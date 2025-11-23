@@ -1,0 +1,168 @@
+# Agent Configuration
+# This file controls all agent behaviors, prompts, and models
+# Prompts are stored in separate files in the prompts/ directory
+
+agents:
+  planner:
+    name: "Planner Agent"
+    model: "sonnet"  # haiku, sonnet, opus
+    temperature: 0.7
+    max_tokens: 4096
+    system_prompt_file: "prompts/planner.txt"
+    capabilities:
+      - planning
+      - task_breakdown
+      - tech_stack_selection
+      - project_type_detection
+    enabled: true
+
+  writer:
+    name: "Writer Agent"
+    model: "sonnet"
+    temperature: 0.3
+    max_tokens: 8192
+    system_prompt_file: "prompts/writer.txt"
+    capabilities:
+      - code_generation
+      - file_creation
+      - step_execution
+    enabled: true
+
+  fixer:
+    name: "Fixer Agent"
+    model: "sonnet"
+    temperature: 0.5
+    max_tokens: 4096
+    system_prompt_file: "prompts/fixer.txt"
+    capabilities:
+      - patching
+      - debugging
+      - error_fixing
+    enabled: true
+
+  runner:
+    name: "Runner Agent"
+    model: "haiku"
+    temperature: 0.1
+    max_tokens: 2048
+    system_prompt_file: "prompts/runner.txt"
+    capabilities:
+      - command_execution
+      - testing
+      - build_management
+    enabled: true
+
+  documenter:
+    name: "Documenter Agent (DocsPack)"
+    model: "haiku"
+    temperature: 0.5
+    max_tokens: 4096
+    system_prompt_file: "prompts/documenter.txt"
+    capabilities:
+      - documentation
+      - srs_generation
+      - uml_diagrams
+      - reports
+    enabled: true
+    # Only runs for academic projects
+    conditional: "project_type == 'Academic'"
+
+  enhancer:
+    name: "Enhancer Agent"
+    model: "sonnet"
+    temperature: 0.6
+    max_tokens: 4096
+    system_prompt_file: "prompts/enhancer.txt"
+    capabilities:
+      - refactoring
+      - optimization
+      - code_enhancement
+    enabled: true
+
+  analyzer:
+    name: "Analyzer Agent"
+    model: "sonnet"
+    temperature: 0.7
+    max_tokens: 4096
+    system_prompt_file: "prompts/analyzer.txt"
+    capabilities:
+      - analysis
+      - code_review
+      - architecture_review
+    enabled: true
+
+workflows:
+  bolt_standard:
+    description: "Full workflow: plan → write → run → fix → docs"
+    steps:
+      - agent: planner
+        name: "Create Execution Plan"
+        timeout: 120
+        retry_count: 2
+        stream_output: false
+
+      - agent: writer
+        name: "Generate Code Files"
+        timeout: 300
+        retry_count: 2
+        stream_output: true
+
+      - agent: runner
+        name: "Execute Preview & Build"
+        timeout: 180
+        retry_count: 1
+        stream_output: true
+
+      - agent: fixer
+        name: "Fix Errors (if any)"
+        timeout: 300
+        retry_count: 2
+        stream_output: true
+        # Only run if errors exist
+        condition: "context.errors.length > 0"
+
+      - agent: documenter
+        name: "Generate Documentation"
+        timeout: 180
+        retry_count: 1
+        stream_output: false
+        # Only run for academic projects
+        condition: "context.project_type == 'Academic'"
+
+  quick_iteration:
+    description: "Quick workflow: plan → write → test"
+    steps:
+      - agent: planner
+        name: "Create Plan"
+        timeout: 60
+        retry_count: 2
+
+      - agent: writer
+        name: "Generate Code"
+        timeout: 200
+        retry_count: 2
+        stream_output: true
+
+      - agent: runner
+        name: "Quick Test"
+        timeout: 120
+        retry_count: 1
+
+  debug:
+    description: "Debug workflow: analyze → fix → verify"
+    steps:
+      - agent: analyzer
+        name: "Analyze Code"
+        timeout: 90
+        retry_count: 1
+
+      - agent: fixer
+        name: "Apply Fixes"
+        timeout: 180
+        retry_count: 3
+        stream_output: true
+
+      - agent: runner
+        name: "Verify Fixes"
+        timeout: 120
+        retry_count: 1
