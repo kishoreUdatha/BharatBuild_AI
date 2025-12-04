@@ -420,3 +420,77 @@ async def list_roles():
             for role in UserRole
         ]
     }
+
+
+@router.post("/seed-sample-data")
+async def seed_sample_employees(
+    count: int = 50,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generate sample employee data for testing pagination.
+    Creates specified number of sample users.
+    """
+    import random
+    from app.core.security import get_password_hash
+
+    first_names = [
+        "Rahul", "Priya", "Amit", "Sneha", "Vikram", "Ananya", "Rohan", "Kavya",
+        "Arjun", "Meera", "Karthik", "Divya", "Suresh", "Anjali", "Vivek", "Swati",
+        "Aditya", "Neha", "Rajesh", "Pooja", "Sameer", "Deepika", "Manish", "Sonali",
+        "Gaurav", "Priyanka", "Akshay", "Tanvi", "Harsh", "Riya", "Kunal", "Shreya",
+        "Varun", "Megha", "Siddharth", "Nisha", "Aakash", "Ishita", "Rohit", "Kavitha"
+    ]
+
+    last_names = [
+        "Sharma", "Patel", "Kumar", "Reddy", "Singh", "Gupta", "Mehta", "Nair",
+        "Verma", "Shah", "Rajan", "Krishnan", "Babu", "Menon", "Jain", "Bose",
+        "Das", "Tiwari", "Yadav", "Sinha", "Patil", "Iyer", "Joshi", "Saxena",
+        "Malhotra", "Kapoor", "Thakur", "Desai", "Mishra", "Agarwal", "Khanna", "Rao"
+    ]
+
+    organizations = [
+        "TechCorp India", "Infosys", "Wipro", "TCS", "HCL Tech", "Tech Mahindra",
+        "Cognizant", "Accenture", "Capgemini", "L&T Infotech", "Mindtree", "Mphasis",
+        "IIT Delhi", "IIT Bombay", "NIT Trichy", "BITS Pilani", "VIT Vellore",
+        "InnovateTech", "HealthAI", "EduSmart", "FinFlow", "AgriNext", "RetailPro"
+    ]
+
+    roles = list(UserRole)
+    created_users = []
+    default_password = get_password_hash("Password123!")
+
+    for i in range(count):
+        first_name = random.choice(first_names)
+        last_name = random.choice(last_names)
+        full_name = f"{first_name} {last_name}"
+        email = f"{first_name.lower()}.{last_name.lower()}{random.randint(1, 999)}@example.com"
+
+        # Check if email exists
+        result = await db.execute(select(User).where(User.email == email))
+        if result.scalar_one_or_none():
+            continue
+
+        user = User(
+            email=email,
+            full_name=full_name,
+            username=f"{first_name.lower()}{random.randint(100, 9999)}",
+            hashed_password=default_password,
+            role=random.choice(roles),
+            organization=random.choice(organizations),
+            is_active=random.random() > 0.1,  # 90% active
+            is_verified=random.random() > 0.3,  # 70% verified
+            created_at=datetime.utcnow() - timedelta(days=random.randint(1, 365)),
+            last_login=datetime.utcnow() - timedelta(hours=random.randint(1, 720)) if random.random() > 0.3 else None
+        )
+        db.add(user)
+        created_users.append(full_name)
+
+    await db.commit()
+
+    return {
+        "success": True,
+        "message": f"Created {len(created_users)} sample employees",
+        "count": len(created_users)
+    }

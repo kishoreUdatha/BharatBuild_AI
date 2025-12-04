@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { useEmployees, Employee } from '@/hooks/useEmployees'
+import { useEmployees } from '@/hooks/useEmployees'
 import { Pagination } from '@/components/ui/Pagination'
+import { apiClient } from '@/lib/api-client'
 
 const ROLES = [
   { value: '', label: 'All Roles' },
@@ -15,11 +16,22 @@ const ROLES = [
   { value: 'api_partner', label: 'API Partner' },
 ]
 
-const STATUS_OPTIONS = [
-  { value: null, label: 'All Status' },
-  { value: true, label: 'Active' },
-  { value: false, label: 'Inactive' },
-]
+// Debounce hook for auto-search
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value)
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value)
+    }, delay)
+
+    return () => {
+      clearTimeout(handler)
+    }
+  }, [value, delay])
+
+  return debouncedValue
+}
 
 export default function EmployeesPage() {
   const router = useRouter()
@@ -31,9 +43,6 @@ export default function EmployeesPage() {
     pageSize,
     total,
     totalPages,
-    search,
-    roleFilter,
-    activeFilter,
     sortBy,
     sortOrder,
     stats,
@@ -48,11 +57,48 @@ export default function EmployeesPage() {
   } = useEmployees({ initialPageSize: 10 })
 
   const [searchInput, setSearchInput] = useState('')
+  const [selectedRole, setSelectedRole] = useState('')
+  const [selectedStatus, setSelectedStatus] = useState<string>('')
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [seeding, setSeeding] = useState(false)
 
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    handleSearch(searchInput)
+  // Debounce search input - auto search after 300ms of no typing
+  const debouncedSearch = useDebounce(searchInput, 300)
+
+  // Auto-search when debounced value changes
+  useEffect(() => {
+    handleSearch(debouncedSearch)
+  }, [debouncedSearch, handleSearch])
+
+  // Handle role filter change
+  const onRoleChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value
+    setSelectedRole(value)
+    handleRoleFilter(value)
+  }, [handleRoleFilter])
+
+  // Handle status filter change
+  const onStatusChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value
+    setSelectedStatus(value)
+    if (value === '') {
+      handleActiveFilter(null)
+    } else {
+      handleActiveFilter(value === 'true')
+    }
+  }, [handleActiveFilter])
+
+  // Seed sample data for testing
+  const handleSeedData = async () => {
+    setSeeding(true)
+    try {
+      await apiClient.post('/users/seed-sample-data?count=50')
+      refresh()
+    } catch (err) {
+      console.error('Failed to seed data:', err)
+    } finally {
+      setSeeding(false)
+    }
   }
 
   const handleDeleteClick = async (userId: string) => {
@@ -65,6 +111,8 @@ export default function EmployeesPage() {
       }
     } else {
       setDeleteConfirm(userId)
+      // Auto-reset confirm after 3 seconds
+      setTimeout(() => setDeleteConfirm(null), 3000)
     }
   }
 
@@ -179,13 +227,14 @@ export default function EmployeesPage() {
             <h1 className="text-2xl font-bold text-white mb-1">Employees</h1>
             <p className="text-gray-400">
               {total} user{total !== 1 ? 's' : ''} found
+              {searchInput && <span className="text-blue-400"> matching "{searchInput}"</span>}
             </p>
           </div>
 
           {/* Filters */}
           <div className="flex flex-wrap items-center gap-3">
-            {/* Search */}
-            <form onSubmit={handleSearchSubmit} className="relative">
+            {/* Search - Auto lookup */}
+            <div className="relative">
               <svg
                 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500"
                 fill="none"
@@ -197,17 +246,27 @@ export default function EmployeesPage() {
               </svg>
               <input
                 type="text"
-                placeholder="Search name, email..."
+                placeholder="Search name, email, org..."
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
                 className="bg-[#252525] border border-[#333] rounded-lg pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:border-blue-500 w-64"
               />
-            </form>
+              {searchInput && (
+                <button
+                  onClick={() => setSearchInput('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
 
             {/* Role Filter */}
             <select
-              value={roleFilter}
-              onChange={(e) => handleRoleFilter(e.target.value)}
+              value={selectedRole}
+              onChange={onRoleChange}
               className="bg-[#252525] border border-[#333] rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
             >
               {ROLES.map((role) => (
@@ -219,27 +278,43 @@ export default function EmployeesPage() {
 
             {/* Status Filter */}
             <select
-              value={activeFilter === null ? '' : activeFilter.toString()}
-              onChange={(e) => {
-                const val = e.target.value
-                handleActiveFilter(val === '' ? null : val === 'true')
-              }}
+              value={selectedStatus}
+              onChange={onStatusChange}
               className="bg-[#252525] border border-[#333] rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
             >
-              {STATUS_OPTIONS.map((opt) => (
-                <option key={String(opt.value)} value={opt.value === null ? '' : opt.value.toString()}>
-                  {opt.label}
-                </option>
-              ))}
+              <option value="">All Status</option>
+              <option value="true">Active</option>
+              <option value="false">Inactive</option>
             </select>
+
+            {/* Seed Sample Data Button */}
+            <button
+              onClick={handleSeedData}
+              disabled={seeding}
+              className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
+              title="Add 50 sample employees"
+            >
+              {seeding ? (
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+              ) : (
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+              )}
+              {seeding ? 'Adding...' : 'Add Sample Data'}
+            </button>
 
             {/* Refresh Button */}
             <button
               onClick={refresh}
-              className="p-2 bg-[#252525] border border-[#333] rounded-lg text-gray-400 hover:text-white hover:border-[#444] transition-colors"
+              disabled={loading}
+              className="p-2 bg-[#252525] border border-[#333] rounded-lg text-gray-400 hover:text-white hover:border-[#444] transition-colors disabled:opacity-50"
               title="Refresh"
             >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <svg className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
               </svg>
             </button>
@@ -260,7 +335,7 @@ export default function EmployeesPage() {
         )}
 
         {/* Error State */}
-        {error && (
+        {error && !loading && (
           <div className="flex items-center justify-center py-20">
             <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-6 max-w-md text-center">
               <svg className="w-12 h-12 text-red-400 mx-auto mb-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
@@ -288,7 +363,26 @@ export default function EmployeesPage() {
                 </svg>
               </div>
               <h3 className="text-xl font-semibold text-white mb-2">No employees found</h3>
-              <p className="text-gray-400">Try adjusting your search or filters</p>
+              <p className="text-gray-400 mb-4">
+                {searchInput || selectedRole || selectedStatus
+                  ? 'Try adjusting your search or filters'
+                  : 'No users have been registered yet'}
+              </p>
+              {(searchInput || selectedRole || selectedStatus) && (
+                <button
+                  onClick={() => {
+                    setSearchInput('')
+                    setSelectedRole('')
+                    setSelectedStatus('')
+                    handleSearch('')
+                    handleRoleFilter('')
+                    handleActiveFilter(null)
+                  }}
+                  className="text-blue-400 hover:text-blue-300 text-sm"
+                >
+                  Clear all filters
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -377,7 +471,7 @@ export default function EmployeesPage() {
                               {employee.is_active ? 'Active' : 'Inactive'}
                             </span>
                             {employee.is_verified && (
-                              <svg className="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                              <svg className="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20" title="Verified">
                                 <path fillRule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                               </svg>
                             )}
