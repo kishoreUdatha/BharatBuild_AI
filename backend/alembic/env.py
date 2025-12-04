@@ -14,8 +14,16 @@ from app.models import *  # Import all models
 # this is the Alembic Config object
 config = context.config
 
-# Override sqlalchemy.url with our DATABASE_URL
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Convert async URL to sync URL for Alembic migrations
+database_url = settings.DATABASE_URL
+# Replace asyncpg with psycopg2 for sync operations
+if "+asyncpg" in database_url:
+    database_url = database_url.replace("+asyncpg", "")
+elif "postgresql+asyncpg" in database_url:
+    database_url = database_url.replace("postgresql+asyncpg", "postgresql")
+
+# Override sqlalchemy.url with our DATABASE_URL (converted to sync)
+config.set_main_option("sqlalchemy.url", database_url)
 
 # Interpret the config file for Python logging
 if config.config_file_name is not None:

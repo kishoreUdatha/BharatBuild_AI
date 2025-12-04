@@ -60,7 +60,7 @@ added 524 packages, and audited 525 packages in 12s
 
 found 0 vulnerabilities
 
-✓ Installation complete
+[OK] Installation complete
 </terminal>
 
 EXAMPLE INPUT:
@@ -112,7 +112,7 @@ Running migrations:
   Applying sessions.0001_initial... OK
   Applying api.0001_initial... OK
 
-✓ Migrations applied successfully
+[OK] Migrations applied successfully
 </terminal>
 
 EXAMPLE INPUT:

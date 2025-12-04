@@ -1,0 +1,66 @@
+{
+  "id": "d21a484d-d242-4bc3-8a35-ef82c39a7efa",
+  "user_id": "b9259a99-c573-441d-8945-7df059513e92",
+  "workflow_type": "bolt_standard",
+  "status": "interrupted",
+  "created_at": "2025-12-04T03:35:33.897564",
+  "updated_at": "2025-12-04T03:37:00.210264",
+  "current_step": "Create Plan",
+  "completed_steps": [
+    "Create Plan"
+  ],
+  "failed_step": null,
+  "error_message": "Client disconnected",
+  "initial_request": {
+    "user_request": "Build a task management app with React",
+    "metadata": {
+      "user_id": "b9259a99-c573-441d-8945-7df059513e92",
+      "user_email": "udathak@gmail.com",
+      "db_project_id": "d21a484d-d242-4bc3-8a35-ef82c39a7efa",
+      "user_role": "student",
+      "session_id": null,
+      "memory_context": {
+        "project_id": "d21a484d-d242-4bc3-8a35-ef82c39a7efa",
+        "project_type": "Unknown",
+        "tech_stack": {},
+        "total_files": 0,
+        "key_files": [],
+        "directories": [],
+        "recent_changes": [],
+        "goals": [],
+        "constraints": [],
+        "conversation_summary": "User asked: Build a task management app with React..."
+      },
+      "project_type": "Unknown",
+      "tech_stack": {}
+    },
+    "workflow_name": "bolt_standard"
+  },
+  "generated_files": [
+    {
+      "path": "package.json",
+      "type": "config",
+      "size_bytes": 1129,
+      "generated_at": "2025-12-04T03:36:05.662456"
+    },
+    {
+      "path": "index.html",
+      "type": "other",
+      "size_bytes": 4185,
+      "generated_at": "2025-12-04T03:36:33.057274"
+    },
+    {
+      "path": "vite.config.ts",
+      "type": "frontend",
+      "size_bytes": 2913,
+      "generated_at": "2025-12-04T03:36:51.166963"
+    }
+  ],
+  "pending_files": [],
+  "context": {
+    "files_created": 0
+  },
+  "retry_count": 0,
+  "max_retries": 3,
+  "can_resume": true
+}

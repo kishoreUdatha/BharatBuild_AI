@@ -1,16 +1,17 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { Send, Sparkles, Loader2 } from 'lucide-react'
+import { Send, Sparkles, Loader2, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 interface ChatInputProps {
   onSend: (message: string) => void
+  onStop?: () => void
   isLoading?: boolean
   placeholder?: string
 }
 
-export function ChatInput({ onSend, isLoading = false, placeholder }: ChatInputProps) {
+export function ChatInput({ onSend, onStop, isLoading = false, placeholder }: ChatInputProps) {
   const [message, setMessage] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -54,34 +55,50 @@ export function ChatInput({ onSend, isLoading = false, placeholder }: ChatInputP
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={placeholder || "Describe your project... (e.g., 'Build a task management app')"}
+            placeholder={placeholder || "Make changes, add new features, ask for anything..."}
             disabled={isLoading}
             rows={1}
             className="flex-1 bg-transparent text-[hsl(var(--bolt-text-primary))] placeholder:text-[hsl(var(--bolt-text-secondary))] resize-none focus:outline-none max-h-[200px] scrollbar-thin"
             style={{ minHeight: '24px' }}
           />
 
-          {/* Send Button */}
-          <Button
-            type="submit"
-            disabled={!message.trim() || isLoading}
-            size="sm"
-            className="flex-shrink-0 bg-[hsl(var(--bolt-accent))] hover:bg-[hsl(var(--bolt-accent-hover))] text-white rounded-lg px-4 h-9 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isLoading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
+          {/* Send/Stop Button */}
+          {isLoading ? (
+            <Button
+              type="button"
+              onClick={onStop}
+              size="sm"
+              className="flex-shrink-0 bg-red-500 hover:bg-red-600 text-white rounded-lg px-4 h-9"
+            >
+              <Square className="w-4 h-4 fill-current" />
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              disabled={!message.trim()}
+              size="sm"
+              className="flex-shrink-0 bg-[hsl(var(--bolt-accent))] hover:bg-[hsl(var(--bolt-accent-hover))] text-white rounded-lg px-4 h-9 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
               <Send className="w-4 h-4" />
-            )}
-          </Button>
+            </Button>
+          )}
         </div>
 
         {/* Helper Text */}
         <div className="mt-2 flex items-center justify-between text-xs text-[hsl(var(--bolt-text-secondary))]">
-          <span>Press Enter to send, Shift+Enter for new line</span>
+          <span>{isLoading ? 'Click stop button to cancel' : 'Press Enter to send, Shift+Enter for new line'}</span>
           <span className="flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-            Ready
+            {isLoading ? (
+              <>
+                <Loader2 className="w-3 h-3 animate-spin text-[hsl(var(--bolt-accent))]" />
+                <span className="text-[hsl(var(--bolt-accent))]">Generating...</span>
+              </>
+            ) : (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                Ready
+              </>
+            )}
           </span>
         </div>
       </form>

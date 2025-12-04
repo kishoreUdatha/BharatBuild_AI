@@ -1,12 +1,20 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import dynamic from 'next/dynamic'
 import { ChatMessage } from './ChatMessage'
 import { ChatInput } from './ChatInput'
 import { FileExplorer } from './FileExplorer'
 import { CodeEditor } from './CodeEditor'
 import { PlanView } from './PlanView'
-import { XTerminal } from './XTerminal'
+import { ProjectSelector } from './ProjectSelector'
+import { ProjectRunControls } from './ProjectRunControls'
+
+// Dynamically import XTerminal to avoid SSR issues
+const XTerminal = dynamic(() => import('./XTerminal'), {
+  ssr: false,
+  loading: () => <div className="h-full flex items-center justify-center text-muted-foreground">Loading terminal...</div>
+})
 import {
   PanelLeftClose,
   PanelLeftOpen,
@@ -20,17 +28,24 @@ import {
   X,
   Minus,
   Maximize2,
-  Undo2,
-  Redo2,
-  History,
+  ChevronDown,
+  ChevronUp,
+  ListTodo,
+  FolderKanban,
+  MessageSquare,
 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { FeedbackModal } from '@/components/feedback/FeedbackModal'
+import { useRouter } from 'next/navigation'
 import { useTerminal } from '@/hooks/useTerminal'
-import { Message } from '@/store/chatStore'
+import { Message, useChatStore } from '@/store/chatStore'
 import { useVersionControl } from '@/services/versionControl/historyManager'
 import { exportProjectAsZip } from '@/services/project/exportService'
 import { useProject } from '@/hooks/useProject'
+import { useProjectStore } from '@/store/projectStore'
+// import { useConnectionHealth } from '@/hooks/useConnectionHealth' // Disabled - was causing header blinking
+import { ReconnectionBanner } from '@/components/ReconnectionBanner'
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
 
 interface FileNode {
   name: string
@@ -42,50 +57,158 @@ interface FileNode {
 
 interface BoltLayoutProps {
   onSendMessage: (message: string) => void
+  onStopGeneration?: () => void
   messages: Message[]
   files: FileNode[]
   isLoading?: boolean
   tokenBalance?: number
   livePreview?: React.ReactNode
   onGenerateProject?: () => void
+  onServerStart?: (url: string) => void
+  onServerStop?: () => void
 }
 
 export function BoltLayout({
   onSendMessage,
+  onStopGeneration,
   messages,
   onGenerateProject,
   files,
   isLoading = false,
   tokenBalance = 0,
   livePreview,
+  onServerStart,
+  onServerStop,
 }: BoltLayoutProps) {
+  const router = useRouter()
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null)
   const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview')
+  const [isPlanViewVisible, setIsPlanViewVisible] = useState(true)
+  const [showFeedback, setShowFeedback] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+
+  // Resizable panel states - thin like border lines
+  const [leftPanelWidth, setLeftPanelWidth] = useState(28) // percentage (balanced chat panel)
+  const [fileExplorerWidth, setFileExplorerWidth] = useState(180) // pixels (balanced file explorer)
+  const [isResizingMain, setIsResizingMain] = useState(false)
+  const [isResizingExplorer, setIsResizingExplorer] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
 
   // Import project store for file operations
   const { openTab } = useProject()
 
   // Import terminal hooks
-  const { isVisible: showTerminal, height: terminalHeight, toggleTerminal, setHeight: setTerminalHeight, logs: terminalLogs, addLog } = useTerminal()
+  const { isVisible: showTerminal, height: terminalHeight, toggleTerminal, openTerminal, setHeight: setTerminalHeight, logs: terminalLogs, addLog, startSession, endSession } = useTerminal()
 
   // Version control hooks
   const { canUndo, canRedo, undo, redo, history } = useVersionControl()
 
+  // Connection health monitoring - DISABLED to prevent header blinking
+  // The health check was causing re-renders every 30 seconds
+  // Uncomment if you need connection monitoring in the future
+  /*
+  const { isConnected, status: connectionStatus, latency } = useConnectionHealth({
+    checkInterval: 30000,
+    autoCheck: false, // Disable auto-check
+    onDisconnect: () => {
+      addLog({
+        type: 'error',
+        content: '⚠️ Connection lost. Your work will be saved locally.'
+      })
+    },
+    onReconnect: () => {
+      addLog({
+        type: 'info',
+        content: '✅ Connection restored!'
+      })
+    }
+  })
+  */
+  // Use static values instead
+  const connectionStatus = 'connected'
+  const latency = null
+
   // Project hooks
   const { currentProject, updateFile } = useProject()
 
-  // Export project handler
+  // Get session info for ephemeral storage download
+  const { sessionId, downloadUrl, resetProject } = useProjectStore()
+
+  // Get chat store for clearing messages
+  const { clearMessages } = useChatStore()
+
+  // Handle new project - clears everything for a fresh start
+  const handleNewProject = useCallback(() => {
+    resetProject()  // Clears project, files, tabs, session
+    clearMessages()  // Clears chat messages
+    setSelectedFile(null)
+    setActiveTab('preview')
+    console.log('[BoltLayout] New project started')
+  }, [resetProject, clearMessages])
+
+  // Export project handler - uses ephemeral session storage (like Bolt.new)
   const handleExportProject = async () => {
-    if (currentProject) {
+    // First try: Use ephemeral session download (preferred - like Bolt.new)
+    if (sessionId && downloadUrl) {
       try {
-        await exportProjectAsZip(currentProject.name, currentProject.files)
+        const response = await fetch(`${API_BASE_URL}${downloadUrl.replace('/api/v1', '')}`)
+        if (!response.ok) {
+          throw new Error("Failed to download: " + response.statusText)
+        }
+        const blob = await response.blob()
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement("a")
+        link.href = url
+        link.download = (currentProject?.name || "project") + ".zip"
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+        console.log("Project downloaded from session storage")
+        return
       } catch (error) {
-        console.error('Failed to export project:', error)
+        console.warn("Session download failed, trying fallback:", error)
       }
     }
+
+    // Second try: Client-side ZIP generation (works offline)
+    if (currentProject && currentProject.files.length > 0) {
+      try {
+        await exportProjectAsZip(currentProject.name, currentProject.files)
+        console.log("Project exported via client-side ZIP")
+        return
+      } catch (error) {
+        console.error("Client-side export failed:", error)
+      }
+    }
+
+    // Third try: Legacy backend export (if project saved permanently)
+    if (currentProject?.id) {
+      try {
+        const response = await fetch(`${API_BASE_URL}/execution/export/${currentProject.id}`)
+        if (!response.ok) {
+          throw new Error("Failed to export: " + response.statusText)
+        }
+        const blob = await response.blob()
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement("a")
+        link.href = url
+        link.download = (currentProject.name || currentProject.id) + ".zip"
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+        console.log("Project exported from backend")
+      } catch (error) {
+        console.error("All export methods failed:", error)
+      }
+    } else {
+      console.error("No project to export")
+    }
   }
+
 
   // Handle undo - restore files from previous commit
   const handleUndo = () => {
@@ -113,9 +236,98 @@ export function BoltLayout({
     }
   }
 
+  // Main splitter resize handler (between left chat panel and right panel)
+  const handleMainSplitterMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsResizingMain(true)
+  }, [])
+
+  // File explorer splitter resize handler (between file explorer and code editor)
+  const handleExplorerSplitterMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsResizingExplorer(true)
+  }, [])
+
+  // Mouse move handler for resizing
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isResizingMain && containerRef.current) {
+        const containerRect = containerRef.current.getBoundingClientRect()
+        const newWidth = ((e.clientX - containerRect.left) / containerRect.width) * 100
+        // Clamp between 10% and 30%
+        setLeftPanelWidth(Math.max(10, Math.min(30, newWidth)))
+      }
+      if (isResizingExplorer && containerRef.current) {
+        const containerRect = containerRef.current.getBoundingClientRect()
+        const rightPanelStart = containerRect.left + (containerRect.width * leftPanelWidth / 100)
+        const newWidth = e.clientX - rightPanelStart
+        // Clamp between 50px and 180px
+        setFileExplorerWidth(Math.max(50, Math.min(180, newWidth)))
+      }
+    }
+
+    const handleMouseUp = () => {
+      setIsResizingMain(false)
+      setIsResizingExplorer(false)
+    }
+
+    if (isResizingMain || isResizingExplorer) {
+      document.addEventListener('mousemove', handleMouseMove)
+      document.addEventListener('mouseup', handleMouseUp)
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+  }, [isResizingMain, isResizingExplorer, leftPanelWidth])
+
+  // Helper function to scroll to bottom
+  const scrollToBottom = useCallback((smooth: boolean = true) => {
+    if (messagesContainerRef.current) {
+      const container = messagesContainerRef.current
+      if (smooth) {
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior: 'smooth'
+        })
+      } else {
+        container.scrollTop = container.scrollHeight
+      }
+    }
+    // Fallback to scrollIntoView
+    messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' })
+  }, [])
+
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    scrollToBottom(true)
+  }, [messages, scrollToBottom])
+
+  // Also scroll when streaming content updates (check last message content length)
+  const lastMessage = messages[messages.length - 1]
+  const lastMessageContent = lastMessage?.content || ''
+  const lastMessageIsStreaming = lastMessage?.type === 'assistant' && (lastMessage as any).isStreaming || false
+
+  useEffect(() => {
+    if (lastMessageIsStreaming) {
+      // Use requestAnimationFrame for smoother scroll during streaming
+      requestAnimationFrame(() => {
+        scrollToBottom(true)
+      })
+    }
+  }, [lastMessageContent, lastMessageIsStreaming, scrollToBottom])
+
+  // Scroll when loading state changes (new message being generated)
+  useEffect(() => {
+    if (isLoading) {
+      scrollToBottom(true)
+    }
+  }, [isLoading, scrollToBottom])
 
   // Auto-switch to Code tab when files are generated
   useEffect(() => {
@@ -137,6 +349,15 @@ export function BoltLayout({
 
   return (
     <div className="h-screen flex flex-col bg-[hsl(var(--bolt-bg-primary))]">
+      {/* Reconnection Banner */}
+      <ReconnectionBanner
+        projectId={currentProject?.id}
+        onResume={(stream) => {
+          console.log('Resuming project generation...')
+          // Handle resume stream
+        }}
+      />
+
       {/* Top Header */}
       <div className="flex items-center justify-between px-6 py-3 border-b border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))]">
         <div className="flex items-center gap-3">
@@ -146,24 +367,9 @@ export function BoltLayout({
             </div>
             <span className="font-bold text-lg bolt-gradient-text">BharatBuild AI</span>
           </div>
-          <Badge variant="secondary" className="text-xs">
-            <Sparkles className="w-3 h-3 mr-1" />
-            Powered by Claude 3.5
-          </Badge>
 
-          {/* Preview/Code Tabs in Header */}
-          <div className="flex items-center gap-1 ml-8">
-            <button
-              onClick={() => setActiveTab('preview')}
-              className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                activeTab === 'preview'
-                  ? 'bg-[hsl(var(--bolt-accent))] text-white'
-                  : 'text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))]'
-              }`}
-            >
-              <Eye className="w-4 h-4" />
-              Preview
-            </button>
+          {/* Code & Preview Buttons */}
+          <div className="flex items-center gap-1 ml-4">
             <button
               onClick={() => setActiveTab('code')}
               className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
@@ -175,105 +381,146 @@ export function BoltLayout({
               <Code2 className="w-4 h-4" />
               Code
             </button>
+            <button
+              onClick={() => setActiveTab('preview')}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                activeTab === 'preview'
+                  ? 'bg-[hsl(var(--bolt-accent))] text-white'
+                  : 'text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))]'
+              }`}
+            >
+              <Eye className="w-4 h-4" />
+              Preview
+            </button>
           </div>
+
+          {/* Project Selector */}
+          <ProjectSelector onNewProject={handleNewProject} />
         </div>
 
-        <div className="flex items-center gap-3">
-          {/* Terminal Toggle - Only show in Code tab */}
-          {activeTab === 'code' && !showTerminal && (
+        <div className="flex items-center gap-2">
+          {/* Generate Project */}
+          {onGenerateProject && (
             <button
-              onClick={() => toggleTerminal()}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors border border-[hsl(var(--bolt-border))]"
+              onClick={onGenerateProject}
+              className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:from-blue-700 hover:to-purple-700 transition-colors"
+              title="Generate Complete Project"
             >
-              <Terminal className="w-4 h-4" />
-              <span>Show Terminal</span>
+              <Sparkles className="w-4 h-4" />
+              Generate
             </button>
           )}
 
-          {/* Version Control Actions */}
-          <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-[hsl(var(--bolt-bg-tertiary))] border border-[hsl(var(--bolt-border))]">
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={!canUndo}
-              onClick={handleUndo}
-              className="h-7 w-7 p-0 text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] disabled:opacity-30"
-              title="Undo (Ctrl+Z)"
-            >
-              <Undo2 className="w-3.5 h-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={!canRedo}
-              onClick={handleRedo}
-              className="h-7 w-7 p-0 text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] disabled:opacity-30"
-              title="Redo (Ctrl+Y)"
-            >
-              <Redo2 className="w-3.5 h-3.5" />
-            </Button>
-            <div className="w-px h-4 bg-[hsl(var(--bolt-border))] mx-1" />
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0 text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))]"
-              title={`Version History (${history.length} commits)`}
-            >
-              <History className="w-3.5 h-3.5" />
-            </Button>
-          </div>
-
-          {/* Generate Project */}
-          {onGenerateProject && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onGenerateProject}
-              className="h-8 px-3 text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))]  bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:from-blue-700 hover:to-purple-700"
-              title="Generate Complete Project"
-            >
-              <Sparkles className="w-4 h-4 mr-1.5" />
-              <span className="text-sm font-semibold">Generate Project</span>
-            </Button>
-          )}
+          {/* Project Run Controls (Docker) */}
+          <ProjectRunControls
+            onOpenTerminal={() => {
+              openTerminal()
+            }}
+            onPreviewUrlChange={(url) => {
+              if (url && onServerStart) {
+                onServerStart(url)
+                setActiveTab('preview')
+              } else if (!url && onServerStop) {
+                onServerStop()
+              }
+            }}
+            onOutput={(line) => {
+              // Show terminal (use openTerminal to avoid race conditions with toggle)
+              openTerminal()
+              // Add output to terminal
+              addLog({
+                type: 'output',
+                content: line
+              })
+            }}
+            onStartSession={() => {
+              // Start session - keeps terminal open during and after execution
+              startSession()
+            }}
+            onEndSession={() => {
+              // End session but keep terminal open for user to review output
+              endSession()
+            }}
+          />
 
           {/* Export Project */}
-          <Button
-            variant="ghost"
-            size="sm"
+          <button
             onClick={handleExportProject}
             disabled={!currentProject || currentProject.files.length === 0}
-            className="h-8 px-3 text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] disabled:opacity-30"
+            className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             title="Download Project as ZIP"
           >
-            <Download className="w-4 h-4 mr-1.5" />
-            <span className="text-sm">Export</span>
-          </Button>
+            <Download className="w-4 h-4" />
+            Export
+          </button>
+
+          {/* Connection Status Indicator - Only show when disconnected or reconnecting */}
+          {connectionStatus !== 'connected' && connectionStatus !== 'checking' && (
+            <div
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium ${
+                connectionStatus === 'reconnecting'
+                  ? 'bg-yellow-500/10 text-yellow-500'
+                  : 'bg-red-500/10 text-red-500'
+              }`}
+              title={latency ? `Latency: ${latency}ms` : 'Connection status'}
+            >
+              <div
+                className={`w-2 h-2 rounded-full ${
+                  connectionStatus === 'reconnecting'
+                    ? 'bg-yellow-500 animate-pulse'
+                    : 'bg-red-500'
+                }`}
+              />
+              {connectionStatus === 'reconnecting' ? 'Reconnecting...' : 'Offline'}
+            </div>
+          )}
 
           {/* Token Balance */}
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[hsl(var(--bolt-bg-tertiary))] border border-[hsl(var(--bolt-border))]">
+          <div className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-[hsl(var(--bolt-bg-tertiary))] border border-[hsl(var(--bolt-border))]">
             <Sparkles className="w-4 h-4 text-[hsl(var(--bolt-accent))]" />
             <span className="text-sm font-medium text-[hsl(var(--bolt-text-primary))]">
               {tokenBalance.toLocaleString()} tokens
             </span>
           </div>
 
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 w-8 p-0 text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))]"
+          {/* My Projects */}
+          <button
+            onClick={() => router.push('/projects')}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
+            title="My Projects"
+          >
+            <FolderKanban className="w-4 h-4" />
+            <span className="text-sm hidden sm:inline">Projects</span>
+          </button>
+
+          {/* Feedback */}
+          <button
+            onClick={() => setShowFeedback(true)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
+            title="Send Feedback"
+          >
+            <MessageSquare className="w-4 h-4" />
+            <span className="text-sm hidden sm:inline">Feedback</span>
+          </button>
+
+          {/* Settings */}
+          <button
+            className="flex items-center justify-center w-8 h-8 rounded-lg text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
           >
             <Settings className="w-4 h-4" />
-          </Button>
+          </button>
         </div>
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex overflow-hidden">
+      <div ref={containerRef} className="flex-1 flex overflow-hidden">
         {/* Left Panel - AI Chat Interaction */}
-        <div className={`flex flex-col ${isSidebarOpen ? 'w-[30%]' : 'w-full'} transition-all border-r border-[hsl(var(--bolt-border))]`}>
+        <div
+          className="flex flex-col border-r border-[hsl(var(--bolt-border))] flex-shrink-0 min-w-0"
+          style={{ width: isSidebarOpen ? `${leftPanelWidth}%` : '100%' }}
+        >
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto scrollbar-thin">
+          <div ref={messagesContainerRef} className="flex-1 overflow-y-auto scrollbar-thin">
             {messages.length === 0 ? (
               <div className="h-full flex items-center justify-center">
                 <div className="text-center max-w-2xl px-4">
@@ -314,13 +561,36 @@ export function BoltLayout({
                     role={message.type}
                     content={message.content}
                     isStreaming={message.type === 'assistant' && message.isStreaming}
-                    thinkingSteps={message.type === 'assistant' ? message.thinkingSteps : undefined}
-                    fileOperations={message.type === 'assistant' ? message.fileOperations : undefined}
                   />
                 ))}
 
-                {/* PlanView - Show current tasks and thinking steps */}
-                <PlanView />
+                {/* Task Progress Panel - Only show when generating project */}
+                {messages.some(m => m.type === 'assistant' && ((m.thinkingSteps?.length ?? 0) > 0 || (m.fileOperations?.length ?? 0) > 0)) && (
+                  <div className="border-t border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))]">
+                    <button
+                      onClick={() => setIsPlanViewVisible(!isPlanViewVisible)}
+                      className="w-full flex items-center justify-between px-4 py-2 hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <ListTodo className="w-4 h-4 text-[hsl(var(--bolt-accent))]" />
+                        <span className="text-sm font-medium text-[hsl(var(--bolt-text-primary))]">
+                          Generation Progress
+                        </span>
+                      </div>
+                      {isPlanViewVisible ? (
+                        <ChevronUp className="w-4 h-4 text-[hsl(var(--bolt-text-secondary))]" />
+                      ) : (
+                        <ChevronDown className="w-4 h-4 text-[hsl(var(--bolt-text-secondary))]" />
+                      )}
+                    </button>
+
+                    {isPlanViewVisible && (
+                      <div className="border-t border-[hsl(var(--bolt-border))] max-h-[300px] overflow-y-auto">
+                        <PlanView />
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div ref={messagesEndRef} />
               </>
@@ -329,13 +599,24 @@ export function BoltLayout({
 
           {/* Input */}
           <div className="border-t border-[hsl(var(--bolt-border))]">
-            <ChatInput onSend={onSendMessage} isLoading={isLoading} />
+            <ChatInput onSend={onSendMessage} onStop={onStopGeneration} isLoading={isLoading} />
           </div>
         </div>
 
+        {/* Main Vertical Splitter - Thin border line */}
+        {isSidebarOpen && (
+          <div
+            onMouseDown={handleMainSplitterMouseDown}
+            className={`w-px cursor-col-resize transition-colors flex-shrink-0 ${
+              isResizingMain ? 'bg-[hsl(var(--bolt-accent))]' : 'bg-[hsl(var(--bolt-border))] hover:bg-[hsl(var(--bolt-accent))]'
+            }`}
+            title="Drag to resize"
+          />
+        )}
+
         {/* Right Panel - Monaco Code Editor & Preview */}
         {isSidebarOpen && (
-          <div className="w-[70%] flex flex-col border-l border-[hsl(var(--bolt-border))]">
+          <div className="flex-1 flex flex-col border-l border-[hsl(var(--bolt-border))] min-w-0">
             {/* Tab Content */}
             <div className="flex-1 flex flex-col overflow-hidden">
               {activeTab === 'code' && (
@@ -343,7 +624,10 @@ export function BoltLayout({
                   {/* Code Editor Area */}
                   <div className={`flex ${showTerminal ? 'flex-1' : 'h-full'} overflow-hidden`}>
                     {/* File Explorer */}
-                    <div className="w-64 flex-shrink-0">
+                    <div
+                      className="flex-shrink-0 border-r border-[hsl(var(--bolt-border))]"
+                      style={{ width: `${fileExplorerWidth}px` }}
+                    >
                       <FileExplorer
                         files={files}
                         onFileSelect={(file) => {
@@ -359,85 +643,85 @@ export function BoltLayout({
                       />
                     </div>
 
+                    {/* File Explorer Splitter - Thin border line */}
+                    <div
+                      onMouseDown={handleExplorerSplitterMouseDown}
+                      className={`w-px cursor-col-resize transition-colors flex-shrink-0 ${
+                        isResizingExplorer ? 'bg-[hsl(var(--bolt-accent))]' : 'bg-[hsl(var(--bolt-border))] hover:bg-[hsl(var(--bolt-accent))]'
+                      }`}
+                      title="Drag to resize"
+                    />
+
                     {/* Code Editor - Simplified (no props needed) */}
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                       <CodeEditor />
                     </div>
                   </div>
 
-                  {/* Terminal Panel - Below Code Editor */}
-                  {showTerminal && (
-                    <div
-                      className="border-t border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))] flex flex-col"
-                      style={{ height: `${terminalHeight}px` }}
-                    >
-                      {/* Terminal Header */}
-                      <div className="flex items-center justify-between px-3 py-2 border-b border-[hsl(var(--bolt-border))]">
-                        <div className="flex items-center gap-2">
-                          <Terminal className="w-4 h-4 text-[hsl(var(--bolt-text-secondary))]" />
-                          <span className="text-sm font-medium text-[hsl(var(--bolt-text-primary))]">
-                            Terminal
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => setTerminalHeight(Math.max(150, terminalHeight - 50))}
-                            className="p-1 hover:bg-[hsl(var(--bolt-bg-tertiary))] rounded"
-                          >
-                            <Minus className="w-3 h-3 text-[hsl(var(--bolt-text-secondary))]" />
-                          </button>
-                          <button
-                            onClick={() => setTerminalHeight(Math.min(400, terminalHeight + 50))}
-                            className="p-1 hover:bg-[hsl(var(--bolt-bg-tertiary))] rounded"
-                          >
-                            <Maximize2 className="w-3 h-3 text-[hsl(var(--bolt-text-secondary))]" />
-                          </button>
-                          <button
-                            onClick={() => toggleTerminal()}
-                            className="p-1 hover:bg-[hsl(var(--bolt-bg-tertiary))] rounded"
-                          >
-                            <X className="w-3 h-3 text-[hsl(var(--bolt-text-secondary))]" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Terminal Content - xterm.js */}
-                      <div className="flex-1 overflow-hidden bg-[hsl(var(--bolt-bg-primary))]">
-                        <XTerminal
-                          logs={terminalLogs}
-                          onCommand={(cmd) => {
-                            // Add command to terminal logs
-                            addLog({
-                              type: 'command',
-                              content: cmd
-                            })
-                            // Execute command (can be extended to call backend)
-                            addLog({
-                              type: 'output',
-                              content: `Command received: ${cmd}`
-                            })
-                          }}
-                        />
-                      </div>
-                    </div>
-                  )}
                 </>
               )}
 
               {activeTab === 'preview' && (
-                <div className="flex-1">
-                  {livePreview ? (
-                    livePreview
-                  ) : (
-                    <div className="h-full flex items-center justify-center text-[hsl(var(--bolt-text-secondary))]">
-                      <div className="text-center">
-                        <Eye className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                        <p className="text-sm">Start building to see live preview</p>
-                      </div>
-                    </div>
-                  )}
+                <div className={`flex-1 flex flex-col bg-white ${showTerminal ? '' : 'h-full'}`}>
+                  {/* Preview Content */}
+                  <div className="flex-1 h-full">
+                    {livePreview || <div className="h-full w-full" />}
+                  </div>
                 </div>
               )}
+
+              {/* Shared Terminal Panel - Single instance, persists across tab switches */}
+              <div
+                className={`border-t border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))] flex flex-col flex-shrink-0 ${showTerminal ? '' : 'hidden'}`}
+                style={{ height: `${terminalHeight}px` }}
+              >
+                {/* Terminal Header */}
+                <div className="flex items-center justify-between px-3 py-2 border-b border-[hsl(var(--bolt-border))]">
+                  <div className="flex items-center gap-2">
+                    <Terminal className="w-4 h-4 text-[hsl(var(--bolt-text-secondary))]" />
+                    <span className="text-sm font-medium text-[hsl(var(--bolt-text-primary))]">
+                      Terminal
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setTerminalHeight(Math.max(150, terminalHeight - 50))}
+                      className="p-1 hover:bg-[hsl(var(--bolt-bg-tertiary))] rounded"
+                    >
+                      <Minus className="w-3 h-3 text-[hsl(var(--bolt-text-secondary))]" />
+                    </button>
+                    <button
+                      onClick={() => setTerminalHeight(Math.min(400, terminalHeight + 50))}
+                      className="p-1 hover:bg-[hsl(var(--bolt-bg-tertiary))] rounded"
+                    >
+                      <Maximize2 className="w-3 h-3 text-[hsl(var(--bolt-text-secondary))]" />
+                    </button>
+                    <button
+                      onClick={() => toggleTerminal()}
+                      className="p-1 hover:bg-[hsl(var(--bolt-bg-tertiary))] rounded"
+                    >
+                      <X className="w-3 h-3 text-[hsl(var(--bolt-text-secondary))]" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Terminal Content - xterm.js - Single instance */}
+                <div className="flex-1 overflow-hidden bg-[hsl(var(--bolt-bg-primary))]">
+                  <XTerminal
+                    logs={terminalLogs}
+                    onCommand={(cmd) => {
+                      addLog({
+                        type: 'command',
+                        content: cmd
+                      })
+                      addLog({
+                        type: 'output',
+                        content: `Command received: ${cmd}`
+                      })
+                    }}
+                  />
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -454,6 +738,9 @@ export function BoltLayout({
           )}
         </button>
       </div>
+
+      {/* Feedback Modal */}
+      <FeedbackModal isOpen={showFeedback} onClose={() => setShowFeedback(false)} />
     </div>
   )
 }

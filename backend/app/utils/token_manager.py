@@ -1,12 +1,21 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import calendar
+import uuid as uuid_module
 
 from app.models.token_balance import TokenBalance, TokenTransaction, TokenPurchase
 from app.models.user import User
+from app.core.config import settings
 from app.core.logging_config import logger
+
+
+def to_str(value: Union[str, uuid_module.UUID]) -> str:
+    """Convert UUID to string if needed - SQLite needs strings"""
+    if isinstance(value, uuid_module.UUID):
+        return str(value)
+    return value
 
 
 class TokenManager:
@@ -24,21 +33,24 @@ class TokenManager:
     @staticmethod
     async def get_or_create_balance(
         db: AsyncSession,
-        user_id: str
+        user_id: Union[str, uuid_module.UUID]
     ) -> TokenBalance:
         """Get or create token balance for user"""
+        user_uuid = to_str(user_id)
         result = await db.execute(
-            select(TokenBalance).where(TokenBalance.user_id == user_id)
+            select(TokenBalance).where(TokenBalance.user_id == user_uuid)
         )
         balance = result.scalar_one_or_none()
 
         if not balance:
-            # Create new balance with initial allowance
+            # Create new balance with initial allowance from config
+            free_tier_tokens = settings.FREE_TIER_TOKENS
+            monthly_allowance = settings.FREE_TIER_MONTHLY_ALLOWANCE
             balance = TokenBalance(
-                user_id=user_id,
-                total_tokens=10000,  # Free tier: 10K tokens
-                remaining_tokens=10000,
-                monthly_allowance=10000,
+                user_id=user_uuid,
+                total_tokens=free_tier_tokens,
+                remaining_tokens=free_tier_tokens,
+                monthly_allowance=monthly_allowance,
                 month_reset_date=TokenManager._get_next_month_date()
             )
             db.add(balance)
@@ -51,9 +63,9 @@ class TokenManager:
     @staticmethod
     async def check_and_deduct_tokens(
         db: AsyncSession,
-        user_id: str,
+        user_id: Union[str, uuid_module.UUID],
         tokens_required: int,
-        project_id: Optional[str] = None,
+        project_id: Optional[Union[str, uuid_module.UUID]] = None,
         agent_type: Optional[str] = None,
         model_used: str = "haiku"
     ) -> tuple[bool, Optional[str]]:
@@ -140,7 +152,7 @@ class TokenManager:
     @staticmethod
     async def add_tokens(
         db: AsyncSession,
-        user_id: str,
+        user_id: Union[str, uuid_module.UUID],
         tokens_to_add: int,
         transaction_type: str = "purchase",
         description: str = "Token purchase",
@@ -179,12 +191,12 @@ class TokenManager:
     @staticmethod
     async def record_transaction(
         db: AsyncSession,
-        user_id: str,
+        user_id: Union[str, uuid_module.UUID],
         transaction_type: str,
         tokens_changed: int,
         tokens_before: int,
         tokens_after: int,
-        project_id: Optional[str] = None,
+        project_id: Optional[Union[str, uuid_module.UUID]] = None,
         agent_type: Optional[str] = None,
         model_used: Optional[str] = None,
         input_tokens: int = 0,
@@ -208,8 +220,8 @@ class TokenManager:
             )
 
         transaction = TokenTransaction(
-            user_id=user_id,
-            project_id=project_id,
+            user_id=to_str(user_id),
+            project_id=to_str(project_id) if project_id else None,
             transaction_type=transaction_type,
             tokens_before=tokens_before,
             tokens_changed=tokens_changed,
@@ -232,15 +244,16 @@ class TokenManager:
     @staticmethod
     async def get_balance_info(
         db: AsyncSession,
-        user_id: str
+        user_id: Union[str, uuid_module.UUID]
     ) -> Dict[str, Any]:
         """Get comprehensive balance information (like Bolt.new dashboard)"""
-        balance = await TokenManager.get_or_create_balance(db, user_id)
+        user_uuid = to_str(user_id)
+        balance = await TokenManager.get_or_create_balance(db, user_uuid)
 
         # Get recent transactions
         result = await db.execute(
             select(TokenTransaction)
-            .where(TokenTransaction.user_id == user_id)
+            .where(TokenTransaction.user_id == user_uuid)
             .order_by(TokenTransaction.created_at.desc())
             .limit(10)
         )

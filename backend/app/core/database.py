@@ -5,18 +5,29 @@ from typing import AsyncGenerator
 
 from app.core.config import settings
 
-# Convert PostgreSQL URL to async format
-DATABASE_URL = settings.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
+# Handle different database URLs
+DATABASE_URL = settings.DATABASE_URL
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
 
-# Create async engine
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=settings.DB_ECHO,
-    pool_size=settings.DB_POOL_SIZE,
-    max_overflow=settings.DB_MAX_OVERFLOW,
-    pool_pre_ping=True,
-    future=True
-)
+# Create async engine with appropriate settings for SQLite vs PostgreSQL
+if "sqlite" in DATABASE_URL:
+    engine = create_async_engine(
+        DATABASE_URL,
+        echo=settings.DB_ECHO,
+        connect_args={"check_same_thread": False},
+        poolclass=NullPool,
+        future=True
+    )
+else:
+    engine = create_async_engine(
+        DATABASE_URL,
+        echo=settings.DB_ECHO,
+        pool_size=settings.DB_POOL_SIZE,
+        max_overflow=settings.DB_MAX_OVERFLOW,
+        pool_pre_ping=True,
+        future=True
+    )
 
 # Create async session factory
 AsyncSessionLocal = async_sessionmaker(

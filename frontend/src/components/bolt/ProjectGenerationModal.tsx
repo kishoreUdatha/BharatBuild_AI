@@ -6,12 +6,20 @@ import { useProjectGeneration } from '@/hooks/useProjectGeneration'
 interface ProjectGenerationModalProps {
   isOpen: boolean
   onClose: () => void
+  onServerStart?: (url: string) => void  // Called when auto-run starts dev server
 }
 
-export const ProjectGenerationModal = ({ isOpen, onClose }: ProjectGenerationModalProps) => {
+export const ProjectGenerationModal = ({ isOpen, onClose, onServerStart }: ProjectGenerationModalProps) => {
   const [description, setDescription] = useState('')
   const [projectName, setProjectName] = useState('')
-  const { generateProject, isGenerating, progress, error } = useProjectGeneration()
+  // Auto-run enabled by default (like Bolt.new)
+  const { generateProject, isGenerating, isAutoRunning, progress, error, serverUrl } = useProjectGeneration({
+    autoRun: true,
+    onServerStart: (url) => {
+      console.log('[Modal] Server started:', url)
+      onServerStart?.(url)
+    },
+  })
 
   if (!isOpen) return null
 

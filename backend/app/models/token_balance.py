@@ -1,18 +1,24 @@
 from sqlalchemy import Column, String, DateTime, Integer, Boolean, ForeignKey, JSON
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from datetime import datetime
-import uuid
+import os
 
 from app.core.database import Base
+from app.core.types import GUID, generate_uuid
+
+# Get defaults from environment or use fallback values
+# Note: These are evaluated at import time, settings may not be available yet
+_FREE_TIER_MONTHLY_ALLOWANCE = int(os.getenv("FREE_TIER_MONTHLY_ALLOWANCE", "10000"))
+_MAX_TOKENS_PER_REQUEST = int(os.getenv("MAX_TOKENS_PER_REQUEST", "8192"))
+_MAX_REQUESTS_PER_DAY = int(os.getenv("MAX_REQUESTS_PER_DAY", "100"))
 
 
 class TokenBalance(Base):
     """User token balance (like Bolt.new & Lovable.dev)"""
     __tablename__ = "token_balances"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
+    id = Column(GUID, primary_key=True, default=generate_uuid)
+    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
 
     # Token Balance
     total_tokens = Column(Integer, default=0, nullable=False)  # Total tokens purchased/allocated
@@ -20,7 +26,7 @@ class TokenBalance(Base):
     remaining_tokens = Column(Integer, default=0, nullable=False)  # Available tokens
 
     # Monthly allowance (subscription-based)
-    monthly_allowance = Column(Integer, default=10000, nullable=False)  # Free tier: 10K tokens/month
+    monthly_allowance = Column(Integer, default=_FREE_TIER_MONTHLY_ALLOWANCE, nullable=False)
     monthly_used = Column(Integer, default=0, nullable=False)
     month_reset_date = Column(DateTime, nullable=True)
 
@@ -31,9 +37,9 @@ class TokenBalance(Base):
     # Rollover tokens (unused from previous month)
     rollover_tokens = Column(Integer, default=0, nullable=False)
 
-    # Limits
-    max_tokens_per_request = Column(Integer, default=8192, nullable=False)
-    max_requests_per_day = Column(Integer, default=100, nullable=False)
+    # Limits (configurable via environment)
+    max_tokens_per_request = Column(Integer, default=_MAX_TOKENS_PER_REQUEST, nullable=False)
+    max_requests_per_day = Column(Integer, default=_MAX_REQUESTS_PER_DAY, nullable=False)
 
     # Tracking
     total_requests = Column(Integer, default=0, nullable=False)
@@ -53,9 +59,9 @@ class TokenTransaction(Base):
     """Individual token transaction (like Bolt.new transaction history)"""
     __tablename__ = "token_transactions"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    id = Column(GUID, primary_key=True, default=generate_uuid)
+    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(GUID, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
 
     # Transaction type
     transaction_type = Column(String(50), nullable=False)  # 'usage', 'purchase', 'refund', 'bonus', 'monthly_reset'
@@ -94,8 +100,8 @@ class TokenPurchase(Base):
     """Token purchase history (like Bolt.new pricing plans)"""
     __tablename__ = "token_purchases"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id = Column(GUID, primary_key=True, default=generate_uuid)
+    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
 
     # Package details
     package_name = Column(String(100), nullable=False)  # 'starter', 'pro', 'unlimited'

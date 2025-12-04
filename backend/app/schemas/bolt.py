@@ -59,20 +59,20 @@ class CreateFileRequest(BaseModel):
     path: str = Field(..., description="File path")
     content: str = Field(..., description="File content")
     language: str = Field(default="plaintext", description="Programming language")
-    project_id: Optional[int] = Field(None, description="Project ID")
+    project_id: Optional[str] = Field(None, description="Project ID (UUID)")
 
 
 class UpdateFileRequest(BaseModel):
     """Request to update a file"""
     path: str = Field(..., description="File path")
     content: str = Field(..., description="New file content")
-    project_id: Optional[int] = Field(None, description="Project ID")
+    project_id: Optional[str] = Field(None, description="Project ID (UUID)")
 
 
 class DeleteFileRequest(BaseModel):
     """Request to delete a file"""
     path: str = Field(..., description="File path")
-    project_id: Optional[int] = Field(None, description="Project ID")
+    project_id: Optional[str] = Field(None, description="Project ID (UUID)")
 
 
 class FileOperationResponse(BaseModel):
@@ -134,10 +134,33 @@ class BoltProjectSchema(BaseModel):
 
 class ExportProjectRequest(BaseModel):
     """Request to export project as ZIP"""
-    project_id: int = Field(..., description="Project ID to export")
+    project_id: str = Field(..., description="Project ID to export (UUID)")
     include_node_modules: bool = Field(default=False, description="Include node_modules")
     include_dot_files: bool = Field(default=True, description="Include dot files")
     include_git_folder: bool = Field(default=False, description="Include .git folder")
+
+
+class BulkSyncFilesRequest(BaseModel):
+    """Request to sync multiple files at once"""
+    project_id: str = Field(..., description="Project ID (UUID)")
+    files: List[ProjectFileSchema] = Field(..., description="Files to sync")
+
+
+class BulkSyncFilesResponse(BaseModel):
+    """Response from bulk file sync"""
+    success: bool = Field(..., description="Whether sync was successful")
+    files_created: int = Field(default=0, description="Number of files created")
+    files_updated: int = Field(default=0, description="Number of files updated")
+    files_deleted: int = Field(default=0, description="Number of files deleted")
+    message: str = Field(..., description="Status message")
+
+
+class GetProjectFilesResponse(BaseModel):
+    """Response with project files"""
+    success: bool = Field(..., description="Whether request was successful")
+    project_id: str = Field(..., description="Project ID")
+    files: List[ProjectFileSchema] = Field(default_factory=list, description="Project files")
+    total_files: int = Field(default=0, description="Total number of files")
 
 
 # Project Generation Schemas (Bolt.new Workflow)

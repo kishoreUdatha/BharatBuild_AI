@@ -192,6 +192,247 @@ class AcademicPDFGenerator:
         story.append(PageBreak())
         return story
 
+    def _create_certificate_page(self, college_info: Dict) -> List:
+        """Create Certificate page for academic document"""
+        story = []
+
+        # College Header
+        story.append(Paragraph(
+            college_info.get('college_name', 'COLLEGE NAME'),
+            self.styles['DocTitle']
+        ))
+        story.append(Spacer(1, 0.1*inch))
+
+        if college_info.get('affiliated_to'):
+            story.append(Paragraph(
+                f"({college_info['affiliated_to']})",
+                self.styles['DocSubtitle']
+            ))
+
+        if college_info.get('college_address'):
+            story.append(Paragraph(
+                college_info['college_address'],
+                self.styles['BodyText']
+            ))
+
+        story.append(Spacer(1, 0.2*inch))
+
+        # Department
+        story.append(Paragraph(
+            college_info.get('department', 'Department of Computer Science and Engineering'),
+            self.styles['Heading2']
+        ))
+
+        story.append(Spacer(1, 0.3*inch))
+
+        # Certificate Title
+        story.append(Paragraph("CERTIFICATE", self.styles['DocTitle']))
+        story.append(Spacer(1, 0.3*inch))
+
+        # Certificate Body
+        project_title = college_info.get('project_title', 'Project Title')
+        academic_year = college_info.get('academic_year', '2024-2025')
+
+        cert_text = f"""This is to certify that the project entitled <b>"{project_title}"</b>
+        is a bonafide work carried out by the following students in partial fulfillment
+        of the requirements for the award of <b>Bachelor of Technology in Computer Science
+        and Engineering</b> during the academic year <b>{academic_year}</b>."""
+
+        story.append(Paragraph(cert_text, self.styles['BodyText']))
+        story.append(Spacer(1, 0.3*inch))
+
+        # Student Table
+        students = college_info.get('students', [])
+        if students:
+            table_data = [['S.No', 'Name', 'Roll Number']]
+            for i, student in enumerate(students, 1):
+                if isinstance(student, dict):
+                    table_data.append([str(i), student.get('name', ''), student.get('roll_number', '')])
+                else:
+                    table_data.append([str(i), str(student), ''])
+
+            student_table = Table(table_data, colWidths=[0.8*inch, 3*inch, 2*inch])
+            student_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), HexColor('#2c3e50')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 11),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), HexColor('#ecf0f1')),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ]))
+            story.append(student_table)
+
+        story.append(Spacer(1, 0.5*inch))
+
+        # Signature Section
+        signature_data = [
+            ['Project Guide', 'Head of Department', 'Principal'],
+            ['', '', ''],
+            [college_info.get('guide_name', '________________'),
+             college_info.get('hod_name', '________________'),
+             college_info.get('principal_name', '________________')],
+            ['Signature: ____________', 'Signature: ____________', 'Signature: ____________'],
+            ['Date: ____________', 'Date: ____________', 'Date: ____________'],
+        ]
+
+        sig_table = Table(signature_data, colWidths=[2.2*inch, 2.2*inch, 2.2*inch])
+        sig_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(sig_table)
+
+        story.append(Spacer(1, 0.4*inch))
+
+        # External Examiner
+        story.append(Paragraph("<b>External Examiner</b>", self.styles['Heading3']))
+        story.append(Paragraph("Name: ________________________", self.styles['BodyText']))
+        story.append(Paragraph("Signature: ____________________", self.styles['BodyText']))
+        story.append(Paragraph("Date: ________________________", self.styles['BodyText']))
+
+        story.append(PageBreak())
+        return story
+
+    def _create_declaration_page(self, college_info: Dict) -> List:
+        """Create Declaration page for academic document"""
+        story = []
+
+        story.append(Paragraph("DECLARATION", self.styles['DocTitle']))
+        story.append(Spacer(1, 0.4*inch))
+
+        project_title = college_info.get('project_title', 'Project Title')
+        college_name = college_info.get('college_name', 'College Name')
+        department = college_info.get('department', 'Department of Computer Science and Engineering')
+        guide_name = college_info.get('guide_name', 'Guide Name')
+
+        declaration_text = f"""We, the undersigned, hereby declare that the project entitled
+        <b>"{project_title}"</b> submitted to <b>{college_name}</b>, <b>{department}</b>,
+        is a record of an original work done by us under the guidance of <b>{guide_name}</b>.
+
+        This project work is submitted in partial fulfillment of the requirements for the
+        award of the degree of <b>Bachelor of Technology in Computer Science and Engineering</b>.
+
+        We further declare that:"""
+
+        story.append(Paragraph(declaration_text, self.styles['BodyText']))
+        story.append(Spacer(1, 0.2*inch))
+
+        # Declaration points
+        points = [
+            "This project is based on our original work.",
+            "This project has not been submitted previously for any degree or examination in any other university.",
+            "All sources of information have been duly acknowledged.",
+            "We have followed the guidelines provided by the institute for preparing this report."
+        ]
+
+        for i, point in enumerate(points, 1):
+            story.append(Paragraph(f"{i}. {point}", self.styles['BodyText']))
+            story.append(Spacer(1, 0.1*inch))
+
+        story.append(Spacer(1, 0.3*inch))
+
+        # Student Signatures
+        students = college_info.get('students', [])
+        if students:
+            story.append(Paragraph("<b>Student Signatures:</b>", self.styles['Heading3']))
+            story.append(Spacer(1, 0.2*inch))
+
+            table_data = [['Name', 'Roll Number', 'Signature']]
+            for student in students:
+                if isinstance(student, dict):
+                    table_data.append([
+                        student.get('name', ''),
+                        student.get('roll_number', ''),
+                        '________________'
+                    ])
+                else:
+                    table_data.append([str(student), '', '________________'])
+
+            sig_table = Table(table_data, colWidths=[2.5*inch, 2*inch, 2*inch])
+            sig_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), HexColor('#34495e')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('TOPPADDING', (0, 0), (-1, -1), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ]))
+            story.append(sig_table)
+
+        story.append(Spacer(1, 0.4*inch))
+
+        # Date and Place
+        story.append(Paragraph(f"<b>Date:</b> {college_info.get('date', '_____________')}", self.styles['BodyText']))
+        story.append(Paragraph(f"<b>Place:</b> {college_name}", self.styles['BodyText']))
+
+        story.append(PageBreak())
+        return story
+
+    def _create_acknowledgement_page(self, college_info: Dict) -> List:
+        """Create Acknowledgement page for academic document"""
+        story = []
+
+        story.append(Paragraph("ACKNOWLEDGEMENT", self.styles['DocTitle']))
+        story.append(Spacer(1, 0.4*inch))
+
+        guide_name = college_info.get('guide_name', 'our project guide')
+        hod_name = college_info.get('hod_name', 'the Head of Department')
+        principal_name = college_info.get('principal_name', 'the Principal')
+        college_name = college_info.get('college_name', 'the college')
+        department = college_info.get('department', 'the department')
+
+        paragraphs = [
+            f"""We take this opportunity to express our profound gratitude and deep regards
+            to our project guide <b>{guide_name}</b> for the exemplary guidance, monitoring,
+            and constant encouragement throughout the course of this project.""",
+
+            f"""We would like to express our sincere thanks to <b>{hod_name}</b>,
+            Head of Department, {department}, for providing us with the opportunity
+            to work on this project.""",
+
+            f"""We also express our sincere gratitude to <b>{principal_name}</b>,
+            Principal, {college_name}, for providing us with the necessary facilities
+            and support.""",
+
+            f"""We extend our heartfelt thanks to all the faculty members of the
+            {department} for their valuable suggestions and support during the
+            development of this project.""",
+
+            """We would also like to thank our family and friends for their constant
+            support and encouragement.""",
+
+            """Finally, we thank all those who directly or indirectly helped us in
+            the successful completion of this project."""
+        ]
+
+        for para in paragraphs:
+            story.append(Paragraph(para, self.styles['BodyText']))
+            story.append(Spacer(1, 0.2*inch))
+
+        story.append(Spacer(1, 0.3*inch))
+
+        # Team Members
+        students = college_info.get('students', [])
+        if students:
+            story.append(Paragraph("<b>Team Members:</b>", self.styles['Heading3']))
+            story.append(Spacer(1, 0.1*inch))
+            for i, student in enumerate(students, 1):
+                name = student.get('name', student) if isinstance(student, dict) else student
+                story.append(Paragraph(f"{i}. {name}", self.styles['BodyText']))
+
+        story.append(Spacer(1, 0.3*inch))
+        story.append(Paragraph(f"<b>Date:</b> {college_info.get('date', '_____________')}", self.styles['BodyText']))
+        story.append(Paragraph(f"<b>Place:</b> {college_name}", self.styles['BodyText']))
+
+        story.append(PageBreak())
+        return story
+
     def _create_table_of_contents(self, sections: List[str]) -> List:
         """Create table of contents"""
         story = []
@@ -267,7 +508,8 @@ class AcademicPDFGenerator:
         self,
         srs_data: Dict,
         output_path: str,
-        doc_info: Optional[Dict] = None
+        doc_info: Optional[Dict] = None,
+        college_info: Optional[Dict] = None
     ) -> bool:
         """
         Generate Software Requirements Specification PDF
@@ -276,6 +518,7 @@ class AcademicPDFGenerator:
             srs_data: SRS content from Document Generator Agent
             output_path: Path to save PDF
             doc_info: Document metadata (title, version, authors, etc.)
+            college_info: College information for Certificate, Declaration, Acknowledgement
 
         Returns:
             bool: True if successful
@@ -302,8 +545,25 @@ class AcademicPDFGenerator:
                 }
             story.extend(self._create_title_page(doc_info))
 
+            # College pages (Certificate, Declaration, Acknowledgement)
+            if college_info:
+                story.extend(self._create_certificate_page(college_info))
+                story.extend(self._create_declaration_page(college_info))
+                story.extend(self._create_acknowledgement_page(college_info))
+
             # Table of contents
             sections = [
+                'Certificate',
+                'Declaration',
+                'Acknowledgement',
+                'Introduction',
+                'Overall Description',
+                'Functional Requirements',
+                'Non-Functional Requirements',
+                'System Features',
+                'External Interface Requirements',
+                'Other Requirements'
+            ] if college_info else [
                 'Introduction',
                 'Overall Description',
                 'Functional Requirements',
@@ -363,7 +623,8 @@ class AcademicPDFGenerator:
         self,
         sds_data: Dict,
         output_path: str,
-        doc_info: Optional[Dict] = None
+        doc_info: Optional[Dict] = None,
+        college_info: Optional[Dict] = None
     ) -> bool:
         """Generate Software Design Specification PDF"""
         try:
@@ -379,6 +640,12 @@ class AcademicPDFGenerator:
                     'date': sds_data.get('date', datetime.utcnow().strftime('%B %d, %Y'))
                 }
             story.extend(self._create_title_page(doc_info))
+
+            # College pages (Certificate, Declaration, Acknowledgement)
+            if college_info:
+                story.extend(self._create_certificate_page(college_info))
+                story.extend(self._create_declaration_page(college_info))
+                story.extend(self._create_acknowledgement_page(college_info))
 
             # SDS Content
             content = sds_data.get('content', {})
@@ -457,7 +724,8 @@ class AcademicPDFGenerator:
         report_data: Dict,
         output_path: str,
         doc_info: Optional[Dict] = None,
-        diagrams: Optional[Dict[str, str]] = None
+        diagrams: Optional[Dict[str, str]] = None,
+        college_info: Optional[Dict] = None
     ) -> bool:
         """
         Generate Complete Project Report PDF (60-80 pages with UML diagrams)
@@ -467,6 +735,7 @@ class AcademicPDFGenerator:
             output_path: Path to save PDF
             doc_info: Document metadata
             diagrams: Dict of {diagram_type: image_path} for UML diagrams
+            college_info: College information for Certificate, Declaration, Acknowledgement
 
         Returns:
             bool: Success status
@@ -485,35 +754,42 @@ class AcademicPDFGenerator:
                 }
             story.extend(self._create_title_page(doc_info))
 
-            # Certificate page
-            story.append(PageBreak())
-            story.append(Spacer(1, 2*inch))
-            story.append(Paragraph("CERTIFICATE", self.styles['DocTitle']))
-            story.append(Spacer(1, 0.5*inch))
-            cert_text = """
-            This is to certify that the project entitled <b>"{title}"</b> is a bonafide work carried out by
-            {author} in partial fulfillment of the requirements for the award of the degree.
-            """.format(
-                title=report_data.get('title', 'Project Title'),
-                author=doc_info.get('authors', ['Student Name'])[0] if 'authors' in doc_info else 'Student Name'
-            )
-            story.append(Paragraph(cert_text, self.styles['BodyText']))
-            story.append(Spacer(1, 2*inch))
-            story.append(Paragraph("Guide's Signature: __________________", self.styles['BodyText']))
-            story.append(Spacer(1, 0.3*inch))
-            story.append(Paragraph("Date: __________________", self.styles['BodyText']))
+            # College pages (Certificate, Declaration, Acknowledgement)
+            if college_info:
+                # Use comprehensive college pages
+                story.extend(self._create_certificate_page(college_info))
+                story.extend(self._create_declaration_page(college_info))
+                story.extend(self._create_acknowledgement_page(college_info))
+            else:
+                # Fallback to simple Certificate page
+                story.append(PageBreak())
+                story.append(Spacer(1, 2*inch))
+                story.append(Paragraph("CERTIFICATE", self.styles['DocTitle']))
+                story.append(Spacer(1, 0.5*inch))
+                cert_text = """
+                This is to certify that the project entitled <b>"{title}"</b> is a bonafide work carried out by
+                {author} in partial fulfillment of the requirements for the award of the degree.
+                """.format(
+                    title=report_data.get('title', 'Project Title'),
+                    author=doc_info.get('authors', ['Student Name'])[0] if 'authors' in doc_info else 'Student Name'
+                )
+                story.append(Paragraph(cert_text, self.styles['BodyText']))
+                story.append(Spacer(1, 2*inch))
+                story.append(Paragraph("Guide's Signature: __________________", self.styles['BodyText']))
+                story.append(Spacer(1, 0.3*inch))
+                story.append(Paragraph("Date: __________________", self.styles['BodyText']))
 
-            # Acknowledgement
-            story.append(PageBreak())
-            story.append(Paragraph("ACKNOWLEDGEMENT", self.styles['Heading1']))
-            story.append(Spacer(1, 0.3*inch))
-            ack_text = """
-            I would like to express my sincere gratitude to my project guide for their invaluable guidance
-            and support throughout this project. I am also thankful to the department faculty and my peers
-            for their encouragement and assistance. This project would not have been possible without their
-            continuous support.
-            """
-            story.append(Paragraph(ack_text, self.styles['BodyText']))
+                # Fallback Acknowledgement
+                story.append(PageBreak())
+                story.append(Paragraph("ACKNOWLEDGEMENT", self.styles['Heading1']))
+                story.append(Spacer(1, 0.3*inch))
+                ack_text = """
+                I would like to express my sincere gratitude to my project guide for their invaluable guidance
+                and support throughout this project. I am also thankful to the department faculty and my peers
+                for their encouragement and assistance. This project would not have been possible without their
+                continuous support.
+                """
+                story.append(Paragraph(ack_text, self.styles['BodyText']))
 
             # Table of Contents (generated from sections)
             story.append(PageBreak())
@@ -727,3 +1003,6 @@ class AcademicPDFGenerator:
 
 # Singleton instance
 pdf_generator = AcademicPDFGenerator()
+
+# Alias for backwards compatibility
+PDFGenerator = AcademicPDFGenerator

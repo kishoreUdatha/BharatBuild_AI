@@ -3,28 +3,115 @@ import { useChatStore, AIMessage, UserMessage } from '@/store/chatStore'
 import { useProjectStore, ProjectFile } from '@/store/projectStore'
 import { useTokenStore } from '@/store/tokenStore'
 import { useTerminalStore } from '@/store/terminalStore'
+import { useErrorStore } from '@/store/errorStore'
+import { parseFileOperationEvent } from '@/hooks/useFileChangeEvents'
 import { streamingClient } from '@/lib/streaming-client'
+import {
+  classifyPromptAsync,
+  getChatResponse,
+  getExplainResponse,
+  getDebugResponse,
+  type ClassificationResult,
+  type PromptIntent
+} from '@/services/promptClassifier'
+import { getAgentLabel } from './agentLabelMapping'
 
 const generateId = () => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+
+// Helper: Extract a project name from user's prompt
+const extractProjectName = (prompt: string): string => {
+  // Common patterns: "Create a/an X", "Build a/an X", "Make a/an X", etc.
+  const patterns = [
+    /(?:create|build|make|develop|design|implement)\s+(?:a|an|the)?\s*(.+?)(?:\s+(?:app|application|website|site|platform|system|tool|project|page|portal))?$/i,
+    /(?:create|build|make|develop|design|implement)\s+(.+)/i,
+    /^(.+?)\s+(?:app|application|website|site|platform|system|tool|project)$/i,
+  ]
+
+  for (const pattern of patterns) {
+    const match = prompt.match(pattern)
+    if (match && match[1]) {
+      // Clean up and capitalize
+      let name = match[1].trim()
+      // Remove common trailing words
+      name = name.replace(/\s+(app|application|website|site|platform|system|tool|project|page|portal)$/i, '')
+      // Capitalize each word
+      name = name.split(' ')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ')
+      // Limit length
+      if (name.length > 50) {
+        name = name.substring(0, 50) + '...'
+      }
+      return name || 'My Project'
+    }
+  }
+
+  // Fallback: Use first few words
+  const words = prompt.split(' ').slice(0, 4).join(' ')
+  return words.charAt(0).toUpperCase() + words.slice(1) || 'My Project'
+}
 
 // Helper: Get language from file extension
 const getLanguageFromPath = (path: string): string => {
   const ext = path.split('.').pop()?.toLowerCase()
   const languageMap: Record<string, string> = {
+    // Web Development
     'js': 'javascript',
     'jsx': 'javascript',
     'ts': 'typescript',
     'tsx': 'typescript',
     'html': 'html',
     'css': 'css',
-    'json': 'json',
-    'md': 'markdown',
+    'scss': 'scss',
+    'sass': 'sass',
+    'less': 'less',
+    'php': 'php',
+
+    // AI/ML & Data Science
     'py': 'python',
+    'r': 'r',
+    'jl': 'julia',
+    'm': 'matlab',
+    'ipynb': 'json',
+
+    // Systems Programming
     'java': 'java',
-    'go': 'go',
-    'rs': 'rust',
     'cpp': 'cpp',
     'c': 'c',
+    'cs': 'csharp',
+    'go': 'go',
+    'rs': 'rust',
+    'rb': 'ruby',
+    'kt': 'kotlin',
+    'scala': 'scala',
+    'swift': 'swift',
+
+    // Data & Config
+    'json': 'json',
+    'xml': 'xml',
+    'yaml': 'yaml',
+    'yml': 'yaml',
+    'toml': 'toml',
+    'csv': 'plaintext',
+
+    // Database
+    'sql': 'sql',
+
+    // Shell & Scripts
+    'sh': 'shell',
+    'bash': 'shell',
+    'ps1': 'powershell',
+    'bat': 'bat',
+
+    // Documentation
+    'md': 'markdown',
+    'rst': 'restructuredtext',
+    'tex': 'latex',
+
+    // Other
+    'dockerfile': 'dockerfile',
+    'makefile': 'makefile',
+    'gradle': 'groovy',
   }
   return languageMap[ext || ''] || 'plaintext'
 }
@@ -53,11 +140,13 @@ export const useChat = () => {
     addFileOperation,
     updateFileOperation,
     updateThinkingSteps,
+    addThinkingStep,
+    updateThinkingStep,
     isStreaming,
     clearMessages
   } = useChatStore()
 
-  const { currentProject } = useProjectStore()
+  const { currentProject, updateProject } = useProjectStore()
   const { deductTokens } = useTokenStore()
   const { addLog, setVisible: setTerminalVisible } = useTerminalStore()
 
@@ -75,7 +164,23 @@ export const useChat = () => {
     }
     addMessage(userMessage)
 
-    // 2. Create AI message placeholder
+    // 2. PROMPT CLASSIFIER LAYER - Classify the user's intent using AI
+    const projectStore = useProjectStore.getState()
+    const classification = await classifyPromptAsync(content, {
+      hasExistingProject: (projectStore.currentProject?.files?.length ?? 0) > 0,
+      currentFiles: projectStore.currentProject?.files?.map(f => f.path) || []
+    })
+
+    console.log('[useChat] Prompt Classification (AI-powered):', {
+      intent: classification.intent,
+      confidence: classification.confidence,
+      reasoning: classification.reasoning,
+      requiresGeneration: classification.requiresGeneration,
+      suggestedWorkflow: classification.suggestedWorkflow,
+      entities: classification.entities
+    })
+
+    // 3. Create AI message placeholder
     const aiMessageId = generateId()
     const aiMessage: AIMessage = {
       id: aiMessageId,
@@ -83,86 +188,380 @@ export const useChat = () => {
       content: '',
       timestamp: new Date(),
       isStreaming: true,
-      status: 'thinking',
+      status: classification.requiresGeneration ? 'thinking' : 'complete',
       fileOperations: [],
       thinkingSteps: []
     }
     addMessage(aiMessage)
+
+    // 4. Route based on intent
+    switch (classification.intent) {
+      case 'CHAT':
+        // Simple conversation - use AI-generated response if available, else fallback
+        const chatResponse = classification.chatResponse || getChatResponse(content)
+        appendToMessage(aiMessageId, chatResponse)
+        updateMessageStatus(aiMessageId, 'complete')
+        stopStreaming()
+        return
+
+      case 'EXPLAIN':
+        // Explanation request - use AI response if available
+        const explainResponse = classification.chatResponse || getExplainResponse(content)
+        appendToMessage(aiMessageId, explainResponse)
+        updateMessageStatus(aiMessageId, 'complete')
+        stopStreaming()
+        return
+
+      case 'DEBUG':
+        // Debug request without existing project context
+        if (!projectStore.currentProject?.files?.length) {
+          const debugResponse = classification.chatResponse || getDebugResponse(content)
+          appendToMessage(aiMessageId, debugResponse)
+          updateMessageStatus(aiMessageId, 'complete')
+          stopStreaming()
+          return
+        }
+        // If there's a project, fall through to generation
+        break
+
+      case 'FIX':
+        // AUTO-FIX: User reports a problem in simple terms
+        // System automatically collects ALL context and sends to Fixer Agent
+        // Context is collected below in the metadata building section (step 8)
+
+        // If no project exists, show helpful message
+        if (!projectStore.currentProject?.files?.length) {
+          appendToMessage(aiMessageId, `I notice you're reporting an issue, but there's no project to fix yet.
+
+**What would you like to do?**
+1. **Create a new project** - Describe what you want to build
+2. **Import existing code** - Paste your code and I'll help fix it
+
+Just describe your project or share the code that needs fixing!`)
+          updateMessageStatus(aiMessageId, 'complete')
+          stopStreaming()
+          return
+        }
+
+        // Continue with fix workflow - context will be attached in metadata below
+        break
+
+      case 'GENERATE':
+        // CRITICAL: For new project generation, reset ALL state to prevent file overlap
+        // This is the Bolt.new behavior - each "create X" starts fresh
+        if (projectStore.currentProject?.files && projectStore.currentProject.files.length > 0) {
+          console.log('[useChat] GENERATE intent with existing project - creating NEW project (Bolt.new style)')
+
+          // Destroy old sandbox on server (fire and forget)
+          const oldProjectId = projectStore.currentProject.id
+          const token = localStorage.getItem('access_token')
+          if (token && oldProjectId && oldProjectId !== 'default-project') {
+            fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/sync/sandbox/${oldProjectId}`, {
+              method: 'DELETE',
+              headers: { 'Authorization': `Bearer ${token}` }
+            }).catch(err => console.warn('[useChat] Failed to cleanup old sandbox:', err))
+          }
+
+          // Reset ALL stores for complete isolation
+          projectStore.resetProject()
+          useTerminalStore.getState().clearLogs()
+          useErrorStore.getState().clearErrors()
+
+          // Create new empty project with temporary ID (will be replaced by project_id_updated event)
+          const newProjectId = `project-${Date.now()}`
+          projectStore.setCurrentProject({
+            id: newProjectId,
+            name: 'New Project',
+            files: [],
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            isSynced: false
+          })
+          console.log(`[useChat] Created fresh project: ${newProjectId}`)
+        }
+        // Continue to generation below
+        break
+
+      case 'MODIFY':
+      case 'DOCUMENT':
+      case 'REFACTOR':
+        // These intents modify existing project - continue below
+        break
+
+      default:
+        // Unknown intent - treat as generation request if long enough
+        if (content.trim().split(/\s+/).length < 4) {
+          const defaultResponse = classification.chatResponse || getChatResponse(content)
+          appendToMessage(aiMessageId, defaultResponse)
+          updateMessageStatus(aiMessageId, 'complete')
+          stopStreaming()
+          return
+        }
+    }
+
+    // 5. Extract project name from prompt and update project (only for GENERATE intent)
+    if (classification.intent === 'GENERATE' &&
+        projectStore.currentProject &&
+        (projectStore.currentProject.name === 'My Project' ||
+         projectStore.currentProject.files.length === 0)) {
+      const extractedName = extractProjectName(content)
+      if (extractedName && extractedName !== 'My Project') {
+        updateProject({ name: extractedName })
+        console.log('[useChat] Updated project name to:', extractedName)
+      }
+    }
+
     startStreaming(aiMessageId)
 
     try {
-      // 3. Initialize thinking steps (will be updated dynamically from backend)
+      // 6. Initialize thinking steps (will be updated dynamically from backend)
       updateThinkingSteps(aiMessageId, [])
 
-      // Track thinking steps dynamically
-      const thinkingStepsMap = new Map<number, { label: string; status: 'pending' | 'active' | 'complete' }>()
+      // 7. Determine workflow based on classification
+      const workflow = classification.suggestedWorkflow === 'bolt_instant' ? 'bolt_instant' : 'bolt_standard'
 
-      // 4. Stream response from Dynamic Orchestrator
+      // 8. Build metadata with auto-collected context for FIX intent
+      let workflowMetadata: Record<string, any> = {}
+
+      if (classification.intent === 'FIX') {
+        // AUTO-FIX: Automatically collect ALL context (Bolt.new style)
+        // User doesn't need to provide technical details!
+        const errorStoreState = useErrorStore.getState()
+        const terminalStoreState = useTerminalStore.getState()
+        const projectStoreState = useProjectStore.getState()
+
+        // Get all unresolved errors from the error collector
+        const autoCollectedErrors = errorStoreState.getUnresolvedErrors().map(err => ({
+          message: err.message,
+          file: err.file,
+          line: err.line,
+          column: err.column,
+          stack: err.stack,
+          source: err.source,
+          severity: err.severity
+        }))
+
+        // Get recent terminal logs (last 50 entries)
+        const autoCollectedLogs = terminalStoreState.logs.slice(-50).map(log => ({
+          type: log.type,
+          content: log.content,
+          timestamp: log.timestamp?.toISOString?.() || new Date().toISOString()
+        }))
+
+        // Get project files for context
+        const autoCollectedFiles = projectStoreState.currentProject?.files?.map(f => ({
+          path: f.path,
+          content: f.content
+        })) || []
+
+        console.log('[useChat] AUTO-FIX: Collected context for Fixer Agent:', {
+          errorsCount: autoCollectedErrors.length,
+          logsCount: autoCollectedLogs.length,
+          filesCount: autoCollectedFiles.length
+        })
+
+        // Pack everything into metadata for the backend
+        workflowMetadata = {
+          intent: 'FIX',
+          auto_fix_context: {
+            user_problem_description: content,  // User's simple description like "page is blank"
+            collected_errors: autoCollectedErrors,
+            terminal_logs: autoCollectedLogs,
+            project_files: autoCollectedFiles
+          }
+        }
+      }
+
+      // Get the CURRENT project ID (may have been reset in GENERATE case above)
+      const freshProjectStore = useProjectStore.getState()
+      const projectId = freshProjectStore.currentProject?.id || 'default-project'
+
+      console.log(`[useChat] Starting orchestrator workflow (${workflow} - ${classification.intent} intent) for project: ${projectId}`)
       await streamingClient.streamOrchestratorWorkflow(
         content,
-        currentProject?.id || 'default-project',
-        'bolt_standard',
-        {},
+        projectId,  // Use fresh project ID (not stale closure value)
+        workflow,  // Use classifier-suggested workflow
+        workflowMetadata,
         (event) => {
-          switch (event.type) {
-            case 'status':
-              // Handle workflow status updates
-              if (event.data?.message) {
-                appendToMessage(aiMessageId, `\n${event.data.message}\n`)
-              }
+          // Log ALL events for debugging
+          console.log('[useChat] Event received:', event.type, event)
 
-              // If total_steps is provided, initialize thinking steps
-              if (event.data?.total_steps) {
-                const steps = []
-                for (let i = 1; i <= event.data.total_steps; i++) {
-                  thinkingStepsMap.set(i, { label: `Step ${i}`, status: 'pending' })
-                  steps.push({ label: `Step ${i}`, status: 'pending' as const })
+          switch (event.type) {
+            case 'project_id_updated':
+              // CRITICAL: Update project ID to actual database UUID
+              // This fixes the bug where frontend uses 'default-project' but files are saved to DB UUID
+              if (event.data?.project_id) {
+                const projectStore = useProjectStore.getState()
+                const newProjectId = event.data.project_id
+                console.log('[project_id_updated] Updating project ID:', event.data.original_project_id, '->', newProjectId)
+
+                // Update the project ID in the store
+                projectStore.updateProject({ id: newProjectId })
+
+                // Also update the current project reference if it exists
+                if (projectStore.currentProject) {
+                  projectStore.setCurrentProject({
+                    ...projectStore.currentProject,
+                    id: newProjectId
+                  })
                 }
-                updateThinkingSteps(aiMessageId, steps)
+              }
+              break
+
+            case 'status':
+              // Handle workflow status updates - DON'T show in chat, only log
+              console.log('[status] Status event:', event.data?.message)
+              // Don't append status messages to chat - they clutter the UI
+              break
+
+            case 'thinking_step':
+              // Handle thinking steps from backend
+              // bolt_standard shows file-by-file progress, bolt_instant shows 3 simple steps
+              if (event.data?.user_visible && event.data?.detail) {
+                const stepLabel = event.data.detail
+                const stepStatus = event.data.step === 'complete' ? 'complete' : 'active'
+
+                // First, mark any existing 'active' steps as 'complete' before adding new one
+                const currentMsg = useChatStore.getState().messages.find(m => m.id === aiMessageId)
+                if (currentMsg && currentMsg.type === 'assistant' && currentMsg.thinkingSteps) {
+                  currentMsg.thinkingSteps.forEach((existingStep) => {
+                    if (existingStep.status === 'active' && existingStep.label !== stepLabel) {
+                      updateThinkingStep(aiMessageId, existingStep.label, { status: 'complete' })
+                    }
+                  })
+                }
+
+                // Check if this step already exists (to avoid duplicates)
+                const existingStep = currentMsg?.type === 'assistant' &&
+                  currentMsg.thinkingSteps?.find(s => s.label === stepLabel)
+
+                if (existingStep) {
+                  // Update existing step
+                  updateThinkingStep(aiMessageId, stepLabel, {
+                    status: stepStatus as 'pending' | 'active' | 'complete'
+                  })
+                } else {
+                  // Add new step
+                  addThinkingStep(aiMessageId, {
+                    label: stepLabel,
+                    status: stepStatus as 'pending' | 'active' | 'complete',
+                    description: event.data.detail,
+                    details: '',
+                    icon: event.data.icon
+                  })
+                }
               }
               break
 
             case 'agent_start':
-              // Mark step as active when agent starts
-              if (event.step && event.data?.name) {
-                const stepLabel = event.data.name
-                thinkingStepsMap.set(event.step, { label: stepLabel, status: 'active' })
+              // Add new step when agent starts (progressive appearance)
+              // Use user-friendly labels instead of internal agent names (Bolt.new style)
+              if (event.data?.name) {
+                const agentInfo = getAgentLabel(event.data.name)
+                // Skip hidden agents (bolt_instant, Analyzer, Verifier, etc.)
+                if (!agentInfo) break
+                const stepLabel = agentInfo.label
+                const status = event.data.status || 'active'
 
-                // Update all thinking steps
-                const steps = Array.from(thinkingStepsMap.values())
-                  .sort((a, b) => {
-                    const indexA = Array.from(thinkingStepsMap.entries()).find(([_, v]) => v === a)?.[0] || 0
-                    const indexB = Array.from(thinkingStepsMap.entries()).find(([_, v]) => v === b)?.[0] || 0
-                    return indexA - indexB
-                  })
-                updateThinkingSteps(aiMessageId, steps)
+                // Check if step already exists (from plan_created)
+                const currentMessage = useChatStore.getState().messages.find(m => m.id === aiMessageId)
+                if (currentMessage && currentMessage.type === 'assistant') {
+                  const existingStepIndex = currentMessage.thinkingSteps?.findIndex(s => s.label === stepLabel)
 
-                appendToMessage(aiMessageId, `\n🤔 **${stepLabel}**\n`)
-              }
-              break
-
-            case 'agent_complete':
-              // Mark step as complete when agent finishes
-              if (event.step) {
-                const stepData = thinkingStepsMap.get(event.step)
-                if (stepData) {
-                  stepData.status = 'complete'
-                  thinkingStepsMap.set(event.step, stepData)
-
-                  // Update all thinking steps
-                  const steps = Array.from(thinkingStepsMap.values())
-                    .sort((a, b) => {
-                      const indexA = Array.from(thinkingStepsMap.entries()).find(([_, v]) => v === a)?.[0] || 0
-                      const indexB = Array.from(thinkingStepsMap.entries()).find(([_, v]) => v === b)?.[0] || 0
-                      return indexA - indexB
+                  if (existingStepIndex !== undefined && existingStepIndex >= 0 && currentMessage.thinkingSteps) {
+                    // Update existing step - preserve description and details
+                    updateThinkingStep(aiMessageId, stepLabel, {
+                      status: status as 'pending' | 'active' | 'complete',
+                      details: event.data.details || currentMessage.thinkingSteps[existingStepIndex]?.details
                     })
-                  updateThinkingSteps(aiMessageId, steps)
+                  } else {
+                    // Add new step
+                    addThinkingStep(aiMessageId, {
+                      label: stepLabel,
+                      status: status as 'pending' | 'active' | 'complete',
+                      description: event.data.description,
+                      details: event.data.details,
+                      taskNumber: event.data.task_number
+                    })
+                  }
+                } else {
+                  // Add new step
+                  addThinkingStep(aiMessageId, {
+                    label: stepLabel,
+                    status: status as 'pending' | 'active' | 'complete',
+                    description: event.data.description,
+                    details: event.data.details,
+                    taskNumber: event.data.task_number
+                  })
                 }
               }
               break
 
+            case 'agent_complete':
+              // Mark step as complete when agent finishes and update details
+              // Use user-friendly labels (Bolt.new style)
+              if (event.data?.name) {
+                const agentInfo = getAgentLabel(event.data.name)
+                // Skip hidden agents
+                if (!agentInfo) break
+                updateThinkingStep(aiMessageId, agentInfo.label, {
+                  status: 'complete',
+                  details: event.data.details || undefined
+                })
+              }
+              break
+
             case 'plan_created':
-              // Plan created event from backend
+              // Plan created event from backend - add tasks to UI immediately
+              console.log('[plan_created] Event received at:', new Date().toISOString())
+              console.log('[plan_created] Event data:', event.data)
+
+              // Update project name if Claude suggested one
+              if (event.data?.project_name) {
+                const projectStore = useProjectStore.getState()
+                projectStore.updateProject({ name: event.data.project_name })
+                console.log('[plan_created] Updated project name to Claude suggestion:', event.data.project_name)
+              }
+
+              if (event.data?.tasks && Array.isArray(event.data.tasks)) {
+                console.log('[plan_created] Tasks count:', event.data.tasks.length)
+
+                // Get current message to check existing steps
+                const currentMsg = useChatStore.getState().messages.find(m => m.id === aiMessageId)
+                const existingSteps = (currentMsg?.type === 'assistant' && currentMsg.thinkingSteps) || []
+
+                // Map existing steps by label for quick lookup
+                const existingStepsMap = new Map(existingSteps.map(s => [s.label, s]))
+
+                // Merge with existing steps, preserving status of already-started steps
+                // This prevents subsequent plan_created events from resetting step statuses
+                const taskSteps = event.data.tasks.map((task: any) => {
+                  const label = task.title || task.name
+                  const existingStep = existingStepsMap.get(label)
+
+                  // Preserve existing status if step is already active or complete
+                  // Only use 'pending' if step doesn't exist or is already pending
+                  const status = existingStep && existingStep.status !== 'pending'
+                    ? existingStep.status
+                    : 'pending' as const
+
+                  return {
+                    label,
+                    status,
+                    description: task.description || existingStep?.description || task.name,
+                    details: task.details || existingStep?.details || '',
+                    taskNumber: task.number
+                  }
+                })
+
+                console.log('[plan_created] Calling updateThinkingSteps with:', taskSteps.length, 'tasks')
+                updateThinkingSteps(aiMessageId, taskSteps)
+                console.log('[plan_created] updateThinkingSteps completed')
+              } else {
+                console.warn('[plan_created] No tasks in event data!')
+              }
+
+              // Handle file operations if provided
               if (event.data?.files) {
                 event.data.files.forEach((file: any) => {
                   addFileOperation(aiMessageId, {
@@ -176,11 +575,9 @@ export const useChat = () => {
               break
 
             case 'file_start':
+              // NOTE: Don't append to chat - file operations shown in PlanView sidebar only
               if (event.path) {
                 updateFileOperation(aiMessageId, event.path, { status: 'in-progress' })
-
-                // Show minimal message in chat (Bolt.new style)
-                appendToMessage(aiMessageId, `\n\n📄 **${event.path}**\n`)
 
                 // Create empty file in project store immediately
                 const projectStore = useProjectStore.getState()
@@ -221,17 +618,16 @@ export const useChat = () => {
 
             case 'file_operation':
               // Handle file_operation events from backend
+              // NOTE: Don't append to chat message - file operations are shown in PlanView sidebar only (Bolt.new style)
               if (event.operation === 'create') {
                 if (event.operation_status === 'in_progress') {
-                  // Add file operation to list
+                  // Add file operation to list (shown in PlanView)
                   addFileOperation(aiMessageId, {
                     type: 'create',
                     path: event.path || '',
                     description: `Creating ${event.path}`,
                     status: 'in-progress'
                   })
-                  // Show minimal message in chat (Bolt.new style)
-                  appendToMessage(aiMessageId, `\n\n📄 **${event.path}**\n`)
                 } else if (event.operation_status === 'complete' && event.file_content !== undefined) {
                   // Mark file operation as complete
                   updateFileOperation(aiMessageId, event.path || '', {
@@ -263,7 +659,12 @@ export const useChat = () => {
                     projectStore.openTab(newFile)
                   }
 
-                  appendToMessage(aiMessageId, `\n✓ ${event.path} created\n`)
+                  // Emit file change event for auto-reload
+                  parseFileOperationEvent({
+                    path: event.path,
+                    operation: 'created',
+                    status: 'complete'
+                  }, projectId)
                 }
               } else if (event.operation === 'modify') {
                 if (event.operation_status === 'in_progress') {
@@ -284,12 +685,111 @@ export const useChat = () => {
                     projectStore.updateFile(event.path || '', event.file_content)
                   }
 
-                  appendToMessage(aiMessageId, `\n✓ ${event.path} modified\n`)
+                  // Emit file change event for auto-reload
+                  parseFileOperationEvent({
+                    path: event.path,
+                    operation: 'updated',
+                    status: 'complete'
+                  }, projectId)
+                }
+              } else if (event.operation === 'fixed') {
+                // Handle file fixed by fixer agent
+                if (event.operation_status === 'in_progress' || event.status === 'in_progress') {
+                  addFileOperation(aiMessageId, {
+                    type: 'modify',
+                    path: event.path || '',
+                    description: `Fixing ${event.path}`,
+                    status: 'in-progress'
+                  })
+                } else if (event.operation_status === 'complete' || event.status === 'complete') {
+                  updateFileOperation(aiMessageId, event.path || '', {
+                    status: 'complete'
+                  })
+
+                  // Update file content in project store if provided
+                  if (event.file_content !== undefined) {
+                    const projectStore = useProjectStore.getState()
+                    projectStore.updateFile(event.path || '', event.file_content)
+                  }
+
+                  // Emit file change event to trigger auto-reload
+                  parseFileOperationEvent({
+                    path: event.path,
+                    operation: 'fixed',
+                    status: 'complete'
+                  }, projectId)
+
+                  console.log(`[useChat] File fixed: ${event.path} - triggering preview reload`)
+                }
+              } else if (event.operation === 'documentation') {
+                // Handle documentation file operations (from Documenter agent)
+                // Documentation files follow planner structure: docs/SRS.md, docs/ARCHITECTURE.md, etc.
+                // For academic projects: Word, PDF, PPT files (binary - stored on backend)
+                const docPath = event.path || ''
+
+                // Check if this is a binary file (Word, PDF, PPT)
+                const isBinaryDoc = (path: string) => {
+                  const ext = path.split('.').pop()?.toLowerCase()
+                  return ['pdf', 'docx', 'doc', 'pptx', 'ppt'].includes(ext || '')
+                }
+
+                if (event.operation_status === 'in_progress' || event.status === 'in_progress') {
+                  addFileOperation(aiMessageId, {
+                    type: 'create',
+                    path: docPath,
+                    description: `Creating documentation: ${docPath}`,
+                    status: 'in-progress'
+                  })
+                } else if (event.operation_status === 'complete' || event.status === 'complete') {
+                  updateFileOperation(aiMessageId, docPath, {
+                    status: 'complete'
+                  })
+
+                  const projectStore = useProjectStore.getState()
+                  const existingFile = findFileInProject(projectStore.currentProject?.files || [], docPath)
+
+                  if (isBinaryDoc(docPath)) {
+                    // Binary files (Word, PDF, PPT) - add to file tree without content
+                    // These are stored on backend and can be downloaded
+                    if (!existingFile) {
+                      const newFile = {
+                        path: docPath,
+                        content: `[Binary file stored on server: ${docPath}]`,
+                        language: 'text',
+                        type: 'file' as const,
+                        isBinary: true
+                      }
+                      projectStore.addFile(newFile)
+                      console.log(`[useChat] Added binary documentation file: ${docPath}`)
+                    }
+                  } else if (event.file_content || event.content) {
+                    // Text files (Markdown) - add with content
+                    const language = getLanguageFromPath(docPath)
+                    const content = event.file_content || event.content || ''
+
+                    if (existingFile) {
+                      projectStore.updateFile(docPath, content)
+                    } else {
+                      // Create new documentation file in docs/ folder structure
+                      const newFile = {
+                        path: docPath,
+                        content: content,
+                        language,
+                        type: 'file' as const
+                      }
+                      projectStore.addFile(newFile)
+                      console.log(`[useChat] Added documentation file: ${docPath}`)
+                    }
+                  } else {
+                    // File created without content (content saved on backend only)
+                    console.log(`[useChat] Documentation file created on backend: ${docPath}`)
+                  }
                 }
               }
               break
 
             case 'file_complete':
+              // NOTE: Don't append to chat - file operations shown in PlanView sidebar only
               if (event.path && event.full_content) {
                 updateFileOperation(aiMessageId, event.path, {
                   status: 'complete',
@@ -326,19 +826,12 @@ export const useChat = () => {
                   // Auto-open newly created file in tab
                   projectStore.openTab(newFile)
                 }
-
-                // Show checkmark in chat (minimal, Bolt.new style)
-                appendToMessage(aiMessageId, `   ✓ Complete\n`)
               }
               break
 
             case 'commands':
               if (event.commands) {
-                appendToMessage(
-                  aiMessageId,
-                  `\n\n### Installation Commands:\n${event.commands.map(cmd => `\`${cmd}\``).join('\n')}\n`
-                )
-
+                // Don't append commands to chat message - only show in terminal
                 // Show terminal and execute commands
                 setTerminalVisible(true)
 
@@ -388,23 +881,74 @@ export const useChat = () => {
               break
 
             case 'complete':
-              // Mark all steps as complete
-              thinkingStepsMap.forEach((stepData, stepNum) => {
-                stepData.status = 'complete'
-                thinkingStepsMap.set(stepNum, stepData)
-              })
-
-              const finalSteps = Array.from(thinkingStepsMap.values())
-                .sort((a, b) => {
-                  const indexA = Array.from(thinkingStepsMap.entries()).find(([_, v]) => v === a)?.[0] || 0
-                  const indexB = Array.from(thinkingStepsMap.entries()).find(([_, v]) => v === b)?.[0] || 0
-                  return indexA - indexB
+              // Mark any remaining active steps as complete
+              const currentMessage = useChatStore.getState().messages.find(m => m.id === aiMessageId)
+              if (currentMessage && currentMessage.type === 'assistant') {
+                currentMessage.thinkingSteps?.forEach((step) => {
+                  if (step.status === 'active') {
+                    updateThinkingStep(aiMessageId, step.label, { status: 'complete' })
+                  }
                 })
-              updateThinkingSteps(aiMessageId, finalSteps)
+              }
 
               updateMessageStatus(aiMessageId, 'complete')
-              if (event.data?.message) {
-                appendToMessage(aiMessageId, `\n\n✅ ${event.data.message}`)
+
+              // Store session_id for ZIP download (ephemeral storage)
+              if (event.data?.session_id) {
+                useProjectStore.getState().setSessionId(event.data.session_id)
+                useProjectStore.getState().setDownloadUrl(event.data.download_url)
+              }
+
+              // Generate completion summary with bullet points
+              const projectStore = useProjectStore.getState()
+              const aiMessage = currentMessage?.type === 'assistant' ? currentMessage : null
+              const completedFiles = aiMessage?.fileOperations?.filter(f => f.status === 'complete') || []
+              const completedSteps = aiMessage?.thinkingSteps?.filter(s => s.status === 'complete') || []
+
+              if (completedFiles.length > 0 || completedSteps.length > 0) {
+                let summary = '\n\n---\n\n✅ **Project Generated Successfully!**\n\n'
+
+                // What was built
+                if (completedSteps.length > 0) {
+                  summary += '**What was built:**\n'
+                  completedSteps.forEach(step => {
+                    summary += `• ${step.label}\n`
+                  })
+                  summary += '\n'
+                }
+
+                // Files created
+                if (completedFiles.length > 0) {
+                  summary += `**Files created:** ${completedFiles.length} files\n`
+
+                  // Group files by type
+                  const components = completedFiles.filter(f => f.path.includes('component') || f.path.endsWith('.tsx') || f.path.endsWith('.jsx'))
+                  const styles = completedFiles.filter(f => f.path.endsWith('.css') || f.path.endsWith('.scss'))
+                  const configs = completedFiles.filter(f => f.path.includes('config') || f.path.endsWith('.json') || f.path.endsWith('.ts') && f.path.includes('config'))
+                  const others = completedFiles.filter(f => !components.includes(f) && !styles.includes(f) && !configs.includes(f))
+
+                  if (components.length > 0) {
+                    summary += `• ${components.length} component${components.length > 1 ? 's' : ''}\n`
+                  }
+                  if (styles.length > 0) {
+                    summary += `• ${styles.length} style file${styles.length > 1 ? 's' : ''}\n`
+                  }
+                  if (configs.length > 0) {
+                    summary += `• ${configs.length} config file${configs.length > 1 ? 's' : ''}\n`
+                  }
+                  if (others.length > 0) {
+                    summary += `• ${others.length} other file${others.length > 1 ? 's' : ''}\n`
+                  }
+                  summary += '\n'
+                }
+
+                // Next steps
+                summary += '**Next steps:**\n'
+                summary += '• Browse files in the editor on the right\n'
+                summary += '• Click "Preview" to see your app in action\n'
+                summary += '• Use "Export" to download as ZIP\n'
+
+                appendToMessage(aiMessageId, summary)
               }
               break
 
@@ -415,8 +959,8 @@ export const useChat = () => {
               break
 
             case 'warning':
-              const warningMsg = event.data?.message || 'Warning'
-              appendToMessage(aiMessageId, `\n⚠️ ${warningMsg}\n`)
+              // Don't show warnings in chat - only log them
+              console.log('[warning]', event.data?.message)
               break
 
             case 'content':
@@ -471,10 +1015,50 @@ export const useChat = () => {
     }
   }, [messages, sendMessage])
 
+  // Stop ongoing generation
+  const stopGeneration = useCallback(() => {
+    console.log('[useChat] Stopping generation...')
+
+    // Abort the streaming client request
+    streamingClient.abort()
+
+    // Stop the streaming state
+    stopStreaming()
+
+    // Find the current streaming message and mark it as stopped
+    const streamingMessage = messages.find(m => m.type === 'assistant' && m.isStreaming)
+    if (streamingMessage) {
+      // Mark any active thinking steps as stopped
+      if (streamingMessage.type === 'assistant' && streamingMessage.thinkingSteps) {
+        streamingMessage.thinkingSteps.forEach((step) => {
+          if (step.status === 'active') {
+            updateThinkingStep(streamingMessage.id, step.label, {
+              status: 'complete',
+              details: 'Stopped by user'
+            })
+          }
+        })
+      }
+
+      // Mark any in-progress file operations as stopped
+      if (streamingMessage.type === 'assistant' && streamingMessage.fileOperations) {
+        streamingMessage.fileOperations.forEach((op) => {
+          if (op.status === 'in-progress') {
+            updateFileOperation(streamingMessage.id, op.path, { status: 'complete' })
+          }
+        })
+      }
+
+      updateMessageStatus(streamingMessage.id, 'complete')
+      appendToMessage(streamingMessage.id, '\n\n⏹️ Generation stopped by user.')
+    }
+  }, [messages, stopStreaming, updateMessageStatus, appendToMessage, updateThinkingStep, updateFileOperation])
+
   return {
     messages,
     sendMessage,
     regenerateMessage,
+    stopGeneration,
     isStreaming,
     clearMessages
   }

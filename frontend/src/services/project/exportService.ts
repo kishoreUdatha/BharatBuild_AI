@@ -5,6 +5,7 @@
  */
 
 import { ProjectFile } from '@/store/projectStore'
+import { getShareUrl, appConfig } from '@/config'
 import JSZip from 'jszip'
 
 export interface ExportOptions {
@@ -130,7 +131,7 @@ function generateReadme(projectName: string, files: ProjectFile[]): string {
   const hasJavaFiles = files.some(f => f.path.endsWith('.java'))
 
   let readme = `# ${projectName}\n\n`
-  readme += `Generated with BharatBuild AI\n\n`
+  readme += `Generated with ${appConfig.name}\n\n`
 
   readme += `## Installation\n\n`
 
@@ -164,7 +165,7 @@ function generateReadme(projectName: string, files: ProjectFile[]): string {
 export async function createShareableLink(projectId: string): Promise<string> {
   // In real implementation, this would call backend API
   // to create a shareable link
-  return `https://bharatbuild.ai/share/${projectId}`
+  return getShareUrl(projectId)
 }
 
 /**

@@ -1,0 +1,131 @@
+# ============================================
+# BharatBuild AI Backend Dockerfile (CPU Only)
+# For systems without NVIDIA GPU
+# ============================================
+
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
+    GOPATH=/go \
+    PATH=$PATH:/usr/local/go/bin:/go/bin:/root/.local/bin
+
+# Set working directory
+WORKDIR /app
+
+# ============================================
+# Install System Dependencies
+# ============================================
+RUN apt-get update && apt-get install -y \
+    # Build tools
+    gcc \
+    g++ \
+    build-essential \
+    cmake \
+    # Database clients
+    postgresql-client \
+    libpq-dev \
+    # System libraries
+    libffi-dev \
+    libssl-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    zlib1g-dev \
+    libjpeg-dev \
+    libpng-dev \
+    libfreetype6-dev \
+    # Audio libraries
+    libsndfile1 \
+    ffmpeg \
+    portaudio19-dev \
+    # OpenCV dependencies
+    libopencv-dev \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    # HDF5 for Keras
+    libhdf5-dev \
+    # BLAS/LAPACK
+    libopenblas-dev \
+    liblapack-dev \
+    # Utilities
+    git \
+    curl \
+    wget \
+    unzip \
+    cargo \
+    rustc \
+    && rm -rf /var/lib/apt/lists/*
+
+# ============================================
+# Install Java
+# ============================================
+RUN apt-get update && apt-get install -y \
+    default-jdk \
+    maven \
+    gradle \
+    && rm -rf /var/lib/apt/lists/*
+
+# ============================================
+# Install Node.js 20.x
+# ============================================
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    npm install -g npm@latest typescript ts-node yarn pnpm && \
+    rm -rf /var/lib/apt/lists/*
+
+# ============================================
+# Install Go 1.21
+# ============================================
+RUN wget -q https://go.dev/dl/go1.21.5.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go1.21.5.linux-amd64.tar.gz && \
+    rm go1.21.5.linux-amd64.tar.gz && \
+    mkdir -p /go/bin
+
+# ============================================
+# Install Ruby & PHP
+# ============================================
+RUN apt-get update && apt-get install -y \
+    ruby ruby-dev \
+    php php-cli php-mbstring php-xml composer \
+    && rm -rf /var/lib/apt/lists/*
+
+# ============================================
+# Install PyTorch CPU version
+# ============================================
+RUN pip install torch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# ============================================
+# Install TensorFlow CPU version
+# ============================================
+RUN pip install tensorflow==2.15.0
+
+# ============================================
+# Copy and install requirements
+# ============================================
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+    --ignore-installed torch torchvision torchaudio tensorflow
+
+# ============================================
+# Download NLP models
+# ============================================
+RUN python -m spacy download en_core_web_sm && \
+    python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords'); nltk.download('wordnet')"
+
+# ============================================
+# Copy application code
+# ============================================
+COPY . .
+
+# Create directories
+RUN mkdir -p uploads temp generated logs user_projects models datasets
+
+# Expose ports
+EXPOSE 8000 8888 6006 5000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

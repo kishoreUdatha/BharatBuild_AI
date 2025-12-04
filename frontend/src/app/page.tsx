@@ -2,10 +2,16 @@
 
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
-import { ArrowRight, Code2, Zap, Globe } from 'lucide-react'
+import { ArrowRight, Code2, Zap, Globe, Upload, Bug, FileText } from 'lucide-react'
 import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { useWorkspaceStore } from '@/store/workspaceStore'
+import { useAuth } from '@/hooks/useAuth'
 
 export default function Home() {
+  const { createWorkspaceWithProject } = useWorkspaceStore()
+  const { isAuthenticated, checkAuth } = useAuth()
+  const router = useRouter()
   const [placeholderIndex, setPlaceholderIndex] = useState(0)
   const placeholders = [
     'Build a React dashboard with TypeScript and Tailwind CSS',
@@ -25,6 +31,34 @@ export default function Home() {
     return () => clearInterval(interval)
   }, [])
 
+  // Handle prompt submission - requires authentication
+  const handlePromptSubmit = (prompt: string) => {
+    if (!prompt.trim()) return
+
+    // Check if user is authenticated
+    if (!checkAuth()) {
+      // Store prompt for after login
+      sessionStorage.setItem('pendingPrompt', prompt)
+      sessionStorage.setItem('redirectAfterLogin', '/bolt')
+      // Redirect to login
+      router.push('/login')
+      return
+    }
+
+    // User is authenticated - proceed with project creation
+    const projectName = prompt.length > 50 ? prompt.substring(0, 50) + '...' : prompt
+    const { workspace, project } = createWorkspaceWithProject(
+      `Workspace ${new Date().toLocaleDateString()}`,
+      projectName,
+      prompt
+    )
+    // Store workspace/project info and prompt
+    sessionStorage.setItem('initialPrompt', prompt)
+    sessionStorage.setItem('workspaceId', workspace.id)
+    sessionStorage.setItem('projectId', project.id)
+    router.push('/bolt')
+  }
+
   return (
     <div className="min-h-screen bg-[hsl(var(--bolt-bg-primary))] relative overflow-hidden">
       {/* Gradient background effect */}
@@ -41,11 +75,14 @@ export default function Home() {
           </Link>
 
           <nav className="hidden md:flex items-center gap-8">
-            <Link href="/features" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors">
-              Features
+            <Link href="/projects" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors">
+              My Projects
             </Link>
-            <Link href="/docs" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors">
-              Docs
+            <Link href="/bolt" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors">
+              Build
+            </Link>
+            <Link href="/paper" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors">
+              Research Paper
             </Link>
             <Link href="/pricing" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors">
               Pricing
@@ -91,9 +128,7 @@ export default function Home() {
                     const input = e.currentTarget.querySelector('input') as HTMLInputElement
                     const prompt = input.value.trim()
                     if (prompt) {
-                      // Store the prompt in sessionStorage to pass to bolt page
-                      sessionStorage.setItem('initialPrompt', prompt)
-                      window.location.href = '/bolt'
+                      handlePromptSubmit(prompt)
                     }
                   }}>
                     <div className="flex items-center gap-2">
@@ -113,43 +148,32 @@ export default function Home() {
             </div>
 
             {/* Quick Examples */}
-            <div className="flex flex-wrap gap-2 justify-center mb-12">
-              <button
-                onClick={() => {
-                  sessionStorage.setItem('initialPrompt', 'Build a mobile app with React Native')
-                  window.location.href = '/bolt'
-                }}
-                className="text-sm px-4 py-2 rounded-full bg-[hsl(var(--bolt-bg-secondary))] border border-[hsl(var(--bolt-border))] text-[hsl(var(--bolt-text-secondary))] hover:border-[hsl(var(--bolt-accent))] hover:text-[hsl(var(--bolt-text-primary))] transition-all"
-              >
-                📱 Mobile app
-              </button>
-              <button
-                onClick={() => {
-                  sessionStorage.setItem('initialPrompt', 'Create an e-commerce website with shopping cart')
-                  window.location.href = '/bolt'
-                }}
-                className="text-sm px-4 py-2 rounded-full bg-[hsl(var(--bolt-bg-secondary))] border border-[hsl(var(--bolt-border))] text-[hsl(var(--bolt-text-secondary))] hover:border-[hsl(var(--bolt-accent))] hover:text-[hsl(var(--bolt-text-primary))] transition-all"
-              >
-                🛍️ E-commerce site
-              </button>
-              <button
-                onClick={() => {
-                  sessionStorage.setItem('initialPrompt', 'Build an analytics dashboard with charts')
-                  window.location.href = '/bolt'
-                }}
-                className="text-sm px-4 py-2 rounded-full bg-[hsl(var(--bolt-bg-secondary))] border border-[hsl(var(--bolt-border))] text-[hsl(var(--bolt-text-secondary))] hover:border-[hsl(var(--bolt-accent))] hover:text-[hsl(var(--bolt-text-primary))] transition-all"
-              >
-                📊 Dashboard
-              </button>
-              <button
-                onClick={() => {
-                  sessionStorage.setItem('initialPrompt', 'Create a simple browser game')
-                  window.location.href = '/bolt'
-                }}
-                className="text-sm px-4 py-2 rounded-full bg-[hsl(var(--bolt-bg-secondary))] border border-[hsl(var(--bolt-border))] text-[hsl(var(--bolt-text-secondary))] hover:border-[hsl(var(--bolt-accent))] hover:text-[hsl(var(--bolt-text-primary))] transition-all"
-              >
-                🎮 Game
-              </button>
+            <div className="flex flex-wrap gap-2 justify-center mb-8">
+              {[
+                { prompt: 'Build a mobile app with React Native', label: '📱 Mobile app' },
+                { prompt: 'Create an e-commerce website with shopping cart', label: '🛍️ E-commerce site' },
+                { prompt: 'Build an analytics dashboard with charts', label: '📊 Dashboard' },
+                { prompt: 'Create a simple browser game', label: '🎮 Game' }
+              ].map((example, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => handlePromptSubmit(example.prompt)}
+                  className="text-sm px-4 py-2 rounded-full bg-[hsl(var(--bolt-bg-secondary))] border border-[hsl(var(--bolt-border))] text-[hsl(var(--bolt-text-secondary))] hover:border-[hsl(var(--bolt-accent))] hover:text-[hsl(var(--bolt-text-primary))] transition-all"
+                >
+                  {example.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Import Project CTA */}
+            <div className="flex justify-center mb-12">
+              <Link href="/import">
+                <button className="flex items-center gap-2 text-sm px-6 py-3 rounded-xl bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/30 text-purple-300 hover:border-purple-500/50 hover:text-purple-200 transition-all">
+                  <Upload className="w-4 h-4" />
+                  Have an existing project? Import & analyze it
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </Link>
             </div>
 
           </div>
@@ -296,18 +320,19 @@ export default function Home() {
             <div>
               <h4 className="font-semibold text-[hsl(var(--bolt-text-primary))] mb-4">Product</h4>
               <ul className="space-y-2 text-[hsl(var(--bolt-text-secondary))] text-sm">
-                <li><Link href="/features" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Features</Link></li>
+                <li><Link href="/projects" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">My Projects</Link></li>
+                <li><Link href="/bolt" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Build App</Link></li>
+                <li><Link href="/paper" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Research Paper</Link></li>
                 <li><Link href="/pricing" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Pricing</Link></li>
-                <li><Link href="/docs" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Documentation</Link></li>
               </ul>
             </div>
 
             <div>
-              <h4 className="font-semibold text-[hsl(var(--bolt-text-primary))] mb-4">Company</h4>
+              <h4 className="font-semibold text-[hsl(var(--bolt-text-primary))] mb-4">Tools</h4>
               <ul className="space-y-2 text-[hsl(var(--bolt-text-secondary))] text-sm">
-                <li><Link href="/about" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">About</Link></li>
-                <li><Link href="/blog" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Blog</Link></li>
-                <li><Link href="/contact" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Contact</Link></li>
+                <li><Link href="/import" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Import Project</Link></li>
+                <li><Link href="/adventure" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Adventure Mode</Link></li>
+                <li><Link href="/dashboard" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Dashboard</Link></li>
               </ul>
             </div>
 

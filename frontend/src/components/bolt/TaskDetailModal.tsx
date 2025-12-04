@@ -23,7 +23,28 @@ import {
   X,
 } from 'lucide-react'
 import { useState } from 'react'
-import { CodeEditor } from './CodeEditor'
+import Editor from '@monaco-editor/react'
+import { monacoTheme } from '@/utils/editorThemes'
+
+// Helper: Get language from file path
+const getLanguageFromPath = (path: string): string => {
+  const ext = path.split('.').pop()?.toLowerCase()
+  const languageMap: Record<string, string> = {
+    js: 'javascript',
+    jsx: 'javascript',
+    ts: 'typescript',
+    tsx: 'typescript',
+    py: 'python',
+    java: 'java',
+    html: 'html',
+    css: 'css',
+    json: 'json',
+    md: 'markdown',
+    yaml: 'yaml',
+    yml: 'yaml',
+  }
+  return languageMap[ext || ''] || 'plaintext'
+}
 
 interface TaskDetailModalProps {
   isOpen: boolean
@@ -217,10 +238,21 @@ export function TaskDetailModal({ isOpen, task, onClose }: TaskDetailModalProps)
                 </Button>
               </div>
               <div className="rounded-lg border border-[hsl(var(--bolt-border))] overflow-hidden" style={{ height: '400px' }}>
-                <CodeEditor
-                  code={task.content}
-                  fileName={task.path}
-                  readOnly={true}
+                <Editor
+                  height="100%"
+                  theme="bharatbuild"
+                  language={getLanguageFromPath(task.path)}
+                  value={task.content}
+                  beforeMount={(monaco) => {
+                    monaco.editor.defineTheme('bharatbuild', monacoTheme)
+                  }}
+                  options={{
+                    readOnly: true,
+                    fontSize: 14,
+                    minimap: { enabled: false },
+                    scrollBeyondLastLine: false,
+                    wordWrap: 'on',
+                  }}
                 />
               </div>
             </div>

@@ -1,6 +1,7 @@
 from anthropic import AsyncAnthropic, Anthropic
 from typing import Optional, Dict, List, Any, AsyncGenerator
 import asyncio
+import json
 from app.core.config import settings
 from app.core.logging_config import logger
 
@@ -9,8 +10,19 @@ class ClaudeClient:
     """Claude API client wrapper for both streaming and non-streaming requests"""
 
     def __init__(self):
-        self.async_client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self.sync_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        # Configure client - use mock server if base URL is provided
+        client_kwargs = {"api_key": settings.ANTHROPIC_API_KEY}
+
+        # Only set base_url if it's a non-empty string with actual content
+        if settings.ANTHROPIC_BASE_URL and settings.ANTHROPIC_BASE_URL.strip():
+            client_kwargs["base_url"] = settings.ANTHROPIC_BASE_URL.strip()
+            logger.info(f"Using custom Claude API base URL: {settings.ANTHROPIC_BASE_URL}")
+
+        if settings.USE_MOCK_CLAUDE:
+            logger.info("Mock Claude API mode enabled")
+
+        self.async_client = AsyncAnthropic(**client_kwargs)
+        self.sync_client = Anthropic(**client_kwargs)
         self.haiku_model = settings.CLAUDE_HAIKU_MODEL
         self.sonnet_model = settings.CLAUDE_SONNET_MODEL
 
@@ -56,6 +68,11 @@ class ClaudeClient:
             if temperature is None:
                 temperature = settings.CLAUDE_TEMPERATURE
 
+            # Log request summary (detailed logging only in DEBUG mode)
+            prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
+            logger.info(f"Claude API: model={model_name}, max_tokens={max_tokens}, prompt_len={len(prompt)}")
+            logger.debug(f"Claude request prompt: {prompt_preview}")
+
             # Make API call
             response = await self.async_client.messages.create(
                 model=model_name,
@@ -78,7 +95,9 @@ class ClaudeClient:
                 "id": response.id
             }
 
-            logger.info(f"Claude API call: {model_name}, tokens: {result['total_tokens']}")
+            # Log response summary (saves 10-20ms per call)
+            logger.info(f"Claude API response: id={response.id}, tokens={result['total_tokens']}, stop={response.stop_reason}")
+            logger.debug(f"Claude response preview: {content[:200]}..." if len(content) > 200 else content)
 
             return result
 
@@ -128,7 +147,13 @@ class ClaudeClient:
             if temperature is None:
                 temperature = settings.CLAUDE_TEMPERATURE
 
+            # Log streaming request summary
+            prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
+            logger.info(f"Claude Streaming: model={model_name}, max_tokens={max_tokens}, prompt_len={len(prompt)}")
+            logger.debug(f"Claude streaming prompt: {prompt_preview}")
+
             # Make streaming API call
+            collected_text = []
             async with self.async_client.messages.stream(
                 model=model_name,
                 max_tokens=max_tokens,
@@ -137,15 +162,15 @@ class ClaudeClient:
                 messages=messages
             ) as stream:
                 async for text in stream.text_stream:
+                    collected_text.append(text)
                     yield text
 
             # Get final message with usage stats
             final_message = await stream.get_final_message()
 
-            logger.info(
-                f"Claude streaming call: {model_name}, "
-                f"tokens: {final_message.usage.input_tokens + final_message.usage.output_tokens}"
-            )
+            # Log streaming response summary
+            total_tokens = final_message.usage.input_tokens + final_message.usage.output_tokens
+            logger.info(f"Claude Streaming response: id={final_message.id}, tokens={total_tokens}, stop={final_message.stop_reason}")
 
         except Exception as e:
             logger.error(f"Claude streaming API error: {e}")

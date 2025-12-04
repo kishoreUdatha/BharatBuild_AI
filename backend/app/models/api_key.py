@@ -1,11 +1,11 @@
 from sqlalchemy import Column, String, DateTime, Enum as SQLEnum, Integer, Boolean, ForeignKey, JSON
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
 import enum
 
 from app.core.database import Base
+from app.core.types import GUID, generate_uuid
 
 
 class APIKeyStatus(str, enum.Enum):
@@ -19,8 +19,8 @@ class APIKey(Base):
     """API Key model"""
     __tablename__ = "api_keys"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id = Column(GUID, primary_key=True, default=generate_uuid)
+    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
 
     key = Column(String(255), unique=True, index=True, nullable=False)
     secret_hash = Column(String(255), nullable=False)

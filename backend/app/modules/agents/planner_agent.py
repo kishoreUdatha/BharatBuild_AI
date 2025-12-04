@@ -47,6 +47,15 @@ OUTPUT FORMAT (MANDATORY):
   <project_type>...</project_type>
   <tech_stack>...</tech_stack>
   <project_structure>...</project_structure>
+  <files>
+    <file path="path/to/file.tsx" priority="1">
+      <description>Description of what this file does</description>
+    </file>
+    <file path="path/to/another.ts" priority="2">
+      <description>Description of what this file does</description>
+    </file>
+    ...
+  </files>
   <tasks>
     Step 1: ...
     Step 2: ...
@@ -54,6 +63,14 @@ OUTPUT FORMAT (MANDATORY):
   </tasks>
   <notes>...</notes>
 </plan>
+
+CRITICAL: The <files> section is REQUIRED!
+- Extract ALL file paths from your <project_structure> and list them in <files>
+- Each file will be generated one at a time by the Writer Agent
+- Priority 1 = generated first, Priority 2 = generated second, etc.
+- Order files logically: config files first, then models, then utilities, then components, then pages
+- The <files> list must match EXACTLY what you show in <project_structure>
+- DO NOT copy the example files - generate files specific to the USER'S REQUEST
 
 RULES:
 - NEVER output <file>.
@@ -112,6 +129,19 @@ DETECTION LOGIC:
    - Time-series → InfluxDB
    - Vector search → Pinecone, Weaviate, Milvus
 
+   DATABASE FILES TO INCLUDE (REQUIRED for full-stack):
+   - Models/Schema file (defines tables)
+   - Migrations file (creates tables)
+   - Seed data file (populates with sample data)
+   - Database config file (connection settings)
+
+   SEED DATA EXAMPLES BY FRAMEWORK:
+   - FastAPI: backend/app/db/seed.py
+   - Django: backend/app/management/commands/seed.py
+   - Spring Boot: src/main/resources/data.sql
+   - Node.js/Prisma: prisma/seed.ts
+   - Express/MongoDB: backend/scripts/seed.js
+
    AUTHENTICATION:
    - Simple → JWT tokens
    - OAuth → OAuth 2.0 + JWT
@@ -136,16 +166,588 @@ DETECTION LOGIC:
    - Need search? → Yes if: large datasets, content discovery, filtering
    - Need caching? → Yes if: high traffic, repeated queries, performance critical
 
+═══════════════════════════════════════════════════════════════════════════════
+              🏭 INDUSTRY-STANDARD PROJECT STRUCTURES (MANDATORY)
+═══════════════════════════════════════════════════════════════════════════════
+
+ALWAYS use these production-grade folder structures based on tech stack:
+
+REACT + VITE (Frontend Only):
+```
+project-name/
+├── src/
+│   ├── assets/              # Static assets (images, fonts)
+│   ├── components/
+│   │   ├── ui/              # Reusable UI components (Button, Input, Modal)
+│   │   ├── layout/          # Layout components (Header, Footer, Sidebar)
+│   │   └── features/        # Feature-specific components
+│   ├── hooks/               # Custom React hooks
+│   ├── lib/                 # Utility functions, API client
+│   ├── pages/               # Page components
+│   ├── store/               # State management (Zustand)
+│   ├── styles/              # Global styles
+│   ├── types/               # TypeScript types/interfaces
+│   ├── App.tsx
+│   ├── main.tsx
+│   └── index.css
+├── public/
+├── package.json
+├── vite.config.ts
+├── tailwind.config.js
+├── tsconfig.json
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+NEXT.JS 14 (App Router - Full Stack):
+```
+project-name/
+├── src/
+│   ├── app/
+│   │   ├── (auth)/          # Auth route group
+│   │   │   ├── login/page.tsx
+│   │   │   └── register/page.tsx
+│   │   ├── (dashboard)/     # Dashboard route group
+│   │   │   ├── layout.tsx
+│   │   │   └── page.tsx
+│   │   ├── api/             # API routes
+│   │   │   └── [...route]/route.ts
+│   │   ├── layout.tsx
+│   │   ├── page.tsx
+│   │   ├── loading.tsx
+│   │   ├── error.tsx
+│   │   └── globals.css
+│   ├── components/
+│   │   ├── ui/              # shadcn/ui components
+│   │   ├── forms/           # Form components
+│   │   └── shared/          # Shared components
+│   ├── lib/
+│   │   ├── utils.ts
+│   │   ├── api.ts
+│   │   └── validations.ts
+│   ├── hooks/
+│   ├── store/
+│   ├── types/
+│   └── config/
+├── prisma/                  # If using Prisma
+│   └── schema.prisma
+├── public/
+├── package.json
+├── next.config.js
+├── tailwind.config.ts
+├── tsconfig.json
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+FASTAPI (Python Backend - Production):
+```
+project-name/
+├── app/
+│   ├── api/
+│   │   └── v1/
+│   │       ├── endpoints/
+│   │       │   ├── __init__.py
+│   │       │   ├── auth.py
+│   │       │   ├── users.py
+│   │       │   └── items.py
+│   │       ├── __init__.py
+│   │       └── router.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── config.py        # Settings with pydantic
+│   │   ├── security.py      # JWT, password hashing
+│   │   └── database.py      # Database connection
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── base.py          # SQLAlchemy Base
+│   │   ├── user.py
+│   │   └── item.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   ├── user.py
+│   │   └── item.py
+│   ├── services/            # Business logic
+│   │   ├── __init__.py
+│   │   └── user_service.py
+│   ├── utils/
+│   │   └── __init__.py
+│   ├── __init__.py
+│   └── main.py
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   └── test_api/
+├── alembic/                 # Database migrations
+│   └── versions/
+├── requirements.txt
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+├── alembic.ini
+└── README.md
+```
+
+DJANGO (Python Full-Stack):
+```
+project-name/
+├── config/                  # Project configuration
+│   ├── __init__.py
+│   ├── settings/
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   ├── development.py
+│   │   └── production.py
+│   ├── urls.py
+│   └── wsgi.py
+├── apps/
+│   ├── users/
+│   │   ├── models.py
+│   │   ├── views.py
+│   │   ├── serializers.py
+│   │   ├── urls.py
+│   │   └── admin.py
+│   └── core/
+├── static/
+├── templates/
+├── tests/
+├── manage.py
+├── requirements/
+│   ├── base.txt
+│   ├── development.txt
+│   └── production.txt
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+FLUTTER (Mobile App - Clean Architecture):
+```
+project-name/
+├── lib/
+│   ├── core/
+│   │   ├── constants/
+│   │   ├── errors/
+│   │   ├── network/
+│   │   ├── theme/
+│   │   └── utils/
+│   ├── features/
+│   │   ├── auth/
+│   │   │   ├── data/
+│   │   │   │   ├── datasources/
+│   │   │   │   ├── models/
+│   │   │   │   └── repositories/
+│   │   │   ├── domain/
+│   │   │   │   ├── entities/
+│   │   │   │   ├── repositories/
+│   │   │   │   └── usecases/
+│   │   │   └── presentation/
+│   │   │       ├── bloc/
+│   │   │       ├── pages/
+│   │   │       └── widgets/
+│   │   └── home/
+│   ├── injection_container.dart
+│   └── main.dart
+├── test/
+├── pubspec.yaml
+├── Dockerfile
+├── docker-compose.yml
+└── README.md
+```
+
+SPRING BOOT (Java Backend):
+```
+project-name/
+├── src/
+│   ├── main/
+│   │   ├── java/com/company/project/
+│   │   │   ├── config/
+│   │   │   │   ├── SecurityConfig.java
+│   │   │   │   └── WebConfig.java
+│   │   │   ├── controller/
+│   │   │   │   └── UserController.java
+│   │   │   ├── service/
+│   │   │   │   ├── UserService.java
+│   │   │   │   └── impl/
+│   │   │   ├── repository/
+│   │   │   │   └── UserRepository.java
+│   │   │   ├── model/
+│   │   │   │   ├── entity/
+│   │   │   │   └── dto/
+│   │   │   ├── exception/
+│   │   │   │   └── GlobalExceptionHandler.java
+│   │   │   └── Application.java
+│   │   └── resources/
+│   │       ├── application.yml
+│   │       └── application-dev.yml
+│   └── test/
+├── pom.xml (or build.gradle)
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+EXPRESS.JS / NODE.JS (Backend):
+```
+project-name/
+├── src/
+│   ├── config/
+│   │   ├── database.js
+│   │   └── env.js
+│   ├── controllers/
+│   ├── middleware/
+│   │   ├── auth.js
+│   │   └── errorHandler.js
+│   ├── models/
+│   ├── routes/
+│   │   └── v1/
+│   ├── services/
+│   ├── utils/
+│   ├── validations/
+│   ├── app.js
+│   └── index.js
+├── tests/
+├── package.json
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+GO (Golang Backend):
+```
+project-name/
+├── cmd/
+│   └── api/
+│       └── main.go
+├── internal/
+│   ├── config/
+│   ├── handlers/
+│   ├── middleware/
+│   ├── models/
+│   ├── repository/
+│   ├── routes/
+│   └── services/
+├── pkg/
+│   └── utils/
+├── migrations/
+├── go.mod
+├── go.sum
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+AI/ML PROJECT (Python):
+```
+project-name/
+├── src/
+│   ├── data/
+│   │   ├── __init__.py
+│   │   ├── preprocessing.py
+│   │   └── dataset.py
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── model.py
+│   │   └── train.py
+│   ├── inference/
+│   │   ├── __init__.py
+│   │   └── predict.py
+│   ├── api/                 # FastAPI/Streamlit
+│   │   └── app.py
+│   └── utils/
+│       └── __init__.py
+├── notebooks/
+│   └── exploration.ipynb
+├── data/
+│   ├── raw/
+│   └── processed/
+├── models/                  # Saved models
+├── tests/
+├── config/
+│   └── config.yaml
+├── requirements.txt
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+MONOREPO (Full-Stack with Shared Code):
+```
+project-name/
+├── apps/
+│   ├── web/                 # Next.js frontend
+│   │   ├── src/
+│   │   └── package.json
+│   ├── api/                 # Backend API
+│   │   ├── src/
+│   │   └── package.json
+│   └── mobile/              # React Native (optional)
+├── packages/
+│   ├── ui/                  # Shared UI components
+│   ├── config/              # Shared configs (ESLint, TS)
+│   └── types/               # Shared TypeScript types
+├── docker/
+│   ├── Dockerfile.web
+│   └── Dockerfile.api
+├── docker-compose.yml
+├── package.json             # Root package.json (workspaces)
+├── turbo.json               # Turborepo config
+├── .env.example
+└── README.md
+```
+
+IMPORTANT STRUCTURAL RULES:
+1. ALWAYS separate concerns (controllers, services, models)
+2. ALWAYS include config/ or core/ for app configuration
+3. ALWAYS include types/ for TypeScript projects
+4. ALWAYS include tests/ directory
+5. ALWAYS include Dockerfile and docker-compose.yml
+6. ALWAYS include .env.example with all required variables
+7. ALWAYS include README.md with setup instructions
+8. Use versioned API paths (/api/v1/) for backends
+9. Group related components in feature folders
+10. Keep reusable code in lib/, utils/, or pkg/
+
+═══════════════════════════════════════════════════════════════════════════════
+
 4. ACADEMIC DOCUMENTS (Include ONLY if project type = Academic/Student Project):
-   - Software Requirements Specification (SRS) - IEEE format, 15-20 pages
+
+   📚 B.TECH / UNDERGRADUATE DOCUMENTS:
+   - Software Requirements Specification (SRS) - IEEE 830 format, 15-20 pages
    - System Design Document - UML diagrams, architecture, 10-15 pages
    - Database Schema Design - ER diagrams, normalization, 5-8 pages
    - API Documentation - Endpoints, request/response examples, 8-10 pages
    - User Manual - Step-by-step guide with screenshots, 10-12 pages
    - Testing Report - Test cases, results, coverage, 8-10 pages
-   - Project Report - Complete documentation, 40-60 pages
+   - Project Report - Complete documentation, 60-80 pages
    - PowerPoint Presentation - 15-20 slides for viva
    - UML Diagrams - Use case, class, sequence, activity diagrams
+
+   🎓 M.TECH / POSTGRADUATE DOCUMENTS (More rigorous academic standards):
+   - Thesis Document - Full dissertation format, 80-150 pages:
+     * Chapter 1: Introduction (Problem statement, objectives, scope, organization)
+     * Chapter 2: Literature Survey (20+ paper reviews, research gaps, comparative analysis)
+     * Chapter 3: Proposed Methodology (Novel approach, algorithms, architecture)
+     * Chapter 4: System Design (Detailed UML, data flow, mathematical models)
+     * Chapter 5: Implementation (Technologies, code snippets, screenshots)
+     * Chapter 6: Results & Analysis (Performance metrics, graphs, comparisons)
+     * Chapter 7: Conclusion & Future Work (Summary, limitations, extensions)
+     * References (IEEE format, 30+ citations)
+     * Appendices (Source code, additional results)
+
+   - Research Paper (IEEE/Springer/Elsevier format):
+     * Abstract (250 words)
+     * Keywords (5-7 terms)
+     * Introduction with contributions
+     * Related Work (literature comparison table)
+     * Proposed Approach with algorithms
+     * Experimental Setup and Dataset
+     * Results with statistical analysis
+     * Conclusion and Future Directions
+     * References (IEEE citation format)
+
+   - Literature Survey Document:
+     * 20-30 paper summaries
+     * Comparative analysis table
+     * Research gap identification
+     * Taxonomy/classification diagram
+     * Year-wise publication trends
+
+   - Synopsis/Research Proposal:
+     * Problem definition
+     * Objectives and scope
+     * Proposed methodology
+     * Expected outcomes
+     * Timeline (Gantt chart)
+     * References
+
+   - Technical Presentation (25-30 slides):
+     * Title slide with affiliations
+     * Problem statement
+     * Literature review highlights
+     * Proposed methodology
+     * System architecture
+     * Implementation details
+     * Results and analysis
+     * Comparison with existing methods
+     * Conclusion and future scope
+     * Q&A slide
+
+═══════════════════════════════════════════════════════════════════════════════
+              🎓 M.TECH PROJECT TYPES (Advanced Research Projects)
+═══════════════════════════════════════════════════════════════════════════════
+
+DETECT M.TECH PROJECT IF:
+- Keywords: M.Tech, MTech, postgraduate, thesis, dissertation, research, novel
+- Keywords: literature survey, research gap, proposed methodology, experimental results
+- Keywords: machine learning research, deep learning, neural network, transformer
+- Keywords: security analysis, cryptography, blockchain research
+- Keywords: IoT optimization, edge computing, fog computing
+- Keywords: NLP, computer vision, image processing, signal processing
+
+M.TECH PROJECT CATEGORIES:
+
+1. MACHINE LEARNING / DEEP LEARNING RESEARCH:
+   - Novel model architectures (CNN, RNN, Transformer variants)
+   - Performance optimization and comparison studies
+   - Transfer learning and domain adaptation
+   - Explainable AI (XAI) implementations
+   - Federated learning systems
+   Tech Stack: Python + PyTorch/TensorFlow + Streamlit/Gradio + MLflow
+
+2. NATURAL LANGUAGE PROCESSING (NLP):
+   - Text classification, sentiment analysis
+   - Named entity recognition
+   - Question answering systems
+   - Language translation models
+   - Text summarization
+   - LLM fine-tuning and evaluation
+   Tech Stack: Python + Transformers + HuggingFace + FastAPI
+
+3. COMPUTER VISION:
+   - Object detection and tracking
+   - Image segmentation
+   - Face recognition systems
+   - Medical image analysis
+   - Video analytics
+   - Generative models (GANs, Diffusion)
+   Tech Stack: Python + OpenCV + PyTorch + YOLO/Detectron2
+
+4. CYBERSECURITY RESEARCH:
+   - Intrusion detection systems (IDS)
+   - Malware analysis and classification
+   - Network traffic analysis
+   - Vulnerability assessment tools
+   - Secure authentication systems
+   - Blockchain security
+   Tech Stack: Python + Scikit-learn + NetworkX + Docker
+
+5. IOT & EDGE COMPUTING:
+   - Smart city applications
+   - Healthcare monitoring systems
+   - Industrial IoT (IIoT)
+   - Edge AI deployment
+   - Sensor data analytics
+   - Real-time processing systems
+   Tech Stack: Python + MQTT + InfluxDB + Grafana + TensorFlow Lite
+
+6. BIG DATA & ANALYTICS:
+   - Distributed data processing
+   - Real-time stream analytics
+   - Data lake architectures
+   - Predictive analytics
+   - Social media analysis
+   Tech Stack: Python + PySpark + Kafka + Hadoop + Elasticsearch
+
+7. CLOUD COMPUTING RESEARCH:
+   - Multi-cloud orchestration
+   - Serverless architectures
+   - Container optimization
+   - Auto-scaling algorithms
+   - Cost optimization
+   Tech Stack: Python + Kubernetes + Terraform + AWS/GCP SDK
+
+8. BLOCKCHAIN APPLICATIONS:
+   - Smart contract development
+   - DeFi applications
+   - Supply chain tracking
+   - Identity management
+   - Consensus algorithm research
+   Tech Stack: Solidity + Hardhat + Web3.js + React
+
+M.TECH PROJECT STRUCTURE (Research-Oriented):
+```
+research-project/
+├── docs/
+│   ├── thesis/
+│   │   ├── chapters/
+│   │   │   ├── 01_introduction.md
+│   │   │   ├── 02_literature_survey.md
+│   │   │   ├── 03_proposed_methodology.md
+│   │   │   ├── 04_system_design.md
+│   │   │   ├── 05_implementation.md
+│   │   │   ├── 06_results_analysis.md
+│   │   │   └── 07_conclusion.md
+│   │   ├── figures/
+│   │   ├── tables/
+│   │   └── thesis_main.tex
+│   ├── research_paper/
+│   │   └── paper.tex
+│   ├── literature_survey/
+│   │   ├── papers/
+│   │   └── comparison_table.xlsx
+│   └── presentations/
+│       ├── phase1_review.pptx
+│       ├── phase2_review.pptx
+│       └── final_defense.pptx
+├── src/
+│   ├── data/
+│   │   ├── preprocessing.py
+│   │   ├── augmentation.py
+│   │   └── dataset.py
+│   ├── models/
+│   │   ├── base_model.py
+│   │   ├── proposed_model.py
+│   │   └── baseline_models.py
+│   ├── training/
+│   │   ├── train.py
+│   │   ├── evaluate.py
+│   │   └── hyperparameter_tuning.py
+│   ├── inference/
+│   │   └── predict.py
+│   ├── visualization/
+│   │   ├── plots.py
+│   │   └── metrics.py
+│   └── utils/
+│       ├── config.py
+│       └── helpers.py
+├── experiments/
+│   ├── experiment_configs/
+│   ├── logs/
+│   └── results/
+├── notebooks/
+│   ├── 01_data_exploration.ipynb
+│   ├── 02_model_development.ipynb
+│   ├── 03_ablation_studies.ipynb
+│   └── 04_visualization.ipynb
+├── api/
+│   └── app.py                # FastAPI/Streamlit for demo
+├── tests/
+├── data/
+│   ├── raw/
+│   ├── processed/
+│   └── external/
+├── models/                    # Saved model weights
+├── requirements.txt
+├── Dockerfile
+├── docker-compose.yml
+├── config.yaml
+├── README.md
+└── setup.py
+```
+
+REQUIRED M.TECH DELIVERABLES:
+1. Working prototype with demo UI (Streamlit/Gradio)
+2. Trained models with performance metrics
+3. Comparison with 3-5 baseline methods
+4. Statistical significance tests (t-test, ANOVA)
+5. Ablation studies showing contribution of each component
+6. Visualization of results (confusion matrix, ROC, loss curves)
+7. LaTeX thesis document (IEEE/Springer template)
+8. Research paper draft (conference/journal ready)
+9. Literature survey with 20+ papers
+10. Final defense presentation (25-30 slides)
+
+═══════════════════════════════════════════════════════════════════════════════
 
 YOUR OUTPUT STRUCTURE - Use <plan> tag:
 
@@ -283,6 +885,41 @@ todo-app/
 ├── README.md
 └── docs/              # Academic documents (SRS, Report, etc.)
 </project_structure>
+
+<files>
+<!-- ⚠️ THIS IS JUST A FORMAT EXAMPLE - You must generate YOUR OWN files based on the project_structure above -->
+<!-- List EVERY file from project_structure with priority (1=first, 2=second, etc.) -->
+<!-- Config files → Models → Utilities → Components → Pages → Docs -->
+
+<file path="docker-compose.yml" priority="1">
+  <description>Docker Compose configuration for running all services (PostgreSQL, backend, frontend)</description>
+</file>
+<file path="frontend/package.json" priority="2">
+  <description>Frontend dependencies and scripts</description>
+</file>
+<file path="frontend/tsconfig.json" priority="3">
+  <description>TypeScript configuration</description>
+</file>
+<file path="frontend/src/app/layout.tsx" priority="4">
+  <description>Root layout with providers</description>
+</file>
+<file path="frontend/src/app/page.tsx" priority="5">
+  <description>Home page</description>
+</file>
+<file path="backend/requirements.txt" priority="6">
+  <description>Python dependencies</description>
+</file>
+<file path="backend/Dockerfile" priority="7">
+  <description>Docker configuration for backend service</description>
+</file>
+<file path="backend/.env.example" priority="8">
+  <description>Environment variables template</description>
+</file>
+<file path="backend/app/main.py" priority="9">
+  <description>FastAPI entry point</description>
+</file>
+<!-- ... list ALL remaining files from project_structure ... -->
+</files>
 
 <tasks>
 STEP 1: Project Setup and Configuration
@@ -489,6 +1126,33 @@ PLANNING RULES:
    - If something is unclear, choose the most common/reasonable option
 
 NOW, ANALYZE THE USER'S REQUEST AND CREATE A UNIQUE, CUSTOMIZED PLAN!
+
+⚠️ FINAL REMINDER - CRITICAL FOR COMPLETE PROJECT GENERATION:
+
+1. First, design <project_structure> based on the user's request
+2. Then, extract EVERY file path from <project_structure> into <files>
+3. The <files> list tells the Writer Agent exactly what to generate
+
+WITHOUT <files> section → Project will be INCOMPLETE!
+
+The <files> section must:
+- Include EVERY file shown in <project_structure>
+- Have priorities (1=first, 2=second, etc.)
+- Have descriptions explaining what each file does
+- Be ordered: config → models → utilities → components → pages → docs
+
+CRITICAL - ALWAYS INCLUDE THESE FILES (if applicable):
+- docker-compose.yml (priority 1) - For running the complete stack locally
+- Dockerfile for backend (priority 2) - For containerizing the backend
+- Dockerfile for frontend (if separate) - For containerizing the frontend
+- .env.example files - For environment configuration templates
+- README.md - For project documentation and setup instructions
+
+Example format:
+<files>
+<file path="src/index.ts" priority="1"><description>Entry point</description></file>
+<file path="src/App.tsx" priority="2"><description>Main app component</description></file>
+</files>
 """
 
     def __init__(self, model: str = "sonnet"):
@@ -547,56 +1211,150 @@ Be thorough, specific, and ensure all tasks are actionable by automation agents.
     def _parse_plan(self, response: str) -> Dict[str, Any]:
         """
         Parse the Bolt.new XML format plan
-        
+
         Args:
             response: Raw XML response from Claude
-        
+
         Returns:
             Parsed plan dictionary
         """
         import re
-        
+
         plan = {}
-        
+
         # Extract <plan> content
         plan_match = re.search(r'<plan>(.*?)</plan>', response, re.DOTALL)
         if not plan_match:
             logger.warning("No <plan> tag found in response")
             return {"error": "Invalid plan format", "raw": response}
-        
+
         plan_content = plan_match.group(1)
-        
+
         # Extract project_type
         project_type_match = re.search(r'<project_type>(.*?)</project_type>', plan_content, re.DOTALL)
         if project_type_match:
             plan["project_type"] = project_type_match.group(1).strip()
-        
+
         # Extract project_info
         project_info_match = re.search(r'<project_info>(.*?)</project_info>', plan_content, re.DOTALL)
         if project_info_match:
             plan["project_info"] = project_info_match.group(1).strip()
-        
+
         # Extract tech_stack
         tech_stack_match = re.search(r'<tech_stack>(.*?)</tech_stack>', plan_content, re.DOTALL)
         if tech_stack_match:
             plan["tech_stack"] = tech_stack_match.group(1).strip()
-        
+
         # Extract project_structure
         structure_match = re.search(r'<project_structure>(.*?)</project_structure>', plan_content, re.DOTALL)
         if structure_match:
             plan["project_structure"] = structure_match.group(1).strip()
-        
+
+        # ✅ FIX: Extract files list (CRITICAL for Writer Agent)
+        files_match = re.search(r'<files>(.*?)</files>', plan_content, re.DOTALL)
+        if files_match:
+            files_content = files_match.group(1)
+            plan["files"] = self._parse_files_list(files_content)
+            plan["files_raw"] = files_content.strip()
+        else:
+            # Fallback: Try to extract files from project_structure
+            logger.warning("No <files> tag found - attempting to extract from project_structure")
+            if plan.get("project_structure"):
+                plan["files"] = self._extract_files_from_structure(plan["project_structure"])
+
         # Extract tasks
         tasks_match = re.search(r'<tasks>(.*?)</tasks>', plan_content, re.DOTALL)
         if tasks_match:
             plan["tasks"] = tasks_match.group(1).strip()
-        
+
         # Extract notes
         notes_match = re.search(r'<notes>(.*?)</notes>', plan_content, re.DOTALL)
         if notes_match:
             plan["notes"] = notes_match.group(1).strip()
 
+        # Log file count for debugging
+        files_count = len(plan.get("files", []))
+        logger.info(f"[PlannerAgent] Parsed plan with {files_count} files")
+
         return plan
+
+    def _parse_files_list(self, files_content: str) -> List[Dict[str, Any]]:
+        """
+        Parse the <files> XML section into a list of file dictionaries.
+
+        Args:
+            files_content: Raw content inside <files> tag
+
+        Returns:
+            List of file dictionaries with path, priority, description
+        """
+        import re
+
+        files = []
+
+        # Match each <file path="..." priority="...">...</file>
+        file_pattern = r'<file\s+path=["\']([^"\']+)["\']\s+priority=["\'](\d+)["\']>\s*<description>(.*?)</description>\s*</file>'
+
+        for match in re.finditer(file_pattern, files_content, re.DOTALL):
+            files.append({
+                "path": match.group(1).strip(),
+                "priority": int(match.group(2)),
+                "description": match.group(3).strip()
+            })
+
+        # Also try alternative format: <file path="..." priority="..."><description>...</description></file>
+        if not files:
+            alt_pattern = r'<file\s+path=["\']([^"\']+)["\'](?:\s+priority=["\'](\d+)["\'])?\s*>\s*(?:<description>)?(.*?)(?:</description>)?\s*</file>'
+            for match in re.finditer(alt_pattern, files_content, re.DOTALL):
+                priority = int(match.group(2)) if match.group(2) else len(files) + 1
+                files.append({
+                    "path": match.group(1).strip(),
+                    "priority": priority,
+                    "description": match.group(3).strip() if match.group(3) else ""
+                })
+
+        # Sort by priority
+        files.sort(key=lambda x: x["priority"])
+
+        return files
+
+    def _extract_files_from_structure(self, structure: str) -> List[Dict[str, Any]]:
+        """
+        Fallback: Extract file paths from project_structure tree.
+
+        Args:
+            structure: Project structure tree string
+
+        Returns:
+            List of file dictionaries extracted from structure
+        """
+        import re
+
+        files = []
+        priority = 1
+
+        # Match file paths (lines with file extensions)
+        # Looks for patterns like: │   ├── filename.ext or └── filename.ext
+        file_extensions = r'\.(tsx?|jsx?|py|json|ya?ml|md|css|scss|html|sql|sh|dockerfile|env|txt|toml|cfg|ini)$'
+
+        for line in structure.split('\n'):
+            # Remove tree characters and whitespace
+            clean_line = re.sub(r'^[\s│├└─]+', '', line).strip()
+
+            if clean_line and re.search(file_extensions, clean_line, re.IGNORECASE):
+                files.append({
+                    "path": clean_line,
+                    "priority": priority,
+                    "description": f"Auto-extracted from project structure"
+                })
+                priority += 1
+
+        # Try to determine full paths by tracking directory context
+        # This is a simplified extraction - full paths may need manual correction
+
+        logger.info(f"[PlannerAgent] Extracted {len(files)} files from project_structure (fallback)")
+
+        return files
 
 
 # Singleton instance

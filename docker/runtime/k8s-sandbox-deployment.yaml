@@ -1,0 +1,343 @@
+# Kubernetes Deployment for BharatBuild Sandbox Cluster
+# This manages Docker sandbox containers for student projects
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bharatbuild-sandbox
+  labels:
+    app: bharatbuild
+    component: sandbox
+
+---
+# Service Account for sandbox pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sandbox-sa
+  namespace: bharatbuild-sandbox
+
+---
+# Role for sandbox management
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sandbox-manager
+  namespace: bharatbuild-sandbox
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/exec", "pods/log"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sandbox-manager-binding
+  namespace: bharatbuild-sandbox
+subjects:
+  - kind: ServiceAccount
+    name: sandbox-sa
+    namespace: bharatbuild-sandbox
+roleRef:
+  kind: Role
+  name: sandbox-manager
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Sandbox Controller Deployment (manages sandbox pods)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-controller
+  namespace: bharatbuild-sandbox
+  labels:
+    app: bharatbuild
+    component: sandbox-controller
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bharatbuild
+      component: sandbox-controller
+  template:
+    metadata:
+      labels:
+        app: bharatbuild
+        component: sandbox-controller
+    spec:
+      serviceAccountName: sandbox-sa
+      containers:
+        - name: controller
+          image: bharatbuild/sandbox-controller:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: KUBERNETES_NAMESPACE
+              value: "bharatbuild-sandbox"
+            - name: MAX_SANDBOXES_PER_NODE
+              value: "50"
+            - name: SANDBOX_TIMEOUT_MINUTES
+              value: "30"
+            - name: SANDBOX_MEMORY_LIMIT
+              value: "512Mi"
+            - name: SANDBOX_CPU_LIMIT
+              value: "500m"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+---
+# Service for Sandbox Controller
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-controller
+  namespace: bharatbuild-sandbox
+  labels:
+    app: bharatbuild
+    component: sandbox-controller
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: bharatbuild
+    component: sandbox-controller
+
+---
+# HorizontalPodAutoscaler for sandbox controller
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sandbox-controller-hpa
+  namespace: bharatbuild-sandbox
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sandbox-controller
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+---
+# NetworkPolicy for sandbox isolation
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-isolation
+  namespace: bharatbuild-sandbox
+spec:
+  podSelector:
+    matchLabels:
+      type: sandbox-pod
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow npm registry, PyPI, etc.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+
+---
+# Resource Quota for sandbox namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: sandbox-quota
+  namespace: bharatbuild-sandbox
+spec:
+  hard:
+    pods: "500"
+    requests.cpu: "100"
+    requests.memory: "200Gi"
+    limits.cpu: "200"
+    limits.memory: "400Gi"
+
+---
+# LimitRange for sandbox pods
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: sandbox-limits
+  namespace: bharatbuild-sandbox
+spec:
+  limits:
+    - type: Pod
+      max:
+        cpu: "2"
+        memory: "2Gi"
+      min:
+        cpu: "100m"
+        memory: "128Mi"
+    - type: Container
+      default:
+        cpu: "500m"
+        memory: "512Mi"
+      defaultRequest:
+        cpu: "250m"
+        memory: "256Mi"
+      max:
+        cpu: "2"
+        memory: "2Gi"
+      min:
+        cpu: "100m"
+        memory: "128Mi"
+
+---
+# ConfigMap for sandbox templates
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sandbox-templates
+  namespace: bharatbuild-sandbox
+data:
+  nodejs.yaml: |
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      labels:
+        type: sandbox-pod
+        runtime: nodejs
+    spec:
+      containers:
+        - name: sandbox
+          image: node:20-alpine
+          command: ["sh", "-c", "npm install && npm run dev"]
+          workingDir: /app
+          ports:
+            - containerPort: 3000
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          volumeMounts:
+            - name: project-files
+              mountPath: /app
+      volumes:
+        - name: project-files
+          emptyDir: {}
+
+  python.yaml: |
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      labels:
+        type: sandbox-pod
+        runtime: python
+    spec:
+      containers:
+        - name: sandbox
+          image: python:3.11-slim
+          command: ["sh", "-c", "pip install -r requirements.txt && python main.py"]
+          workingDir: /app
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          volumeMounts:
+            - name: project-files
+              mountPath: /app
+      volumes:
+        - name: project-files
+          emptyDir: {}
+
+  java.yaml: |
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      labels:
+        type: sandbox-pod
+        runtime: java
+    spec:
+      containers:
+        - name: sandbox
+          image: eclipse-temurin:17-jdk-alpine
+          command: ["sh", "-c", "mvn spring-boot:run"]
+          workingDir: /app
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1"
+          volumeMounts:
+            - name: project-files
+              mountPath: /app
+      volumes:
+        - name: project-files
+          emptyDir: {}

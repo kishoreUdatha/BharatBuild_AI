@@ -27,7 +27,10 @@ class PackageManagerType(str, Enum):
 class PackageManager:
     """Manages package installation for different tech stacks"""
 
-    def __init__(self, base_path: str = "./user_projects"):
+    def __init__(self, base_path: str = None):
+        if base_path is None:
+            from app.core.config import settings
+            base_path = str(settings.USER_PROJECTS_DIR)
         self.base_path = Path(base_path)
 
     def get_project_path(self, project_id: str) -> Path:
@@ -179,9 +182,9 @@ class PackageManager:
             await process.wait()
 
             if process.returncode == 0:
-                yield "✓ Installation completed successfully"
+                yield "[OK] Installation completed successfully"
             else:
-                yield f"✗ Installation failed with exit code {process.returncode}"
+                yield f"[FAIL] Installation failed with exit code {process.returncode}"
 
         except Exception as e:
             logger.error(f"Error in install_stream: {e}")

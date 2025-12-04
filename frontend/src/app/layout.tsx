@@ -7,6 +7,9 @@ const inter = Inter({ subsets: ['latin'] })
 export const metadata: Metadata = {
   title: 'BharatBuild AI - AI-Powered Project Generation',
   description: 'Complete AI-driven platform for academic projects, code automation, and product building',
+  icons: {
+    icon: '/icon.svg',
+  },
 }
 
 export default function RootLayout({

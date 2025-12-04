@@ -1,0 +1,64 @@
+{
+  "id": "test-123",
+  "user_id": "anonymous",
+  "workflow_type": "bolt_standard",
+  "status": "completed",
+  "created_at": "2025-12-03T15:37:39.618198",
+  "updated_at": "2025-12-03T15:39:11.559190",
+  "current_step": "Create Plan",
+  "completed_steps": [
+    "Create Plan"
+  ],
+  "failed_step": null,
+  "error_message": null,
+  "initial_request": {
+    "user_request": "hello",
+    "metadata": {},
+    "workflow_name": "bolt_standard"
+  },
+  "generated_files": [
+    {
+      "path": "package.json",
+      "type": "config",
+      "size_bytes": 872,
+      "generated_at": "2025-12-03T15:38:05.390063"
+    },
+    {
+      "path": "index.html",
+      "type": "other",
+      "size_bytes": 1313,
+      "generated_at": "2025-12-03T15:38:14.562693"
+    },
+    {
+      "path": "vite.config.ts",
+      "type": "frontend",
+      "size_bytes": 4136,
+      "generated_at": "2025-12-03T15:38:34.325005"
+    },
+    {
+      "path": "tailwind.config.js",
+      "type": "frontend",
+      "size_bytes": 5308,
+      "generated_at": "2025-12-03T15:38:59.375392"
+    },
+    {
+      "path": "postcss.config.js",
+      "type": "frontend",
+      "size_bytes": 81,
+      "generated_at": "2025-12-03T15:39:03.893717"
+    },
+    {
+      "path": "tsconfig.json",
+      "type": "config",
+      "size_bytes": 919,
+      "generated_at": "2025-12-03T15:39:11.559180"
+    }
+  ],
+  "pending_files": [],
+  "context": {
+    "files_created": 0
+  },
+  "retry_count": 0,
+  "max_retries": 3,
+  "can_resume": true
+}

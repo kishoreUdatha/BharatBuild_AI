@@ -2,12 +2,128 @@
 # This file controls all agent behaviors, prompts, and models
 # Prompts are stored in separate files in the prompts/ directory
 
+# ==========================================
+# PROJECT COMPLEXITY CONFIGURATION
+# Controls file generation limits per complexity level
+# ==========================================
+complexity:
+  # File limits by complexity level
+  file_limits:
+    minimal: 5        # Landing pages, single pages
+    simple: 8         # Basic apps, portfolios
+    intermediate: 15  # CRUD apps, dashboards (frontend only)
+    intermediate_with_backend: 20  # With backend/database
+    complex: 40       # Full platforms
+
+  # Technology-specific overrides
+  technology_limits:
+    flutter:
+      simple: 20
+      complex: 40
+    react_native:
+      simple: 20
+      complex: 40
+    spring_boot:
+      simple: 20
+      complex: 50
+    django:
+      simple: 18
+      complex: 35
+    ai_ml:
+      default: 18
+
+  # Keywords for complexity detection
+  keywords:
+    minimal:
+      - "landing page"
+      - "landing"
+      - "single page"
+      - "one page"
+      - "simple page"
+      - "homepage"
+      - "home page"
+      - "splash page"
+      - "coming soon"
+
+    simple:
+      - "simple"
+      - "basic"
+      - "quick"
+      - "portfolio"
+      - "resume"
+      - "cv site"
+      - "blog"
+      - "personal site"
+      - "mvp"
+      - "prototype"
+      - "demo"
+      - "static"
+
+    complex:
+      - "full platform"
+      - "complete platform"
+      - "full stack"
+      - "full-stack"
+      - "with authentication"
+      - "with auth"
+      - "with payment"
+      - "with stripe"
+      - "with database"
+      - "production ready"
+      - "enterprise"
+      - "saas"
+      - "complete app"
+
+  # Technology detection keywords
+  technology_keywords:
+    mobile:
+      - "flutter"
+      - "react native"
+      - "mobile app"
+      - "android app"
+      - "ios app"
+    java:
+      - "spring boot"
+      - "java"
+      - "spring"
+      - "maven"
+      - "gradle"
+    django:
+      - "django"
+      - "python web"
+    ai_ml:
+      - "machine learning"
+      - "ml"
+      - "ai"
+      - "deep learning"
+      - "tensorflow"
+      - "pytorch"
+      - "model training"
+      - "neural network"
+
+  # Recommended tech stacks
+  recommended_stacks:
+    minimal: "HTML + CSS + JavaScript OR React + Vite"
+    simple: "React + Vite + TypeScript + Tailwind"
+    intermediate: "React + Vite + TypeScript"
+    intermediate_with_backend: "React + FastAPI + PostgreSQL"
+    complex: "Next.js + FastAPI + PostgreSQL"
+    flutter_simple: "Flutter + Dart"
+    flutter_complex: "Flutter + Dart + Provider/Bloc"
+    react_native_simple: "React Native + TypeScript"
+    react_native_complex: "React Native + TypeScript + Redux"
+    spring_boot_simple: "Spring Boot + Java + Maven + PostgreSQL"
+    spring_boot_complex: "Spring Boot + Java + Maven + PostgreSQL + Spring Security"
+    django_simple: "Django + Python + PostgreSQL"
+    django_complex: "Django + DRF + PostgreSQL + Celery"
+    ai_ml: "Python + TensorFlow/PyTorch + Streamlit + Jupyter"
+
 agents:
   planner:
     name: "Planner Agent"
     model: "sonnet"  # haiku, sonnet, opus
     temperature: 0.7
-    max_tokens: 4096
+    max_tokens: 8192  # Increased to handle detailed plans
     system_prompt_file: "prompts/planner.txt"
     capabilities:
       - planning
@@ -26,6 +142,19 @@ agents:
       - code_generation
       - file_creation
       - step_execution
+    enabled: true
+
+  verifier:
+    name: "Verification Agent"
+    model: "haiku"
+    temperature: 0.3
+    max_tokens: 2048
+    system_prompt_file: "prompts/verifier.txt"
+    capabilities:
+      - file_verification
+      - completeness_check
+      - syntax_validation
+      - missing_file_detection
     enabled: true
 
   fixer:
@@ -64,8 +193,9 @@ agents:
       - uml_diagrams
       - reports
     enabled: true
-    # Only runs for academic projects
-    conditional: "project_type == 'Academic'"
+    # Runs for ALL projects - generates different docs based on project type
+    # Academic: Full docs (SRS, SDS, UML, Reports, PPT, Viva)
+    # Other: Basic docs (README, API docs, Architecture)
 
   enhancer:
     name: "Enhancer Agent"
@@ -91,7 +221,60 @@ agents:
       - architecture_review
     enabled: true
 
+  # Import Analyzer Agent - Token-optimized for analyzing imported projects
+  import_analyzer:
+    name: "Import Analyzer Agent"
+    model: "sonnet"  # Auto-switches to haiku for simple tasks
+    temperature: 0.3  # Lower for focused output
+    max_tokens: 4096  # Dynamic based on task
+    system_prompt_file: "prompts/import_analyzer.txt"
+    capabilities:
+      - code_analysis
+      - bug_detection
+      - security_audit
+      - performance_review
+      - documentation_assessment
+    enabled: true
+    # Token optimizations:
+    # - Prioritizes files by relevance to analysis type
+    # - Truncates large files (keeps start + end)
+    # - Uses Haiku for simple tasks (<5 files or docs)
+    # - Uses Sonnet for complex analysis
+    # - Compact prompts to reduce input tokens
+
+  # FAST INSTANT GENERATOR - Like Bolt.new (single API call)
+  bolt_instant:
+    name: "Bolt Instant Generator"
+    model: "sonnet"
+    temperature: 0.5
+    max_tokens: 32000  # Very large for complete project generation (Claude max ~64k)
+    system_prompt_file: "prompts/bolt_instant.txt"
+    capabilities:
+      - instant_generation
+      - planning
+      - code_generation
+      - file_creation
+    enabled: true
+
 workflows:
+  # ⚡ INSTANT WORKFLOW - Single API call like Bolt.new (FASTEST)
+  bolt_instant:
+    description: "Instant generation: single call generates everything (~60-90 seconds)"
+    steps:
+      - agent: bolt_instant
+        name: "Generate Complete Project"
+        timeout: 180
+        retry_count: 2
+        stream_output: true
+
+      - agent: documenter
+        name: "Generate Documentation"
+        timeout: 600
+        retry_count: 1
+        stream_output: false
+        # Always run after code generation
+        # Timeout increased to 600s (10 min) for academic docs
+
   bolt_standard:
     description: "Full workflow: plan → write → run → fix → docs"
     steps:
@@ -106,6 +289,12 @@ workflows:
         timeout: 300
         retry_count: 2
         stream_output: true
+
+      - agent: verifier
+        name: "Verify Files"
+        timeout: 120
+        retry_count: 1
+        stream_output: false
 
       - agent: runner
         name: "Execute Preview & Build"
@@ -123,11 +312,12 @@ workflows:
 
       - agent: documenter
         name: "Generate Documentation"
-        timeout: 180
+        timeout: 600
         retry_count: 1
         stream_output: false
-        # Only run for academic projects
-        condition: "context.project_type == 'Academic'"
+        # Always run - generates different docs based on project type
+        # Timeout increased to 600s (10 min) for full academic document generation
+        # (Project Report + SRS + PPT with 19 sections each)
 
   quick_iteration:
     description: "Quick workflow: plan → write → test"

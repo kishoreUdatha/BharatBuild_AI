@@ -11,6 +11,22 @@ export interface UserMessage {
 export interface ThinkingStep {
   label: string
   status: 'pending' | 'active' | 'complete'
+  description?: string
+  details?: string
+  taskNumber?: number
+  icon?: string
+  category?: string
+  deliverables?: string
+}
+
+export interface PlanData {
+  projectName?: string
+  projectDescription?: string
+  projectType?: string
+  complexity?: string
+  estimatedFiles?: string
+  techStack?: { name: string; items: string }[]
+  features?: { icon: string; name: string; description: string }[]
 }
 
 export interface AIMessage {
@@ -22,6 +38,7 @@ export interface AIMessage {
   status?: 'thinking' | 'planning' | 'generating' | 'complete'
   fileOperations?: FileOperation[]
   thinkingSteps?: ThinkingStep[]
+  planData?: PlanData
 }
 
 export interface FileOperation {
@@ -51,6 +68,8 @@ interface ChatState {
   addFileOperation: (messageId: string, operation: FileOperation) => void
   updateFileOperation: (messageId: string, operationPath: string, updates: Partial<FileOperation>) => void
   updateThinkingSteps: (id: string, steps: ThinkingStep[]) => void
+  addThinkingStep: (id: string, step: ThinkingStep) => void
+  updateThinkingStep: (id: string, label: string, updates: Partial<ThinkingStep>) => void
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -153,12 +172,57 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   updateThinkingSteps: (id, steps) => {
-    set((state) => ({
-      messages: state.messages.map((msg) =>
+    console.log('[chatStore.updateThinkingSteps] Called with id:', id, 'steps count:', steps.length)
+    console.log('[chatStore.updateThinkingSteps] Steps data:', JSON.stringify(steps, null, 2))
+    set((state) => {
+      const messageFound = state.messages.find(m => m.id === id && m.type === 'assistant')
+      console.log('[chatStore.updateThinkingSteps] Message found:', !!messageFound, 'Message id:', messageFound?.id)
+
+      const updatedMessages = state.messages.map((msg) =>
         msg.id === id && msg.type === 'assistant'
           ? { ...msg, thinkingSteps: steps }
           : msg
       )
+
+      const updatedMessage = updatedMessages.find(m => m.id === id && m.type === 'assistant')
+      console.log('[chatStore.updateThinkingSteps] After update, thinkingSteps count:', (updatedMessage as any)?.thinkingSteps?.length)
+
+      return { messages: updatedMessages }
+    })
+  },
+
+  addThinkingStep: (id, step) => {
+    console.log('[chatStore.addThinkingStep] Adding step:', step.label, 'to message:', id)
+    set((state) => ({
+      messages: state.messages.map((msg) => {
+        if (msg.id === id && msg.type === 'assistant') {
+          const thinkingSteps = msg.thinkingSteps || []
+          console.log('[chatStore.addThinkingStep] Current steps count:', thinkingSteps.length)
+          return {
+            ...msg,
+            thinkingSteps: [...thinkingSteps, step]
+          }
+        }
+        return msg
+      })
+    }))
+  },
+
+  updateThinkingStep: (id, label, updates) => {
+    console.log('[chatStore.updateThinkingStep] Updating step:', label, 'in message:', id, 'with:', updates)
+    set((state) => ({
+      messages: state.messages.map((msg) => {
+        if (msg.id === id && msg.type === 'assistant') {
+          const thinkingSteps = msg.thinkingSteps || []
+          return {
+            ...msg,
+            thinkingSteps: thinkingSteps.map((step) =>
+              step.label === label ? { ...step, ...updates } : step
+            )
+          }
+        }
+        return msg
+      })
     }))
   }
 }))

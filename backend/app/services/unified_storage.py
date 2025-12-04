@@ -1,0 +1,782 @@
+"""
+Unified 3-Layer Storage Service for BharatBuild AI
+
+ARCHITECTURE:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  LAYER 1 — Sandbox (Runtime)         LAYER 2 — S3/MinIO (Permanent)        │
+│  /sandbox/workspace/<project-id>/    s3://bucket/projects/<user>/<proj>/   │
+│  • Preview, Run, Build, Test         • All source files                    │
+│  • Deleted on idle/close             • Project ZIP, PDFs, diagrams         │
+│                                                                             │
+│                    LAYER 3 — PostgreSQL (Metadata)                         │
+│                    • project_id, user_id, s3_path                          │
+│                    • plan_json, file_index, history                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+FLOW:
+1. During generation → Write to Layer 1 (sandbox)
+2. Generation complete → Upload to Layer 2 (S3)
+3. Store metadata in Layer 3 (PostgreSQL)
+4. User opens project → Fetch from Layer 2, load into Layer 1 for preview
+"""
+
+import os
+import json
+import shutil
+import zipfile
+import asyncio
+import hashlib
+from pathlib import Path
+from typing import Optional, Dict, Any, List
+from datetime import datetime
+from dataclasses import dataclass, field
+from uuid import UUID
+import logging
+
+from app.services.storage_service import storage_service
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Configuration - Use Windows-compatible path on Windows
+# NOTE: Must match SANDBOX_PATH in config.py for consistency
+import platform
+if platform.system() == "Windows":
+    _default_sandbox = "C:/tmp/sandbox/workspace"
+else:
+    _default_sandbox = "/tmp/sandbox/workspace"
+
+SANDBOX_BASE_PATH = os.getenv("SANDBOX_BASE_PATH", _default_sandbox)
+S3_WORKSPACE_PREFIX = "workspaces"  # Structure: workspaces/{user_id}/{project_id}/
+
+
+@dataclass
+class FileInfo:
+    """Information about a single file"""
+    path: str
+    name: str
+    type: str  # 'file' or 'folder'
+    content: Optional[str] = None
+    language: str = 'plaintext'
+    size_bytes: int = 0
+    children: List['FileInfo'] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = {
+            'path': self.path,
+            'name': self.name,
+            'type': self.type,
+            'language': self.language,
+        }
+        if self.type == 'file':
+            result['content'] = self.content or ''
+            result['size_bytes'] = self.size_bytes
+        elif self.children:
+            result['children'] = [c.to_dict() for c in self.children]
+        return result
+
+
+class UnifiedStorageService:
+    """
+    Unified storage service that manages all 3 layers:
+    - Layer 1: Sandbox (runtime, ephemeral)
+    - Layer 2: S3/MinIO (permanent files)
+    - Layer 3: PostgreSQL (metadata only - handled by SQLAlchemy models)
+    """
+
+    def __init__(self):
+        self.sandbox_path = Path(SANDBOX_BASE_PATH)
+        self.sandbox_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"UnifiedStorageService initialized. Sandbox: {self.sandbox_path}")
+
+    # ==================== LAYER 1: SANDBOX ====================
+
+    def get_sandbox_path(self, project_id: str, user_id: Optional[str] = None) -> Path:
+        """
+        Get sandbox workspace path for a project.
+
+        Path structure: /workspaces/{user_id}/{project_id}/
+
+        Args:
+            project_id: Project UUID
+            user_id: User UUID (optional for backward compatibility)
+
+        Returns:
+            Path to sandbox workspace
+        """
+        if user_id:
+            return self.sandbox_path / user_id / project_id
+        # Fallback for backward compatibility
+        return self.sandbox_path / project_id
+
+    async def create_sandbox(self, project_id: str, user_id: Optional[str] = None) -> Path:
+        """Create a sandbox workspace for runtime execution"""
+        sandbox = self.get_sandbox_path(project_id, user_id)
+        sandbox.mkdir(parents=True, exist_ok=True)
+        # Log the actual path being created for debugging
+        logger.info(f"[Sandbox] Created at: {sandbox} (user_id={user_id}, project_id={project_id})")
+        return sandbox
+
+    async def write_to_sandbox(
+        self,
+        project_id: str,
+        file_path: str,
+        content: str,
+        user_id: Optional[str] = None
+    ) -> bool:
+        """Write a file to the sandbox workspace"""
+        try:
+            sandbox = self.get_sandbox_path(project_id, user_id)
+            full_path = sandbox / file_path
+
+            # Prevent path traversal
+            if '..' in file_path:
+                raise ValueError("Path traversal detected")
+
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(full_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            logger.debug(f"Wrote to sandbox: {project_id}/{file_path}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to write to sandbox: {e}")
+            return False
+
+    async def read_from_sandbox(
+        self,
+        project_id: str,
+        file_path: str,
+        user_id: Optional[str] = None
+    ) -> Optional[str]:
+        """Read a file from the sandbox workspace"""
+        try:
+            sandbox = self.get_sandbox_path(project_id, user_id)
+            full_path = sandbox / file_path
+
+            if not full_path.exists():
+                return None
+
+            with open(full_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception as e:
+            logger.error(f"Failed to read from sandbox: {e}")
+            return None
+
+    async def list_sandbox_files(
+        self,
+        project_id: str,
+        user_id: Optional[str] = None
+    ) -> List[FileInfo]:
+        """List all files in the sandbox as a hierarchical tree"""
+        sandbox = self.get_sandbox_path(project_id, user_id)
+
+        if not sandbox.exists():
+            return []
+
+        return self._build_file_tree(sandbox, sandbox)
+
+    def _build_file_tree(self, base_path: Path, current_path: Path) -> List[FileInfo]:
+        """Recursively build file tree structure"""
+        items = []
+
+        try:
+            for item in sorted(current_path.iterdir()):
+                # Skip hidden files
+                if item.name.startswith('.'):
+                    continue
+
+                relative_path = str(item.relative_to(base_path)).replace("\\", "/")
+
+                if item.is_dir():
+                    children = self._build_file_tree(base_path, item)
+                    items.append(FileInfo(
+                        path=relative_path,
+                        name=item.name,
+                        type='folder',
+                        children=children
+                    ))
+                else:
+                    language = self._detect_language(item.name)
+                    items.append(FileInfo(
+                        path=relative_path,
+                        name=item.name,
+                        type='file',
+                        language=language,
+                        size_bytes=item.stat().st_size
+                    ))
+        except PermissionError:
+            pass
+
+        return items
+
+    async def delete_sandbox(self, project_id: str, user_id: Optional[str] = None) -> bool:
+        """Delete the sandbox workspace (called on idle/close)"""
+        try:
+            sandbox = self.get_sandbox_path(project_id, user_id)
+            if sandbox.exists():
+                shutil.rmtree(sandbox)
+                logger.info(f"Deleted sandbox for project {project_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete sandbox: {e}")
+            return False
+
+    async def sandbox_exists(self, project_id: str, user_id: Optional[str] = None) -> bool:
+        """Check if sandbox exists for a project"""
+        return self.get_sandbox_path(project_id, user_id).exists()
+
+    # ==================== LAYER 2: S3/MINIO ====================
+
+    def get_s3_prefix(self, user_id: str, project_id: str) -> str:
+        """Get S3 prefix for a project: workspaces/<user-id>/<project-id>/"""
+        return f"{S3_WORKSPACE_PREFIX}/{user_id}/{project_id}"
+
+    async def upload_to_s3(
+        self,
+        user_id: str,
+        project_id: str,
+        file_path: str,
+        content: str
+    ) -> Dict[str, Any]:
+        """Upload a single file to S3 (Layer 2)"""
+        s3_key = f"{self.get_s3_prefix(user_id, project_id)}/{file_path}"
+        content_bytes = content.encode('utf-8')
+
+        result = await storage_service.upload_file(
+            project_id=project_id,
+            file_path=file_path,
+            content=content_bytes
+        )
+
+        return {
+            's3_key': result.get('s3_key'),
+            'content_hash': result.get('content_hash'),
+            'size_bytes': result.get('size_bytes'),
+            'path': file_path
+        }
+
+    async def download_from_s3(self, s3_key: str) -> Optional[str]:
+        """Download a file from S3"""
+        content_bytes = await storage_service.download_file(s3_key)
+        if content_bytes:
+            return content_bytes.decode('utf-8')
+        return None
+
+    async def upload_project_to_s3(
+        self,
+        user_id: str,
+        project_id: str,
+        files: List[Dict[str, str]]
+    ) -> Dict[str, Any]:
+        """Upload all project files to S3"""
+        uploaded = []
+        errors = []
+
+        for file_data in files:
+            try:
+                result = await self.upload_to_s3(
+                    user_id=user_id,
+                    project_id=project_id,
+                    file_path=file_data['path'],
+                    content=file_data['content']
+                )
+                uploaded.append(result)
+            except Exception as e:
+                errors.append({'path': file_data['path'], 'error': str(e)})
+
+        return {
+            'uploaded': len(uploaded),
+            'errors': len(errors),
+            'files': uploaded,
+            's3_prefix': self.get_s3_prefix(user_id, project_id)
+        }
+
+    async def create_and_upload_zip(
+        self,
+        user_id: str,
+        project_id: str,
+        source_path: Optional[Path] = None
+    ) -> Optional[str]:
+        """Create ZIP from sandbox and upload to S3"""
+        if source_path is None:
+            source_path = self.get_sandbox_path(project_id, user_id)
+
+        if not source_path.exists():
+            return None
+
+        # Create ZIP
+        zip_path = self.sandbox_path / f"{project_id}.zip"
+
+        try:
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for file_path in source_path.rglob('*'):
+                    if file_path.is_file() and not file_path.name.startswith('.'):
+                        arcname = file_path.relative_to(source_path)
+                        zf.write(file_path, arcname)
+
+            # Upload ZIP to S3
+            with open(zip_path, 'rb') as f:
+                zip_content = f.read()
+
+            s3_key = f"{self.get_s3_prefix(user_id, project_id)}/project.zip"
+
+            await storage_service.upload_file(
+                project_id=project_id,
+                file_path="project.zip",
+                content=zip_content,
+                content_type='application/zip'
+            )
+
+            # Clean up local ZIP
+            zip_path.unlink()
+
+            logger.info(f"Created and uploaded ZIP for project {project_id}")
+            return s3_key
+
+        except Exception as e:
+            logger.error(f"Failed to create/upload ZIP: {e}")
+            if zip_path.exists():
+                zip_path.unlink()
+            return None
+
+    async def get_download_url(self, user_id: str, project_id: str) -> Optional[str]:
+        """Get presigned download URL for project ZIP"""
+        s3_key = f"{self.get_s3_prefix(user_id, project_id)}/project.zip"
+        try:
+            return await storage_service.get_presigned_url(s3_key)
+        except Exception as e:
+            logger.error(f"Failed to get download URL: {e}")
+            return None
+
+    # ==================== UNIFIED OPERATIONS ====================
+
+    async def load_project_for_editing(
+        self,
+        user_id: str,
+        project_id: str,
+        s3_prefix: Optional[str] = None,
+        file_index: Optional[List[Dict]] = None
+    ) -> List[FileInfo]:
+        """
+        Load project files for editing in the UI.
+
+        Priority order:
+        1. Check Layer 1 (sandbox) - if active, use it
+        2. Fetch from Layer 2 (S3) - permanent storage
+
+        Returns hierarchical file tree with content.
+        """
+        # Check if sandbox exists (project is actively being edited)
+        if await self.sandbox_exists(project_id, user_id):
+            logger.info(f"Loading project {project_id} from sandbox (Layer 1)")
+            files = await self.list_sandbox_files(project_id, user_id)
+            # Add content to files
+            for file_info in self._flatten_tree(files):
+                if file_info.type == 'file':
+                    file_info.content = await self.read_from_sandbox(project_id, file_info.path, user_id)
+            return files
+
+        # Fetch from S3 (Layer 2)
+        if file_index and s3_prefix:
+            logger.info(f"Loading project {project_id} from S3 (Layer 2)")
+            return await self._load_from_s3(project_id, s3_prefix, file_index, user_id)
+
+        # No files found
+        logger.warning(f"No files found for project {project_id}")
+        return []
+
+    async def _load_from_s3(
+        self,
+        project_id: str,
+        s3_prefix: str,
+        file_index: List[Dict],
+        user_id: Optional[str] = None
+    ) -> List[FileInfo]:
+        """Load files from S3 based on file index"""
+        # Create sandbox and populate from S3
+        await self.create_sandbox(project_id, user_id)
+
+        files = []
+        for file_info in file_index:
+            if file_info.get('is_folder') or file_info.get('type') == 'folder':
+                continue
+
+            s3_key = file_info.get('s3_key')
+            if s3_key:
+                content = await self.download_from_s3(s3_key)
+                if content:
+                    # Write to sandbox for editing
+                    await self.write_to_sandbox(project_id, file_info['path'], content, user_id)
+
+        # Return tree from sandbox
+        return await self.list_sandbox_files(project_id, user_id)
+
+    async def save_project(
+        self,
+        user_id: str,
+        project_id: str,
+        persist_to_s3: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Save project from sandbox (Layer 1) to S3 (Layer 2).
+
+        Returns metadata for Layer 3 (PostgreSQL).
+        """
+        sandbox = self.get_sandbox_path(project_id, user_id)
+
+        if not sandbox.exists():
+            return {'success': False, 'error': 'Sandbox not found'}
+
+        files = await self.list_sandbox_files(project_id, user_id)
+        flat_files = self._flatten_tree(files)
+
+        # Collect file data
+        file_index = []
+        total_size = 0
+
+        for file_info in flat_files:
+            if file_info.type == 'file':
+                content = await self.read_from_sandbox(project_id, file_info.path, user_id)
+                size = len(content.encode('utf-8')) if content else 0
+
+                file_entry = {
+                    'path': file_info.path,
+                    'name': file_info.name,
+                    'language': file_info.language,
+                    'size_bytes': size,
+                    'is_folder': False
+                }
+
+                if persist_to_s3 and content:
+                    # Upload to S3
+                    result = await self.upload_to_s3(user_id, project_id, file_info.path, content)
+                    file_entry['s3_key'] = result.get('s3_key')
+                    file_entry['content_hash'] = result.get('content_hash')
+
+                file_index.append(file_entry)
+                total_size += size
+
+        # Create ZIP
+        zip_key = None
+        if persist_to_s3:
+            zip_key = await self.create_and_upload_zip(user_id, project_id)
+
+        # Return metadata for Layer 3
+        return {
+            'success': True,
+            'project_id': project_id,
+            's3_prefix': self.get_s3_prefix(user_id, project_id),
+            'zip_s3_key': zip_key,
+            'file_index': file_index,
+            'total_files': len(file_index),
+            'total_size_bytes': total_size,
+            'saved_at': datetime.utcnow().isoformat()
+        }
+
+    def _flatten_tree(self, files: List[FileInfo]) -> List[FileInfo]:
+        """Flatten hierarchical file tree"""
+        result = []
+        for f in files:
+            result.append(f)
+            if f.children:
+                result.extend(self._flatten_tree(f.children))
+        return result
+
+    def _detect_language(self, filename: str) -> str:
+        """Detect language from file extension"""
+        ext = filename.split('.')[-1].lower() if '.' in filename else ''
+        language_map = {
+            'js': 'javascript',
+            'jsx': 'javascript',
+            'ts': 'typescript',
+            'tsx': 'typescript',
+            'py': 'python',
+            'java': 'java',
+            'go': 'go',
+            'rs': 'rust',
+            'rb': 'ruby',
+            'php': 'php',
+            'html': 'html',
+            'css': 'css',
+            'scss': 'scss',
+            'json': 'json',
+            'xml': 'xml',
+            'yaml': 'yaml',
+            'yml': 'yaml',
+            'md': 'markdown',
+            'sql': 'sql',
+            'sh': 'shell',
+        }
+        return language_map.get(ext, 'plaintext')
+
+    # ==================== LAYER 3: DATABASE PERSISTENCE ====================
+
+    async def save_to_database(
+        self,
+        project_id: str,
+        file_path: str,
+        content: str,
+        language: Optional[str] = None
+    ) -> bool:
+        """
+        Save file to PostgreSQL database (Layer 3).
+
+        This enables project recovery after sandbox cleanup.
+        - Small files (<10KB): Stored inline in PostgreSQL
+        - Large files: Stored in S3, reference kept in DB
+
+        Args:
+            project_id: Project UUID string
+            file_path: Relative file path
+            content: File content
+            language: Optional language override
+
+        Returns:
+            True if saved successfully
+        """
+        try:
+            # Import here to avoid circular imports
+            from app.core.database import AsyncSessionLocal
+            from app.models.project_file import ProjectFile
+            from sqlalchemy import select
+
+            # Validate project_id format (convert to UUID and back to string)
+            # GUID column is String(36), so we need string, not UUID object
+            try:
+                project_uuid = str(UUID(project_id))  # Validate format, keep as string
+                logger.debug(f"[Layer3-DB] Validated project_id: {project_uuid}")
+            except ValueError as ve:
+                logger.error(f"[Layer3-DB] Invalid project_id format: '{project_id}' - {ve}")
+                return False
+
+            # Calculate file metadata
+            content_bytes = content.encode('utf-8')
+            size_bytes = len(content_bytes)
+            content_hash = hashlib.sha256(content_bytes).hexdigest()
+            file_name = file_path.split('/')[-1]
+            parent_path = '/'.join(file_path.split('/')[:-1]) or None
+
+            # Detect language if not provided
+            if not language:
+                language = self._detect_language(file_name)
+
+            # Determine storage method (inline if < 10KB)
+            inline_threshold = getattr(settings, 'FILE_INLINE_THRESHOLD', 10240)
+            is_inline = size_bytes < inline_threshold
+
+            async with AsyncSessionLocal() as session:
+                # Check if file already exists
+                result = await session.execute(
+                    select(ProjectFile)
+                    .where(ProjectFile.project_id == project_uuid)
+                    .where(ProjectFile.path == file_path)
+                )
+                existing_file = result.scalar_one_or_none()
+
+                if is_inline:
+                    # Store inline in PostgreSQL
+                    s3_key = None
+                    content_inline = content
+                else:
+                    # Store in S3
+                    upload_result = await storage_service.upload_file(
+                        project_id,
+                        file_path,
+                        content_bytes
+                    )
+                    s3_key = upload_result.get('s3_key')
+                    content_inline = None
+
+                if existing_file:
+                    # Update existing file
+                    old_s3_key = existing_file.s3_key
+
+                    existing_file.content_inline = content_inline
+                    existing_file.s3_key = s3_key
+                    existing_file.content_hash = content_hash
+                    existing_file.size_bytes = size_bytes
+                    existing_file.is_inline = is_inline
+                    existing_file.language = language
+
+                    # Delete old S3 file if storage method changed
+                    if old_s3_key and old_s3_key != s3_key:
+                        try:
+                            await storage_service.delete_file(old_s3_key)
+                        except Exception:
+                            pass  # Ignore cleanup errors
+                else:
+                    # Create new file record
+                    new_file = ProjectFile(
+                        project_id=project_uuid,
+                        path=file_path,
+                        name=file_name,
+                        language=language,
+                        s3_key=s3_key,
+                        content_hash=content_hash,
+                        size_bytes=size_bytes,
+                        content_inline=content_inline,
+                        is_inline=is_inline,
+                        is_folder=False,
+                        parent_path=parent_path
+                    )
+                    session.add(new_file)
+
+                    # Create parent folders if needed
+                    await self._ensure_parent_folders_db(session, project_uuid, file_path)
+
+                await session.commit()
+                logger.debug(f"[Layer3-DB] Saved: {project_id}/{file_path} ({'inline' if is_inline else 'S3'}, {size_bytes}b)")
+                return True
+
+        except Exception as e:
+            logger.error(f"[Layer3-DB] Failed to save {file_path}: {e}", exc_info=True)
+            return False
+
+    async def _ensure_parent_folders_db(self, session, project_uuid: str, file_path: str):
+        """Create parent folder records in database if they don't exist"""
+        from app.models.project_file import ProjectFile
+        from sqlalchemy import select
+
+        parts = file_path.split('/')
+        if len(parts) <= 1:
+            return
+
+        current_path = ''
+        for part in parts[:-1]:  # Exclude the file itself
+            current_path = f"{current_path}/{part}" if current_path else part
+
+            # Check if folder exists
+            result = await session.execute(
+                select(ProjectFile)
+                .where(ProjectFile.project_id == project_uuid)
+                .where(ProjectFile.path == current_path)
+            )
+            existing = result.scalar_one_or_none()
+
+            if not existing:
+                folder = ProjectFile(
+                    project_id=project_uuid,
+                    path=current_path,
+                    name=part,
+                    is_folder=True,
+                    is_inline=True,
+                    size_bytes=0
+                )
+                session.add(folder)
+
+    async def get_file_from_database(self, project_id: str, file_path: str) -> Optional[str]:
+        """
+        Retrieve file content from database (Layer 3).
+
+        Used for project recovery when sandbox is cleaned up.
+
+        Args:
+            project_id: Project UUID string
+            file_path: Relative file path
+
+        Returns:
+            File content or None if not found
+        """
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.project_file import ProjectFile
+            from sqlalchemy import select
+
+            # Validate format, keep as string for String(36) column
+            project_uuid = str(UUID(project_id))
+
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(ProjectFile)
+                    .where(ProjectFile.project_id == project_uuid)
+                    .where(ProjectFile.path == file_path)
+                )
+                file_record = result.scalar_one_or_none()
+
+                if not file_record:
+                    return None
+
+                # Get content based on storage location
+                if file_record.is_inline and file_record.content_inline:
+                    return file_record.content_inline
+                elif file_record.s3_key:
+                    content_bytes = await storage_service.download_file(file_record.s3_key)
+                    return content_bytes.decode('utf-8') if content_bytes else None
+
+                return None
+
+        except Exception as e:
+            logger.error(f"[Layer3-DB] Failed to get {file_path}: {e}")
+            return None
+
+    async def restore_project_from_database(self, project_id: str, user_id: Optional[str] = None) -> List[FileInfo]:
+        """
+        Restore project files from database to sandbox.
+
+        Call this when a user opens a project whose sandbox was cleaned up.
+
+        Args:
+            project_id: Project UUID string
+            user_id: User UUID string (for user-scoped paths)
+
+        Returns:
+            List of restored files
+        """
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.project_file import ProjectFile
+            from sqlalchemy import select
+
+            # Validate format, keep as string for String(36) column
+            project_uuid = str(UUID(project_id))
+            restored_files = []
+
+            async with AsyncSessionLocal() as session:
+                # Get all files for project
+                result = await session.execute(
+                    select(ProjectFile)
+                    .where(ProjectFile.project_id == project_uuid)
+                    .where(ProjectFile.is_folder == False)
+                    .order_by(ProjectFile.path)
+                )
+                files = result.scalars().all()
+
+                if not files:
+                    logger.info(f"[Layer3-DB] No files to restore for project {project_id}")
+                    return []
+
+                # Create sandbox with user-scoped path
+                await self.create_sandbox(project_id, user_id)
+
+                # Restore each file
+                for file_record in files:
+                    content = None
+
+                    if file_record.is_inline and file_record.content_inline:
+                        content = file_record.content_inline
+                    elif file_record.s3_key:
+                        content_bytes = await storage_service.download_file(file_record.s3_key)
+                        content = content_bytes.decode('utf-8') if content_bytes else None
+
+                    if content:
+                        await self.write_to_sandbox(project_id, file_record.path, content, user_id)
+                        restored_files.append(FileInfo(
+                            path=file_record.path,
+                            name=file_record.name,
+                            type='file',
+                            language=file_record.language or 'plaintext',
+                            size_bytes=file_record.size_bytes
+                        ))
+
+                logger.info(f"[Layer3-DB] Restored {len(restored_files)} files for project {project_id}")
+                return restored_files
+
+        except Exception as e:
+            logger.error(f"[Layer3-DB] Failed to restore project {project_id}: {e}")
+            return []
+
+
+# Singleton instance
+unified_storage = UnifiedStorageService()

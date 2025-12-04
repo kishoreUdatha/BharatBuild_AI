@@ -1,8 +1,10 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import auth, projects, api_keys, billing, tokens, streaming, bolt, automation, orchestrator
+from app.api.v1.endpoints import auth, projects, api_keys, billing, tokens, streaming, bolt, automation, orchestrator, logs, execution, documents, adventure, resume, download, containers, preview, jobs, agentic, classify, sync, payments, import_project, paper, feedback, sandbox, workspace, log_stream, retrieval
 
 api_router = APIRouter()
 
+api_router.include_router(payments.router, prefix="/payments", tags=["Payments"])
+api_router.include_router(classify.router, prefix="/classify", tags=["Prompt Classification"])
 api_router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 api_router.include_router(projects.router, prefix="/projects", tags=["Projects"])
 api_router.include_router(api_keys.router, prefix="/api-keys", tags=["API Keys"])
@@ -12,3 +14,22 @@ api_router.include_router(streaming.router, prefix="/streaming", tags=["Streamin
 api_router.include_router(bolt.router, tags=["Bolt AI Editor"])
 api_router.include_router(automation.router, tags=["Automation Engine"])
 api_router.include_router(orchestrator.router, tags=["Dynamic Orchestrator"])
+api_router.include_router(logs.router, tags=["Logs"])
+api_router.include_router(execution.router, prefix="/execution", tags=["Project Execution"])
+api_router.include_router(documents.router, prefix="/documents", tags=["Document Generation"])
+api_router.include_router(adventure.router, tags=["Project Adventure"])
+api_router.include_router(resume.router, prefix="/resume", tags=["Resume & Recovery"])
+api_router.include_router(download.router, prefix="/download", tags=["Download & Temp Storage"])
+api_router.include_router(containers.router, tags=["Container Execution"])
+api_router.include_router(preview.router, tags=["Preview Proxy"])
+api_router.include_router(jobs.router, tags=["Job Storage"])
+api_router.include_router(agentic.router, tags=["Agentic CLI"])
+api_router.include_router(sync.router, tags=["File Sync"])
+api_router.include_router(import_project.router, prefix="/import", tags=["Project Import & Analysis"])
+api_router.include_router(paper.router, prefix="/paper", tags=["IEEE Paper Analysis"])
+api_router.include_router(feedback.router, tags=["User Feedback"])
+api_router.include_router(sandbox.router, prefix="/sandbox", tags=["Sandbox Management"])
+api_router.include_router(workspace.router, prefix="/workspace", tags=["Workspace Management"])
+api_router.include_router(log_stream.router, prefix="/log-stream", tags=["Log Stream WebSocket"])
+api_router.include_router(retrieval.router, tags=["Project Retrieval"])
+

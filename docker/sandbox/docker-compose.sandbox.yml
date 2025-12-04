@@ -1,0 +1,72 @@
+# Sandbox Docker Compose Template
+# This file is used as a template for spinning up isolated project containers
+# Environment variables are injected at runtime:
+#   - PROJECT_ID: Unique project identifier
+#   - HOST_PORT: Port mapped to host for preview
+#   - WORKSPACE_PATH: Path to project files on host
+#   - CONTAINER_PORT: Internal port (default 3000)
+
+version: '3.8'
+
+services:
+  sandbox:
+    image: bharatbuild/runtime:latest
+    container_name: sandbox_${PROJECT_ID:-default}
+
+    # Resource limits per container
+    deploy:
+      resources:
+        limits:
+          cpus: '${CPU_LIMIT:-0.5}'
+          memory: ${MEMORY_LIMIT:-512M}
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+    # Port mapping for preview
+    ports:
+      - "${HOST_PORT:-3000}:${CONTAINER_PORT:-3000}"
+
+    # Mount project files
+    volumes:
+      - ${WORKSPACE_PATH:-./workspace}:/workspace
+
+    # Environment
+    environment:
+      - NODE_ENV=development
+      - PORT=${CONTAINER_PORT:-3000}
+      - HOST=0.0.0.0
+      - PROJECT_ID=${PROJECT_ID}
+
+    # Working directory
+    working_dir: /workspace
+
+    # Network isolation
+    networks:
+      - sandbox_network
+
+    # Security
+    security_opt:
+      - no-new-privileges:true
+
+    # Auto-restart on failure
+    restart: unless-stopped
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${CONTAINER_PORT:-3000}/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # Labels for management
+    labels:
+      - "bharatbuild.sandbox=true"
+      - "bharatbuild.project_id=${PROJECT_ID}"
+      - "bharatbuild.created_at=${CREATED_AT:-unknown}"
+
+networks:
+  sandbox_network:
+    driver: bridge
+    name: sandbox_${PROJECT_ID:-default}_network

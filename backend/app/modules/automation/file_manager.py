@@ -16,27 +16,62 @@ from app.modules.bolt.patch_applier import apply_unified_patch
 class FileManager:
     """Manages project files on the file system"""
 
-    def __init__(self, base_path: str = "./user_projects"):
+    def __init__(self, base_path: str = None):
+        if base_path is None:
+            from app.core.config import settings
+            base_path = str(settings.USER_PROJECTS_DIR)
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
 
-    def get_project_path(self, project_id: str) -> Path:
-        """Get the full path for a project"""
+    def get_project_path(self, project_id: str, user_id: str = None) -> Path:
+        """
+        Get the full path for a project.
+
+        Path structure: workspaces/{user_id}/{project_id}/
+
+        Args:
+            project_id: Project UUID
+            user_id: User UUID (optional for backward compatibility)
+
+        Returns:
+            Path to project directory
+        """
+        if user_id:
+            return self.base_path / user_id / project_id
+        # Fallback for backward compatibility
         return self.base_path / project_id
 
-    async def create_project(self, project_id: str, name: str) -> Dict:
-        """Create a new project directory"""
-        try:
-            project_path = self.get_project_path(project_id)
+    async def create_project(self, project_id: str, name: str, user_id: str = None) -> Dict:
+        """
+        Create a new project directory (or return existing if already created).
 
+        Path structure: workspaces/{user_id}/{project_id}/
+
+        Args:
+            project_id: Project UUID
+            name: Project name
+            user_id: User UUID (optional for backward compatibility)
+        """
+        try:
+            project_path = self.get_project_path(project_id, user_id)
+
+            # If project already exists, just return success (idempotent operation)
             if project_path.exists():
-                raise FileExistsError(f"Project {project_id} already exists")
+                logger.info(f"Project {project_id} already exists, reusing directory")
+                return {
+                    "success": True,
+                    "project_id": project_id,
+                    "user_id": user_id,
+                    "path": str(project_path),
+                    "already_exists": True
+                }
 
             project_path.mkdir(parents=True, exist_ok=True)
 
             # Create metadata file
             metadata = {
                 "id": project_id,
+                "user_id": user_id,
                 "name": name,
                 "created_at": datetime.utcnow().isoformat(),
                 "updated_at": datetime.utcnow().isoformat()
@@ -46,11 +81,15 @@ class FileManager:
             with open(metadata_path, 'w') as f:
                 json.dump(metadata, f, indent=2)
 
-            logger.info(f"Created project: {project_id}")
+            if user_id:
+                logger.info(f"Created project: {project_id} for user {user_id}")
+            else:
+                logger.info(f"Created project: {project_id}")
 
             return {
                 "success": True,
                 "project_id": project_id,
+                "user_id": user_id,
                 "path": str(project_path)
             }
 
@@ -61,10 +100,16 @@ class FileManager:
                 "error": str(e)
             }
 
-    async def create_file(self, project_id: str, file_path: str, content: str) -> Dict:
+    async def create_file(
+        self,
+        project_id: str,
+        file_path: str,
+        content: str,
+        user_id: str = None
+    ) -> Dict:
         """Create a new file in the project"""
         try:
-            project_path = self.get_project_path(project_id)
+            project_path = self.get_project_path(project_id, user_id)
             full_path = project_path / file_path
 
             # Create parent directories
@@ -89,10 +134,10 @@ class FileManager:
                 "error": str(e)
             }
 
-    async def read_file(self, project_id: str, file_path: str) -> Optional[str]:
+    async def read_file(self, project_id: str, file_path: str, user_id: str = None) -> Optional[str]:
         """Read file content"""
         try:
-            project_path = self.get_project_path(project_id)
+            project_path = self.get_project_path(project_id, user_id)
             full_path = project_path / file_path
 
             if not full_path.exists():
@@ -105,14 +150,20 @@ class FileManager:
             logger.error(f"Error reading file {file_path}: {e}")
             return None
 
-    async def update_file(self, project_id: str, file_path: str, content: str) -> Dict:
+    async def update_file(
+        self,
+        project_id: str,
+        file_path: str,
+        content: str,
+        user_id: str = None
+    ) -> Dict:
         """Update existing file content"""
         try:
-            project_path = self.get_project_path(project_id)
+            project_path = self.get_project_path(project_id, user_id)
             full_path = project_path / file_path
 
             if not full_path.exists():
-                return await self.create_file(project_id, file_path, content)
+                return await self.create_file(project_id, file_path, content, user_id)
 
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
@@ -132,11 +183,17 @@ class FileManager:
                 "error": str(e)
             }
 
-    async def apply_patch(self, project_id: str, file_path: str, patch: str) -> Dict:
+    async def apply_patch(
+        self,
+        project_id: str,
+        file_path: str,
+        patch: str,
+        user_id: str = None
+    ) -> Dict:
         """Apply a unified diff patch to a file"""
         try:
             # Read original content
-            original_content = await self.read_file(project_id, file_path)
+            original_content = await self.read_file(project_id, file_path, user_id)
 
             if original_content is None:
                 return {
@@ -151,7 +208,7 @@ class FileManager:
                 return result
 
             # Write patched content
-            await self.update_file(project_id, file_path, result['patched_content'])
+            await self.update_file(project_id, file_path, result['patched_content'], user_id)
 
             return {
                 "success": True,
@@ -166,10 +223,10 @@ class FileManager:
                 "error": str(e)
             }
 
-    async def delete_file(self, project_id: str, file_path: str) -> Dict:
+    async def delete_file(self, project_id: str, file_path: str, user_id: str = None) -> Dict:
         """Delete a file"""
         try:
-            project_path = self.get_project_path(project_id)
+            project_path = self.get_project_path(project_id, user_id)
             full_path = project_path / file_path
 
             if not full_path.exists():
@@ -194,10 +251,10 @@ class FileManager:
                 "error": str(e)
             }
 
-    async def get_file_tree(self, project_id: str) -> List[Dict]:
+    async def get_file_tree(self, project_id: str, user_id: str = None) -> List[Dict]:
         """Get the project file tree structure"""
         try:
-            project_path = self.get_project_path(project_id)
+            project_path = self.get_project_path(project_id, user_id)
 
             if not project_path.exists():
                 return []
@@ -211,7 +268,8 @@ class FileManager:
                         if item.name.startswith('.'):
                             continue
 
-                        relative_path = str(item.relative_to(project_path))
+                        # Normalize path to forward slashes for cross-platform compatibility
+                        relative_path = str(item.relative_to(project_path)).replace("\\", "/")
 
                         if item.is_dir():
                             items.append({
@@ -259,10 +317,10 @@ class FileManager:
             logger.error(f"Error getting file tree for {project_id}: {e}")
             return []
 
-    async def delete_project(self, project_id: str) -> Dict:
+    async def delete_project(self, project_id: str, user_id: str = None) -> Dict:
         """Delete entire project"""
         try:
-            project_path = self.get_project_path(project_id)
+            project_path = self.get_project_path(project_id, user_id)
 
             if not project_path.exists():
                 return {

@@ -9,10 +9,11 @@ from app.core.database import AsyncSessionLocal
 from app.models.project import Project, ProjectStatus
 from app.models.document import Document, DocumentType
 from app.models.agent_task import AgentTask, AgentTaskStatus, AgentType
-from app.modules.orchestrator.multi_agent_orchestrator import orchestrator
+from app.modules.orchestrator.dynamic_orchestrator import dynamic_orchestrator
 from app.utils.document_generator import document_generator
 from app.utils.storage_client import storage_client
 from app.core.logging_config import logger
+from app.core.config import settings
 
 
 class ProjectExecutionTask(Task):
@@ -58,12 +59,24 @@ class ProjectExecutionTask(Task):
                     await db.commit()
                     logger.info(f"Project {project_id}: {progress}% - {message}")
 
-                # Execute orchestrator
-                results = await orchestrator.execute_project(
-                    mode=project.mode.value,
-                    project_data=project_data,
-                    progress_callback=update_progress
-                )
+                # Execute dynamic orchestrator workflow
+                # Collect results from async generator
+                results = {"files_created": [], "metadata": {}}
+                async for event in dynamic_orchestrator.execute_workflow(
+                    user_request=project.description,
+                    project_id=str(project.id),
+                    workflow_name="bolt_standard",
+                    metadata={"mode": project.mode.value, "project_type": "Academic" if project.mode.value == "student" else "Commercial"}
+                ):
+                    # Update progress based on events
+                    if hasattr(event, 'type'):
+                        event_type = event.type.value if hasattr(event.type, 'value') else str(event.type)
+                        if event_type == "status":
+                            await update_progress(project.progress + 5, event.data.get("message", ""))
+                        elif event_type == "file_operation":
+                            results["files_created"].append(event.data)
+                        elif event_type == "complete":
+                            results["metadata"] = event.data
 
                 # Save results
                 total_tokens = results.get("metadata", {}).get("total_tokens", 0)
@@ -187,7 +200,7 @@ def cleanup_old_files():
 
     temp_dir = Path(__file__).parent.parent.parent / "temp"
     current_time = time.time()
-    days_old = 7
+    days_old = settings.PROJECT_CLEANUP_DAYS  # From .env
 
     if temp_dir.exists():
         for file_path in temp_dir.glob("*"):

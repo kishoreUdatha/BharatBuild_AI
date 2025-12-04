@@ -1,13 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional
 from pydantic import BaseModel
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.models.user import User
 from app.models.token_balance import TokenTransaction, TokenPurchase
-from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import get_current_user, get_optional_current_user
 from app.utils.token_manager import token_manager
 from app.core.logging_config import logger
 
@@ -60,7 +61,7 @@ class TokenPurchaseResponse(BaseModel):
 
 @router.get("/balance", response_model=TokenBalanceResponse)
 async def get_token_balance(
-    current_user: User = Depends(get_current_user),
+    user_id: Optional[str] = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -73,8 +74,36 @@ async def get_token_balance(
     - Monthly allowance
     - Premium tokens
     - Rollover tokens
+
+    In development mode, returns mock data if not authenticated.
     """
-    balance_info = await token_manager.get_balance_info(db, str(current_user.id))
+    # Return mock data in dev mode if not authenticated
+    if user_id is None:
+        if settings.is_dev_mode():
+            mock_data = settings.get_mock_token_data()
+            return TokenBalanceResponse(
+                total_tokens=mock_data["total_tokens"],
+                used_tokens=mock_data["used_tokens"],
+                remaining_tokens=mock_data["remaining_tokens"],
+                monthly_allowance=mock_data["monthly_allowance"],
+                monthly_used=mock_data["monthly_used"],
+                monthly_remaining=mock_data["monthly_remaining"],
+                monthly_used_percentage=round((mock_data["monthly_used"] / mock_data["monthly_allowance"]) * 100, 1) if mock_data["monthly_allowance"] > 0 else 0,
+                premium_tokens=mock_data["total_tokens"] - mock_data["monthly_allowance"],
+                premium_remaining=mock_data["total_tokens"] - mock_data["monthly_allowance"],
+                rollover_tokens=0,
+                month_reset_date=None,
+                total_requests=10,
+                requests_today=2,
+                last_request_at=None
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required"
+            )
+
+    balance_info = await token_manager.get_balance_info(db, user_id)
 
     return TokenBalanceResponse(
         total_tokens=balance_info["total_tokens"],
@@ -190,19 +219,12 @@ async def purchase_tokens(
     """
     Purchase token package (like Bolt.new pricing)
 
-    Packages:
-    - Starter: 50K tokens - ₹99
-    - Pro: 200K tokens - ₹349
-    - Unlimited: 1M tokens - ₹1499
+    Packages are configurable via environment variables.
     """
-    # Token packages
-    packages = {
-        "starter": {"tokens": 50000, "price": 9900, "name": "Starter Pack"},
-        "pro": {"tokens": 200000, "price": 34900, "name": "Pro Pack"},
-        "unlimited": {"tokens": 1000000, "price": 149900, "name": "Unlimited Pack"}
-    }
+    # Token packages from config
+    packages = settings.get_token_packages()
 
-    if purchase_data.package not in packages:
+    if purchase_data.package not in packages or not packages[purchase_data.package]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid package. Choose: starter, pro, or unlimited"
@@ -228,8 +250,8 @@ async def purchase_tokens(
 
     logger.info(f"Created token purchase for user {current_user.id}: {package['name']}")
 
-    # In production, integrate with Razorpay here
-    payment_url = f"https://payment.example.com/pay/{purchase.id}"
+    # Get payment URL from config
+    payment_url = settings.get_payment_url(str(purchase.id))
 
     return TokenPurchaseResponse(
         package_name=package["name"],
@@ -249,16 +271,10 @@ async def redeem_promo_code(
     """
     Redeem promo code for bonus tokens (like Bolt.new/Lovable.dev)
 
-    Example codes:
-    - WELCOME2024: 10K bonus tokens
-    - LAUNCH50: 50K bonus tokens
+    Promo codes are configurable via environment variables or database.
     """
-    # Promo codes database (in production, store in DB)
-    promo_codes = {
-        "WELCOME2024": 10000,
-        "LAUNCH50": 50000,
-        "BETA100": 100000
-    }
+    # Get promo codes from config
+    promo_codes = settings.get_promo_codes()
 
     if promo_code not in promo_codes:
         raise HTTPException(
@@ -291,87 +307,82 @@ async def redeem_promo_code(
 async def get_token_packages():
     """
     Get available token packages (like Bolt.new pricing page)
+
+    Packages are configurable via environment variables.
     """
+    # Get packages from config
+    packages = settings.get_token_packages()
+    monthly_plans = settings.get_monthly_plans()
+
+    # Build response with package details
+    package_list = []
+    for pkg_id, pkg in packages.items():
+        if pkg:
+            package_list.append({
+                "id": pkg_id,
+                "name": pkg.get("name", pkg_id.title()),
+                "tokens": pkg.get("tokens", 0),
+                "price": pkg.get("price", 0) // 100,  # Convert paise to rupees for display
+                "currency": "INR",
+                "popular": pkg_id == "pro",
+                "features": _get_package_features(pkg_id, pkg.get("tokens", 0))
+            })
+
+    # Build monthly plans response
+    monthly_list = []
+    for plan_id, plan in monthly_plans.items():
+        if plan:
+            monthly_list.append({
+                "id": plan_id if plan_id != "pro" else "pro_monthly",
+                "name": plan.get("name", plan_id.title()),
+                "price": plan.get("price", 0) // 100,  # Convert paise to rupees for display
+                "tokens_per_month": plan.get("tokens", 0),
+                "features": _get_plan_features(plan_id, plan.get("tokens", 0))
+            })
+
     return {
-        "packages": [
-            {
-                "id": "starter",
-                "name": "Starter Pack",
-                "tokens": 50000,
-                "price": 99,
-                "currency": "INR",
-                "features": [
-                    "50,000 tokens",
-                    "Valid for 3 months",
-                    "All AI agents",
-                    "Priority support"
-                ]
-            },
-            {
-                "id": "pro",
-                "name": "Pro Pack",
-                "tokens": 200000,
-                "price": 349,
-                "currency": "INR",
-                "popular": True,
-                "features": [
-                    "200,000 tokens",
-                    "Valid for 6 months",
-                    "All AI agents",
-                    "Priority support",
-                    "Advanced analytics"
-                ]
-            },
-            {
-                "id": "unlimited",
-                "name": "Unlimited Pack",
-                "tokens": 1000000,
-                "price": 1499,
-                "currency": "INR",
-                "features": [
-                    "1,000,000 tokens",
-                    "Valid for 12 months",
-                    "All AI agents",
-                    "Dedicated support",
-                    "Advanced analytics",
-                    "Custom integrations"
-                ]
-            }
-        ],
-        "monthly_plans": [
-            {
-                "id": "free",
-                "name": "Free Tier",
-                "price": 0,
-                "tokens_per_month": 10000,
-                "features": [
-                    "10,000 tokens/month",
-                    "Rollover up to 5,000 tokens",
-                    "Basic support"
-                ]
-            },
-            {
-                "id": "basic",
-                "name": "Basic",
-                "price": 299,
-                "tokens_per_month": 50000,
-                "features": [
-                    "50,000 tokens/month",
-                    "Rollover up to 25,000 tokens",
-                    "Priority support"
-                ]
-            },
-            {
-                "id": "pro_monthly",
-                "name": "Pro",
-                "price": 999,
-                "tokens_per_month": 250000,
-                "features": [
-                    "250,000 tokens/month",
-                    "Rollover up to 125,000 tokens",
-                    "Priority support",
-                    "Advanced analytics"
-                ]
-            }
-        ]
+        "packages": package_list,
+        "monthly_plans": monthly_list
     }
+
+
+def _get_package_features(pkg_id: str, tokens: int) -> list:
+    """Get features list for a package"""
+    base_features = [
+        f"{tokens:,} tokens",
+        "All AI agents",
+    ]
+
+    if pkg_id == "starter":
+        return base_features + ["Valid for 3 months", "Priority support"]
+    elif pkg_id == "pro":
+        return base_features + ["Valid for 6 months", "Priority support", "Advanced analytics"]
+    elif pkg_id == "unlimited":
+        return base_features + ["Valid for 12 months", "Dedicated support", "Advanced analytics", "Custom integrations"]
+
+    return base_features
+
+
+def _get_plan_features(plan_id: str, tokens: int) -> list:
+    """Get features list for a monthly plan"""
+    rollover = tokens // 2
+
+    if plan_id == "free":
+        return [
+            f"{tokens:,} tokens/month",
+            f"Rollover up to {rollover:,} tokens",
+            "Basic support"
+        ]
+    elif plan_id == "basic":
+        return [
+            f"{tokens:,} tokens/month",
+            f"Rollover up to {rollover:,} tokens",
+            "Priority support"
+        ]
+    else:  # pro
+        return [
+            f"{tokens:,} tokens/month",
+            f"Rollover up to {rollover:,} tokens",
+            "Priority support",
+            "Advanced analytics"
+        ]

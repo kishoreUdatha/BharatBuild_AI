@@ -1,19 +1,18 @@
 from sqlalchemy import Column, String, DateTime, Integer, ForeignKey, JSON, Text
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from datetime import datetime
-import uuid
 
 from app.core.database import Base
+from app.core.types import GUID, generate_uuid
 
 
 class UsageLog(Base):
     """Usage log model for tracking API usage"""
     __tablename__ = "usage_logs"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    api_key_id = Column(UUID(as_uuid=True), ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True)
+    id = Column(GUID, primary_key=True, default=generate_uuid)
+    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    api_key_id = Column(GUID, ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True)
 
     # Request details
     endpoint = Column(String(255), nullable=False)
@@ -50,8 +49,8 @@ class TokenUsage(Base):
     """Daily token usage aggregation"""
     __tablename__ = "token_usage"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id = Column(GUID, primary_key=True, default=generate_uuid)
+    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
 
     date = Column(DateTime, nullable=False, index=True)
 

@@ -3,12 +3,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from datetime import timedelta
+from pathlib import Path
 import time
 
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.core.logging_config import logger
 from app.api.v1.router import api_router
+from app.services.temp_session_storage import temp_storage
+from app.services.sandbox_cleanup import sandbox_cleanup
+from app.services.fix_executor import execute_fix
+from app.api.v1.endpoints.log_stream import log_stream_manager
 import app.models  # Import models so metadata knows about them
 
 
@@ -25,10 +31,54 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables created successfully")
 
+    # Clean up any leftover temp sessions from previous runs
+    temp_storage.cleanup_all()
+    logger.info("Cleaned up old temp sessions")
+
+    # Start background cleanup task for temp storage
+    await temp_storage.start_cleanup_task()
+    logger.info("Started temp storage cleanup task (1hr TTL)")
+
+    # Start sandbox cleanup service (Bolt.new style ephemeral storage)
+    if settings.SANDBOX_CLEANUP_ENABLED:
+        # Configure sandbox cleanup from settings
+        sandbox_cleanup.sandbox_path = Path(settings.SANDBOX_PATH)
+        sandbox_cleanup.idle_timeout = timedelta(minutes=settings.SANDBOX_IDLE_TIMEOUT_MINUTES)
+        sandbox_cleanup.cleanup_interval = timedelta(minutes=settings.SANDBOX_CLEANUP_INTERVAL_MINUTES)
+        sandbox_cleanup.min_age = timedelta(minutes=settings.SANDBOX_MIN_AGE_MINUTES)
+
+        await sandbox_cleanup.start()
+        logger.info(
+            f"Started sandbox cleanup service - "
+            f"Path: {settings.SANDBOX_PATH}, "
+            f"Idle timeout: {settings.SANDBOX_IDLE_TIMEOUT_MINUTES}min, "
+            f"Interval: {settings.SANDBOX_CLEANUP_INTERVAL_MINUTES}min"
+        )
+    else:
+        logger.info("Sandbox cleanup service disabled")
+
+    # ========== AUTO-FIX SETUP (Bolt.new Magic!) ==========
+    # Register fix callback so errors are fixed automatically
+    log_stream_manager.set_fix_callback(execute_fix)
+    logger.info("Auto-fix callback registered - errors will be fixed automatically!")
+
     yield
 
     # Shutdown
     logger.info("Shutting down BharatBuild AI Platform...")
+
+    # Stop sandbox cleanup service
+    if settings.SANDBOX_CLEANUP_ENABLED:
+        await sandbox_cleanup.stop()
+        logger.info("Stopped sandbox cleanup service")
+
+    # Stop cleanup task
+    temp_storage.stop_cleanup_task()
+
+    # Clean up all temp sessions
+    temp_storage.cleanup_all()
+    logger.info("Cleaned up all temp sessions")
+
     await engine.dispose()
 
 
@@ -52,17 +102,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# GZipMiddleware - but we need to skip it for SSE endpoints
+# app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
-# Request timing middleware
-@app.middleware("http")
-async def add_process_time_header(request: Request, call_next):
-    start_time = time.time()
-    response = await call_next(request)
-    process_time = time.time() - start_time
-    response.headers["X-Process-Time"] = str(process_time)
-    return response
+# Note: We don't use @app.middleware("http") here because it buffers
+# streaming responses. The timing headers are added in individual endpoints
+# or we skip timing for SSE endpoints.
 
 
 # Exception handlers
@@ -110,7 +156,7 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "app.main:app",
-        host="0.0.0.0",
-        port=8000,
+        host=settings.SERVER_HOST,
+        port=settings.SERVER_PORT,
         reload=settings.DEBUG
     )

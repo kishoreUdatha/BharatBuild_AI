@@ -142,7 +142,7 @@ class AutomationEngine:
             # Final completion
             yield {
                 "type": "complete",
-                "message": "✓ All tasks completed successfully",
+                "message": "[OK] All tasks completed successfully",
                 "actions_executed": len(actions),
                 "timestamp": datetime.utcnow().isoformat()
             }

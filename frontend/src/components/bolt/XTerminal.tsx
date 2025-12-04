@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -21,9 +21,84 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
   const fitAddonRef = useRef<FitAddon | null>(null)
   const currentLineRef = useRef<string>('')
   const lastLogCountRef = useRef<number>(0)
+  const onCommandRef = useRef(onCommand)
+  const isInitializedRef = useRef(false)
+  const fitTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
+  // Context menu state for copy
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
+
+  // Copy selected text to clipboard
+  const copyToClipboard = useCallback(async () => {
+    if (!xtermRef.current) return
+
+    const selection = xtermRef.current.getSelection()
+    if (selection) {
+      try {
+        await navigator.clipboard.writeText(selection)
+        // Visual feedback - briefly show copied message
+        console.log('[XTerminal] Copied to clipboard:', selection.substring(0, 50) + '...')
+      } catch (err) {
+        console.error('[XTerminal] Failed to copy:', err)
+      }
+    }
+    setContextMenu(null)
+  }, [])
+
+  // Handle right-click context menu
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const selection = xtermRef.current?.getSelection()
+    if (selection) {
+      setContextMenu({ x: e.clientX, y: e.clientY })
+    }
+  }, [])
+
+  // Close context menu on click outside
   useEffect(() => {
-    if (!terminalRef.current) return
+    const handleClick = () => setContextMenu(null)
+    if (contextMenu) {
+      document.addEventListener('click', handleClick)
+      return () => document.removeEventListener('click', handleClick)
+    }
+  }, [contextMenu])
+
+  // Keep onCommand ref updated without causing re-render
+  useEffect(() => {
+    onCommandRef.current = onCommand
+  }, [onCommand])
+
+  // Debounced fit function to prevent blinking
+  const debouncedFit = useCallback(() => {
+    if (fitTimeoutRef.current) {
+      clearTimeout(fitTimeoutRef.current)
+    }
+    fitTimeoutRef.current = setTimeout(() => {
+      try {
+        if (fitAddonRef.current && xtermRef.current) {
+          fitAddonRef.current.fit()
+        }
+      } catch (error) {
+        // Silently ignore fit errors
+      }
+    }, 100)
+  }, [])
+
+  // Initialize terminal only once
+  useEffect(() => {
+    // Guard: Don't initialize if ref is missing or already initialized
+    if (!terminalRef.current) {
+      console.log('[XTerminal] Container ref not ready')
+      return
+    }
+
+    if (isInitializedRef.current && xtermRef.current) {
+      console.log('[XTerminal] Already initialized, skipping')
+      return
+    }
+
+    console.log('[XTerminal] Initializing terminal...')
+    isInitializedRef.current = true
 
     // Initialize xterm.js
     const terminal = new Terminal({
@@ -36,7 +111,7 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
         foreground: '#e4e6eb',
         cursor: '#0099ff',
         cursorAccent: '#ffffff',
-        selection: 'rgba(0, 153, 255, 0.3)',
+        selectionBackground: 'rgba(0, 153, 255, 0.3)',
         black: '#1a1d23',
         red: '#f87171',
         green: '#4ade80',
@@ -68,11 +143,19 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
 
     // Open terminal
     terminal.open(terminalRef.current)
-    fitAddon.fit()
 
     // Store refs
     xtermRef.current = terminal
     fitAddonRef.current = fitAddon
+
+    // Fit after a small delay to ensure DOM is ready
+    setTimeout(() => {
+      try {
+        fitAddon.fit()
+      } catch (error) {
+        // Silently ignore
+      }
+    }, 50)
 
     // Welcome message
     terminal.writeln('\x1b[1;36m╔═══════════════════════════════════════════════════╗\x1b[0m')
@@ -82,32 +165,40 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
     terminal.writeln('')
     terminal.write('\x1b[1;32m$\x1b[0m ')
 
-    // Handle input
-    let currentLine = ''
+    // Handle input - use ref for onCommand to avoid re-initialization
     terminal.onData((data) => {
       const code = data.charCodeAt(0)
 
       // Enter key
       if (code === 13) {
         terminal.writeln('')
-        if (currentLine.trim()) {
-          onCommand?.(currentLine)
+        if (currentLineRef.current.trim()) {
+          onCommandRef.current?.(currentLineRef.current)
         }
-        currentLine = ''
+        currentLineRef.current = ''
         terminal.write('\x1b[1;32m$\x1b[0m ')
       }
       // Backspace
       else if (code === 127) {
-        if (currentLine.length > 0) {
-          currentLine = currentLine.slice(0, -1)
+        if (currentLineRef.current.length > 0) {
+          currentLineRef.current = currentLineRef.current.slice(0, -1)
           terminal.write('\b \b')
         }
       }
-      // Ctrl+C
+      // Ctrl+C - If there's a selection, copy it; otherwise send interrupt
       else if (code === 3) {
-        terminal.writeln('^C')
-        currentLine = ''
-        terminal.write('\x1b[1;32m$\x1b[0m ')
+        const selection = terminal.getSelection()
+        if (selection) {
+          navigator.clipboard.writeText(selection).then(() => {
+            console.log('[XTerminal] Copied with Ctrl+C')
+          }).catch(err => {
+            console.error('[XTerminal] Copy failed:', err)
+          })
+        } else {
+          terminal.writeln('^C')
+          currentLineRef.current = ''
+          terminal.write('\x1b[1;32m$\x1b[0m ')
+        }
       }
       // Ctrl+L (clear)
       else if (code === 12) {
@@ -116,23 +207,54 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
       }
       // Printable characters
       else if (code >= 32) {
-        currentLine += data
+        currentLineRef.current += data
         terminal.write(data)
       }
     })
 
-    // Handle resize
-    const handleResize = () => {
-      fitAddon.fit()
-    }
-    window.addEventListener('resize', handleResize)
+    // Add keyboard handler for Ctrl+Shift+C (copy)
+    terminal.attachCustomKeyEventHandler((event) => {
+      // Ctrl+Shift+C to copy
+      if (event.ctrlKey && event.shiftKey && event.key === 'C') {
+        const selection = terminal.getSelection()
+        if (selection) {
+          navigator.clipboard.writeText(selection).then(() => {
+            console.log('[XTerminal] Copied with Ctrl+Shift+C')
+          }).catch(err => {
+            console.error('[XTerminal] Copy failed:', err)
+          })
+        }
+        return false // Prevent default
+      }
+      // Ctrl+Shift+V to paste
+      if (event.ctrlKey && event.shiftKey && event.key === 'V') {
+        navigator.clipboard.readText().then(text => {
+          terminal.write(text)
+          currentLineRef.current += text
+        }).catch(err => {
+          console.error('[XTerminal] Paste failed:', err)
+        })
+        return false // Prevent default
+      }
+      return true // Allow other keys
+    })
 
     // Cleanup
     return () => {
-      window.removeEventListener('resize', handleResize)
-      terminal.dispose()
+      console.log('[XTerminal] Cleanup - disposing terminal')
+      if (fitTimeoutRef.current) {
+        clearTimeout(fitTimeoutRef.current)
+      }
+      try {
+        terminal.dispose()
+      } catch (e) {
+        console.log('[XTerminal] Error disposing terminal:', e)
+      }
+      xtermRef.current = null
+      fitAddonRef.current = null
+      isInitializedRef.current = false
     }
-  }, [onCommand])
+  }, []) // Empty dependency - initialize only once
 
   // Handle new logs
   useEffect(() => {
@@ -177,28 +299,56 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
     }
   }, [logs])
 
-  // Re-fit on mount and when container size changes
+  // Re-fit on container size changes with debouncing
   useEffect(() => {
     const resizeObserver = new ResizeObserver(() => {
-      if (fitAddonRef.current) {
-        fitAddonRef.current.fit()
-      }
+      debouncedFit()
     })
 
     if (terminalRef.current) {
       resizeObserver.observe(terminalRef.current)
     }
 
+    // Also handle window resize with debounce
+    const handleWindowResize = () => {
+      debouncedFit()
+    }
+    window.addEventListener('resize', handleWindowResize)
+
     return () => {
       resizeObserver.disconnect()
+      window.removeEventListener('resize', handleWindowResize)
     }
-  }, [])
+  }, [debouncedFit])
 
   return (
-    <div
-      ref={terminalRef}
-      className="h-full w-full"
-      style={{ padding: '8px' }}
-    />
+    <div className="relative h-full w-full">
+      <div
+        ref={terminalRef}
+        className="h-full w-full"
+        style={{ padding: '8px' }}
+        onContextMenu={handleContextMenu}
+      />
+
+      {/* Context Menu for Copy */}
+      {contextMenu && (
+        <div
+          className="fixed z-50 bg-[#2d2d2d] border border-[#555] rounded shadow-lg py-1 min-w-[120px]"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            onClick={copyToClipboard}
+            className="w-full px-3 py-1.5 text-left text-sm text-white hover:bg-[#3d3d3d] flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            Copy
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
+
+export default XTerminal

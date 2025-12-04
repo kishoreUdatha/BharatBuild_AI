@@ -1,11 +1,11 @@
 from sqlalchemy import Column, String, DateTime, Enum as SQLEnum, Integer, ForeignKey, Text, JSON
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
 import enum
 
 from app.core.database import Base
+from app.core.types import GUID, generate_uuid
 
 
 class AgentTaskStatus(str, enum.Enum):
@@ -35,8 +35,8 @@ class AgentTask(Base):
     """Agent task model for tracking individual agent executions"""
     __tablename__ = "agent_tasks"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    id = Column(GUID, primary_key=True, default=generate_uuid)
+    project_id = Column(GUID, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
 
     agent_type = Column(SQLEnum(AgentType), nullable=False)
     status = Column(SQLEnum(AgentTaskStatus), default=AgentTaskStatus.PENDING, nullable=False)

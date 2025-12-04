@@ -27,7 +27,10 @@ class BuildTool(str, Enum):
 class BuildSystem:
     """Manages building and compilation for different tech stacks"""
 
-    def __init__(self, base_path: str = "./user_projects"):
+    def __init__(self, base_path: str = None):
+        if base_path is None:
+            from app.core.config import settings
+            base_path = str(settings.USER_PROJECTS_DIR)
         self.base_path = Path(base_path)
 
     def get_project_path(self, project_id: str) -> Path:
@@ -250,9 +253,9 @@ class BuildSystem:
 
             yield ""
             if process.returncode == 0:
-                yield "✓ Build completed successfully"
+                yield "[OK] Build completed successfully"
             else:
-                yield f"✗ Build failed with exit code {process.returncode}"
+                yield f"[FAIL] Build failed with exit code {process.returncode}"
 
         except Exception as e:
             logger.error(f"Error in build_stream: {e}")

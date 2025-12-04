@@ -1,19 +1,19 @@
 from sqlalchemy import Column, String, DateTime, ForeignKey, JSON, Boolean, Text
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from datetime import datetime, timedelta
 import uuid
 
 from app.core.database import Base
+from app.core.types import GUID, generate_uuid
 
 
 class Session(Base):
     """User session model for workspace persistence"""
     __tablename__ = "sessions"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
+    id = Column(GUID, primary_key=True, default=generate_uuid)
+    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(GUID, ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
 
     # Session data
     session_token = Column(String(255), unique=True, nullable=False, index=True)

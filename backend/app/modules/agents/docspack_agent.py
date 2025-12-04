@@ -1,33 +1,28 @@
 """
-AGENT 5 — DOCSPACK AGENT (Student Academic Generator)
+AGENT 5 — DOCSPACK AGENT (Documentation Generator)
 
-Used ONLY when project_type = "Student Project".
+Generates documentation for ALL project types:
+- Academic: SRS, UML, Reports, PPT, Viva questions
+- Standard: README, API docs, Architecture docs
 
-Generates:
-✔ Abstract
-✔ SRS
-✔ UML
-✔ ER Diagram (text)
-✔ Report 30+ pages
-✔ PPT slides content
-✔ Viva questions
-✔ Output explanation
+Output format: <file path="...">content</file>
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 from app.utils.claude_client import ClaudeClient
+from pathlib import Path
 import json
 
 
 class DocsPackAgent:
     """
-    Document Pack Agent for generating complete academic documentation
-    based on project analysis.
+    Document Pack Agent for generating documentation for all project types.
+    Supports both academic (full IEEE docs) and standard (dev docs) modes.
     """
 
-    def __init__(self):
+    def __init__(self, model: str = "sonnet"):
         self.claude_client = ClaudeClient()
-        self.model = "claude-3-5-sonnet-20241022"  # Use Sonnet for quality
+        self.model = model
 
     async def generate_documents(self, project_analysis: Dict[str, Any]) -> Dict[str, str]:
         """
@@ -299,6 +294,214 @@ Format in Markdown with clear sections."""
         )
 
         return response['content'][0]['text']
+
+    async def generate_all_documents(
+        self,
+        plan: str,
+        project_id: str,
+        files: List[Dict[str, Any]],
+        doc_type: str = "academic"
+    ) -> Dict[str, Any]:
+        """
+        Generate all documentation based on project plan and files.
+
+        Args:
+            plan: Raw plan text from planner
+            project_id: Project identifier
+            files: List of files created
+            doc_type: "academic" or "standard"
+
+        Returns:
+            Dict with response containing <file> tags
+        """
+        # Build file summary
+        file_summary = "\n".join([
+            f"- {f.get('path', 'unknown')}: {f.get('type', 'file')}"
+            for f in files[:50]  # Limit to 50 files
+        ])
+
+        # Load appropriate prompt
+        prompt_file = "documenter.txt"
+        prompt_path = Path(__file__).parent.parent.parent / "config" / "prompts" / prompt_file
+
+        system_prompt = ""
+        if prompt_path.exists():
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                system_prompt = f.read()
+        else:
+            system_prompt = self._get_default_system_prompt(doc_type)
+
+        # Build user prompt based on doc type
+        # NOTE: Use paths that match planner.txt (lines 306-309):
+        # - docs/SRS.md (Software Requirements Specification)
+        # - docs/ARCHITECTURE.md (System architecture)
+        # - docs/USER_MANUAL.md (How to use)
+        # - README.md (Project overview)
+
+        if doc_type == "academic":
+            user_prompt = f"""Generate COMPLETE academic documentation for this project.
+
+PROJECT ID: {project_id}
+
+PROJECT PLAN:
+{plan[:8000]}
+
+FILES CREATED ({len(files)} files):
+{file_summary}
+
+OUTPUT REQUIRED - Generate ALL these files (matching project structure from planner):
+
+<file path="README.md">
+# Project Overview
+- Project description, features, tech stack
+- Quick start guide
+- Installation instructions
+- Usage examples
+- License and credits
+</file>
+
+<file path="docs/SRS.md">
+# Software Requirements Specification (IEEE 830-1998)
+- Introduction (Purpose, Scope, Definitions)
+- Overall Description (Product Perspective, Functions, User Characteristics)
+- Functional Requirements (30+ requirements with FR-001 to FR-030)
+- Non-Functional Requirements (15+ requirements)
+- External Interface Requirements
+</file>
+
+<file path="docs/ARCHITECTURE.md">
+# System Architecture
+- High-level architecture diagram (Mermaid)
+- Component descriptions
+- Data flow diagrams
+- Database schema (ER diagram in Mermaid)
+- API architecture
+</file>
+
+<file path="docs/USER_MANUAL.md">
+# User Manual
+- Getting Started
+- Feature walkthrough with screenshots descriptions
+- Troubleshooting guide
+- FAQ
+</file>
+
+<file path="docs/UML_DIAGRAMS.md">
+# UML Diagrams
+All diagrams in Mermaid format:
+- Use Case Diagram
+- Class Diagram
+- Sequence Diagram
+- Activity Diagram
+- ER Diagram
+</file>
+
+<file path="docs/VIVA_QUESTIONS.md">
+# Viva Questions & Answers
+25+ questions with detailed answers covering:
+- Project overview
+- Architecture & Design
+- Technology Stack
+- Implementation details
+- Testing & Quality
+- Future scope
+</file>
+
+Generate COMPLETE content for EACH file. No placeholders. Use Mermaid syntax for ALL diagrams."""
+        else:
+            # Standard developer documentation
+            user_prompt = f"""Generate developer documentation for this project.
+
+PROJECT ID: {project_id}
+
+PROJECT PLAN:
+{plan[:8000]}
+
+FILES CREATED ({len(files)} files):
+{file_summary}
+
+OUTPUT REQUIRED - Generate ALL these files (matching project structure from planner):
+
+<file path="README.md">
+# Project Name
+- Project description with badges
+- Features list
+- Tech stack
+- Quick start guide
+- Installation instructions
+- Usage examples with code
+- API overview
+- Configuration
+- Deployment
+- Contributing
+- License
+</file>
+
+<file path="docs/SRS.md">
+# Software Requirements Specification
+- Introduction
+- Functional Requirements
+- Non-Functional Requirements
+- System Constraints
+</file>
+
+<file path="docs/ARCHITECTURE.md">
+# System Architecture
+- High-level architecture diagram (ASCII or Mermaid)
+- Component descriptions
+- Data flow
+- Database design
+- API design
+</file>
+
+<file path="docs/USER_MANUAL.md">
+# User Manual
+- Getting Started
+- Features
+- Usage Guide
+- Troubleshooting
+</file>
+
+<file path="docs/API_REFERENCE.md">
+# API Reference
+- Authentication
+- Endpoints with request/response examples
+- Error codes
+- Rate limits
+</file>
+
+Generate COMPLETE content for EACH file. No placeholders."""
+
+        # Call Claude
+        response = await self.claude_client.generate(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            model=self.model,
+            max_tokens=16000,
+            temperature=0.7
+        )
+
+        # Handle different response formats
+        if isinstance(response, dict):
+            if 'content' in response and isinstance(response['content'], list):
+                content = response['content'][0].get('text', '')
+            else:
+                content = response.get('content', '')
+        else:
+            content = str(response)
+
+        return {"response": content}
+
+    def _get_default_system_prompt(self, doc_type: str) -> str:
+        """Fallback system prompt if file not found"""
+        if doc_type == "academic":
+            return """You are an academic documentation generator.
+Generate IEEE-standard documentation for student projects.
+Output files using <file path="...">content</file> format."""
+        else:
+            return """You are a developer documentation generator.
+Generate clean, professional documentation for software projects.
+Output files using <file path="...">content</file> format."""
 
 
 # Example usage

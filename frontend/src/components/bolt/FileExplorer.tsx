@@ -10,10 +10,16 @@ import {
   FileCode,
   FileJson,
   FileText,
+  FileType,
+  BookOpen,
+  FileSpreadsheet,
+  Presentation,
+  Download,
 } from 'lucide-react'
 
 interface FileNode {
   name: string
+  path?: string
   type: 'file' | 'folder'
   children?: FileNode[]
   content?: string
@@ -25,8 +31,16 @@ interface FileExplorerProps {
   selectedFile?: string
 }
 
-const getFileIcon = (fileName: string) => {
+const getFileIcon = (fileName: string, path?: string) => {
   const ext = fileName.split('.').pop()?.toLowerCase()
+
+  // Special icons for documentation files in docs/ folder
+  if (path?.startsWith('docs/') || path?.includes('/docs/')) {
+    if (ext === 'md') {
+      // Use BookOpen for documentation markdown files
+      return BookOpen
+    }
+  }
 
   switch (ext) {
     case 'js':
@@ -38,11 +52,30 @@ const getFileIcon = (fileName: string) => {
     case 'json':
       return FileJson
     case 'md':
+      return FileText
     case 'txt':
       return FileText
+    // Academic/Student document types
+    case 'pdf':
+      return FileType  // PDF icon
+    case 'docx':
+    case 'doc':
+      return FileSpreadsheet  // Word document icon
+    case 'pptx':
+    case 'ppt':
+      return Presentation  // PowerPoint icon
+    case 'xlsx':
+    case 'xls':
+      return FileSpreadsheet  // Excel icon
     default:
       return File
   }
+}
+
+// Check if file is a binary/downloadable type
+const isBinaryFile = (fileName: string): boolean => {
+  const ext = fileName.split('.').pop()?.toLowerCase()
+  return ['pdf', 'docx', 'doc', 'pptx', 'ppt', 'xlsx', 'xls', 'zip', 'rar'].includes(ext || '')
 }
 
 function FileTreeNode({
@@ -58,6 +91,7 @@ function FileTreeNode({
 }) {
   const [isExpanded, setIsExpanded] = useState(level === 0)
   const isSelected = selectedFile === node.name
+  const isBinary = node.type === 'file' && isBinaryFile(node.name)
 
   const handleClick = () => {
     if (node.type === 'folder') {
@@ -69,7 +103,28 @@ function FileTreeNode({
 
   const Icon = node.type === 'folder'
     ? (isExpanded ? FolderOpen : Folder)
-    : getFileIcon(node.name)
+    : getFileIcon(node.name, node.path)
+
+  // Get color class based on file type
+  const getFileColor = () => {
+    if (node.type === 'folder') return ''
+    const ext = node.name.split('.').pop()?.toLowerCase()
+    switch (ext) {
+      case 'pdf':
+        return 'text-red-400'  // Red for PDF
+      case 'docx':
+      case 'doc':
+        return 'text-blue-400'  // Blue for Word
+      case 'pptx':
+      case 'ppt':
+        return 'text-orange-400'  // Orange for PPT
+      case 'xlsx':
+      case 'xls':
+        return 'text-green-400'  // Green for Excel
+      default:
+        return ''
+    }
+  }
 
   return (
     <div>
@@ -93,9 +148,14 @@ function FileTreeNode({
         )}
         {node.type === 'file' && <span className="w-4" />}
 
-        <Icon className="w-4 h-4 flex-shrink-0" />
+        <Icon className={`w-4 h-4 flex-shrink-0 ${getFileColor()}`} />
 
-        <span className="text-sm truncate">{node.name}</span>
+        <span className="text-sm truncate flex-1">{node.name}</span>
+
+        {/* Show download icon for binary files */}
+        {isBinary && (
+          <Download className="w-3 h-3 text-[hsl(var(--bolt-text-secondary))] opacity-60" />
+        )}
       </div>
 
       {node.type === 'folder' && isExpanded && node.children && (

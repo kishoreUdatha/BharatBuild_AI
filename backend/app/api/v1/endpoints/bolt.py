@@ -16,6 +16,12 @@ from app.core.logging_config import logger
 from app.utils.claude_client import claude_client
 from app.modules.auth.dependencies import get_current_user
 from app.models.user import User
+from app.models.project import Project
+from app.models.project_file import ProjectFile
+from sqlalchemy import select
+import hashlib
+import os
+from uuid import UUID
 from app.schemas.bolt import (
     BoltChatRequest,
     BoltChatResponse,
@@ -31,11 +37,15 @@ from app.schemas.bolt import (
     ProjectFileSchema,
     GenerateProjectRequest,
     GenerateProjectResponse,
-    GenerateProjectStreamEvent
+    GenerateProjectStreamEvent,
+    BulkSyncFilesRequest,
+    BulkSyncFilesResponse,
+    GetProjectFilesResponse
 )
 from app.modules.bolt.prompts import BOLT_SYSTEM_PROMPT
 from app.modules.bolt.context_builder import context_builder
-from app.modules.orchestrator.bolt_orchestrator import bolt_orchestrator
+from app.services.unified_storage import UnifiedStorageService
+from app.services.enterprise_tracker import EnterpriseTracker
 
 
 router = APIRouter(prefix="/bolt", tags=["Bolt AI Editor"])
@@ -44,15 +54,23 @@ router = APIRouter(prefix="/bolt", tags=["Bolt AI Editor"])
 @router.post("/chat/stream")
 async def stream_bolt_chat(
     request: BoltChatRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Stream AI responses for Bolt.new-style chat
     Uses Server-Sent Events (SSE) for real-time streaming
     """
+    # Initialize enterprise tracker for message logging
+    tracker = EnterpriseTracker(db)
+    project_uuid = UUID(request.project_id) if hasattr(request, 'project_id') and request.project_id else None
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
+            # Track user message if project exists
+            if project_uuid:
+                await tracker.track_user_message(project_uuid, request.message)
+
             # Send status event
             yield f"data: {json.dumps({'type': 'status', 'data': {'message': 'Building context...'}, 'timestamp': datetime.utcnow().isoformat()})}\n\n"
 
@@ -84,6 +102,7 @@ async def stream_bolt_chat(
 
             # Stream response from Claude
             full_response = ""
+            total_tokens = 0
             async for chunk in claude_client.generate_stream(
                 prompt=formatted_context,
                 system_prompt=BOLT_SYSTEM_PROMPT,
@@ -93,9 +112,19 @@ async def stream_bolt_chat(
                 messages=messages if messages else None
             ):
                 full_response += chunk
+                total_tokens += len(chunk) // 4  # Rough token estimate
 
                 # Send content event
                 yield f"data: {json.dumps({'type': 'content', 'data': {'chunk': chunk}, 'timestamp': datetime.utcnow().isoformat()})}\n\n"
+
+            # Track AI response if project exists
+            if project_uuid:
+                await tracker.track_agent_response(
+                    project_uuid,
+                    agent_type="assistant",
+                    content=full_response,
+                    tokens_used=total_tokens
+                )
 
             # Parse response for file changes (unified diffs)
             file_changes = _extract_file_changes(full_response)
@@ -204,8 +233,6 @@ async def create_file(
 ):
     """Create a new file"""
     try:
-        # TODO: Save to database if project_id provided
-
         file_schema = ProjectFileSchema(
             path=request.path,
             content=request.content,
@@ -213,12 +240,83 @@ async def create_file(
             type="file"
         )
 
+        # Save to database if project_id provided
+        if request.project_id:
+            try:
+                project_uuid = UUID(request.project_id)
+
+                # Verify project exists and belongs to user
+                result = await db.execute(
+                    select(Project).where(
+                        Project.id == project_uuid,
+                        Project.user_id == current_user.id
+                    )
+                )
+                project = result.scalar_one_or_none()
+
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+
+                # Check if file already exists
+                existing_result = await db.execute(
+                    select(ProjectFile).where(
+                        ProjectFile.project_id == project_uuid,
+                        ProjectFile.path == request.path
+                    )
+                )
+                existing_file = existing_result.scalar_one_or_none()
+
+                if existing_file:
+                    raise HTTPException(status_code=400, detail="File already exists")
+
+                # Calculate content hash and size
+                content_bytes = request.content.encode('utf-8')
+                content_hash = hashlib.sha256(content_bytes).hexdigest()
+                size_bytes = len(content_bytes)
+
+                # Extract file name from path
+                file_name = os.path.basename(request.path)
+                parent_path = os.path.dirname(request.path) or None
+
+                # Create new file record
+                new_file = ProjectFile(
+                    project_id=project_uuid,
+                    path=request.path,
+                    name=file_name,
+                    language=request.language,
+                    content_hash=content_hash,
+                    size_bytes=size_bytes,
+                    content_inline=request.content if size_bytes < 10240 else None,
+                    is_inline=size_bytes < 10240,
+                    is_folder=False,
+                    parent_path=parent_path
+                )
+
+                db.add(new_file)
+                await db.commit()
+                await db.refresh(new_file)
+
+                # Track file creation in version history
+                tracker = EnterpriseTracker(db)
+                await tracker.track_file_created(
+                    project_id=project_uuid,
+                    file_id=new_file.id,
+                    content=request.content,
+                    created_by="user"
+                )
+
+                logger.info(f"File {request.path} created in project {request.project_id}")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid project_id format")
+
         return FileOperationResponse(
             success=True,
             message=f"File {request.path} created successfully",
             file=file_schema
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"File creation error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -232,13 +330,100 @@ async def update_file(
 ):
     """Update an existing file"""
     try:
-        # TODO: Update in database if project_id provided
+        # Update in database if project_id provided
+        if request.project_id:
+            try:
+                project_uuid = UUID(request.project_id)
+
+                # Verify project exists and belongs to user
+                result = await db.execute(
+                    select(Project).where(
+                        Project.id == project_uuid,
+                        Project.user_id == current_user.id
+                    )
+                )
+                project = result.scalar_one_or_none()
+
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+
+                # Find the existing file
+                file_result = await db.execute(
+                    select(ProjectFile).where(
+                        ProjectFile.project_id == project_uuid,
+                        ProjectFile.path == request.path
+                    )
+                )
+                existing_file = file_result.scalar_one_or_none()
+
+                tracker = EnterpriseTracker(db)
+
+                if not existing_file:
+                    # File doesn't exist, create it
+                    content_bytes = request.content.encode('utf-8')
+                    content_hash = hashlib.sha256(content_bytes).hexdigest()
+                    size_bytes = len(content_bytes)
+                    file_name = os.path.basename(request.path)
+                    parent_path = os.path.dirname(request.path) or None
+
+                    new_file = ProjectFile(
+                        project_id=project_uuid,
+                        path=request.path,
+                        name=file_name,
+                        language="plaintext",
+                        content_hash=content_hash,
+                        size_bytes=size_bytes,
+                        content_inline=request.content if size_bytes < 10240 else None,
+                        is_inline=size_bytes < 10240,
+                        is_folder=False,
+                        parent_path=parent_path
+                    )
+                    db.add(new_file)
+                    await db.commit()
+                    await db.refresh(new_file)
+
+                    # Track file creation
+                    await tracker.track_file_created(
+                        project_id=project_uuid,
+                        file_id=new_file.id,
+                        content=request.content,
+                        created_by="user"
+                    )
+                else:
+                    # Capture old content for version tracking
+                    old_content = existing_file.content_inline or ""
+
+                    # Update existing file
+                    content_bytes = request.content.encode('utf-8')
+                    existing_file.content_hash = hashlib.sha256(content_bytes).hexdigest()
+                    existing_file.size_bytes = len(content_bytes)
+                    existing_file.content_inline = request.content if len(content_bytes) < 10240 else None
+                    existing_file.is_inline = len(content_bytes) < 10240
+                    existing_file.updated_at = datetime.utcnow()
+
+                    await db.commit()
+
+                    # Track file edit in version history
+                    await tracker.track_file_edited(
+                        project_id=project_uuid,
+                        file_id=existing_file.id,
+                        new_content=request.content,
+                        old_content=old_content,
+                        edited_by="user"
+                    )
+
+                logger.info(f"File {request.path} updated in project {request.project_id}")
+
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid project_id format")
 
         return FileOperationResponse(
             success=True,
             message=f"File {request.path} updated successfully"
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"File update error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -252,13 +437,49 @@ async def delete_file(
 ):
     """Delete a file"""
     try:
-        # TODO: Delete from database if project_id provided
+        # Delete from database if project_id provided
+        if request.project_id:
+            try:
+                project_uuid = UUID(request.project_id)
+
+                # Verify project exists and belongs to user
+                result = await db.execute(
+                    select(Project).where(
+                        Project.id == project_uuid,
+                        Project.user_id == current_user.id
+                    )
+                )
+                project = result.scalar_one_or_none()
+
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+
+                # Find the file to delete
+                file_result = await db.execute(
+                    select(ProjectFile).where(
+                        ProjectFile.project_id == project_uuid,
+                        ProjectFile.path == request.path
+                    )
+                )
+                existing_file = file_result.scalar_one_or_none()
+
+                if existing_file:
+                    await db.delete(existing_file)
+                    await db.commit()
+                    logger.info(f"File {request.path} deleted from project {request.project_id}")
+                else:
+                    logger.warning(f"File {request.path} not found in project {request.project_id}")
+
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid project_id format")
 
         return FileOperationResponse(
             success=True,
             message=f"File {request.path} deleted successfully"
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"File deletion error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -411,166 +632,192 @@ def _extract_file_changes(response: str) -> list:
     return changes
 
 
-# ============================================================================
-# PROJECT GENERATION ENDPOINTS (Bolt.new Workflow)
-# ============================================================================
+@router.get("/files/{project_id}", response_model=GetProjectFilesResponse)
+async def get_project_files(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all files for a project"""
+    try:
+        project_uuid = UUID(project_id)
 
-@router.post("/generate-project", response_model=GenerateProjectResponse)
-async def generate_project(
-    request: GenerateProjectRequest,
+        # Verify project exists and belongs to user
+        result = await db.execute(
+            select(Project).where(
+                Project.id == project_uuid,
+                Project.user_id == current_user.id
+            )
+        )
+        project = result.scalar_one_or_none()
+
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Get all files for the project
+        files_result = await db.execute(
+            select(ProjectFile).where(
+                ProjectFile.project_id == project_uuid,
+                ProjectFile.is_folder == False
+            ).order_by(ProjectFile.path)
+        )
+        files = files_result.scalars().all()
+
+        # Convert to schema
+        file_schemas = []
+        for f in files:
+            file_schemas.append(ProjectFileSchema(
+                path=f.path,
+                content=f.content_inline if f.is_inline else None,
+                language=f.language or "plaintext",
+                type="file"
+            ))
+
+        return GetProjectFilesResponse(
+            success=True,
+            project_id=project_id,
+            files=file_schemas,
+            total_files=len(file_schemas)
+        )
+
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid project_id format")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get project files error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/files/sync", response_model=BulkSyncFilesResponse)
+async def bulk_sync_files(
+    request: BulkSyncFilesRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Generate a complete project using Bolt.new workflow
+    Bulk sync files for a project.
+    Creates new files, updates existing ones, preserves files not in the request.
 
-    This endpoint:
-    1. Calls Planner Agent to create project plan
-    2. Iterates through implementation steps
-    3. Calls Writer Agent for each step to generate files
-    4. Returns complete project with all files
-
-    Non-streaming version - returns all results at once
+    IMPORTANT: This endpoint now syncs to BOTH:
+    1. PostgreSQL database (Layer 3) - for persistence/recovery
+    2. Sandbox disk (Layer 1) - for preview/execution
     """
     try:
-        import uuid
+        project_uuid = UUID(request.project_id)
 
-        # Generate project ID
-        project_id = request.project_name or f"project_{uuid.uuid4().hex[:8]}"
-
-        logger.info(f"[Generate Project] Starting for user {current_user.id}: {request.description[:100]}")
-
-        # Execute Bolt workflow
-        result = await bolt_orchestrator.execute_bolt_workflow(
-            user_request=request.description,
-            project_id=project_id,
-            metadata=request.metadata or {}
-        )
-
-        if not result.get("success"):
-            return GenerateProjectResponse(
-                success=False,
-                project_id=project_id,
-                plan={},
-                total_steps=0,
-                steps_completed=0,
-                total_files_created=0,
-                total_commands_executed=0,
-                files_created=[],
-                commands_executed=[],
-                started_at=result.get("started_at", datetime.utcnow().isoformat()),
-                completed_at=result.get("completed_at", datetime.utcnow().isoformat()),
-                error=result.get("error", "Unknown error")
+        # Verify project exists and belongs to user
+        result = await db.execute(
+            select(Project).where(
+                Project.id == project_uuid,
+                Project.user_id == current_user.id
             )
+        )
+        project = result.scalar_one_or_none()
 
-        # Return successful response
-        return GenerateProjectResponse(
-            success=True,
-            project_id=result["project_id"],
-            plan=result["plan"],
-            total_steps=result["total_steps"],
-            steps_completed=result["steps_completed"],
-            total_files_created=result["total_files_created"],
-            total_commands_executed=result["total_commands_executed"],
-            files_created=result["files_created"],
-            commands_executed=result["commands_executed"],
-            started_at=result["started_at"],
-            completed_at=result["completed_at"]
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Initialize storage service for sandbox writes
+        storage = UnifiedStorageService()
+
+        # Get user_id for user-scoped paths (Bolt.new structure)
+        user_id = str(current_user.id)
+
+        # Ensure sandbox exists with user-scoped path: {user_id}/{project_id}
+        await storage.create_sandbox(request.project_id, user_id)
+
+        # Get existing files
+        existing_result = await db.execute(
+            select(ProjectFile).where(ProjectFile.project_id == project_uuid)
+        )
+        existing_files = {f.path: f for f in existing_result.scalars().all()}
+
+        files_created = 0
+        files_updated = 0
+        sandbox_writes = 0
+
+        # Process each file in the request
+        for file_data in request.files:
+            if file_data.type == "folder":
+                continue  # Skip folders
+
+            content = file_data.content or ""
+            content_bytes = content.encode('utf-8')
+            content_hash = hashlib.sha256(content_bytes).hexdigest()
+            size_bytes = len(content_bytes)
+
+            # ========== LAYER 1: Write to Sandbox (for preview/execution) ==========
+            try:
+                sandbox_success = await storage.write_to_sandbox(
+                    request.project_id,
+                    file_data.path,
+                    content,
+                    user_id  # User-scoped path
+                )
+                if sandbox_success:
+                    sandbox_writes += 1
+            except Exception as e:
+                logger.warning(f"Failed to write {file_data.path} to sandbox: {e}")
+
+            # ========== LAYER 3: Write to Database (for persistence) ==========
+            if file_data.path in existing_files:
+                # Update existing file
+                existing_file = existing_files[file_data.path]
+                if existing_file.content_hash != content_hash:
+                    existing_file.content_hash = content_hash
+                    existing_file.size_bytes = size_bytes
+                    existing_file.content_inline = content if size_bytes < 10240 else None
+                    existing_file.is_inline = size_bytes < 10240
+                    existing_file.language = file_data.language
+                    existing_file.updated_at = datetime.utcnow()
+                    files_updated += 1
+            else:
+                # Create new file
+                file_name = os.path.basename(file_data.path)
+                parent_path = os.path.dirname(file_data.path) or None
+
+                new_file = ProjectFile(
+                    project_id=project_uuid,
+                    path=file_data.path,
+                    name=file_name,
+                    language=file_data.language,
+                    content_hash=content_hash,
+                    size_bytes=size_bytes,
+                    content_inline=content if size_bytes < 10240 else None,
+                    is_inline=size_bytes < 10240,
+                    is_folder=False,
+                    parent_path=parent_path
+                )
+                db.add(new_file)
+                files_created += 1
+
+        await db.commit()
+
+        logger.info(
+            f"Synced files for project {request.project_id}: "
+            f"{files_created} created, {files_updated} updated, "
+            f"{sandbox_writes} written to sandbox"
         )
 
+        return BulkSyncFilesResponse(
+            success=True,
+            files_created=files_created,
+            files_updated=files_updated,
+            files_deleted=0,
+            message=f"Synced {files_created + files_updated} files to DB, {sandbox_writes} to sandbox"
+        )
+
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid project_id format")
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"[Generate Project] Error: {e}", exc_info=True)
+        logger.error(f"Bulk sync files error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/generate-project/stream")
-async def generate_project_stream(
-    request: GenerateProjectRequest,
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Generate a complete project using Bolt.new workflow with streaming
-
-    Streams progress updates in real-time:
-    - progress: Overall progress percentage
-    - step_start: When a step begins
-    - step_complete: When a step finishes
-    - file_created: When a file is created
-    - command_executed: When a command is executed
-    - done: When generation is complete
-    - error: If an error occurs
-    """
-
-    async def event_generator() -> AsyncGenerator[str, None]:
-        try:
-            import uuid
-
-            # Generate project ID
-            project_id = request.project_name or f"project_{uuid.uuid4().hex[:8]}"
-
-            logger.info(f"[Generate Project Stream] Starting for user {current_user.id}")
-
-            # Define progress callback
-            async def progress_callback(percent: int, message: str):
-                event = {
-                    "type": "progress",
-                    "data": {
-                        "percent": percent,
-                        "message": message
-                    },
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-                yield f"data: {json.dumps(event)}\n\n"
-
-            # Execute Bolt workflow with progress callback
-            result = await bolt_orchestrator.execute_bolt_workflow(
-                user_request=request.description,
-                project_id=project_id,
-                metadata=request.metadata or {},
-                progress_callback=progress_callback
-            )
-
-            if result.get("success"):
-                # Send completion event
-                event = {
-                    "type": "done",
-                    "data": {
-                        "project_id": result["project_id"],
-                        "total_files_created": result["total_files_created"],
-                        "total_commands_executed": result["total_commands_executed"],
-                        "steps_completed": result["steps_completed"]
-                    },
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-                yield f"data: {json.dumps(event)}\n\n"
-            else:
-                # Send error event
-                event = {
-                    "type": "error",
-                    "data": {
-                        "error": result.get("error", "Unknown error")
-                    },
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-                yield f"data: {json.dumps(event)}\n\n"
-
-        except Exception as e:
-            logger.error(f"[Generate Project Stream] Error: {e}", exc_info=True)
-            event = {
-                "type": "error",
-                "data": {
-                    "error": str(e)
-                },
-                "timestamp": datetime.utcnow().isoformat()
-            }
-            yield f"data: {json.dumps(event)}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
-    )
+# ============================================================================
+# PROJECT GENERATION - Use /api/v1/orchestrator/execute instead
+# These endpoints are deprecated. Use dynamic_orchestrator via /orchestrator/execute
+# ============================================================================
