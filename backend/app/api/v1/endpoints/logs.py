@@ -6,7 +6,7 @@ Includes:
 2. Project LogBus logs (browser, build, backend, network, docker errors)
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional, Literal
 from datetime import datetime
@@ -27,6 +27,17 @@ class LogEntry(BaseModel):
     content: dict
 
 
+class PaginatedLogsResponse(BaseModel):
+    """Paginated logs response"""
+    items: List[LogEntry]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    has_next: bool
+    has_previous: bool
+
+
 # In-memory log storage (replace with database or file storage in production)
 _log_storage: List[LogEntry] = []
 
@@ -40,20 +51,22 @@ def add_log_entry(entry: LogEntry):
         _log_storage.pop(0)
 
 
-@router.get("/claude", response_model=List[LogEntry])
+@router.get("/claude", response_model=PaginatedLogsResponse)
 async def get_claude_logs(
-    limit: int = 100,
-    log_type: Optional[Literal["request", "response"]] = None
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=200, description="Items per page"),
+    log_type: Optional[Literal["request", "response"]] = Query(None, description="Filter by type")
 ):
     """
-    Get Claude API logs
+    Get Claude API logs with pagination
 
     Args:
-        limit: Maximum number of logs to return
+        page: Page number (1-indexed)
+        page_size: Number of items per page
         log_type: Filter by type (request/response)
 
     Returns:
-        List of log entries
+        Paginated list of log entries
     """
     logs = _log_storage.copy()
 
@@ -64,7 +77,21 @@ async def get_claude_logs(
     # Return most recent logs first
     logs.reverse()
 
-    return logs[:limit]
+    # Apply pagination
+    total = len(logs)
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+    offset = (page - 1) * page_size
+    paginated_logs = logs[offset:offset + page_size]
+
+    return PaginatedLogsResponse(
+        items=paginated_logs,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+        has_next=page < total_pages,
+        has_previous=page > 1
+    )
 
 
 @router.delete("/claude")
@@ -231,9 +258,14 @@ async def submit_browser_logs(request: LogBatchRequest):
 
 
 @router.get("/project/{project_id}")
-async def get_project_logs(project_id: str):
+async def get_project_logs(
+    project_id: str,
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=200, description="Items per page"),
+    source: Optional[str] = Query(None, description="Filter by source (browser, build, backend, network, docker)")
+):
     """
-    Get all collected logs for a project.
+    Get all collected logs for a project with pagination.
 
     Returns structured logs from all 5 collectors:
     - browser_errors
@@ -249,10 +281,59 @@ async def get_project_logs(project_id: str):
         log_bus = get_log_bus(project_id)
         payload = log_bus.get_fixer_payload()
 
+        # Flatten all logs into a single list for pagination
+        all_logs = []
+
+        # Add browser errors
+        for err in payload.get("browser_errors", []):
+            if source is None or source == "browser":
+                all_logs.append({"source": "browser", **err})
+
+        # Add build errors
+        for err in payload.get("build_errors", []):
+            if source is None or source == "build":
+                all_logs.append({"source": "build", **err})
+
+        # Add backend errors
+        for err in payload.get("backend_errors", []):
+            if source is None or source == "backend":
+                all_logs.append({"source": "backend", **err})
+
+        # Add network errors
+        for err in payload.get("network_errors", []):
+            if source is None or source == "network":
+                all_logs.append({"source": "network", **err})
+
+        # Add docker errors
+        for err in payload.get("docker_errors", []):
+            if source is None or source == "docker":
+                all_logs.append({"source": "docker", **err})
+
+        # Apply pagination
+        total = len(all_logs)
+        total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+        offset = (page - 1) * page_size
+        paginated_logs = all_logs[offset:offset + page_size]
+
         return {
             "success": True,
             "project_id": project_id,
-            "logs": payload
+            "items": paginated_logs,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_previous": page > 1,
+            "summary": {
+                "browser_errors": len(payload.get("browser_errors", [])),
+                "build_errors": len(payload.get("build_errors", [])),
+                "backend_errors": len(payload.get("backend_errors", [])),
+                "network_errors": len(payload.get("network_errors", [])),
+                "docker_errors": len(payload.get("docker_errors", [])),
+                "stack_traces": len(payload.get("stack_traces", [])),
+                "error_files": payload.get("error_files", [])
+            }
         }
 
     except Exception as e:
@@ -279,18 +360,33 @@ async def clear_project_logs(project_id: str):
 
 
 @router.get("/project/{project_id}/errors")
-async def get_project_errors(project_id: str):
-    """Get only error logs for a project (all sources combined)"""
+async def get_project_errors(
+    project_id: str,
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page")
+):
+    """Get only error logs for a project with pagination (all sources combined)"""
     try:
         from app.services.log_bus import get_log_bus
         log_bus = get_log_bus(project_id)
         errors = log_bus.get_errors()
 
+        # Apply pagination
+        total = len(errors)
+        total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+        offset = (page - 1) * page_size
+        paginated_errors = errors[offset:offset + page_size]
+
         return {
             "success": True,
             "project_id": project_id,
-            "error_count": len(errors),
-            "errors": errors
+            "items": paginated_errors,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_previous": page > 1
         }
 
     except Exception as e:

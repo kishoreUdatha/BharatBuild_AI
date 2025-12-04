@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from typing import List, Optional
 from pydantic import BaseModel
+from datetime import datetime
 
 from app.core.database import get_db
 from app.core.config import settings
@@ -35,14 +36,34 @@ class TokenBalanceResponse(BaseModel):
 
 class TokenTransactionResponse(BaseModel):
     """Token transaction response"""
+    id: str
     type: str
     tokens: int
-    description: str = None
-    agent: str = None
+    tokens_before: int
+    tokens_after: int
+    description: Optional[str] = None
+    agent: Optional[str] = None
+    model: Optional[str] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    estimated_cost_usd: float = 0
+    estimated_cost_inr: float = 0
+    project_id: Optional[str] = None
     timestamp: str
 
     class Config:
         from_attributes = True
+
+
+class PaginatedTransactionsResponse(BaseModel):
+    """Paginated token transactions response"""
+    items: List[TokenTransactionResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    has_next: bool
+    has_previous: bool
 
 
 class TokenPurchaseRequest(BaseModel):
@@ -123,35 +144,68 @@ async def get_token_balance(
     )
 
 
-@router.get("/transactions", response_model=List[TokenTransactionResponse])
+@router.get("/transactions", response_model=PaginatedTransactionsResponse)
 async def get_token_transactions(
-    limit: int = 50,
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    transaction_type: Optional[str] = Query(None, description="Filter by type (usage, purchase, bonus, monthly_reset)"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Get token transaction history (like Bolt.new transaction log)
+    Get token transaction history with pagination (like Bolt.new transaction log)
 
     Shows detailed history of all token usage, purchases, and bonuses
     """
-    result = await db.execute(
-        select(TokenTransaction)
-        .where(TokenTransaction.user_id == current_user.id)
-        .order_by(TokenTransaction.created_at.desc())
-        .limit(limit)
-    )
+    # Build base query
+    query = select(TokenTransaction).where(TokenTransaction.user_id == current_user.id)
+    count_query = select(func.count(TokenTransaction.id)).where(TokenTransaction.user_id == current_user.id)
+
+    # Apply type filter
+    if transaction_type:
+        query = query.where(TokenTransaction.transaction_type == transaction_type)
+        count_query = count_query.where(TokenTransaction.transaction_type == transaction_type)
+
+    # Get total count
+    count_result = await db.execute(count_query)
+    total = count_result.scalar() or 0
+
+    # Apply pagination
+    offset = (page - 1) * page_size
+    query = query.order_by(TokenTransaction.created_at.desc()).offset(offset).limit(page_size)
+
+    result = await db.execute(query)
     transactions = result.scalars().all()
 
-    return [
-        TokenTransactionResponse(
-            type=t.transaction_type,
-            tokens=t.tokens_changed,
-            description=t.description,
-            agent=t.agent_type,
-            timestamp=t.created_at.isoformat()
-        )
-        for t in transactions
-    ]
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+
+    return PaginatedTransactionsResponse(
+        items=[
+            TokenTransactionResponse(
+                id=str(t.id),
+                type=t.transaction_type,
+                tokens=t.tokens_changed,
+                tokens_before=t.tokens_before,
+                tokens_after=t.tokens_after,
+                description=t.description,
+                agent=t.agent_type,
+                model=t.model_used,
+                input_tokens=t.input_tokens or 0,
+                output_tokens=t.output_tokens or 0,
+                estimated_cost_usd=(t.estimated_cost_usd or 0) / 100,
+                estimated_cost_inr=(t.estimated_cost_inr or 0) / 100,
+                project_id=str(t.project_id) if t.project_id else None,
+                timestamp=t.created_at.isoformat()
+            )
+            for t in transactions
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+        has_next=page < total_pages,
+        has_previous=page > 1
+    )
 
 
 @router.get("/analytics")
