@@ -8,7 +8,7 @@ import { Pagination } from '@/components/ui/Pagination'
 
 export default function ProjectsPage() {
   const router = useRouter()
-  const { projects, loading, error, total, page, totalPages, refresh, goToPage } = useProjects()
+  const { projects, loading, error, total, page, pageSize, totalPages, refresh, goToPage, changePageSize } = useProjects()
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
 
@@ -227,19 +227,20 @@ export default function ProjectsPage() {
               ))}
             </div>
 
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="mt-8">
-                <Pagination
-                  currentPage={page}
-                  totalPages={totalPages}
-                  onPageChange={goToPage}
-                  total={total}
-                  showTotal={true}
-                  showPageSize={false}
-                />
-              </div>
-            )}
+            {/* Pagination - Always show when there are projects */}
+            <div className="mt-8 border-t border-[#333] pt-6">
+              <Pagination
+                currentPage={page}
+                totalPages={totalPages || 1}
+                onPageChange={goToPage}
+                pageSize={pageSize}
+                onPageSizeChange={changePageSize}
+                pageSizeOptions={[6, 12, 24, 48]}
+                total={total}
+                showTotal={true}
+                showPageSize={true}
+              />
+            </div>
           </>
         )}
       </main>

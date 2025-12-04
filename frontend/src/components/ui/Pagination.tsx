@@ -70,10 +70,10 @@ export function Pagination({
   return (
     <div className={`flex flex-col sm:flex-row items-center justify-between gap-4 ${className}`}>
       {/* Total and page size */}
-      <div className="flex items-center gap-4 text-sm text-zinc-400">
+      <div className="flex items-center gap-4 text-sm text-gray-400">
         {showTotal && total !== undefined && (
           <span>
-            Showing {Math.min((currentPage - 1) * pageSize + 1, total)} -{' '}
+            Showing {total > 0 ? Math.min((currentPage - 1) * pageSize + 1, total) : 0} -{' '}
             {Math.min(currentPage * pageSize, total)} of {total} items
           </span>
         )}
@@ -84,7 +84,7 @@ export function Pagination({
             <select
               value={pageSize}
               onChange={(e) => onPageSizeChange(Number(e.target.value))}
-              className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="bg-[#252525] border border-[#333] rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
             >
               {pageSizeOptions.map((size) => (
                 <option key={size} value={size}>
@@ -102,7 +102,7 @@ export function Pagination({
         <button
           onClick={() => onPageChange(currentPage - 1)}
           disabled={currentPage <= 1}
-          className="px-3 py-1.5 rounded border border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="px-3 py-2 rounded-lg border border-[#333] bg-[#252525] text-gray-400 hover:text-white hover:border-[#444] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           aria-label="Previous page"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -114,14 +114,14 @@ export function Pagination({
         {getPageNumbers().map((page, index) => (
           <React.Fragment key={index}>
             {page === '...' ? (
-              <span className="px-3 py-1.5 text-zinc-500">...</span>
+              <span className="px-3 py-2 text-gray-500">...</span>
             ) : (
               <button
                 onClick={() => onPageChange(page as number)}
-                className={`px-3 py-1.5 rounded border transition-colors ${
+                className={`w-10 h-10 rounded-lg border text-sm font-medium transition-colors ${
                   currentPage === page
-                    ? 'border-blue-500 bg-blue-500/20 text-blue-400'
-                    : 'border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
+                    ? 'border-blue-500 bg-blue-600 text-white'
+                    : 'border-[#333] bg-[#252525] text-gray-400 hover:text-white hover:border-[#444]'
                 }`}
               >
                 {page}
@@ -134,7 +134,7 @@ export function Pagination({
         <button
           onClick={() => onPageChange(currentPage + 1)}
           disabled={currentPage >= totalPages}
-          className="px-3 py-1.5 rounded border border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="px-3 py-2 rounded-lg border border-[#333] bg-[#252525] text-gray-400 hover:text-white hover:border-[#444] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           aria-label="Next page"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
