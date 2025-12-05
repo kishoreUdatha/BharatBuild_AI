@@ -9,13 +9,14 @@ Features:
 - Download endpoints for generated files
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from pydantic import BaseModel
 from typing import List, Optional
 from uuid import UUID
+from datetime import datetime
 import json
 import asyncio
 import os
@@ -23,12 +24,14 @@ import os
 from app.core.database import get_db
 from app.models.user import User
 from app.models.project import Project
+from app.models.document import Document
 from app.modules.auth.dependencies import get_current_user
 from app.modules.agents.chunked_document_agent import (
     chunked_document_agent,
     DocumentType
 )
 from app.core.logging_config import logger
+from app.utils.pagination import create_paginated_response
 
 
 router = APIRouter()
@@ -266,11 +269,13 @@ async def download_document(
 @router.get("/list/{project_id}")
 async def list_project_documents(
     project_id: str,
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(10, ge=1, le=100, description="Items per page"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    List all generated documents for a project.
+    List all generated documents for a project with pagination.
     """
     # Verify project ownership
     try:
@@ -295,19 +300,42 @@ async def list_project_documents(
 
     documents = []
 
-    # Search in project docs folder first (preferred location)
+    # First, get documents from database
+    db_docs_result = await db.execute(
+        select(Document).where(Document.project_id == UUID(project_id))
+    )
+    db_documents = db_docs_result.scalars().all()
+
+    for doc in db_documents:
+        documents.append({
+            "id": str(doc.id),
+            "name": doc.title,
+            "type": doc.document_type.value if doc.document_type else "unknown",
+            "status": doc.status,
+            "size_bytes": doc.file_size or 0,
+            "created_at": doc.created_at.isoformat() if doc.created_at else None,
+            "download_url": f"/api/v1/documents/download/{project_id}/{doc.document_type.value if doc.document_type else 'unknown'}",
+            "source": "database"
+        })
+
+    # Search in project docs folder (file system)
     project_docs_dir = settings.get_project_docs_dir(project_id)
     if project_docs_dir.exists():
         for file_path in project_docs_dir.iterdir():
             if file_path.is_file():
                 doc_type = "presentations" if file_path.suffix == ".pptx" else "documents"
-                documents.append({
-                    "name": file_path.name,
-                    "type": doc_type,
-                    "size_bytes": file_path.stat().st_size,
-                    "created_at": file_path.stat().st_ctime,
-                    "download_url": f"/api/v1/documents/download/{project_id}/{file_path.stem}"
-                })
+                # Avoid duplicates with database entries
+                if not any(d.get("name") == file_path.name for d in documents):
+                    documents.append({
+                        "id": None,
+                        "name": file_path.name,
+                        "type": doc_type,
+                        "status": "completed",
+                        "size_bytes": file_path.stat().st_size,
+                        "created_at": datetime.fromtimestamp(file_path.stat().st_ctime).isoformat(),
+                        "download_url": f"/api/v1/documents/download/{project_id}/{file_path.stem}",
+                        "source": "filesystem"
+                    })
 
     # Also search in legacy generated directories
     search_dirs = [
@@ -320,19 +348,36 @@ async def list_project_documents(
             for file_path in search_dir.glob(f"*{project_id}*"):
                 if file_path.is_file():
                     # Avoid duplicates
-                    if not any(d["name"] == file_path.name for d in documents):
+                    if not any(d.get("name") == file_path.name for d in documents):
                         documents.append({
+                            "id": None,
                             "name": file_path.name,
                             "type": doc_type,
+                            "status": "completed",
                             "size_bytes": file_path.stat().st_size,
-                            "created_at": file_path.stat().st_ctime,
-                            "download_url": f"/api/v1/documents/download/{project_id}/{file_path.stem}"
+                            "created_at": datetime.fromtimestamp(file_path.stat().st_ctime).isoformat(),
+                            "download_url": f"/api/v1/documents/download/{project_id}/{file_path.stem}",
+                            "source": "filesystem"
                         })
+
+    # Sort by created_at descending
+    documents.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+
+    # Apply pagination
+    total = len(documents)
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+    offset = (page - 1) * page_size
+    paginated_docs = documents[offset:offset + page_size]
 
     return {
         "project_id": project_id,
-        "documents": documents,
-        "total": len(documents)
+        "items": paginated_docs,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_previous": page > 1
     }
 
 

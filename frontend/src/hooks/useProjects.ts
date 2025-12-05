@@ -24,26 +24,31 @@ export interface ProjectsResponse {
   total: number
   page: number
   page_size: number
+  total_pages?: number
 }
 
-export function useProjects(initialPage: number = 1, pageSize: number = 12) {
+export function useProjects(initialPage: number = 1, initialPageSize: number = 12) {
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [page, setPage] = useState(initialPage)
+  const [pageSize, setPageSize] = useState(initialPageSize)
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
 
-  const fetchProjects = useCallback(async (pageNum: number = page) => {
+  const fetchProjects = useCallback(async (pageNum: number, size: number) => {
     setLoading(true)
     setError(null)
 
     try {
-      const response: ProjectsResponse = await apiClient.getProjects()
-      setProjects(response.projects)
-      setTotal(response.total)
-      setTotalPages(Math.ceil(response.total / pageSize))
-      setPage(response.page)
+      const response: ProjectsResponse = await apiClient.getProjects(pageNum, size)
+      setProjects(response.projects || [])
+      setTotal(response.total || 0)
+
+      // Calculate total pages
+      const calculatedTotalPages = response.total_pages || Math.ceil((response.total || 0) / size)
+      setTotalPages(calculatedTotalPages)
+      setPage(response.page || pageNum)
     } catch (err: any) {
       console.error('Failed to fetch projects:', err)
       if (err.response?.status === 401) {
@@ -51,26 +56,29 @@ export function useProjects(initialPage: number = 1, pageSize: number = 12) {
       } else {
         setError(err.message || 'Failed to fetch projects')
       }
+      setProjects([])
+      setTotal(0)
+      setTotalPages(0)
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize])
+  }, [])
 
   const deleteProject = useCallback(async (projectId: string) => {
     try {
-      await apiClient.getProject(projectId) // Using this as a workaround, would need delete endpoint
-      // For now, we'll just refresh the list
-      await fetchProjects()
+      await apiClient.delete(`/projects/${projectId}`)
+      // Refresh the list after deletion
+      await fetchProjects(page, pageSize)
       return true
     } catch (err: any) {
       console.error('Failed to delete project:', err)
       throw err
     }
-  }, [fetchProjects])
+  }, [fetchProjects, page, pageSize])
 
   const refresh = useCallback(() => {
-    fetchProjects(page)
-  }, [fetchProjects, page])
+    fetchProjects(page, pageSize)
+  }, [fetchProjects, page, pageSize])
 
   const goToPage = useCallback((newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) {
@@ -78,19 +86,27 @@ export function useProjects(initialPage: number = 1, pageSize: number = 12) {
     }
   }, [totalPages])
 
+  const changePageSize = useCallback((newSize: number) => {
+    setPageSize(newSize)
+    setPage(1) // Reset to first page when changing page size
+  }, [])
+
+  // Fetch projects when page or pageSize changes
   useEffect(() => {
-    fetchProjects()
-  }, []) // Only fetch on mount
+    fetchProjects(page, pageSize)
+  }, [page, pageSize, fetchProjects])
 
   return {
     projects,
     loading,
     error,
     page,
+    pageSize,
     total,
     totalPages,
     refresh,
     goToPage,
+    changePageSize,
     deleteProject,
   }
 }
