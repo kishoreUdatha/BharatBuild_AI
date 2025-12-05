@@ -177,6 +177,9 @@ class UnifiedStorageService:
 
         return self._build_file_tree(sandbox, sandbox)
 
+    # Directories to skip when building file tree (large/binary/generated)
+    SKIP_DIRS = {'node_modules', '__pycache__', '.git', 'dist', 'build', '.next', 'venv', '.venv', 'target'}
+
     def _build_file_tree(self, base_path: Path, current_path: Path) -> List[FileInfo]:
         """Recursively build file tree structure"""
         items = []
@@ -185,6 +188,10 @@ class UnifiedStorageService:
             for item in sorted(current_path.iterdir()):
                 # Skip hidden files
                 if item.name.startswith('.'):
+                    continue
+
+                # Skip large/binary directories
+                if item.is_dir() and item.name in self.SKIP_DIRS:
                     continue
 
                 relative_path = str(item.relative_to(base_path)).replace("\\", "/")

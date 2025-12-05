@@ -21,7 +21,7 @@ import asyncio
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, cast, String
 
 from app.core.logging_config import logger
 from app.core.config import settings
@@ -41,10 +41,23 @@ class WorkspaceRestoreService:
     def __init__(self):
         self.sandbox_path = Path(settings.SANDBOX_PATH)
 
+    def _get_workspace_path(self, project_id: str, user_id: str = None) -> Path:
+        """
+        Get the workspace path for a project.
+
+        Uses user-scoped paths to match container_manager:
+        - sandbox_path / user_id / project_id (if user_id provided)
+        - sandbox_path / project_id (fallback for backwards compatibility)
+        """
+        if user_id:
+            return self.sandbox_path / user_id / project_id
+        return self.sandbox_path / project_id
+
     async def check_workspace_status(
         self,
         project_id: str,
-        db: AsyncSession
+        db: AsyncSession,
+        user_id: str = None
     ) -> Dict:
         """
         Check if a project's workspace exists and what restoration options are available.
@@ -57,13 +70,18 @@ class WorkspaceRestoreService:
             - file_count: int - number of files in database
             - has_plan: bool - has plan_json stored
         """
-        workspace_path = self.sandbox_path / project_id
+        # Check database for restoration options (also gets user_id)
+        project = await self._get_project(project_id, db)
+
+        # Use user_id from project if not provided
+        if not user_id and project:
+            user_id = str(project.user_id)
+
+        workspace_path = self._get_workspace_path(project_id, user_id)
 
         # Check if workspace exists
-        exists = workspace_path.exists() and any(workspace_path.iterdir())
+        exists = workspace_path.exists() and any(workspace_path.iterdir()) if workspace_path.exists() else False
 
-        # Check database for restoration options
-        project = await self._get_project(project_id, db)
         files = await self._get_project_files(project_id, db) if project else []
 
         has_plan = project and project.plan_json is not None
@@ -96,6 +114,7 @@ class WorkspaceRestoreService:
         self,
         project_id: str,
         db: AsyncSession,
+        user_id: str = None,
         progress_callback: Optional[callable] = None
     ) -> Dict:
         """
@@ -106,12 +125,18 @@ class WorkspaceRestoreService:
         Args:
             project_id: Project to restore
             db: Database session
+            user_id: User ID for user-scoped paths (optional, fetched from project if not provided)
             progress_callback: Optional callback for progress updates
 
         Returns:
             Dict with restoration results
         """
-        workspace_path = self.sandbox_path / project_id
+        # Get project to find user_id if not provided
+        project = await self._get_project(project_id, db)
+        if not user_id and project:
+            user_id = str(project.user_id)
+
+        workspace_path = self._get_workspace_path(project_id, user_id)
 
         # Get files from database
         files = await self._get_project_files(project_id, db)
@@ -180,6 +205,7 @@ class WorkspaceRestoreService:
         self,
         project_id: str,
         db: AsyncSession,
+        user_id: str = None,
         progress_callback: Optional[callable] = None
     ) -> Dict:
         """
@@ -194,6 +220,7 @@ class WorkspaceRestoreService:
         Args:
             project_id: Project to regenerate
             db: Database session
+            user_id: User ID for user-scoped paths (optional, fetched from project if not provided)
             progress_callback: Optional callback for progress updates
 
         Returns:
@@ -208,6 +235,10 @@ class WorkspaceRestoreService:
                 "error": "Project not found"
             }
 
+        # Get user_id from project if not provided
+        if not user_id:
+            user_id = str(project.user_id)
+
         if not project.plan_json and not project.history:
             return {
                 "success": False,
@@ -215,7 +246,7 @@ class WorkspaceRestoreService:
             }
 
         # Create new empty workspace (Bolt.new step 2)
-        workspace_path = self.sandbox_path / project_id
+        workspace_path = self._get_workspace_path(project_id, user_id)
         if workspace_path.exists():
             import shutil
             shutil.rmtree(workspace_path)  # Clear any leftover files
@@ -250,11 +281,53 @@ class WorkspaceRestoreService:
             }
         }
 
+    def _check_essential_files(self, workspace_path: Path, project_type: str = "node") -> Dict:
+        """
+        Check if essential files exist in the workspace.
+
+        Essential files by project type:
+        - node: package.json
+        - python: requirements.txt or main.py or app.py
+        - static: index.html
+
+        Returns:
+            Dict with:
+            - complete: bool - all essential files present
+            - missing: List[str] - list of missing essential files
+            - found: List[str] - list of found essential files
+        """
+        essential_files = {
+            "node": ["package.json"],
+            "python": ["requirements.txt", "main.py", "app.py"],  # Any one of these
+            "static": ["index.html"],
+        }
+
+        required = essential_files.get(project_type, ["package.json"])
+
+        found = []
+        for f in required:
+            if (workspace_path / f).exists():
+                found.append(f)
+
+        # For python, only one file is required (any of them)
+        if project_type == "python":
+            is_complete = len(found) > 0
+        else:
+            is_complete = len(found) == len(required)
+
+        return {
+            "complete": is_complete,
+            "missing": [f for f in required if f not in found],
+            "found": found
+        }
+
     async def auto_restore(
         self,
         project_id: str,
         db: AsyncSession,
-        prefer_regenerate: bool = False
+        user_id: str = None,
+        prefer_regenerate: bool = False,
+        project_type: str = "node"
     ) -> Dict:
         """
         Automatically restore workspace using best available method.
@@ -262,28 +335,61 @@ class WorkspaceRestoreService:
         Args:
             project_id: Project to restore
             db: Database session
+            user_id: User ID for user-scoped paths (optional, fetched from project if not provided)
             prefer_regenerate: If True, prefer regeneration over restoration
+            project_type: Type of project (node, python, static)
 
         Returns:
             Dict with restoration results
         """
-        status = await self.check_workspace_status(project_id, db)
+        status = await self.check_workspace_status(project_id, db, user_id)
+
+        # Get workspace path to check essential files
+        project = await self._get_project(project_id, db)
+        if not user_id and project:
+            user_id = str(project.user_id)
+        workspace_path = self._get_workspace_path(project_id, user_id)
 
         if status["workspace_exists"]:
-            return {
-                "success": True,
-                "method": "already_exists",
-                "message": "Workspace already exists"
-            }
+            # Check if essential files are present
+            essential_check = self._check_essential_files(workspace_path, project_type)
+
+            if essential_check["complete"]:
+                logger.info(f"[WorkspaceRestore] Workspace exists with essential files: {essential_check['found']}")
+                return {
+                    "success": True,
+                    "method": "already_exists",
+                    "message": "Workspace already exists with essential files",
+                    "workspace_path": str(workspace_path)
+                }
+            else:
+                # Workspace exists but missing essential files - try to restore
+                logger.warning(f"[WorkspaceRestore] Workspace incomplete, missing: {essential_check['missing']}")
+
+                # Try to restore missing files from storage
+                if status["can_restore"]:
+                    logger.info(f"[WorkspaceRestore] Restoring missing files from storage for {project_id}")
+                    restore_result = await self.restore_from_storage(project_id, db, user_id)
+                    if restore_result.get("success"):
+                        return restore_result
+
+                # If can't restore, return with warning
+                return {
+                    "success": True,  # Workspace exists, just incomplete
+                    "method": "incomplete",
+                    "message": f"Workspace exists but missing essential files: {essential_check['missing']}",
+                    "missing_files": essential_check["missing"],
+                    "workspace_path": str(workspace_path)
+                }
 
         if prefer_regenerate and status["can_regenerate"]:
-            return await self.regenerate_from_plan(project_id, db)
+            return await self.regenerate_from_plan(project_id, db, user_id)
 
         if status["can_restore"]:
-            return await self.restore_from_storage(project_id, db)
+            return await self.restore_from_storage(project_id, db, user_id)
 
         if status["can_regenerate"]:
-            return await self.regenerate_from_plan(project_id, db)
+            return await self.regenerate_from_plan(project_id, db, user_id)
 
         return {
             "success": False,
@@ -294,9 +400,10 @@ class WorkspaceRestoreService:
     async def _get_project(self, project_id: str, db: AsyncSession) -> Optional[Project]:
         """Get project from database"""
         try:
-            from uuid import UUID
+            # projects.id is stored as String(36) not UUID
+            # Use cast() to prevent asyncpg from converting UUID-like strings to UUID type
             result = await db.execute(
-                select(Project).where(Project.id == UUID(project_id))
+                select(Project).where(Project.id == cast(project_id, String(36)))
             )
             return result.scalar_one_or_none()
         except Exception as e:
@@ -306,9 +413,10 @@ class WorkspaceRestoreService:
     async def _get_project_files(self, project_id: str, db: AsyncSession) -> List[ProjectFile]:
         """Get all files for a project from database"""
         try:
-            from uuid import UUID
+            # project_id in project_files table is stored as varchar, not UUID
+            # Use cast() to prevent asyncpg from converting UUID-like strings to UUID type
             result = await db.execute(
-                select(ProjectFile).where(ProjectFile.project_id == UUID(project_id))
+                select(ProjectFile).where(ProjectFile.project_id == cast(project_id, String(36)))
             )
             return result.scalars().all()
         except Exception as e:

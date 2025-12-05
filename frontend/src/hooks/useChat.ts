@@ -576,15 +576,18 @@ Just describe your project or share the code that needs fixing!`)
 
             case 'file_start':
               // NOTE: Don't append to chat - file operations shown in PlanView sidebar only
-              if (event.path) {
-                updateFileOperation(aiMessageId, event.path, { status: 'in-progress' })
+              // NOTE: Backend sends data nested inside event.data
+              const startData = event.data || event
+              const startPath = startData.path || event.path
+              if (startPath) {
+                updateFileOperation(aiMessageId, startPath, { status: 'in-progress' })
 
                 // Create empty file in project store immediately
                 const projectStore = useProjectStore.getState()
-                const language = getLanguageFromPath(event.path)
+                const language = getLanguageFromPath(startPath)
 
                 projectStore.addFile({
-                  path: event.path,
+                  path: startPath,
                   content: '', // Start with empty content
                   language,
                   type: 'file'
@@ -592,8 +595,8 @@ Just describe your project or share the code that needs fixing!`)
 
                 // Auto-select this file to show in Monaco editor
                 const newFile = {
-                  name: event.path.split('/').pop() || event.path,
-                  path: event.path,
+                  name: startPath.split('/').pop() || startPath,
+                  path: startPath,
                   content: '',
                   language,
                   type: 'file' as const
@@ -603,15 +606,19 @@ Just describe your project or share the code that needs fixing!`)
               break
 
             case 'file_content':
-              if (event.content && event.path) {
+              // NOTE: Backend sends data nested inside event.data
+              const contentData = event.data || event
+              const contentPath = contentData.path || event.path
+              const contentChunk = contentData.content || event.content
+              if (contentChunk && contentPath) {
                 // DON'T append to chat message - stream to Monaco editor instead!
                 const projectStore = useProjectStore.getState()
-                const currentFile = findFileInProject(projectStore.currentProject?.files || [], event.path)
+                const currentFile = findFileInProject(projectStore.currentProject?.files || [], contentPath)
 
                 if (currentFile) {
                   // Append chunk to file content (this creates the "typing" effect in Monaco)
-                  const newContent = (currentFile.content || '') + event.content
-                  projectStore.updateFile(event.path, newContent)
+                  const newContent = (currentFile.content || '') + contentChunk
+                  projectStore.updateFile(contentPath, newContent)
                 }
               }
               break
@@ -619,41 +626,52 @@ Just describe your project or share the code that needs fixing!`)
             case 'file_operation':
               // Handle file_operation events from backend
               // NOTE: Don't append to chat message - file operations are shown in PlanView sidebar only (Bolt.new style)
-              if (event.operation === 'create') {
-                if (event.operation_status === 'in_progress') {
+              // NOTE: Backend sends data nested inside event.data, so we access it there
+              const fileOp = event.data || event  // Support both nested and flat event structures
+              const opType = fileOp.operation || event.operation
+              const opStatus = fileOp.operation_status || event.operation_status
+              const opPath = fileOp.path || event.path || ''
+              const opContent = fileOp.file_content ?? event.file_content
+
+              console.log('[file_operation] Received:', { opType, opStatus, opPath, hasContent: opContent !== undefined })
+
+              if (opType === 'create') {
+                if (opStatus === 'in_progress') {
                   // Add file operation to list (shown in PlanView)
                   addFileOperation(aiMessageId, {
                     type: 'create',
-                    path: event.path || '',
-                    description: `Creating ${event.path}`,
+                    path: opPath,
+                    description: `Creating ${opPath}`,
                     status: 'in-progress'
                   })
-                } else if (event.operation_status === 'complete' && event.file_content !== undefined) {
+                } else if (opStatus === 'complete' && opContent !== undefined) {
                   // Mark file operation as complete
-                  updateFileOperation(aiMessageId, event.path || '', {
+                  updateFileOperation(aiMessageId, opPath, {
                     status: 'complete',
-                    content: event.file_content
+                    content: opContent
                   })
 
                   // Add file to project store with actual content from backend
                   const projectStore = useProjectStore.getState()
-                  const language = getLanguageFromPath(event.path || '')
+                  const language = getLanguageFromPath(opPath)
 
                   // Check if file already exists
-                  const existingFile = findFileInProject(projectStore.currentProject?.files || [], event.path || '')
+                  const existingFile = findFileInProject(projectStore.currentProject?.files || [], opPath)
 
                   if (existingFile) {
                     // Update existing file with new content
-                    projectStore.updateFile(event.path || '', event.file_content)
+                    projectStore.updateFile(opPath, opContent)
+                    console.log('[file_operation] Updated existing file:', opPath)
                   } else {
                     // Create new file with content from backend
                     const newFile = {
-                      path: event.path || '',
-                      content: event.file_content,
+                      path: opPath,
+                      content: opContent,
                       language,
                       type: 'file' as const
                     }
                     projectStore.addFile(newFile)
+                    console.log('[file_operation] Created new file:', opPath)
 
                     // Auto-open newly created file in tab
                     projectStore.openTab(newFile)
@@ -661,71 +679,74 @@ Just describe your project or share the code that needs fixing!`)
 
                   // Emit file change event for auto-reload
                   parseFileOperationEvent({
-                    path: event.path,
+                    path: opPath,
                     operation: 'created',
                     status: 'complete'
                   }, projectId)
                 }
-              } else if (event.operation === 'modify') {
-                if (event.operation_status === 'in_progress') {
+              } else if (opType === 'modify') {
+                if (opStatus === 'in_progress') {
                   addFileOperation(aiMessageId, {
                     type: 'modify',
-                    path: event.path || '',
-                    description: `Modifying ${event.path}`,
+                    path: opPath,
+                    description: `Modifying ${opPath}`,
                     status: 'in-progress'
                   })
-                } else if (event.operation_status === 'complete') {
-                  updateFileOperation(aiMessageId, event.path || '', {
+                } else if (opStatus === 'complete') {
+                  updateFileOperation(aiMessageId, opPath, {
                     status: 'complete'
                   })
 
                   // Update file content in project store if provided
-                  if (event.file_content !== undefined) {
+                  if (opContent !== undefined) {
                     const projectStore = useProjectStore.getState()
-                    projectStore.updateFile(event.path || '', event.file_content)
+                    projectStore.updateFile(opPath, opContent)
                   }
 
                   // Emit file change event for auto-reload
                   parseFileOperationEvent({
-                    path: event.path,
+                    path: opPath,
                     operation: 'updated',
                     status: 'complete'
                   }, projectId)
                 }
-              } else if (event.operation === 'fixed') {
+              } else if (opType === 'fixed') {
                 // Handle file fixed by fixer agent
-                if (event.operation_status === 'in_progress' || event.status === 'in_progress') {
+                const fixStatus = opStatus || fileOp.status || event.status
+                if (fixStatus === 'in_progress') {
                   addFileOperation(aiMessageId, {
                     type: 'modify',
-                    path: event.path || '',
-                    description: `Fixing ${event.path}`,
+                    path: opPath,
+                    description: `Fixing ${opPath}`,
                     status: 'in-progress'
                   })
-                } else if (event.operation_status === 'complete' || event.status === 'complete') {
-                  updateFileOperation(aiMessageId, event.path || '', {
+                } else if (fixStatus === 'complete') {
+                  updateFileOperation(aiMessageId, opPath, {
                     status: 'complete'
                   })
 
                   // Update file content in project store if provided
-                  if (event.file_content !== undefined) {
+                  if (opContent !== undefined) {
                     const projectStore = useProjectStore.getState()
-                    projectStore.updateFile(event.path || '', event.file_content)
+                    projectStore.updateFile(opPath, opContent)
                   }
 
                   // Emit file change event to trigger auto-reload
                   parseFileOperationEvent({
-                    path: event.path,
+                    path: opPath,
                     operation: 'fixed',
                     status: 'complete'
                   }, projectId)
 
-                  console.log(`[useChat] File fixed: ${event.path} - triggering preview reload`)
+                  console.log(`[useChat] File fixed: ${opPath} - triggering preview reload`)
                 }
-              } else if (event.operation === 'documentation') {
+              } else if (opType === 'documentation') {
                 // Handle documentation file operations (from Documenter agent)
                 // Documentation files follow planner structure: docs/SRS.md, docs/ARCHITECTURE.md, etc.
                 // For academic projects: Word, PDF, PPT files (binary - stored on backend)
-                const docPath = event.path || ''
+                const docPath = opPath
+                const docStatus = opStatus || fileOp.status || event.status
+                const docContent = opContent || fileOp.content || event.content
 
                 // Check if this is a binary file (Word, PDF, PPT)
                 const isBinaryDoc = (path: string) => {
@@ -733,14 +754,14 @@ Just describe your project or share the code that needs fixing!`)
                   return ['pdf', 'docx', 'doc', 'pptx', 'ppt'].includes(ext || '')
                 }
 
-                if (event.operation_status === 'in_progress' || event.status === 'in_progress') {
+                if (docStatus === 'in_progress') {
                   addFileOperation(aiMessageId, {
                     type: 'create',
                     path: docPath,
                     description: `Creating documentation: ${docPath}`,
                     status: 'in-progress'
                   })
-                } else if (event.operation_status === 'complete' || event.status === 'complete') {
+                } else if (docStatus === 'complete') {
                   updateFileOperation(aiMessageId, docPath, {
                     status: 'complete'
                   })
@@ -762,18 +783,17 @@ Just describe your project or share the code that needs fixing!`)
                       projectStore.addFile(newFile)
                       console.log(`[useChat] Added binary documentation file: ${docPath}`)
                     }
-                  } else if (event.file_content || event.content) {
+                  } else if (docContent) {
                     // Text files (Markdown) - add with content
                     const language = getLanguageFromPath(docPath)
-                    const content = event.file_content || event.content || ''
 
                     if (existingFile) {
-                      projectStore.updateFile(docPath, content)
+                      projectStore.updateFile(docPath, docContent)
                     } else {
                       // Create new documentation file in docs/ folder structure
                       const newFile = {
                         path: docPath,
-                        content: content,
+                        content: docContent,
                         language,
                         type: 'file' as const
                       }
@@ -790,34 +810,38 @@ Just describe your project or share the code that needs fixing!`)
 
             case 'file_complete':
               // NOTE: Don't append to chat - file operations shown in PlanView sidebar only
-              if (event.path && event.full_content) {
-                updateFileOperation(aiMessageId, event.path, {
+              // NOTE: Backend sends data nested inside event.data
+              const completeData = event.data || event
+              const completePath = completeData.path || event.path
+              const completeContent = completeData.full_content || event.full_content
+              if (completePath && completeContent) {
+                updateFileOperation(aiMessageId, completePath, {
                   status: 'complete',
-                  content: event.full_content
+                  content: completeContent
                 })
 
                 // Ensure final content is set (in case streaming missed chunks)
                 const projectStore = useProjectStore.getState()
-                const language = getLanguageFromPath(event.path)
+                const language = getLanguageFromPath(completePath)
 
-                const existingFile = findFileInProject(projectStore.currentProject?.files || [], event.path)
+                const existingFile = findFileInProject(projectStore.currentProject?.files || [], completePath)
 
                 if (existingFile) {
                   // Update to final content
-                  projectStore.updateFile(event.path, event.full_content)
+                  projectStore.updateFile(completePath, completeContent)
 
                   // Auto-open updated file in tab
                   projectStore.openTab({
-                    path: event.path,
-                    content: event.full_content,
+                    path: completePath,
+                    content: completeContent,
                     language,
                     type: 'file'
                   })
                 } else {
                   // Fallback: create file if it doesn't exist
                   const newFile = {
-                    path: event.path,
-                    content: event.full_content,
+                    path: completePath,
+                    content: completeContent,
                     language,
                     type: 'file' as const
                   }

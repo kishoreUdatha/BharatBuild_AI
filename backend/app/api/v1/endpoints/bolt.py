@@ -638,26 +638,87 @@ async def get_project_files(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get all files for a project"""
+    """
+    Get all files for a project.
+
+    COMPLETE FLOW (Bolt.new style):
+    UI → Bolt API → Workspace Loader → Metadata DB → Reconstruct Files → Return Tree + Files → UI Editor
+
+    1. Check if sandbox workspace exists
+    2. If not, auto-restore from database/S3 using WorkspaceRestoreService
+    3. Return files with content
+    """
     try:
-        project_uuid = UUID(project_id)
+        from app.services.workspace_restore import workspace_restore
 
-        # Verify project exists and belongs to user
-        result = await db.execute(
-            select(Project).where(
-                Project.id == project_uuid,
-                Project.user_id == current_user.id
+        user_id = str(current_user.id)
+
+        # Step 1: Check workspace status using WorkspaceRestoreService
+        status = await workspace_restore.check_workspace_status(project_id, db, user_id)
+        logger.info(f"[Bolt] Workspace status for {project_id}: exists={status['workspace_exists']}, can_restore={status['can_restore']}")
+
+        # Step 2: If workspace doesn't exist, auto-restore from storage
+        if not status["workspace_exists"] and status["can_restore"]:
+            logger.info(f"[Bolt] Auto-restoring workspace for {project_id}")
+            restore_result = await workspace_restore.restore_from_storage(project_id, db, user_id)
+            if restore_result.get("success"):
+                logger.info(f"[Bolt] Restored {restore_result.get('restored_files')} files for {project_id}")
+            else:
+                logger.warning(f"[Bolt] Restore failed: {restore_result.get('error')}")
+
+        # Step 3: Try to get files from sandbox first (Layer 1 - fastest)
+        storage = UnifiedStorageService()
+        if await storage.sandbox_exists(project_id, user_id):
+            # Load from sandbox
+            files = await storage.list_sandbox_files(project_id, user_id)
+            file_schemas = []
+
+            def process_files(file_list):
+                for f in file_list:
+                    if f.type == 'file':
+                        # Read content from sandbox
+                        import asyncio
+                        content = asyncio.get_event_loop().run_until_complete(
+                            storage.read_from_sandbox(project_id, f.path, user_id)
+                        ) if hasattr(asyncio, 'get_event_loop') else None
+                        file_schemas.append(ProjectFileSchema(
+                            path=f.path,
+                            content=content or '',
+                            language=f.language or "plaintext",
+                            type="file"
+                        ))
+                    elif f.children:
+                        process_files(f.children)
+
+            # Async version
+            async def process_files_async(file_list):
+                for f in file_list:
+                    if f.type == 'file':
+                        content = await storage.read_from_sandbox(project_id, f.path, user_id)
+                        file_schemas.append(ProjectFileSchema(
+                            path=f.path,
+                            content=content or '',
+                            language=f.language or "plaintext",
+                            type="file"
+                        ))
+                    elif f.children:
+                        await process_files_async(f.children)
+
+            await process_files_async(files)
+
+            return GetProjectFilesResponse(
+                success=True,
+                project_id=project_id,
+                files=file_schemas,
+                total_files=len(file_schemas)
             )
-        )
-        project = result.scalar_one_or_none()
 
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
-
-        # Get all files for the project
+        # Step 4: Fallback to database (Layer 4 - ProjectFile table)
+        # Use string comparison for project_id (stored as String(36), not UUID)
+        from sqlalchemy import cast, String as SQLString
         files_result = await db.execute(
             select(ProjectFile).where(
-                ProjectFile.project_id == project_uuid,
+                ProjectFile.project_id == cast(project_id, SQLString(36)),
                 ProjectFile.is_folder == False
             ).order_by(ProjectFile.path)
         )

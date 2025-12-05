@@ -100,6 +100,9 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
   // Detect server start from output
   const detectServerStart = useCallback((output: string) => {
+    console.log('[DetectServer] Checking output:', output.substring(0, 100))
+
+    // Patterns to detect server URL and extract port
     const serverPatterns = [
       /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)/i,
       /running\s+(?:on|at)\s+(?:port\s+)?(\d+)/i,
@@ -109,6 +112,27 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       /local:\s*https?:\/\/.*:(\d+)/i,
     ]
 
+    // Patterns that indicate server is ready (without needing to extract port)
+    const readyPatterns = [
+      /vite.*ready\s+in/i,              // "VITE v5.4.6 ready in 234 ms"
+      /webpack.*compiled/i,             // "webpack compiled successfully"
+      /compiled\s+successfully/i,       // Generic compile success
+      /development\s+server\s+running/i, // Next.js style
+      /ready\s+on/i,                    // "ready on http://localhost:3000"
+    ]
+
+    // First check if server is ready (even if we can't extract port)
+    for (const pattern of readyPatterns) {
+      if (pattern.test(output)) {
+        console.log('[DetectServer] MATCHED readyPattern:', pattern)
+        // Server is ready, set status to running
+        // Port will be fetched from preview endpoint
+        setStatus('running')
+        return true
+      }
+    }
+
+    // Try to extract port from output
     for (const pattern of serverPatterns) {
       const match = output.match(pattern)
       if (match && match[1]) {
@@ -123,9 +147,13 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     return false
   }, [onPreviewUrlChange])
 
-  // ============= ERROR DETECTION =============
+  // ============= BOLT.NEW STYLE ERROR DETECTION =============
+  // Track current command for fixer agent
+  const currentCommandRef = useRef<string>('')
+
   const detectError = useCallback((output: string): boolean => {
-    const errorPatterns = [
+    // Terminal/Build errors
+    const terminalErrorPatterns = [
       /error:/i,
       /exception:/i,
       /traceback/i,
@@ -140,14 +168,62 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       /unexpected token/i,
       /command failed/i,
       /exited with code [1-9]/i,
+      /npm ERR!/i,
+      /ENOENT/i,
+      /EACCES/i,
     ]
 
-    for (const pattern of errorPatterns) {
+    // Docker-specific errors
+    const dockerErrorPatterns = [
+      /port.*already.*in.*use/i,
+      /invalid.*dockerfile/i,
+      /missing.*dependencies/i,
+      /incorrect.*base.*image/i,
+      /build.*failure/i,
+      /health.*check.*failing/i,
+      /container.*exit.*code.*[1-9]/i,
+      /compose.*file.*syntax/i,
+      /docker.*daemon/i,
+      /no.*such.*image/i,
+      /cannot.*connect.*to.*docker/i,
+      /failed.*to.*pull/i,
+      /EXPOSE.*invalid/i,
+    ]
+
+    // Vite/Next/Webpack errors
+    const bundlerErrorPatterns = [
+      /\[vite\].*error/i,
+      /\[webpack\].*error/i,
+      /\[next\].*error/i,
+      /failed.*to.*resolve.*import/i,
+      /transform.*failed/i,
+      /internal.*server.*error/i,
+      /pre-transform.*error/i,
+    ]
+
+    // Python errors
+    const pythonErrorPatterns = [
+      /file.*not.*found/i,
+      /no.*module.*named/i,
+      /attributeerror/i,
+      /valueerror/i,
+      /keyerror/i,
+      /indentationerror/i,
+    ]
+
+    const allPatterns = [
+      ...terminalErrorPatterns,
+      ...dockerErrorPatterns,
+      ...bundlerErrorPatterns,
+      ...pythonErrorPatterns,
+    ]
+
+    for (const pattern of allPatterns) {
       if (pattern.test(output)) {
         // Add to error buffer
         errorBufferRef.current.push(output)
-        // Keep last 20 lines for context
-        if (errorBufferRef.current.length > 20) {
+        // Keep last 30 lines for context (increased for Bolt.new style)
+        if (errorBufferRef.current.length > 30) {
           errorBufferRef.current.shift()
         }
         return true
@@ -164,7 +240,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     errorBufferRef.current = []
   }, [])
 
-  // ============= AUTO-FIX HANDLER =============
+  // ============= BOLT.NEW STYLE AUTO-FIX HANDLER =============
   const attemptAutoFix = useCallback(async (errorMessage: string, stackTrace: string) => {
     if (!currentProject?.id || !autoFix) {
       return false
@@ -172,9 +248,8 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
     if (fixAttempts >= MAX_AUTO_FIX_ATTEMPTS) {
       setMaxAttemptsReached(true)
-      onOutput?.(`\n❌ Max auto-fix attempts (${MAX_AUTO_FIX_ATTEMPTS}) reached.`)
-      onOutput?.('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-      onOutput?.('🔴 AUTO-FIX FAILED - Manual intervention required')
+      onOutput?.('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+      onOutput?.(`❌ Max auto-fix attempts (${MAX_AUTO_FIX_ATTEMPTS}) reached.`)
       onOutput?.('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
       onOutput?.('\n💡 Options:')
       onOutput?.('   1. Review the error message above')
@@ -189,11 +264,16 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     setIsFixing(true)
     setStatus('fixing')
     setFixAttempts(prev => prev + 1)
-    onOutput?.(`\n🔧 Auto-Fix Attempt ${fixAttempts + 1}/${MAX_AUTO_FIX_ATTEMPTS}...`)
-    onOutput?.('🤖 AI Fixer Agent analyzing error...')
+    onOutput?.('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+    onOutput?.(`🔧 AUTO-FIX ATTEMPT ${fixAttempts + 1}/${MAX_AUTO_FIX_ATTEMPTS}`)
+    onOutput?.('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+    onOutput?.('🤖 Fixer Agent analyzing error...')
+    onOutput?.(`📋 Command: ${currentCommandRef.current || 'unknown'}`)
 
     try {
       const token = localStorage.getItem('access_token')
+
+      // Send Bolt.new style payload with command and error logs
       const response = await fetch(`${API_BASE_URL}/execution/fix/${currentProject.id}`, {
         method: 'POST',
         headers: {
@@ -203,6 +283,8 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         body: JSON.stringify({
           error_message: errorMessage,
           stack_trace: stackTrace,
+          command: currentCommandRef.current || 'unknown',  // Bolt.new style: include command
+          error_logs: errorBufferRef.current.slice(-20),    // Bolt.new style: include recent error logs
         })
       })
 
@@ -238,10 +320,10 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         onOutput?.(`📋 Running: ${result.instructions}`)
       }
 
-      // Reload project files to reflect changes
+      // Reload project files to reflect changes (use /load endpoint to get files with content)
       try {
         const { apiClient } = await import('@/lib/api-client')
-        const projectData = await apiClient.getProject(currentProject.id)
+        const projectData = await apiClient.loadProjectWithFiles(currentProject.id)
         loadFromBackend(projectData)
         onOutput?.('🔄 Project files reloaded')
       } catch (e) {
@@ -264,17 +346,105 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     }
   }, [currentProject?.id, autoFix, fixAttempts, onOutput, loadFromBackend])
 
+  // ============= LOAD FILES FROM BACKEND =============
+  const loadFilesFromBackend = async (): Promise<boolean> => {
+    if (!currentProject?.id) return false
+
+    onOutput?.('📥 Loading project files from backend...')
+
+    try {
+      const { apiClient } = await import('@/lib/api-client')
+      // Use loadProjectWithFiles which calls /projects/{id}/load - returns project + all files with content
+      const projectData = await apiClient.loadProjectWithFiles(currentProject.id)
+
+      if (projectData?.files && projectData.files.length > 0) {
+        loadFromBackend(projectData)
+        onOutput?.(`✅ Loaded ${projectData.files.length} files from backend`)
+        return true
+      } else {
+        onOutput?.('⚠️ No files found in backend')
+        return false
+      }
+    } catch (error: any) {
+      onOutput?.(`⚠️ Could not load files from backend: ${error.message}`)
+      return false
+    }
+  }
+
+  // ============= SYNC FILES TO WORKSPACE =============
+  const syncFilesToWorkspace = async (): Promise<boolean> => {
+    // First check if we have files in memory
+    if (!currentProject?.files || currentProject.files.length === 0) {
+      onOutput?.('⚠️ No files in memory, trying to load from backend...')
+      // Try to load files from backend
+      const loaded = await loadFilesFromBackend()
+      if (!loaded) {
+        onOutput?.('❌ No files available to sync')
+        return false
+      }
+    }
+
+    // Re-check after potential load (need to get fresh data from store)
+    const { currentProject: freshProject } = useProjectStore.getState()
+    if (!freshProject?.files || freshProject.files.length === 0) {
+      onOutput?.('❌ Still no files after backend load')
+      return false
+    }
+
+    const token = localStorage.getItem('access_token')
+    onOutput?.(`📁 Syncing ${freshProject.files.length} files to workspace...`)
+
+    try {
+      // Use batch write endpoint for efficiency
+      const response = await fetch(`${API_BASE_URL}/containers/${freshProject.id}/files/batch`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token && { 'Authorization': `Bearer ${token}` })
+        },
+        body: JSON.stringify({
+          files: freshProject.files.map(f => ({
+            path: f.path,
+            content: f.content || ''
+          }))
+        })
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        onOutput?.(`⚠️ Sync failed: ${error.detail || 'Unknown error'}`)
+        return false
+      }
+
+      const result = await response.json()
+      onOutput?.(`✅ Synced ${result.success}/${result.total} files`)
+      return result.success > 0
+    } catch (error: any) {
+      onOutput?.(`⚠️ Sync error: ${error.message}`)
+      return false
+    }
+  }
+
   // ============= DOCKER EXECUTION =============
   const runWithDocker = async (): Promise<boolean> => {
     if (!currentProject?.id) return false
 
+    // Reset error buffer for this execution
+    errorBufferRef.current = []
+
     onOutput?.('🐳 Starting Docker container...')
 
+    // Get auth token for authenticated requests
+    const token = localStorage.getItem('access_token')
+
     try {
-      // Step 1: Create container
+      // Step 1: Create container FIRST (this sets up the user-scoped workspace path)
       const createResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/create`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token && { 'Authorization': `Bearer ${token}` })
+        },
         body: JSON.stringify({
           project_type: detectProjectType(),
           memory_limit: '512m',
@@ -289,21 +459,42 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
       const container = await createResponse.json()
       onOutput?.(`✅ Container created: ${container.container_id}`)
+
+      // Step 2: Sync files to workspace AFTER container is created
+      // This ensures files are written to the correct user-scoped path
+      const fileSynced = await syncFilesToWorkspace()
+      if (!fileSynced && currentProject?.files?.length > 0) {
+        onOutput?.('⚠️ File sync failed - workspace may be empty!')
+        // Don't continue if files couldn't be synced
+        throw new Error('Failed to sync project files to workspace')
+      }
+
       setStatus('starting')
 
-      // Step 2: Execute commands
+      // Step 3: Execute commands
       const commands = detectProjectType() === 'node'
         ? ['npm install', 'npm run dev']
         : detectProjectType() === 'python'
         ? ['pip install -r requirements.txt', 'python main.py']
         : ['python -m http.server 3000']
 
+      // Identify which commands are long-running (dev servers) vs short (install/build)
+      const isLongRunningCommand = (cmd: string) => {
+        const patterns = ['npm run dev', 'npm start', 'yarn dev', 'yarn start', 'pnpm dev', 'python -m http.server', 'python main.py', 'node server']
+        return patterns.some(p => cmd.includes(p))
+      }
+
       for (const command of commands) {
+        // Track current command for Fixer Agent (Bolt.new style)
+        currentCommandRef.current = command
         onOutput?.(`$ ${command}`)
 
         const execResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/exec`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token && { 'Authorization': `Bearer ${token}` })
+          },
           body: JSON.stringify({ command, timeout: 600 }),
           signal: abortControllerRef.current?.signal,
         })
@@ -318,6 +509,11 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
         const decoder = new TextDecoder()
         let buffer = ''
+        let serverStarted = false
+        let commandDone = false
+        let hasError = false
+        let errorOutput = ''
+        const isDevServer = isLongRunningCommand(command)
 
         while (true) {
           const { done, value } = await reader.read()
@@ -334,20 +530,135 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
                 if (event.type === 'stdout' || event.type === 'stderr') {
                   const text = String(event.data)
                   onOutput?.(text)
-                  detectServerStart(text)
+
+                  // Detect errors in Docker output (for Fixer Agent)
+                  if (detectError(text)) {
+                    hasError = true
+                    errorOutput += text + '\n'
+                    errorBufferRef.current.push(text)
+                  }
+
+                  // Only detect server start for dev server commands
+                  console.log('[SSE] isDevServer:', isDevServer, 'command:', command)
+                  if (isDevServer && detectServerStart(text)) {
+                    console.log('[SSE] Server detected as started!')
+                    serverStarted = true
+                    hasError = false // Server started successfully, ignore earlier warnings
+                  }
+                }
+                // Check for error event from server
+                if (event.type === 'error') {
+                  const errText = String(event.data)
+                  onOutput?.(`❌ ${errText}`)
+                  hasError = true
+                  errorOutput += errText + '\n'
+                  errorBufferRef.current.push(errText)
+                }
+                // Check for done event from server (command completed)
+                if (event.type === 'done') {
+                  commandDone = true
                 }
               } catch {}
             }
           }
+
+          // Break conditions:
+          // 1. Command is done (got 'done' event from server)
+          // 2. Dev server started (detected server URL in output)
+          if (commandDone) {
+            break
+          }
+          if (isDevServer && serverStarted) {
+            onOutput?.('✅ Server started successfully!')
+
+            // IMMEDIATELY fetch preview URL when server starts (Bolt.new style)
+            // Don't wait until the for loop completes!
+            try {
+              const previewResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/preview?port=3000`, {
+                headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+              })
+              if (previewResponse.ok) {
+                const previewData = await previewResponse.json()
+                console.log('[Preview] Backend response (on server start):', previewData)
+
+                // Determine preview URL - handle multiple response formats
+                let finalPreviewUrl: string | null = null
+
+                // Priority 1: Use direct_url if provided (absolute URL from backend)
+                if (previewData.direct_url) {
+                  finalPreviewUrl = previewData.direct_url
+                  console.log('[Preview] Using direct_url:', finalPreviewUrl)
+                }
+                // Priority 2: Use url if it's already an absolute URL
+                else if (previewData.url && previewData.url.startsWith('http')) {
+                  finalPreviewUrl = previewData.url
+                  console.log('[Preview] Using absolute url:', finalPreviewUrl)
+                }
+                // Priority 3: Construct absolute URL from relative url
+                else if (previewData.url) {
+                  finalPreviewUrl = `${API_BASE_URL.replace('/api/v1', '')}${previewData.url}`
+                  console.log('[Preview] Constructed URL from relative:', finalPreviewUrl)
+                }
+
+                if (finalPreviewUrl) {
+                  setPreviewUrl(finalPreviewUrl)
+                  onPreviewUrlChange?.(finalPreviewUrl)
+                  console.log('[Preview] Set preview URL on server start:', finalPreviewUrl)
+                }
+              }
+            } catch (previewError) {
+              console.warn('[Preview] Failed to fetch preview URL:', previewError)
+            }
+
+            break
+          }
+        }
+
+        // If errors detected during this command, save for Fixer Agent
+        if (hasError && !serverStarted) {
+          const fullError = errorOutput || errorBufferRef.current.join('\n')
+          setLastError({
+            message: fullError.slice(0, 500),
+            stackTrace: fullError,
+            detectedAt: new Date()
+          })
+          // Return false to trigger auto-fix
+          return false
         }
       }
 
-      // Get preview URL
-      const previewResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/preview?port=3000`)
+      // Get preview URL - use direct_url for absolute URL (works across ports)
+      const previewResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/preview?port=3000`, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      })
       if (previewResponse.ok) {
-        const { url } = await previewResponse.json()
-        setPreviewUrl(url)
-        onPreviewUrlChange?.(url)
+        const previewData = await previewResponse.json()
+        console.log('[Preview] Backend response:', previewData)
+
+        // Determine preview URL - handle multiple response formats
+        let finalPreviewUrl: string | null = null
+
+        // Priority 1: Use direct_url if provided (absolute URL from backend)
+        if (previewData.direct_url) {
+          finalPreviewUrl = previewData.direct_url
+          console.log('[Preview] Using direct_url:', finalPreviewUrl)
+        }
+        // Priority 2: Use url if it's already an absolute URL
+        else if (previewData.url && previewData.url.startsWith('http')) {
+          finalPreviewUrl = previewData.url
+          console.log('[Preview] Using absolute url:', finalPreviewUrl)
+        }
+        // Priority 3: Construct absolute URL from relative url
+        else if (previewData.url) {
+          finalPreviewUrl = `${API_BASE_URL.replace('/api/v1', '')}${previewData.url}`
+          console.log('[Preview] Constructed URL from relative:', finalPreviewUrl)
+        }
+
+        if (finalPreviewUrl) {
+          setPreviewUrl(finalPreviewUrl)
+          onPreviewUrlChange?.(finalPreviewUrl)
+          console.log('[Preview] Set preview URL:', finalPreviewUrl)
+        }
       }
 
       setStatus('running')

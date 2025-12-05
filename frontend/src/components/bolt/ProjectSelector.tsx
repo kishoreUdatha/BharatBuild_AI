@@ -59,12 +59,14 @@ export function ProjectSelector({ onProjectSelect, onNewProject }: ProjectSelect
    * 4. NO file mixing between projects!
    */
   const handleSelectProject = async (project: Project) => {
-    if (currentProject?.id === project.id) {
+    // Allow re-selection if current project has no files (force reload)
+    const hasNoFiles = !currentProject?.files || currentProject.files.length === 0
+    if (currentProject?.id === project.id && !hasNoFiles) {
       setIsOpen(false)
       return
     }
 
-    console.log(`[ProjectSelector] Switching to project: ${project.id} (${project.title})`)
+    console.log(`[ProjectSelector] Switching to project: ${project.id} (${project.title}), hasNoFiles: ${hasNoFiles}`)
 
     try {
       // Use Bolt.new-style project switching with complete teardown

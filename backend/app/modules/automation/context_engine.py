@@ -40,6 +40,7 @@ class ContextPayload:
     tech_stack: str
     error_summary: str
     total_tokens_estimate: int = 0
+    missing_modules: List[Dict] = field(default_factory=list)  # Files that need to be CREATED
 
 
 class ContextEngine:
@@ -103,36 +104,318 @@ class ContextEngine:
 
     # Error patterns to extract file paths
     ERROR_FILE_PATTERNS = [
-        # JavaScript/Node errors
+        # ============= VITE/WEBPACK SPECIFIC PATTERNS =============
+        # Vite: Failed to resolve import "./components/Header" from "src/App.tsx"
+        r'Failed to resolve import ["\']([^"\']+)["\'] from ["\']([^"\']+)["\']',
+        # Vite: Could not resolve "./components/Header" from "src/App.tsx"
+        r'Could not resolve ["\']([^"\']+)["\'] from ["\']([^"\']+)["\']',
+        # Vite plugin error: /workspace/src/App.tsx:4:23
+        r'/workspace/([^\s:]+):(\d+)(?::\d+)?',
+        # Webpack: Module not found: Can't resolve './Header' in '/path/to/src/components'
+        r"Can't resolve ['\"]([^'\"]+)['\"] in ['\"]([^'\"]+)['\"]",
+        # esbuild: Could not resolve "react"
+        r'Could not resolve ["\']([^"\']+)["\']',
+
+        # ============= JAVASCRIPT/NODE ERRORS =============
         r'at\s+(?:\w+\s+)?\(?([^\s:()]+\.[jt]sx?):(\d+)(?::\d+)?\)?',
         r'([^\s:]+\.[jt]sx?):(\d+)(?::\d+)?',
 
-        # Python errors
+        # ============= PYTHON ERRORS =============
         r'File\s+"([^"]+)"(?:,\s+line\s+(\d+))?',
         r'([^\s:]+\.py):(\d+)',
 
-        # Go errors
+        # ============= GO ERRORS =============
         r'([^\s:]+\.go):(\d+)',
 
-        # Rust errors
+        # ============= RUST ERRORS =============
         r'-->\s*([^\s:]+\.rs):(\d+)',
 
-        # Java errors
+        # ============= JAVA ERRORS =============
         r'at\s+[\w.$]+\(([^:]+\.java):(\d+)\)',
 
-        # Generic pattern
+        # ============= GENERIC FILE:LINE PATTERN =============
         r'([^\s:]+\.\w+):(\d+)(?::\d+)?',
 
-        # Module not found
+        # ============= MODULE NOT FOUND PATTERNS =============
         r"Cannot find module '([^']+)'",
         r'Module not found.*[\'"]([^\'"]+)[\'"]',
         r'No module named [\'"]?([^\'"]+)[\'"]?',
+        # Import statement extraction
+        r'import\s+.*from\s+["\']([^"\']+)["\']',
+    ]
+
+    # Patterns to extract missing modules (files that need to be CREATED)
+    # Format: (pattern, 'missing_group_index', 'source_group_index')
+    MISSING_MODULE_PATTERNS = [
+        # ============= JAVASCRIPT/TYPESCRIPT =============
+        # Vite/esbuild: Failed to resolve import "./components/Header" from "src/App.tsx"
+        (r'Failed to resolve import ["\']([^"\']+)["\'] from ["\']([^"\']+)["\']', 'missing', 'source'),
+        # Webpack: Can't resolve './Header'
+        (r"Can't resolve ['\"]([^'\"]+)['\"]", 'missing', None),
+        # Node: Cannot find module './components/Header'
+        (r"Cannot find module ['\"]([^'\"]+)['\"]", 'missing', None),
+        # TypeScript: Cannot find module './Header' or its corresponding type declarations
+        (r"Cannot find module ['\"]([^'\"]+)['\"] or its corresponding type declarations", 'missing', None),
+        # Module not found: Error: Can't resolve
+        (r"Module not found.*Can't resolve ['\"]([^'\"]+)['\"]", 'missing', None),
+
+        # ============= PYTHON =============
+        # ModuleNotFoundError: No module named 'mymodule'
+        (r"No module named ['\"]?([^'\"]+)['\"]?", 'missing', None),
+        # ImportError: cannot import name 'MyClass' from 'mymodule'
+        (r"cannot import name ['\"]?([^'\"]+)['\"]? from ['\"]?([^'\"]+)['\"]?", 'name', 'module'),
+        # ModuleNotFoundError: No module named 'app.services.helper'
+        (r"ModuleNotFoundError: No module named ['\"]?([^'\"]+)['\"]?", 'missing', None),
+
+        # ============= GO =============
+        # cannot find package "github.com/user/repo" in any of:
+        (r'cannot find package ["\']([^"\']+)["\']', 'missing', None),
+        # package mypackage is not in GOROOT
+        (r'package ([^\s]+) is not in GOROOT', 'missing', None),
+        # no required module provides package
+        (r'no required module provides package ([^\s;]+)', 'missing', None),
+
+        # ============= RUST =============
+        # unresolved import `mymodule`
+        (r'unresolved import `([^`]+)`', 'missing', None),
+        # error[E0433]: failed to resolve: use of undeclared crate or module `mymod`
+        (r'use of undeclared crate or module `([^`]+)`', 'missing', None),
+        # cannot find crate `mycrate`
+        (r"cannot find crate `([^`]+)`", 'missing', None),
+
+        # ============= JAVA/KOTLIN =============
+        # package com.example.helper does not exist
+        (r'package ([^\s]+) does not exist', 'missing', None),
+        # cannot find symbol: class MyHelper
+        (r'cannot find symbol.*class ([^\s]+)', 'missing', None),
+        # ClassNotFoundException: com.example.MyClass
+        (r'ClassNotFoundException: ([^\s]+)', 'missing', None),
+
+        # ============= RUBY =============
+        # LoadError: cannot load such file -- mymodule
+        (r"cannot load such file -- ([^\s]+)", 'missing', None),
+        # NameError: uninitialized constant MyModule
+        (r'uninitialized constant ([^\s]+)', 'missing', None),
+
+        # ============= PHP =============
+        # Class 'App\Services\Helper' not found
+        (r"Class ['\"]?([^'\"]+)['\"]? not found", 'missing', None),
+        # require_once(): Failed opening required 'helper.php'
+        (r"Failed opening required ['\"]?([^'\"]+)['\"]?", 'missing', None),
+
+        # ============= C# =============
+        # The type or namespace name 'MyClass' could not be found
+        (r"type or namespace name ['\"]?([^'\"]+)['\"]? could not be found", 'missing', None),
     ]
 
     def __init__(self, project_path: str):
         self.project_path = Path(project_path)
         self._file_cache: Dict[str, str] = {}
         self._import_graph: Dict[str, Set[str]] = defaultdict(set)
+        self._missing_modules: List[Dict] = []  # Track modules that need to be created
+
+    def scan_project_files(self, extensions: Optional[List[str]] = None) -> List[Dict]:
+        """
+        Scan project directory for all source files.
+        Like Bolt.new, this gives us full project context.
+        Supports ALL major programming languages.
+        """
+        if extensions is None:
+            extensions = [
+                # JavaScript/TypeScript
+                '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.svelte',
+                # Python
+                '.py', '.pyx', '.pyi',
+                # Go
+                '.go',
+                # Rust
+                '.rs',
+                # Java/Kotlin
+                '.java', '.kt', '.kts', '.gradle',
+                # C/C++
+                '.c', '.cpp', '.cc', '.h', '.hpp', '.hh',
+                # C#/.NET
+                '.cs', '.csproj', '.sln',
+                # Ruby
+                '.rb', '.erb', '.rake',
+                # PHP
+                '.php', '.blade.php',
+                # Swift
+                '.swift',
+                # Scala
+                '.scala', '.sc',
+                # Elixir/Erlang
+                '.ex', '.exs', '.erl', '.hrl',
+                # Haskell
+                '.hs', '.lhs',
+                # F#/OCaml
+                '.fs', '.fsx', '.ml', '.mli',
+                # Clojure
+                '.clj', '.cljs', '.cljc', '.edn',
+                # Config files
+                '.json', '.yaml', '.yml', '.toml', '.xml', '.ini', '.env',
+                # Web
+                '.html', '.css', '.scss', '.sass', '.less',
+                # Docs
+                '.md', '.rst', '.txt',
+                # Shell
+                '.sh', '.bash', '.zsh', '.fish',
+                # Docker/Infra
+                '.dockerfile',
+            ]
+
+        files = []
+        exclude_dirs = {
+            'node_modules', '__pycache__', '.git', 'dist', 'build', '.next',
+            'venv', '.venv', 'env', '.env', 'target', '.cache', 'vendor',
+            'coverage', '.nyc_output', 'obj', 'bin', '.gradle', '.idea',
+            '.vs', '.vscode', 'packages', '.dart_tool', 'Pods'
+        }
+
+        try:
+            for root, dirs, filenames in os.walk(self.project_path):
+                # Skip excluded directories
+                dirs[:] = [d for d in dirs if d not in exclude_dirs]
+
+                for filename in filenames:
+                    ext = Path(filename).suffix.lower()
+                    if ext in extensions or filename in ['package.json', 'tsconfig.json', 'Dockerfile', 'requirements.txt']:
+                        file_path = Path(root) / filename
+                        rel_path = str(file_path.relative_to(self.project_path)).replace('\\', '/')
+
+                        try:
+                            content = file_path.read_text(encoding='utf-8', errors='ignore')
+                            files.append({
+                                'path': rel_path,
+                                'content': content,
+                                'size': len(content)
+                            })
+                        except Exception as e:
+                            logger.warning(f"[ContextEngine] Failed to read {rel_path}: {e}")
+
+            logger.info(f"[ContextEngine] Scanned {len(files)} project files")
+            return files
+
+        except Exception as e:
+            logger.error(f"[ContextEngine] Failed to scan project: {e}")
+            return []
+
+    def extract_missing_modules(self, errors: List[Dict]) -> List[Dict]:
+        """
+        Extract modules that need to be CREATED (not just fixed).
+        This is key for Bolt.new-style functionality.
+
+        Returns list of:
+        {
+            'missing_path': './components/Header',
+            'source_file': 'src/App.tsx',
+            'suggested_path': 'src/components/Header.tsx',
+            'type': 'component'  # component, hook, util, type, etc.
+        }
+        """
+        missing = []
+        seen = set()
+
+        for error in errors:
+            message = error.get('message', '')
+            stack = error.get('stack', '')
+            full_text = f"{message}\n{stack}"
+
+            for pattern, missing_group, source_group in self.MISSING_MODULE_PATTERNS:
+                for match in re.finditer(pattern, full_text, re.MULTILINE | re.IGNORECASE):
+                    groups = match.groups()
+                    missing_path = groups[0] if groups else None
+                    source_file = groups[1] if len(groups) > 1 and source_group else error.get('file', '')
+
+                    if missing_path and missing_path not in seen:
+                        seen.add(missing_path)
+
+                        # Resolve to actual file path
+                        suggested_path = self._resolve_missing_module(missing_path, source_file)
+
+                        # Determine module type
+                        module_type = self._classify_module_type(missing_path)
+
+                        missing.append({
+                            'missing_path': missing_path,
+                            'source_file': source_file,
+                            'suggested_path': suggested_path,
+                            'type': module_type
+                        })
+
+                        logger.info(f"[ContextEngine] Found missing module: {missing_path} -> {suggested_path}")
+
+        self._missing_modules = missing
+        return missing
+
+    def _resolve_missing_module(self, import_path: str, source_file: str) -> str:
+        """Resolve import path to actual file path"""
+        # Handle relative imports
+        if import_path.startswith('./') or import_path.startswith('../'):
+            # Get directory of source file
+            source_dir = str(Path(source_file).parent)
+
+            if import_path.startswith('./'):
+                resolved = str(Path(source_dir) / import_path[2:])
+            else:
+                resolved = str(Path(source_dir) / import_path)
+        elif import_path.startswith('@/'):
+            # Common alias for src/
+            resolved = 'src/' + import_path[2:]
+        else:
+            resolved = import_path
+
+        # Normalize path
+        resolved = resolved.replace('\\', '/')
+
+        # Add extension if missing
+        if not Path(resolved).suffix:
+            # Try to determine extension based on project type
+            for ext in ['.tsx', '.ts', '.jsx', '.js']:
+                if self._file_exists(resolved + ext):
+                    return resolved + ext
+            # Default to .tsx for components
+            if '/components/' in resolved or 'Component' in resolved:
+                return resolved + '.tsx'
+            return resolved + '.ts'
+
+        return resolved
+
+    def _classify_module_type(self, import_path: str) -> str:
+        """Classify what type of module this is"""
+        path_lower = import_path.lower()
+
+        if '/components/' in path_lower or 'component' in path_lower:
+            return 'component'
+        elif '/hooks/' in path_lower or path_lower.startswith('use'):
+            return 'hook'
+        elif '/utils/' in path_lower or '/lib/' in path_lower:
+            return 'util'
+        elif '/types/' in path_lower or '.d.ts' in path_lower:
+            return 'type'
+        elif '/context/' in path_lower or 'context' in path_lower:
+            return 'context'
+        elif '/services/' in path_lower or '/api/' in path_lower:
+            return 'service'
+        elif '/store/' in path_lower or 'store' in path_lower:
+            return 'store'
+        else:
+            return 'module'
+
+    def get_sibling_files(self, file_path: str, all_files: List[Dict]) -> List[Dict]:
+        """
+        Get files in the same directory (for pattern matching).
+        Like Bolt.new, we look at siblings to understand coding patterns.
+        """
+        file_dir = str(Path(file_path).parent)
+        siblings = []
+
+        for f in all_files:
+            f_dir = str(Path(f.get('path', '')).parent)
+            if f_dir == file_dir and f.get('path') != file_path:
+                siblings.append(f)
+
+        return siblings
 
     def build_context(
         self,
@@ -159,23 +442,33 @@ class ContextEngine:
         """
         logger.info(f"[ContextEngine] Building context for: {user_message[:50]}...")
 
-        # 1. Extract files from errors
+        # 0. If no files provided, scan project directory
+        if not all_files:
+            logger.info("[ContextEngine] No files provided, scanning project directory...")
+            all_files = self.scan_project_files()
+
+        # 1. Extract MISSING modules (files that need to be CREATED)
+        missing_modules = self.extract_missing_modules(errors)
+        logger.info(f"[ContextEngine] Found {len(missing_modules)} missing modules to create")
+
+        # 2. Extract files from errors
         error_files = self._extract_files_from_errors(errors)
         logger.info(f"[ContextEngine] Found {len(error_files)} files in errors")
 
-        # 2. Extract files from terminal logs
+        # 3. Extract files from terminal logs
         log_files = self._extract_files_from_logs(terminal_logs)
         logger.info(f"[ContextEngine] Found {len(log_files)} files in logs")
 
-        # 3. Build import graph for dependency analysis
+        # 4. Build import graph for dependency analysis
         self._build_import_graph(all_files)
 
-        # 4. Score and select relevant files
+        # 5. Score and select relevant files (including siblings for pattern matching)
         relevant_files = self._select_relevant_files(
             error_files=error_files,
             log_files=log_files,
             all_files=all_files,
-            active_file=active_file
+            active_file=active_file,
+            missing_modules=missing_modules  # Pass missing modules for sibling detection
         )
         logger.info(f"[ContextEngine] Selected {len(relevant_files)} relevant files")
 
@@ -196,10 +489,11 @@ class ContextEngine:
             logs=logs_summary,
             tech_stack=", ".join(tech_stack) if tech_stack else "Unknown",
             error_summary=error_summary,
-            total_tokens_estimate=self._estimate_tokens(relevant_files)
+            total_tokens_estimate=self._estimate_tokens(relevant_files),
+            missing_modules=missing_modules  # Include files that need to be CREATED
         )
 
-        logger.info(f"[ContextEngine] Built payload with ~{payload.total_tokens_estimate} tokens")
+        logger.info(f"[ContextEngine] Built payload with ~{payload.total_tokens_estimate} tokens, {len(missing_modules)} missing modules")
 
         return payload
 
@@ -408,10 +702,12 @@ class ContextEngine:
         error_files: List[Tuple[str, Optional[int], str]],
         log_files: List[Tuple[str, Optional[int], str]],
         all_files: List[Dict],
-        active_file: Optional[str]
+        active_file: Optional[str],
+        missing_modules: Optional[List[Dict]] = None
     ) -> List[FileContext]:
         """Select and score relevant files for context"""
         scored_files: Dict[str, FileContext] = {}
+        missing_modules = missing_modules or []
 
         # Create lookup for all files
         all_files_map = {f.get("path", ""): f for f in all_files}
@@ -429,7 +725,46 @@ class ContextEngine:
                     is_primary=True
                 )
 
-        # 2. Add files from logs (high priority)
+        # 2. Add SOURCE files for missing modules (the file that has the broken import)
+        for missing in missing_modules:
+            source_file = missing.get('source_file', '')
+            if source_file and source_file not in scored_files:
+                content = all_files_map.get(source_file, {}).get("content", "") or self._read_file(source_file)
+                if content:
+                    scored_files[source_file] = FileContext(
+                        path=source_file,
+                        content=content,
+                        relevance_score=100.0,
+                        reason=f"Has missing import: {missing.get('missing_path', '')}",
+                        is_primary=True
+                    )
+                    logger.info(f"[ContextEngine] Added source file for missing module: {source_file}")
+
+        # 3. Add SIBLING files for pattern matching (Bolt.new style!)
+        for missing in missing_modules:
+            suggested_path = missing.get('suggested_path', '')
+            if suggested_path:
+                # Get directory where the missing file should be created
+                target_dir = str(Path(suggested_path).parent)
+
+                # Find existing files in that directory for pattern matching
+                for f in all_files:
+                    f_path = f.get('path', '')
+                    f_dir = str(Path(f_path).parent)
+
+                    if f_dir == target_dir and f_path not in scored_files:
+                        content = f.get('content', '') or self._read_file(f_path)
+                        if content:
+                            scored_files[f_path] = FileContext(
+                                path=f_path,
+                                content=content,
+                                relevance_score=90.0,  # High priority - pattern matching
+                                reason=f"Sibling file for pattern matching (creating {Path(suggested_path).name})",
+                                is_primary=False
+                            )
+                            logger.info(f"[ContextEngine] Added sibling file for pattern: {f_path}")
+
+        # 4. Add files from logs (high priority)
         for path, line, source in log_files:
             if path not in scored_files:
                 content = all_files_map.get(path, {}).get("content", "") or self._read_file(path)
@@ -443,7 +778,7 @@ class ContextEngine:
                         is_primary=False
                     )
 
-        # 3. Add active file if not already included
+        # 5. Add active file if not already included
         if active_file and active_file not in scored_files:
             content = all_files_map.get(active_file, {}).get("content", "") or self._read_file(active_file)
             if content:
@@ -455,7 +790,7 @@ class ContextEngine:
                     is_primary=False
                 )
 
-        # 4. Add dependencies of error files
+        # 6. Add dependencies of error files
         for path in list(scored_files.keys()):
             if scored_files[path].is_primary:
                 deps = self._get_dependencies(path, depth=1)
@@ -471,7 +806,7 @@ class ContextEngine:
                                 is_primary=False
                             )
 
-        # 5. Add files that import error files (reverse dependencies)
+        # 7. Add files that import error files (reverse dependencies)
         primary_files = [p for p, f in scored_files.items() if f.is_primary]
         for file_path, imports in self._import_graph.items():
             for primary in primary_files:

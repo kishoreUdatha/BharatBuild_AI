@@ -33,6 +33,8 @@ import json
 import time
 import socket
 import random
+import platform
+import re
 from typing import Optional, Dict, Any, AsyncGenerator, List, Set
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -42,6 +44,39 @@ from threading import Lock
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _to_docker_path(path: Path) -> str:
+    """
+    Convert a filesystem path to Docker-compatible format.
+
+    On Windows with Docker Desktop (Linux containers), paths need to be converted:
+    - C:\\tmp\\sandbox\\workspace -> /c/tmp/sandbox/workspace
+    - C:/tmp/sandbox/workspace -> /c/tmp/sandbox/workspace
+
+    On Linux/Mac, paths are passed through unchanged.
+
+    Args:
+        path: Path object to convert
+
+    Returns:
+        Docker-compatible path string
+    """
+    path_str = str(path.absolute())
+
+    # Only convert on Windows
+    if platform.system() == "Windows":
+        # Match drive letter pattern (e.g., C:\ or C:/)
+        match = re.match(r'^([A-Za-z]):[/\\](.*)$', path_str)
+        if match:
+            drive = match.group(1).lower()
+            rest = match.group(2).replace('\\', '/')
+            docker_path = f"/{drive}/{rest}"
+            logger.debug(f"Converted Windows path '{path_str}' to Docker path '{docker_path}'")
+            return docker_path
+
+    # Non-Windows or no drive letter - return as-is with forward slashes
+    return path_str.replace('\\', '/')
 
 
 class ContainerStatus(Enum):
@@ -230,7 +265,15 @@ class ContainerConfig:
 
     # Network
     network_enabled: bool = True        # Allow network access
-    exposed_ports: List[int] = field(default_factory=lambda: [3000, 3001, 5000, 8000, 8080])
+    # Expose common dev server ports and fallback ports (3000-3005, 5173-5175 for Vite, etc.)
+    exposed_ports: List[int] = field(default_factory=lambda: [
+        3000, 3001, 3002, 3003, 3004, 3005,  # Node.js/React common ports and fallbacks
+        4173, 4174,                           # Vite preview ports
+        5000, 5001,                           # Flask/Python common ports
+        5173, 5174, 5175,                     # Vite default dev ports
+        8000, 8001,                           # FastAPI/Django ports
+        8080, 8081                            # General web server ports
+    ])
 
     # Security
     read_only_root: bool = False        # Read-only root filesystem
@@ -250,6 +293,7 @@ class ProjectContainer:
     last_activity: datetime
     port_mappings: Dict[int, int] = field(default_factory=dict)  # container_port -> host_port
     config: ContainerConfig = field(default_factory=ContainerConfig)
+    active_port: Optional[int] = None  # Detected active port from app output (e.g., Vite on 3001)
 
     def is_expired(self) -> bool:
         """Check if container should be cleaned up"""
@@ -341,9 +385,74 @@ class ContainerManager:
         # Recover ports from existing Docker containers (handles server restart)
         self.port_manager.recover_from_docker(self.docker)
 
+        # Recover container tracking from Docker (handles server restart)
+        self._recover_containers_from_docker()
+
     def _allocate_port_for_project(self, project_id: str) -> int:
         """Allocate a unique available host port for a project"""
         return self.port_manager.allocate_port(project_id)
+
+    def _recover_containers_from_docker(self):
+        """
+        Recover container tracking from running Docker containers.
+        Called on startup to handle server restarts gracefully.
+        """
+        try:
+            containers = self.docker.containers.list(
+                filters={"label": "bharatbuild=true"}
+            )
+
+            for container in containers:
+                try:
+                    project_id = container.labels.get("project_id")
+                    user_id = container.labels.get("user_id", "anonymous")
+                    created_at_str = container.labels.get("created_at")
+
+                    if not project_id:
+                        continue
+
+                    # Parse created_at from label
+                    try:
+                        created_at = datetime.fromisoformat(created_at_str) if created_at_str else datetime.utcnow()
+                    except (ValueError, TypeError):
+                        created_at = datetime.utcnow()
+
+                    # Extract port mappings from Docker
+                    port_mappings = {}
+                    if container.ports:
+                        for container_port, host_bindings in container.ports.items():
+                            if host_bindings:
+                                # container_port is like "3000/tcp"
+                                port_num = int(container_port.split('/')[0])
+                                host_port = int(host_bindings[0].get("HostPort", 0))
+                                if host_port > 0:
+                                    port_mappings[port_num] = host_port
+
+                    # Determine status from Docker container state
+                    status = ContainerStatus.RUNNING if container.status == "running" else ContainerStatus.STOPPED
+
+                    # Create ProjectContainer entry
+                    project_container = ProjectContainer(
+                        container_id=container.id,
+                        project_id=project_id,
+                        user_id=user_id,
+                        status=status,
+                        created_at=created_at,
+                        last_activity=datetime.utcnow(),
+                        port_mappings=port_mappings,
+                        config=ContainerConfig(),
+                    )
+
+                    self.containers[project_id] = project_container
+                    logger.info(f"Recovered container for project {project_id}: ports={port_mappings}, status={status.value}")
+
+                except Exception as e:
+                    logger.warning(f"Failed to recover container {container.id[:12]}: {e}")
+
+            logger.info(f"Recovered {len(self.containers)} containers from Docker")
+
+        except Exception as e:
+            logger.warning(f"Could not recover containers from Docker: {e}")
 
     def _get_project_path(self, project_id: str, user_id: Optional[str] = None) -> Path:
         """
@@ -360,8 +469,26 @@ class ContainerManager:
             Path to project directory
         """
         if user_id:
-            # User-scoped path: {base}/{user_id}/{project_id}
-            return self.projects_base_path / user_id / project_id
+            user_path = self.projects_base_path / user_id / project_id
+
+            # Check if specified user path has actual project files
+            if user_path.exists() and (user_path / "package.json").exists():
+                logger.info(f"Found project with package.json at user path: {user_path}")
+                return user_path
+
+            # Search all user folders for existing project (handles auth mismatch)
+            # This is needed because user_id from JWT may differ from original creator
+            if self.projects_base_path.exists():
+                for user_dir in self.projects_base_path.iterdir():
+                    if user_dir.is_dir():
+                        potential_path = user_dir / project_id
+                        if potential_path.exists() and (potential_path / "package.json").exists():
+                            logger.info(f"Found existing project in {user_dir.name}/{project_id}, using that path")
+                            return potential_path
+
+            # No existing project found - use the specified user path (will be created)
+            logger.info(f"No existing project found, using new path: {user_path}")
+            return user_path
         else:
             # Legacy fallback: {base}/{project_id}
             return self.projects_base_path / project_id
@@ -412,7 +539,9 @@ class ContainerManager:
         # Get project directory (user-scoped like Bolt.new)
         project_path = self._get_project_path(project_id, user_id)
         project_path.mkdir(parents=True, exist_ok=True)
+        docker_mount_path = _to_docker_path(project_path)
         logger.info(f"Project path for {user_id}/{project_id}: {project_path}")
+        logger.info(f"Docker mount path: {docker_mount_path}")
 
         # Select runtime image
         image = self.RUNTIME_IMAGES.get(project_type, self.RUNTIME_IMAGES["node"])
@@ -439,9 +568,9 @@ class ContainerManager:
                 tty=True,
                 stdin_open=True,
 
-                # Mount project directory
+                # Mount project directory (convert Windows paths for Docker)
                 volumes={
-                    str(project_path.absolute()): {
+                    _to_docker_path(project_path): {
                         "bind": "/workspace",
                         "mode": "rw"
                     }
@@ -599,6 +728,9 @@ class ContainerManager:
                 while "\n" in buffer:
                     line, buffer = buffer.split("\n", 1)
                     yield {"type": "stdout", "data": line}
+
+                    # Detect active port from output (e.g., "Local: http://localhost:3001/")
+                    self._detect_active_port(project_id, line)
 
                     # Send to LogBus for backend log collection
                     if log_bus:
@@ -760,9 +892,11 @@ class ContainerManager:
         """
         Get the preview URL for a running project.
 
+        Uses detected active_port if available (e.g., when Vite falls back to 3001).
+
         Args:
             project_id: Project identifier
-            container_port: Port inside container
+            container_port: Port inside container (fallback if active_port not detected)
 
         Returns:
             URL like "http://localhost:10001" or None
@@ -771,13 +905,44 @@ class ContainerManager:
             return None
 
         container = self.containers[project_id]
+
+        # Priority 1: Use detected active port if available
+        if container.active_port:
+            host_port = container.port_mappings.get(container.active_port)
+            if host_port:
+                logger.info(f"[Preview] Using detected active port {container.active_port} -> {host_port}")
+                return f"http://localhost:{host_port}"
+
+        # Priority 2: Use requested container_port
         host_port = container.port_mappings.get(container_port)
+        if host_port:
+            return f"http://localhost:{host_port}"
 
-        if not host_port:
-            return None
+        # Priority 3: Try first available mapped port
+        if container.port_mappings:
+            first_port = next(iter(container.port_mappings.values()))
+            logger.info(f"[Preview] Falling back to first available port: {first_port}")
+            return f"http://localhost:{first_port}"
 
-        # In production, this would be your domain
-        return f"http://localhost:{host_port}"
+        return None
+
+    def get_all_preview_urls(self, project_id: str) -> Dict[int, str]:
+        """
+        Get all available preview URLs for a project.
+
+        Returns:
+            Dict mapping container_port -> preview_url
+        """
+        if project_id not in self.containers:
+            return {}
+
+        container = self.containers[project_id]
+        urls = {}
+
+        for container_port, host_port in container.port_mappings.items():
+            urls[container_port] = f"http://localhost:{host_port}"
+
+        return urls
 
     async def stop_container(self, project_id: str) -> bool:
         """
@@ -908,37 +1073,149 @@ class ContainerManager:
             logger.error(f"Failed to get stats: {e}")
             return None
 
+    def _detect_active_port(self, project_id: str, text: str) -> Optional[int]:
+        """
+        Detect the active port from terminal output.
+
+        Parses output from various dev servers:
+        - Vite: "Local: http://localhost:3001/"
+        - Next.js: "ready - started server on 0.0.0.0:3000"
+        - Create React App: "Local: http://localhost:3000"
+        - Express: "Server running on port 3000"
+
+        Returns the detected port if found, None otherwise.
+        """
+        import re
+
+        # Patterns to detect server startup with port
+        port_patterns = [
+            r'Local:\s*http://localhost:(\d+)',           # Vite, CRA
+            r'localhost:(\d+)',                            # Generic localhost:port
+            r'127\.0\.0\.1:(\d+)',                         # 127.0.0.1:port
+            r'0\.0\.0\.0:(\d+)',                           # 0.0.0.0:port
+            r'started server on.*:(\d+)',                  # Next.js
+            r'listening on.*:(\d+)',                       # Express
+            r'Server running on port (\d+)',               # Generic
+            r'App running at.*:(\d+)',                     # Vue CLI
+            r'Compiled successfully.*localhost:(\d+)',     # Webpack
+        ]
+
+        for pattern in port_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                port = int(match.group(1))
+                # Validate it's a reasonable port
+                if 1000 <= port <= 65535:
+                    # Update container's active port
+                    if project_id in self.containers:
+                        container = self.containers[project_id]
+                        if container.active_port != port:
+                            container.active_port = port
+                            logger.info(f"[Port] Detected active port {port} for project {project_id}")
+                    return port
+
+        return None
+
     def _send_to_logbus(self, log_bus, text: str, command: str) -> None:
         """
         Send log line to LogBus for collection.
         Detects errors vs info based on content.
+        Also triggers auto-fix for terminal/build errors.
         """
         import re
+        import asyncio
+
+        # Strip ALL ANSI escape codes for pattern matching
+        # Extended regex to catch all escape sequences including cursor movement, etc.
+        ansi_escape = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\r')
+        clean_text = ansi_escape.sub('', text).strip()
+
+        # Skip empty lines
+        if not clean_text:
+            return
+
+        # ASCII-safe debug logging (replace non-ASCII chars)
+        safe_text = clean_text.encode('ascii', 'replace').decode('ascii')[:100]
+        logger.info(f"[LogBus:{log_bus.project_id}] Processing line: {safe_text}")
 
         # Error patterns for backend runtime
         error_patterns = [
-            r'error', r'Error', r'ERROR',
-            r'exception', r'Exception', r'EXCEPTION',
-            r'failed', r'Failed', r'FAILED',
+            r'\berror\b', r'\bError\b', r'\bERROR\b',
+            r'\bexception\b', r'\bException\b', r'\bEXCEPTION\b',
+            r'\bfailed\b', r'\bFailed\b', r'\bFAILED\b',
             r'Traceback', r'traceback',
             r'ModuleNotFoundError', r'ImportError',
             r'TypeError', r'ValueError', r'KeyError',
             r'RuntimeError', r'AttributeError',
-            r'500', r'404', r'Internal Server Error',
+            r'\b500\b', r'\b404\b', r'Internal Server Error',
             r'Connection refused', r'ECONNREFUSED',
             r'EADDRINUSE', r'port.*in use',
+            r'Cannot find package', r'Cannot find module',
+            r'Pre-transform error', r'Build failed',
+            r'ENOENT', r'spawn.*ENOENT',
         ]
 
-        is_error = any(re.search(p, text, re.IGNORECASE) for p in error_patterns)
+        # Use clean_text (without ANSI codes) for pattern matching
+        is_error = any(re.search(p, clean_text, re.IGNORECASE) for p in error_patterns)
+
+        # Log which pattern matched (if any)
+        if is_error:
+            for p in error_patterns:
+                if re.search(p, clean_text, re.IGNORECASE):
+                    logger.info(f"[LogBus:{log_bus.project_id}] MATCHED pattern '{p}'")
 
         # Check if it's a stack trace
-        has_stack = 'at ' in text or 'File "' in text or 'line ' in text.lower()
+        has_stack = 'at ' in clean_text or 'File "' in clean_text or 'line ' in clean_text.lower()
 
         if is_error:
+            logger.info(f"[LogBus] Detected error in terminal for {log_bus.project_id}: {text[:150]}")
             log_bus.add_backend_error(
                 message=text,
                 stack=text if has_stack else None
             )
+
+            # ======= AUTO-FIX TRIGGER FOR TERMINAL ERRORS =======
+            # Trigger auto-fix for build/compile errors from terminal
+            # Skip certain non-fixable errors (system errors, warnings that don't need code changes)
+            skip_patterns = [
+                r'spawn.*ENOENT',  # System command not found (xdg-open in Docker)
+                r'warning:',  # Warnings typically don't need fixes
+                r'WARN\s',
+            ]
+            should_skip = any(re.search(p, clean_text, re.IGNORECASE) for p in skip_patterns)
+
+            if should_skip:
+                logger.debug(f"[AutoFix] Skipping non-fixable error: {text[:100]}")
+            else:
+                logger.info(f"[AutoFix] Attempting to trigger for: {text[:100]}")
+                try:
+                    from app.api.v1.endpoints.log_stream import log_stream_manager
+                    # Try multiple approaches to get event loop
+                    try:
+                        # Method 1: Get running loop (works if we're in async context)
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(
+                            log_stream_manager.trigger_auto_fix(log_bus.project_id, is_error=True)
+                        )
+                        logger.info(f"[AutoFix] Task created for {log_bus.project_id}")
+                    except RuntimeError:
+                        # Method 2: Use thread-safe method if no running loop
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if loop.is_running():
+                                asyncio.run_coroutine_threadsafe(
+                                    log_stream_manager.trigger_auto_fix(log_bus.project_id, is_error=True),
+                                    loop
+                                )
+                                logger.info(f"[AutoFix] Coroutine scheduled thread-safe for {log_bus.project_id}")
+                            else:
+                                # Method 3: Create new event loop if needed
+                                asyncio.run(log_stream_manager.trigger_auto_fix(log_bus.project_id, is_error=True))
+                                logger.info(f"[AutoFix] Created new loop for {log_bus.project_id}")
+                        except Exception as e2:
+                            logger.warning(f"[AutoFix] All loop methods failed for {log_bus.project_id}: {e2}")
+                except Exception as e:
+                    logger.warning(f"[AutoFix] Could not trigger for {log_bus.project_id}: {e}")
         else:
             # Determine if it's Docker or backend based on command
             if 'docker' in command.lower():

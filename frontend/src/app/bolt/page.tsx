@@ -82,6 +82,23 @@ export default function BoltPage() {
     setIsMounted(true)
   }, [])
 
+  // Debug: Log when currentProject changes
+  useEffect(() => {
+    console.log('[BoltPage] currentProject changed:', {
+      id: currentProject?.id,
+      name: currentProject?.name,
+      filesCount: currentProject?.files?.length || 0,
+      isSynced: currentProject?.isSynced
+    })
+    if (currentProject?.files) {
+      console.log('[BoltPage] Files structure:', currentProject.files.map(f => ({
+        path: f.path,
+        type: f.type,
+        childrenCount: f.children?.length || 0
+      })))
+    }
+  }, [currentProject])
+
   // Check authentication on mount
   useEffect(() => {
     if (!isMounted) return

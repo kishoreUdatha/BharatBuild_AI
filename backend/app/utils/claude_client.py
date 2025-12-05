@@ -1,9 +1,16 @@
-from anthropic import AsyncAnthropic, Anthropic
+from anthropic import AsyncAnthropic, Anthropic, APIStatusError, APIError
 from typing import Optional, Dict, List, Any, AsyncGenerator
 import asyncio
 import json
+import random
 from app.core.config import settings
 from app.core.logging_config import logger
+
+# Retry configuration
+MAX_RETRIES = 3
+BASE_DELAY = 2.0  # seconds
+MAX_DELAY = 30.0  # seconds
+RETRYABLE_ERRORS = ['overloaded_error', 'rate_limit_error', 'server_error']
 
 
 class ClaudeClient:
@@ -25,6 +32,27 @@ class ClaudeClient:
         self.sync_client = Anthropic(**client_kwargs)
         self.haiku_model = settings.CLAUDE_HAIKU_MODEL
         self.sonnet_model = settings.CLAUDE_SONNET_MODEL
+
+    def _is_retryable_error(self, error: Exception) -> bool:
+        """Check if an error is retryable (overload, rate limit, etc.)"""
+        error_str = str(error).lower()
+        if isinstance(error, (APIStatusError, APIError)):
+            # Check error type from API response
+            if hasattr(error, 'body') and isinstance(error.body, dict):
+                error_type = error.body.get('error', {}).get('type', '')
+                return error_type in RETRYABLE_ERRORS
+            # Check status code for server errors
+            if hasattr(error, 'status_code'):
+                return error.status_code in [429, 500, 502, 503, 529]
+        # Fallback: check error message
+        return any(err in error_str for err in ['overload', 'rate_limit', '529', '503', 'capacity'])
+
+    def _calculate_retry_delay(self, attempt: int) -> float:
+        """Calculate delay with exponential backoff and jitter"""
+        delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
+        # Add jitter (0-25% of delay)
+        jitter = delay * random.uniform(0, 0.25)
+        return delay + jitter
 
     async def generate(
         self,
@@ -49,61 +77,72 @@ class ClaudeClient:
         Returns:
             Dict with response and metadata
         """
-        try:
-            # Select model
-            model_name = self.sonnet_model if model == "sonnet" else self.haiku_model
+        # Select model
+        model_name = self.sonnet_model if model == "sonnet" else self.haiku_model
 
-            # Build messages
-            if messages is None:
-                messages = []
+        # Build messages
+        if messages is None:
+            messages = []
 
-            messages.append({
-                "role": "user",
-                "content": prompt
-            })
+        messages.append({
+            "role": "user",
+            "content": prompt
+        })
 
-            # Set defaults
-            if max_tokens is None:
-                max_tokens = settings.CLAUDE_MAX_TOKENS
-            if temperature is None:
-                temperature = settings.CLAUDE_TEMPERATURE
+        # Set defaults
+        if max_tokens is None:
+            max_tokens = settings.CLAUDE_MAX_TOKENS
+        if temperature is None:
+            temperature = settings.CLAUDE_TEMPERATURE
 
-            # Log request summary (detailed logging only in DEBUG mode)
-            prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
-            logger.info(f"Claude API: model={model_name}, max_tokens={max_tokens}, prompt_len={len(prompt)}")
-            logger.debug(f"Claude request prompt: {prompt_preview}")
+        # Log request summary (detailed logging only in DEBUG mode)
+        prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
+        logger.info(f"Claude API: model={model_name}, max_tokens={max_tokens}, prompt_len={len(prompt)}")
+        logger.debug(f"Claude request prompt: {prompt_preview}")
 
-            # Make API call
-            response = await self.async_client.messages.create(
-                model=model_name,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=system_prompt if system_prompt else "",
-                messages=messages
-            )
+        last_error = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                # Make API call
+                response = await self.async_client.messages.create(
+                    model=model_name,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=system_prompt if system_prompt else "",
+                    messages=messages
+                )
 
-            # Extract response
-            content = response.content[0].text if response.content else ""
+                # Extract response
+                content = response.content[0].text if response.content else ""
 
-            result = {
-                "content": content,
-                "model": model_name,
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-                "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
-                "stop_reason": response.stop_reason,
-                "id": response.id
-            }
+                result = {
+                    "content": content,
+                    "model": model_name,
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                    "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
+                    "stop_reason": response.stop_reason,
+                    "id": response.id
+                }
 
-            # Log response summary (saves 10-20ms per call)
-            logger.info(f"Claude API response: id={response.id}, tokens={result['total_tokens']}, stop={response.stop_reason}")
-            logger.debug(f"Claude response preview: {content[:200]}..." if len(content) > 200 else content)
+                # Log response summary (saves 10-20ms per call)
+                logger.info(f"Claude API response: id={response.id}, tokens={result['total_tokens']}, stop={response.stop_reason}")
+                logger.debug(f"Claude response preview: {content[:200]}..." if len(content) > 200 else content)
 
-            return result
+                return result
 
-        except Exception as e:
-            logger.error(f"Claude API error: {e}")
-            raise
+            except Exception as e:
+                last_error = e
+                if self._is_retryable_error(e) and attempt < MAX_RETRIES:
+                    delay = self._calculate_retry_delay(attempt)
+                    logger.warning(f"Claude API overloaded (attempt {attempt + 1}/{MAX_RETRIES + 1}), retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"Claude API error: {e}")
+                    raise
+
+        # Should not reach here, but just in case
+        raise last_error
 
     async def generate_stream(
         self,
@@ -128,53 +167,69 @@ class ClaudeClient:
         Yields:
             Chunks of text as they arrive
         """
-        try:
-            # Select model
-            model_name = self.sonnet_model if model == "sonnet" else self.haiku_model
+        # Select model
+        model_name = self.sonnet_model if model == "sonnet" else self.haiku_model
 
-            # Build messages
-            if messages is None:
-                messages = []
+        # Build messages
+        if messages is None:
+            messages = []
 
-            messages.append({
-                "role": "user",
-                "content": prompt
-            })
+        messages.append({
+            "role": "user",
+            "content": prompt
+        })
 
-            # Set defaults
-            if max_tokens is None:
-                max_tokens = settings.CLAUDE_MAX_TOKENS
-            if temperature is None:
-                temperature = settings.CLAUDE_TEMPERATURE
+        # Set defaults
+        if max_tokens is None:
+            max_tokens = settings.CLAUDE_MAX_TOKENS
+        if temperature is None:
+            temperature = settings.CLAUDE_TEMPERATURE
 
-            # Log streaming request summary
-            prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
-            logger.info(f"Claude Streaming: model={model_name}, max_tokens={max_tokens}, prompt_len={len(prompt)}")
-            logger.debug(f"Claude streaming prompt: {prompt_preview}")
+        # Log streaming request summary
+        prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
+        logger.info(f"Claude Streaming: model={model_name}, max_tokens={max_tokens}, prompt_len={len(prompt)}")
+        logger.debug(f"Claude streaming prompt: {prompt_preview}")
 
-            # Make streaming API call
-            collected_text = []
-            async with self.async_client.messages.stream(
-                model=model_name,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=system_prompt if system_prompt else "",
-                messages=messages
-            ) as stream:
-                async for text in stream.text_stream:
-                    collected_text.append(text)
-                    yield text
+        last_error = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                # Make streaming API call
+                collected_text = []
+                has_yielded = False
+                async with self.async_client.messages.stream(
+                    model=model_name,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=system_prompt if system_prompt else "",
+                    messages=messages
+                ) as stream:
+                    async for text in stream.text_stream:
+                        has_yielded = True
+                        collected_text.append(text)
+                        yield text
 
-            # Get final message with usage stats
-            final_message = await stream.get_final_message()
+                # Get final message with usage stats
+                final_message = await stream.get_final_message()
 
-            # Log streaming response summary
-            total_tokens = final_message.usage.input_tokens + final_message.usage.output_tokens
-            logger.info(f"Claude Streaming response: id={final_message.id}, tokens={total_tokens}, stop={final_message.stop_reason}")
+                # Log streaming response summary
+                total_tokens = final_message.usage.input_tokens + final_message.usage.output_tokens
+                logger.info(f"Claude Streaming response: id={final_message.id}, tokens={total_tokens}, stop={final_message.stop_reason}")
+                return  # Success, exit the retry loop
 
-        except Exception as e:
-            logger.error(f"Claude streaming API error: {e}")
-            raise
+            except Exception as e:
+                last_error = e
+                # Only retry if we haven't started yielding yet (can't recover mid-stream)
+                if not has_yielded and self._is_retryable_error(e) and attempt < MAX_RETRIES:
+                    delay = self._calculate_retry_delay(attempt)
+                    logger.warning(f"Claude Streaming API overloaded (attempt {attempt + 1}/{MAX_RETRIES + 1}), retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"Claude streaming API error: {e}")
+                    raise
+
+        # Should not reach here, but just in case
+        if last_error:
+            raise last_error
 
     async def batch_generate(
         self,
