@@ -95,10 +95,14 @@ class AutoFixer:
     def _get_error_hash(self, error: Dict[str, Any]) -> str:
         """Generate hash for error to track fix attempts"""
         # Use message + file + line as unique identifier
+        # Handle None values explicitly (get() default only applies when key is missing)
+        message = error.get("message") or ""
+        file = error.get("file") or ""
+        line = error.get("line") or ""
         parts = [
-            error.get("message", "")[:100],
-            error.get("file", ""),
-            str(error.get("line", ""))
+            str(message)[:100],
+            str(file),
+            str(line)
         ]
         return "|".join(parts)
 
@@ -109,19 +113,32 @@ class AutoFixer:
         Returns (should_fix, reason)
         """
         if not self.config.enabled:
+            logger.debug(f"[AutoFixer:{self.project_id}] Auto-fix disabled")
             return False, "Auto-fix disabled"
 
         if self._fixing:
+            logger.debug(f"[AutoFixer:{self.project_id}] Fix already in progress")
             return False, "Fix already in progress"
 
         # Check cooldown
         if self._last_fix_time:
             elapsed = (datetime.utcnow() - self._last_fix_time).total_seconds()
             if elapsed < self.config.cooldown_seconds:
+                logger.debug(f"[AutoFixer:{self.project_id}] In cooldown ({self.config.cooldown_seconds - elapsed:.1f}s remaining)")
                 return False, f"Cooldown ({self.config.cooldown_seconds - elapsed:.1f}s remaining)"
 
         # Get errors from LogBus
         payload = log_bus.get_fixer_payload()
+
+        # Log error counts for debugging
+        error_counts = {
+            "browser": len(payload.get("browser_errors", [])),
+            "build": len(payload.get("build_errors", [])),
+            "backend": len(payload.get("backend_errors", [])),
+            "docker": len(payload.get("docker_errors", [])),
+            "network": len(payload.get("network_errors", []))
+        }
+        logger.info(f"[AutoFixer:{self.project_id}] Error counts: {error_counts}")
 
         trigger_reasons = []
 

@@ -10,7 +10,7 @@ This module provides Docker-based project execution with:
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from pydantic import BaseModel
 from typing import Optional, List
 from uuid import UUID
@@ -31,6 +31,7 @@ from app.modules.agents.base_agent import AgentContext
 from app.modules.execution.docker_executor import docker_executor, docker_compose_executor, FrameworkType, DEFAULT_PORTS
 from app.services.unified_storage import unified_storage
 from app.services.sandbox_cleanup import touch_project
+from app.services.log_bus import get_log_bus
 
 # Store running processes by project_id for stop functionality
 _running_processes: dict[str, asyncio.subprocess.Process] = {}
@@ -79,14 +80,14 @@ def get_project_path(project_id: str, user_id: str = None):
 async def verify_project_ownership(project_id: str, current_user: User, db: AsyncSession) -> bool:
     """Helper function to verify project ownership"""
     try:
+        # Use CAST() instead of ::uuid to avoid conflict with SQLAlchemy's :param syntax
         result = await db.execute(
-            select(Project).where(
-                Project.id == UUID(project_id),
-                Project.user_id == current_user.id
-            )
+            text("SELECT id FROM projects WHERE id = CAST(:project_id AS uuid) AND user_id = CAST(:user_id AS uuid)"),
+            {"project_id": str(project_id), "user_id": str(current_user.id)}
         )
         return result.scalar_one_or_none() is not None
-    except ValueError:
+    except Exception as e:
+        logger.warning(f"[Execution] verify_project_ownership error: {e}")
         return False
 
 router = APIRouter()
@@ -98,11 +99,13 @@ class RunProjectRequest(BaseModel):
 
 
 class FixErrorRequest(BaseModel):
-    """Request model for auto-fixing runtime errors"""
+    """Request model for auto-fixing runtime errors (Bolt.new style)"""
     error_message: str
     stack_trace: Optional[str] = None
     error_type: Optional[str] = None  # syntax, runtime, import, type, logic
     affected_files: Optional[List[str]] = None  # Files mentioned in error
+    command: Optional[str] = None  # Command that failed (npm run dev, etc.)
+    error_logs: Optional[List[str]] = None  # Additional error logs from terminal
 
 
 @router.post("/run/{project_id}")
@@ -231,7 +234,29 @@ async def fix_runtime_error(
             raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
 
         logger.info(f"[Fixer] Auto-fixing error for project: {project_id}")
-        logger.info(f"Error message: {request.error_message[:200]}...")
+        logger.info(f"[Fixer] Error: {request.error_message[:200]}...")
+        logger.info(f"[Fixer] Command: {request.command}")
+
+        # ============= BOLT.NEW STYLE: Use LogBus for context =============
+        log_bus = get_log_bus(project_id)
+
+        # Add error to LogBus (for tracking)
+        log_bus.add_build_error(
+            message=request.error_message,
+            file=request.affected_files[0] if request.affected_files else None
+        )
+
+        # Add additional error logs if provided
+        if request.error_logs:
+            for error_log in request.error_logs:
+                log_bus.add_build_log(error_log, level="error")
+
+        # Get Bolt.new-style fixer payload with file context
+        fixer_payload = log_bus.get_bolt_fixer_payload(
+            project_path=str(project_path),
+            command=request.command or "unknown",
+            error_message=request.error_message
+        )
 
         # Get all project files for context
         project_files = []
@@ -250,7 +275,7 @@ async def fix_runtime_error(
 
                 # Read file content if it might be affected
                 # Only read source files to limit context size
-                if any(ext in rel_path for ext in ['.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.html', '.css']):
+                if any(ext in rel_path for ext in ['.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.html', '.css', '.yml', '.yaml']):
                     try:
                         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                             content = f.read()
@@ -260,7 +285,10 @@ async def fix_runtime_error(
                     except Exception as e:
                         logger.warning(f"Could not read file {rel_path}: {e}")
 
-        # Prepare context for fixer agent
+        # Merge file contents from LogBus payload
+        file_contents.update(fixer_payload.get("fileContext", {}))
+
+        # Prepare context for fixer agent (Bolt.new style)
         context = AgentContext(
             project_id=project_id,
             user_prompt=f"Fix this error: {request.error_message}",
@@ -268,10 +296,16 @@ async def fix_runtime_error(
                 "error_message": request.error_message,
                 "stack_trace": request.stack_trace or "",
                 "error_type": request.error_type,
-                "affected_files": request.affected_files or [],
+                "affected_files": request.affected_files or fixer_payload.get("errorFiles", []),
                 "project_files": project_files,
                 "file_contents": file_contents,
-                "project_path": str(project_path)
+                "project_path": str(project_path),
+                # Bolt.new style additions
+                "command": request.command or "unknown",
+                "environment": fixer_payload.get("environment", {}),
+                "error_logs": fixer_payload.get("errorLogs", {}),
+                "package_json": fixer_payload.get("fileContext", {}).get("package.json"),
+                "dockerfile": fixer_payload.get("fileContext", {}).get("Dockerfile"),
             }
         )
 

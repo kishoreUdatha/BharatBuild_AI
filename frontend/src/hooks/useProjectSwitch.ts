@@ -37,8 +37,83 @@ import { useProjectStore } from '@/store/projectStore'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useErrorStore } from '@/store/errorStore'
 import { useChatStore } from '@/store/chatStore'
+import { apiClient } from '@/lib/api-client'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+
+// Type for ProjectFile (matches projectStore)
+interface ProjectFile {
+  path: string
+  content: string
+  language: string
+  type: 'file' | 'folder'
+  children?: ProjectFile[]
+}
+
+/**
+ * Convert flat file list to hierarchical tree structure
+ *
+ * Input: [{ path: 'src/App.tsx', content: '...' }, { path: 'package.json', content: '...' }]
+ * Output: [
+ *   { path: 'package.json', type: 'file', ... },
+ *   { path: 'src', type: 'folder', children: [{ path: 'src/App.tsx', type: 'file', ... }] }
+ * ]
+ */
+function buildFileTree(flatFiles: Array<{ path: string; content: string; language?: string }>): ProjectFile[] {
+  const root: ProjectFile[] = []
+
+  for (const file of flatFiles) {
+    const parts = file.path.split('/')
+    let currentLevel = root
+    let currentPath = ''
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]
+      currentPath = currentPath ? `${currentPath}/${part}` : part
+      const isLastPart = i === parts.length - 1
+
+      if (isLastPart) {
+        // It's a file - add it to current level
+        currentLevel.push({
+          path: file.path,  // Full path for files
+          content: file.content || '',
+          language: file.language || 'plaintext',
+          type: 'file'
+        })
+      } else {
+        // It's a folder - find or create it
+        let folder = currentLevel.find(f => f.type === 'folder' && f.path === currentPath)
+        if (!folder) {
+          folder = {
+            path: currentPath,
+            content: '',
+            language: '',
+            type: 'folder',
+            children: []
+          }
+          currentLevel.push(folder)
+        }
+        currentLevel = folder.children!
+      }
+    }
+  }
+
+  // Sort: folders first, then files, alphabetically
+  const sortTree = (items: ProjectFile[]): ProjectFile[] => {
+    return items
+      .map(item => ({
+        ...item,
+        children: item.children ? sortTree(item.children) : undefined
+      }))
+      .sort((a, b) => {
+        if (a.type === 'folder' && b.type === 'file') return -1
+        if (a.type === 'file' && b.type === 'folder') return 1
+        return a.path.localeCompare(b.path)
+      })
+  }
+
+  return sortTree(root)
+}
 
 interface SwitchOptions {
   loadFiles?: boolean      // Load files from backend (default: true)
@@ -158,76 +233,54 @@ export function useProjectSwitch() {
 
       if (loadFiles) {
         try {
-          const token = localStorage.getItem('access_token')
-          if (token) {
-            const response = await fetch(
-              `${API_BASE_URL}/sync/files/${newProjectId}`,
-              {
-                headers: { 'Authorization': `Bearer ${token}` }
-              }
-            )
+          // Use /sync/files endpoint which returns hierarchical tree and works reliably
+          // The /projects/{id}/load endpoint has auth issues
+          console.log(`[ProjectSwitch] Loading project files via /sync/files/${newProjectId}`)
+          const data = await apiClient.get(`/sync/files/${newProjectId}`)
 
-            if (response.ok) {
-              const data = await response.json()
-
-              if (data.success && data.tree) {
-                // Convert backend tree to ProjectFile format
-                const convertTree = (items: any[]): any[] => {
-                  return items.map((item: any) => ({
-                    path: item.path,
-                    content: item.content || '',
-                    language: item.language || 'plaintext',
-                    type: item.type === 'folder' ? 'folder' : 'file',
-                    children: item.children ? convertTree(item.children) : undefined
-                  }))
-                }
-
-                const files = convertTree(data.tree)
-
-                // Set new project in store
-                projectStore.setCurrentProject({
-                  id: newProjectId,
-                  name: data.project?.title || `Project ${newProjectId}`,
-                  description: data.project?.description,
-                  files: files,
-                  createdAt: new Date(),
-                  updatedAt: new Date(),
-                  isSynced: true
-                })
-
-                result = {
-                  success: true,
-                  projectId: newProjectId,
-                  fileCount: data.total || files.length,
-                  layer: data.layer || 'sandbox'
-                }
-
-                console.log(`[ProjectSwitch] ✓ Loaded ${result.fileCount} files from ${result.layer}`)
-              } else {
-                // No files found - create empty project
-                projectStore.setCurrentProject({
-                  id: newProjectId,
-                  name: `Project ${newProjectId}`,
-                  files: [],
-                  createdAt: new Date(),
-                  updatedAt: new Date(),
-                  isSynced: false
-                })
-
-                result = {
-                  success: true,
-                  projectId: newProjectId,
-                  fileCount: 0,
-                  layer: 'none'
-                }
-
-                console.log('[ProjectSwitch] ✓ Created empty project (no files on server)')
-              }
-            } else {
-              throw new Error(`Server returned ${response.status}`)
+          // The /sync/files endpoint returns { success, project_id, tree, layer, total }
+          // tree is already hierarchical with folders/children structure
+          if (data.success && data.tree && data.tree.length > 0) {
+            // Convert backend tree format to frontend ProjectFile format
+            const convertTree = (items: any[]): ProjectFile[] => {
+              return items.map((item: any) => ({
+                path: item.path,
+                content: item.content || '',
+                language: item.language || 'plaintext',
+                type: item.type === 'folder' ? 'folder' : 'file',
+                children: item.children ? convertTree(item.children) : undefined
+              }))
             }
+
+            const fileTree = convertTree(data.tree)
+
+            console.log(`[ProjectSwitch] Loaded file tree: ${fileTree.length} root items, ${data.total} total files from layer: ${data.layer}`)
+            console.log('[ProjectSwitch] Tree structure:', JSON.stringify(fileTree.map(f => ({
+              path: f.path,
+              type: f.type,
+              childrenCount: f.children?.length || 0
+            })), null, 2))
+
+            // Set new project in store with hierarchical tree
+            projectStore.setCurrentProject({
+              id: newProjectId,
+              name: `Project ${newProjectId}`,
+              files: fileTree,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+              isSynced: true
+            })
+
+            result = {
+              success: true,
+              projectId: newProjectId,
+              fileCount: data.total || fileTree.length,
+              layer: data.layer || 'unknown'
+            }
+
+            console.log(`[ProjectSwitch] ✓ Loaded ${result.fileCount} files from ${result.layer}`)
           } else {
-            // No auth token - create empty project
+            // No files found - create empty project
             projectStore.setCurrentProject({
               id: newProjectId,
               name: `Project ${newProjectId}`,
@@ -241,9 +294,10 @@ export function useProjectSwitch() {
               success: true,
               projectId: newProjectId,
               fileCount: 0,
-              layer: 'none',
-              error: 'Not authenticated'
+              layer: 'none'
             }
+
+            console.log('[ProjectSwitch] ✓ Project loaded but no files found')
           }
         } catch (err: any) {
           console.warn('[ProjectSwitch] Failed to load project files:', err)

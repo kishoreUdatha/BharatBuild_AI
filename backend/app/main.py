@@ -1,3 +1,4 @@
+# Container port config updated + Bolt.new-style reverse proxy (preview_proxy.py replaces preview.py)
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -93,13 +94,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add middleware
+# Add middleware - Allow all origins in development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=["*"],  # Allow all origins for development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # GZipMiddleware - but we need to skip it for SSE endpoints

@@ -15,8 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from uuid import UUID
+from sqlalchemy import select, cast, String
 import json
 
 from app.core.logging_config import logger
@@ -24,6 +23,7 @@ from app.core.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.models.user import User
 from app.models.project import Project, ProjectStatus, ProjectMode
+from app.models.project_file import ProjectFile
 from app.services.unified_storage import unified_storage
 
 
@@ -275,10 +275,10 @@ async def save_to_s3(
             return result
 
         # Update PostgreSQL metadata (Layer 3)
+        # Note: Project.id is String(36) not UUID, use cast() to prevent asyncpg UUID conversion
         try:
-            project_uuid = UUID(project_id)
             db_result = await db.execute(
-                select(Project).where(Project.id == project_uuid)
+                select(Project).where(Project.id == cast(project_id, String(36)))
             )
             project = db_result.scalar_one_or_none()
 
@@ -350,11 +350,11 @@ async def get_project_files(
     """
     try:
         user_id = str(current_user.id)
+        actual_user_id = user_id  # Track actual user_id used
 
-        # 1. Check sandbox (Layer 1) with user-scoped path
-        if await unified_storage.sandbox_exists(project_id, user_id):
-            logger.info(f"[Layer 1] Loading from sandbox: {user_id}/{project_id}")
-            files = await unified_storage.list_sandbox_files(project_id, user_id)
+        # Helper function to load files from sandbox
+        async def load_from_sandbox(proj_id: str, uid: str, layer_name: str):
+            files = await unified_storage.list_sandbox_files(proj_id, uid)
 
             async def add_content_recursive(file_list):
                 result = []
@@ -362,7 +362,7 @@ async def get_project_files(
                     file_dict = f.to_dict()
                     if f.type == 'file':
                         file_dict['content'] = await unified_storage.read_from_sandbox(
-                            project_id, f.path, user_id
+                            proj_id, f.path, uid
                         ) or ''
                     elif f.children:
                         file_dict['children'] = await add_content_recursive(f.children)
@@ -370,20 +370,44 @@ async def get_project_files(
                 return result
 
             tree = await add_content_recursive(files)
-
             return {
                 "success": True,
-                "project_id": project_id,
+                "project_id": proj_id,
                 "tree": tree,
-                "layer": "sandbox",
+                "layer": layer_name,
                 "total": len(unified_storage._flatten_tree(files))
             }
 
+        # 1. Check sandbox (Layer 1) with user-scoped path
+        # Only use sandbox if it exists AND has files (not empty) - Fixed
+        if await unified_storage.sandbox_exists(project_id, user_id):
+            sandbox_files = await unified_storage.list_sandbox_files(project_id, user_id)
+            if sandbox_files:  # Has files, use sandbox
+                logger.info(f"[Layer 1] Loading from sandbox: {user_id}/{project_id} ({len(sandbox_files)} files)")
+                return await load_from_sandbox(project_id, user_id, "sandbox")
+            else:
+                logger.info(f"[Layer 1] Sandbox exists but empty for {user_id}/{project_id}, falling through to database")
+
+        # 1.5 FALLBACK: Search for project in ANY user's sandbox directory
+        # This handles cases where files were created by auto-fix or other processes
+        from pathlib import Path
+        import platform
+        sandbox_base = Path("C:/tmp/sandbox/workspace") if platform.system() == "Windows" else Path("/tmp/sandbox/workspace")
+
+        if sandbox_base.exists():
+            for potential_user_dir in sandbox_base.iterdir():
+                if potential_user_dir.is_dir():
+                    potential_project_path = potential_user_dir / project_id
+                    if potential_project_path.exists() and any(potential_project_path.iterdir()):
+                        found_user_id = potential_user_dir.name
+                        logger.info(f"[Layer 1.5] Found project in {found_user_id}/{project_id} (current user: {user_id})")
+                        return await load_from_sandbox(project_id, found_user_id, "sandbox_found")
+
         # 2. Check PostgreSQL (Layer 3) for metadata
+        # Note: Project.id is String(36) not UUID, use cast() to prevent asyncpg UUID conversion
         try:
-            project_uuid = UUID(project_id)
             db_result = await db.execute(
-                select(Project).where(Project.id == project_uuid)
+                select(Project).where(Project.id == cast(project_id, String(36)))
             )
             project = db_result.scalar_one_or_none()
 
@@ -423,7 +447,103 @@ async def get_project_files(
         except ValueError:
             pass  # Not a valid UUID
 
-        # 3. No files found
+        # 3. Check ProjectFile table (Layer 4 - Database storage)
+        # This is where files are stored by the writer agent
+        # Use cast() to prevent asyncpg UUID conversion
+        try:
+            db_result = await db.execute(
+                select(ProjectFile).where(ProjectFile.project_id == cast(project_id, String(36)))
+            )
+            project_files = db_result.scalars().all()
+
+            if project_files:
+                logger.info(f"[Layer 4] Loading {len(project_files)} files from database: {project_id}")
+
+                # Build hierarchical tree from flat file list
+                def build_tree(files):
+                    """Convert flat file list to hierarchical tree"""
+                    root = []
+                    folders = {}
+
+                    for pf in files:
+                        file_path = pf.path
+                        content = pf.content_inline or ""
+
+                        # Detect language from extension
+                        ext = file_path.rsplit(".", 1)[-1] if "." in file_path else ""
+                        lang_map = {
+                            "ts": "typescript", "tsx": "typescript",
+                            "js": "javascript", "jsx": "javascript",
+                            "py": "python", "json": "json",
+                            "html": "html", "css": "css",
+                            "md": "markdown", "yaml": "yaml", "yml": "yaml"
+                        }
+                        language = lang_map.get(ext, "plaintext")
+
+                        # Split path into parts
+                        parts = file_path.split("/")
+
+                        if len(parts) == 1:
+                            # Root level file
+                            root.append({
+                                "path": file_path,
+                                "name": file_path,
+                                "type": "file",
+                                "content": content,
+                                "language": language
+                            })
+                        else:
+                            # Nested file - create folder structure
+                            current_level = root
+                            current_path = ""
+
+                            for i, part in enumerate(parts[:-1]):
+                                current_path = f"{current_path}/{part}" if current_path else part
+
+                                # Find or create folder
+                                folder = None
+                                for item in current_level:
+                                    if item.get("type") == "folder" and item.get("path") == current_path:
+                                        folder = item
+                                        break
+
+                                if not folder:
+                                    folder = {
+                                        "path": current_path,
+                                        "name": part,
+                                        "type": "folder",
+                                        "children": []
+                                    }
+                                    current_level.append(folder)
+
+                                current_level = folder.get("children", [])
+                                if "children" not in folder:
+                                    folder["children"] = current_level
+
+                            # Add file to current folder
+                            current_level.append({
+                                "path": file_path,
+                                "name": parts[-1],
+                                "type": "file",
+                                "content": content,
+                                "language": language
+                            })
+
+                    return root
+
+                tree = build_tree(project_files)
+
+                return {
+                    "success": True,
+                    "project_id": project_id,
+                    "tree": tree,
+                    "layer": "database",
+                    "total": len(project_files)
+                }
+        except Exception as db_error:
+            logger.warning(f"[Layer 4] Database lookup failed: {db_error}")
+
+        # 4. No files found
         return {
             "success": True,
             "project_id": project_id,
@@ -512,3 +632,4 @@ async def sync_files_legacy(
 ):
     """Legacy: Redirect to sandbox bulk write"""
     return await write_multiple_to_sandbox(request, current_user)
+# Trigger reload

@@ -1,19 +1,29 @@
 """
-Workspace Management API - Bolt.new Style Restoration
+Workspace Management API - Bolt.new Style
 
-Endpoints for managing project workspaces:
-- Check workspace status
-- Restore workspace from storage
-- Regenerate workspace from plan
-- CRUD operations for Workspace model
+BOLT.NEW ARCHITECTURE:
+=====================
+Stage 1: GET /workspace/project/{projectId} → Returns tree + metadata (NO content)
+Stage 5: GET /workspace/project/{projectId}/file?path=... → Lazy load single file
+Stage 6: PATCH /workspace/project/{projectId}/file → Update file content
+
+Key principles:
+1. NO full content in workspace fetch (lazy loading)
+2. File tree is hierarchical
+3. Content loaded on-demand
+4. Super fast initial load
+
+Also includes:
+- Workspace CRUD operations
+- Restoration endpoints
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, cast, String
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from uuid import UUID
 from datetime import datetime
 import json
@@ -23,10 +33,12 @@ from app.core.database import get_db
 from app.core.logging_config import logger
 from app.models.user import User
 from app.models.project import Project
+from app.models.project_file import ProjectFile
 from app.models.workspace import Workspace
 from app.modules.auth.dependencies import get_current_user
 from app.services.workspace_restore import workspace_restore
 from app.services.sandbox_cleanup import touch_project
+from app.services.unified_storage import unified_storage
 
 
 router = APIRouter()
@@ -623,3 +635,300 @@ async def regenerate_workspace(
             "has_tasks": "tasks" in project.plan_json if isinstance(project.plan_json, dict) else False
         }
     }
+
+
+# ==================== BOLT.NEW STYLE ENDPOINTS ====================
+# These endpoints match Bolt.new's architecture for lazy loading
+
+class FileNode(BaseModel):
+    """File tree node (no content - lazy loaded)"""
+    name: str
+    path: str
+    type: str  # "file" or "folder"
+    size: Optional[int] = None
+    language: Optional[str] = None
+    children: Optional[List['FileNode']] = None
+
+    class Config:
+        from_attributes = True
+
+
+class BoltWorkspaceResponse(BaseModel):
+    """Full workspace response (Bolt.new style) - NO file content!"""
+    projectId: str
+    root: str = "/"
+    tree: List[FileNode]
+    openTabs: List[str] = []
+    plan: Optional[Dict[str, Any]] = None
+    techStack: List[str] = []
+    messages: List[Dict[str, Any]] = []
+    createdAt: Optional[str] = None
+    updatedAt: Optional[str] = None
+
+
+class FileContentResponse(BaseModel):
+    """Single file content response (lazy loaded)"""
+    path: str
+    content: str
+    language: str
+    size: int
+    checksum: Optional[str] = None
+
+
+class FileUpdateRequest(BaseModel):
+    """File update request"""
+    path: str
+    content: Optional[str] = None
+    contentDiff: Optional[str] = None  # For incremental updates
+
+
+# Update forward reference for recursive model
+FileNode.model_rebuild()
+
+
+def _build_bolt_tree(files: List[ProjectFile]) -> List[FileNode]:
+    """
+    Build hierarchical file tree from flat file list.
+    Returns Bolt.new style tree (NO content):
+    [
+        { "name": "src", "type": "folder", "children": [...] },
+        { "name": "index.html", "type": "file", "size": 210 }
+    ]
+    """
+    root: Dict[str, Any] = {"children": {}}
+
+    for file in files:
+        parts = file.path.split('/')
+        current = root
+
+        # Build path
+        for i, part in enumerate(parts):
+            if part not in current["children"]:
+                is_file = (i == len(parts) - 1) and not file.is_folder
+                current["children"][part] = {
+                    "name": part,
+                    "path": '/'.join(parts[:i+1]),
+                    "type": "file" if is_file else "folder",
+                    "size": file.size_bytes if is_file else None,
+                    "language": file.language if is_file else None,
+                    "children": {} if not is_file else None
+                }
+            current = current["children"][part]
+
+    # Convert to list format
+    def to_list(node: Dict) -> List[FileNode]:
+        result = []
+        for name, data in sorted(node.get("children", {}).items()):
+            children = None
+            if data.get("type") == "folder" and data.get("children"):
+                children = to_list(data)
+
+            result.append(FileNode(
+                name=data["name"],
+                path=data["path"],
+                type=data["type"],
+                size=data.get("size"),
+                language=data.get("language"),
+                children=children if children else None
+            ))
+        return result
+
+    return to_list(root)
+
+
+@router.get("/project/{project_id}", response_model=BoltWorkspaceResponse)
+async def get_bolt_workspace(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Stage 1-4: Get workspace metadata + tree (NO file content).
+
+    This is SUPER FAST because we only return:
+    - File tree structure (hierarchical)
+    - Project metadata
+    - Plan JSON
+    - Claude messages
+
+    File content is lazy-loaded via GET /workspace/project/{id}/file?path=...
+    """
+    try:
+        user_id = str(current_user.id)
+
+        # Stage 2: Fetch project metadata
+        result = await db.execute(
+            select(Project).where(Project.id == cast(project_id, String(36)))
+        )
+        project = result.scalar_one_or_none()
+
+        # Stage 2: Fetch file tree (metadata only, NO content!)
+        files_result = await db.execute(
+            select(ProjectFile)
+            .where(ProjectFile.project_id == cast(project_id, String(36)))
+            .order_by(ProjectFile.path)
+        )
+        files = files_result.scalars().all()
+
+        # Stage 3: Build hierarchical tree (Bolt.new style)
+        tree = _build_bolt_tree(files)
+
+        # Extract tech stack
+        tech_stack = []
+        if project and project.tech_stack:
+            if isinstance(project.tech_stack, list):
+                tech_stack = project.tech_stack
+            elif isinstance(project.tech_stack, str):
+                tech_stack = [t.strip() for t in project.tech_stack.split(',')]
+
+        logger.info(f"[Bolt] Workspace fetch: {project_id} - {len(files)} files in tree (NO content)")
+
+        # Touch project to keep sandbox alive
+        touch_project(project_id)
+
+        # Stage 4: Return workspace (NO file content!)
+        return BoltWorkspaceResponse(
+            projectId=project_id,
+            root="/",
+            tree=tree,
+            openTabs=[],
+            plan=project.plan_json if project else None,
+            techStack=tech_stack,
+            messages=project.history if project and project.history else [],
+            createdAt=project.created_at.isoformat() if project and project.created_at else None,
+            updatedAt=project.updated_at.isoformat() if project and project.updated_at else None
+        )
+
+    except Exception as e:
+        logger.error(f"[Bolt] Error fetching workspace: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/project/{project_id}/file", response_model=FileContentResponse)
+async def get_file_content(
+    project_id: str,
+    path: str = Query(..., description="File path to load"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Stage 5: Lazy load single file content.
+
+    Called when:
+    - User clicks file in tree
+    - User opens tab
+    - File needed for preview (entrypoints)
+
+    This keeps initial workspace load SUPER FAST!
+    """
+    try:
+        user_id = str(current_user.id)
+
+        # Try to get from database first (Layer 3)
+        file_result = await db.execute(
+            select(ProjectFile)
+            .where(ProjectFile.project_id == cast(project_id, String(36)))
+            .where(ProjectFile.path == path)
+        )
+        file_record = file_result.scalar_one_or_none()
+
+        if file_record:
+            # Get content from inline storage or S3
+            content = ""
+            if file_record.is_inline and file_record.content_inline:
+                content = file_record.content_inline
+            elif file_record.s3_key:
+                # Fetch from S3
+                content = await unified_storage.download_from_s3(file_record.s3_key) or ""
+
+            logger.info(f"[Bolt] Lazy load: {path} ({len(content)} bytes)")
+
+            return FileContentResponse(
+                path=path,
+                content=content,
+                language=file_record.language or "plaintext",
+                size=file_record.size_bytes or len(content),
+                checksum=file_record.content_hash
+            )
+
+        # Fallback: Try sandbox (Layer 1)
+        content = await unified_storage.read_from_sandbox(project_id, path, user_id)
+        if content:
+            # Detect language from extension
+            ext = path.rsplit('.', 1)[-1] if '.' in path else ''
+            lang_map = {
+                'ts': 'typescript', 'tsx': 'typescript',
+                'js': 'javascript', 'jsx': 'javascript',
+                'py': 'python', 'json': 'json',
+                'html': 'html', 'css': 'css',
+                'md': 'markdown', 'yaml': 'yaml', 'yml': 'yaml'
+            }
+            language = lang_map.get(ext, 'plaintext')
+
+            logger.info(f"[Bolt] Lazy load (sandbox): {path} ({len(content)} bytes)")
+
+            return FileContentResponse(
+                path=path,
+                content=content,
+                language=language,
+                size=len(content),
+                checksum=None
+            )
+
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Bolt] Error fetching file: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/project/{project_id}/file")
+async def update_file_content(
+    project_id: str,
+    request: FileUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Stage 6: Update file content (sync live changes).
+
+    Called when user types in editor.
+    Stores:
+    - Updated content in database
+    - Also syncs to sandbox for preview
+
+    This maintains workspace state even if you reload browser.
+    """
+    try:
+        user_id = str(current_user.id)
+
+        content = request.content
+        if not content and request.contentDiff:
+            # TODO: Apply diff to existing content
+            raise HTTPException(status_code=400, detail="contentDiff not yet supported, send full content")
+
+        if not content:
+            raise HTTPException(status_code=400, detail="content is required")
+
+        # Save to database (Layer 3 - persistent)
+        db_saved = await unified_storage.save_to_database(project_id, request.path, content)
+
+        # Save to sandbox (Layer 1 - for preview)
+        await unified_storage.write_to_sandbox(project_id, request.path, content, user_id)
+
+        logger.info(f"[Bolt] File updated: {request.path} ({len(content)} bytes)")
+
+        return {
+            "success": db_saved,
+            "path": request.path,
+            "size": len(content),
+            "updatedAt": datetime.utcnow().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Bolt] Error updating file: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

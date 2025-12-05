@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import auth, projects, api_keys, billing, tokens, streaming, bolt, automation, orchestrator, logs, execution, documents, adventure, resume, download, containers, preview, jobs, agentic, classify, sync, payments, import_project, paper, feedback, sandbox, workspace, log_stream, retrieval
+from app.api.v1.endpoints import auth, projects, api_keys, billing, tokens, streaming, bolt, automation, orchestrator, logs, execution, documents, adventure, resume, download, containers, jobs, agentic, classify, sync, payments, import_project, paper, feedback, sandbox, workspace, log_stream, retrieval, preview_proxy
 
 api_router = APIRouter()
 
@@ -21,7 +21,8 @@ api_router.include_router(adventure.router, tags=["Project Adventure"])
 api_router.include_router(resume.router, prefix="/resume", tags=["Resume & Recovery"])
 api_router.include_router(download.router, prefix="/download", tags=["Download & Temp Storage"])
 api_router.include_router(containers.router, tags=["Container Execution"])
-api_router.include_router(preview.router, tags=["Preview Proxy"])
+# NOTE: Old preview.py removed - replaced by preview_proxy.py (Bolt.new-style reverse proxy w/ Docker internal IP)
+api_router.include_router(preview_proxy.router, tags=["Preview Reverse Proxy"])
 api_router.include_router(jobs.router, tags=["Job Storage"])
 api_router.include_router(agentic.router, tags=["Agentic CLI"])
 api_router.include_router(sync.router, tags=["File Sync"])

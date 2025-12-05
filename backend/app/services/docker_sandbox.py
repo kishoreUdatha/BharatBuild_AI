@@ -24,7 +24,10 @@ import asyncio
 import json
 import uuid
 import logging
+import platform
+import re
 from typing import Optional, Dict, Any, List
+from pathlib import Path
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from enum import Enum
@@ -33,6 +36,32 @@ import docker
 from docker.errors import NotFound, APIError
 
 logger = logging.getLogger(__name__)
+
+
+def _to_docker_path(path_str: str) -> str:
+    """
+    Convert a filesystem path to Docker-compatible format.
+
+    On Windows with Docker Desktop (Linux containers), paths need to be converted:
+    - C:\\tmp\\sandbox\\workspace -> /c/tmp/sandbox/workspace
+    - C:/tmp/sandbox/workspace -> /c/tmp/sandbox/workspace
+
+    On Linux/Mac, paths are passed through unchanged.
+    """
+    # Only convert on Windows
+    if platform.system() == "Windows":
+        # Match drive letter pattern (e.g., C:\ or C:/)
+        match = re.match(r'^([A-Za-z]):[/\\](.*)$', path_str)
+        if match:
+            drive = match.group(1).lower()
+            rest = match.group(2).replace('\\', '/')
+            docker_path = f"/{drive}/{rest}"
+            logger.debug(f"Converted Windows path '{path_str}' to Docker path '{docker_path}'")
+            return docker_path
+
+    # Non-Windows or no drive letter - return as-is with forward slashes
+    return path_str.replace('\\', '/')
+
 
 # Configuration
 SANDBOX_NETWORK = os.getenv("SANDBOX_NETWORK", "bharatbuild-sandbox")
@@ -404,10 +433,11 @@ class DockerSandboxManager:
             image = BASE_IMAGES.get(project_type, BASE_IMAGES[ProjectType.NODEJS])
             command = custom_command or DEFAULT_COMMANDS.get(project_type)
 
-            # Volume mounts
+            # Volume mounts (convert Windows paths for Docker)
             volumes = {}
             if files_path:
-                volumes[files_path] = {"bind": "/app", "mode": "rw"}
+                docker_path = _to_docker_path(files_path)
+                volumes[docker_path] = {"bind": "/app", "mode": "rw"}
 
             # Environment
             env = {

@@ -14,6 +14,7 @@ Auto-fix is triggered automatically when errors are detected!
 
 import json
 import asyncio
+import re
 from typing import Dict, Set, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from datetime import datetime
@@ -23,6 +24,194 @@ from app.services.log_bus import get_log_bus, LogBusManager
 from app.services.auto_fixer import get_auto_fixer, AutoFixConfig
 
 router = APIRouter()
+
+
+# ============= BUILD ERROR DETECTION (Bolt.new style) =============
+# Patterns that indicate a build error across ALL technologies
+BUILD_ERROR_PATTERNS = [
+    # ============= VITE/WEBPACK/ESBUILD =============
+    "Failed to resolve import",
+    "Could not resolve",
+    "[plugin:vite:",
+    "[vite]",
+    "Pre-transform error",
+    "Transform failed",
+    "Module not found",
+    "Can't resolve",
+    "Cannot find module",
+    "esbuild:",
+
+    # ============= TYPESCRIPT/JAVASCRIPT =============
+    "TS2",  # TypeScript error codes (TS2304, TS2339, etc.)
+    "TSError",
+    "error TS",
+    "SyntaxError:",
+    "ReferenceError:",
+    "TypeError:",
+    "Unexpected token",
+    "is not defined",
+    "is not a function",
+    "Property '",
+    "Argument of type",
+
+    # ============= PYTHON =============
+    "ModuleNotFoundError",
+    "ImportError",
+    "NameError:",
+    "AttributeError:",
+    "IndentationError",
+    "TabError",
+    "SyntaxError: invalid syntax",
+    "No module named",
+    "cannot import name",
+    "Traceback (most recent call last)",
+    "File \"",  # Python stack trace
+
+    # ============= PYTHON FRAMEWORKS =============
+    "django.core.exceptions",
+    "flask.exceptions",
+    "FastAPI",
+    "pydantic.error_wrappers",
+    "ValidationError",
+
+    # ============= GO =============
+    "undefined:",
+    "cannot find package",
+    "imported and not used",
+    "declared and not used",
+    "no required module provides",
+    "go: module",
+    "panic:",
+
+    # ============= RUST =============
+    "error[E",  # Rust error codes (E0433, E0599, etc.)
+    "cannot find",
+    "unresolved import",
+    "no method named",
+    "mismatched types",
+    "borrow of moved value",
+    "cargo build",
+
+    # ============= JAVA/KOTLIN =============
+    "java.lang.Error",
+    "java.lang.Exception",
+    "ClassNotFoundException",
+    "NoClassDefFoundError",
+    "NullPointerException",
+    "cannot find symbol",
+    "package does not exist",
+    "error: ",  # Java compiler
+    "FAILURE: Build failed",  # Gradle
+    "BUILD FAILURE",  # Maven
+
+    # ============= C/C++ =============
+    "undefined reference",
+    "fatal error:",
+    "error: expected",
+    "linker error",
+    "#include",
+    "no such file or directory",
+
+    # ============= .NET/C# =============
+    "CS0",  # C# error codes
+    "error CS",
+    "System.Exception",
+    "NullReferenceException",
+    "Build FAILED",
+
+    # ============= RUBY/RAILS =============
+    "LoadError",
+    "NameError:",
+    "NoMethodError",
+    "uninitialized constant",
+    "Gem::LoadError",
+    "ActiveRecord::",
+    "ActionController::",
+
+    # ============= PHP =============
+    "Fatal error:",
+    "Parse error:",
+    "PHP Fatal error",
+    "Class '",
+    "Call to undefined",
+
+    # ============= CSS/SASS/LESS =============
+    "Sass Error",
+    "Less Error",
+    "PostCSS",
+    "CssSyntaxError",
+    "Unknown word",
+    "Unclosed block",
+
+    # ============= DATABASE =============
+    "sqlite3.OperationalError",
+    "psycopg2.Error",
+    "pymysql.err",
+    "OperationalError",
+    "IntegrityError",
+    "ProgrammingError",
+    "relation \"",
+    "column \"",
+    "table \"",
+
+    # ============= DOCKER/CONTAINER =============
+    "docker:",
+    "Dockerfile",
+    "COPY failed",
+    "RUN failed",
+    "exited with code",
+
+    # ============= GENERAL BUILD =============
+    "Build failed",
+    "Compilation failed",
+    "compile error",
+    "build error",
+    "FAILED",
+    "ERROR",
+]
+
+
+def is_build_error(message: str) -> bool:
+    """
+    Check if a message is a build error across ALL technologies.
+
+    This helps correctly categorize errors that may come from
+    docker/backend sources but are actually build errors.
+    """
+    if not message:
+        return False
+
+    message_lower = message.lower()
+
+    # Check for build error patterns
+    for pattern in BUILD_ERROR_PATTERNS:
+        if pattern.lower() in message_lower:
+            return True
+
+    # Check for file path references with line numbers (common in build errors)
+    # Supports: JS/TS, Python, Go, Rust, Java, C/C++, Ruby, PHP, C#
+    file_extensions = r'\.(tsx?|jsx?|vue|svelte|py|go|rs|java|kt|c|cpp|h|hpp|rb|php|cs|swift|scala|ex|exs|erl|hs|ml|fs)'
+    if re.search(rf'[/\\][\w/\\]+{file_extensions}[:(\d]', message):
+        if 'error' in message_lower or 'failed' in message_lower or 'exception' in message_lower:
+            return True
+
+    # Check for Python-style stack traces
+    if re.search(r'File "[^"]+\.py", line \d+', message):
+        return True
+
+    # Check for Go-style errors
+    if re.search(r'\.go:\d+:\d+:', message):
+        return True
+
+    # Check for Rust-style errors
+    if re.search(r'--> [^:]+\.rs:\d+:\d+', message):
+        return True
+
+    # Check for Java-style stack traces
+    if re.search(r'at [\w.$]+\([^:]+\.java:\d+\)', message):
+        return True
+
+    return False
 
 
 class LogStreamManager:
@@ -110,8 +299,15 @@ class LogStreamManager:
         This is the MAGIC that makes it feel automatic!
         Called after every error log is received.
         """
-        if not self._fix_callback or not is_error:
+        if not is_error:
+            logger.debug(f"[LogStream] trigger_auto_fix called for {project_id} but is_error=False")
             return
+
+        if not self._fix_callback:
+            logger.warning(f"[LogStream] Auto-fix callback not registered! Cannot auto-fix for {project_id}")
+            return
+
+        logger.info(f"[LogStream] Auto-fix triggered for project {project_id}")
 
         # Get auto-fixer for this project
         auto_fixer = get_auto_fixer(project_id)
@@ -248,22 +444,31 @@ async def log_stream(websocket: WebSocket, project_id: str):
                     )
 
                 elif source == "build":
-                    if log_type == "stderr" or "error" in str(log_data).lower():
-                        log_bus.add_build_error(message=str(log_data.get("data", log_data)))
+                    message_str = str(log_data.get("data", log_data))
+                    if log_type == "stderr" or is_build_error(message_str):
+                        log_bus.add_build_error(message=message_str)
                     else:
-                        log_bus.add_build_log(str(log_data.get("data", log_data)))
+                        log_bus.add_build_log(message_str)
 
                 elif source == "backend":
-                    if log_type == "stderr" or "error" in str(log_data).lower():
-                        log_bus.add_backend_error(message=str(log_data.get("data", log_data)))
+                    message_str = str(log_data.get("data", log_data))
+                    # Check if this is actually a build error (Vite/Webpack from container)
+                    if is_build_error(message_str):
+                        log_bus.add_build_error(message=message_str)
+                    elif log_type == "stderr" or "error" in message_str.lower():
+                        log_bus.add_backend_error(message=message_str)
                     else:
-                        log_bus.add_backend_log(str(log_data.get("data", log_data)))
+                        log_bus.add_backend_log(message_str)
 
                 elif source == "docker":
-                    if log_type == "stderr" or "error" in str(log_data).lower():
-                        log_bus.add_docker_error(str(log_data.get("data", log_data)))
+                    message_str = str(log_data.get("data", log_data))
+                    # Check if this is actually a build error (Vite/Webpack from container)
+                    if is_build_error(message_str):
+                        log_bus.add_build_error(message=message_str)
+                    elif log_type == "stderr" or "error" in message_str.lower():
+                        log_bus.add_docker_error(message_str)
                     else:
-                        log_bus.add_docker_log(str(log_data.get("data", log_data)))
+                        log_bus.add_docker_log(message_str)
 
                 # Broadcast to monitors
                 await log_stream_manager.broadcast_to_monitors({
@@ -276,11 +481,15 @@ async def log_stream(websocket: WebSocket, project_id: str):
 
                 # ======= AUTO-FIX TRIGGER (Bolt.new Magic!) =======
                 # Check if this was an error and trigger auto-fix
-                is_error = (
+                message_for_check = str(log_data.get("data", log_data.get("message", "")))
+                is_error_type = (
                     "error" in log_type.lower() or
-                    log_type in ("runtime_error", "promise_rejection", "console_error")
+                    log_type in ("runtime_error", "promise_rejection", "console_error", "stderr")
                 )
+                is_error = is_error_type or is_build_error(message_for_check)
+
                 if is_error:
+                    logger.debug(f"[LogStream] Error detected - type={log_type}, is_build_error={is_build_error(message_for_check)}")
                     # Trigger auto-fix in background (debounced)
                     asyncio.create_task(
                         log_stream_manager.trigger_auto_fix(project_id, is_error=True)

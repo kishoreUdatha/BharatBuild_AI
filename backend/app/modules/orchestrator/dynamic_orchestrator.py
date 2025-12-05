@@ -2575,9 +2575,9 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
                 yield OrchestratorEvent(
                     type=EventType.FILE_OPERATION,
                     data={
-                        "operation": "generating",
+                        "operation": "create",
                         "path": file_path,
-                        "status": "in-progress",
+                        "operation_status": "in_progress",
                         "file_number": file_index,
                         "total_files": len(files_to_generate),
                         "description": file_description
@@ -2596,13 +2596,21 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
                     ):
                         yield event
 
-                    # Mark file as complete
+                    # Mark file as complete - include file_content so frontend can display it
+                    # Get the content from the last created file
+                    file_content_for_event = ""
+                    for fc in reversed(context.files_created):
+                        if fc.get('path') == file_path:
+                            file_content_for_event = fc.get('content', '')
+                            break
+
                     yield OrchestratorEvent(
                         type=EventType.FILE_OPERATION,
                         data={
                             "operation": "create",
                             "path": file_path,
-                            "status": "complete",
+                            "operation_status": "complete",
+                            "file_content": file_content_for_event,
                             "file_number": file_index,
                             "total_files": len(files_to_generate)
                         }
