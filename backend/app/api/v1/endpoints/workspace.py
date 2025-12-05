@@ -21,7 +21,7 @@ Also includes:
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, cast, String
+from sqlalchemy import select, func
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from uuid import UUID
@@ -38,7 +38,7 @@ from app.models.workspace import Workspace
 from app.modules.auth.dependencies import get_current_user
 from app.services.workspace_restore import workspace_restore
 from app.services.sandbox_cleanup import touch_project
-from app.services.unified_storage import unified_storage
+from app.utils.pagination import paginate, create_paginated_response
 
 
 router = APIRouter()
@@ -86,6 +86,22 @@ class ProjectInWorkspace(BaseModel):
 class WorkspaceWithProjects(WorkspaceResponse):
     """Workspace with list of projects"""
     projects: List[ProjectInWorkspace] = []
+
+
+class PaginatedProjectsInWorkspace(BaseModel):
+    """Paginated projects response for workspace"""
+    items: List[ProjectInWorkspace]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    has_next: bool
+    has_previous: bool
+
+
+class WorkspaceWithPaginatedProjects(WorkspaceResponse):
+    """Workspace with paginated projects"""
+    projects: PaginatedProjectsInWorkspace
 
 
 # ==================== WORKSPACE CRUD ENDPOINTS ====================
@@ -233,13 +249,15 @@ async def get_default_workspace(
     )
 
 
-@router.get("/{workspace_id}", response_model=WorkspaceWithProjects)
+@router.get("/{workspace_id}", response_model=WorkspaceWithPaginatedProjects)
 async def get_workspace(
     workspace_id: str,
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(10, ge=1, le=100, description="Items per page"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get a specific workspace with its projects."""
+    """Get a specific workspace with paginated projects."""
     try:
         result = await db.execute(
             select(Workspace).where(
@@ -260,13 +278,26 @@ async def get_workspace(
             detail="Invalid workspace ID"
         )
 
-    # Get projects in workspace
+    # Get total count of projects
+    count_result = await db.execute(
+        select(func.count(Project.id)).where(Project.workspace_id == workspace.id)
+    )
+    total = count_result.scalar() or 0
+
+    # Get paginated projects
+    offset = (page - 1) * page_size
     projects_result = await db.execute(
-        select(Project).where(Project.workspace_id == workspace.id)
+        select(Project)
+        .where(Project.workspace_id == workspace.id)
+        .order_by(Project.created_at.desc())
+        .offset(offset)
+        .limit(page_size)
     )
     projects = projects_result.scalars().all()
 
-    return WorkspaceWithProjects(
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+
+    return WorkspaceWithPaginatedProjects(
         id=str(workspace.id),
         user_id=str(workspace.user_id),
         name=workspace.name,
@@ -274,18 +305,26 @@ async def get_workspace(
         is_default=workspace.is_default,
         storage_path=workspace.storage_path,
         s3_prefix=workspace.s3_prefix,
-        project_count=len(projects),
+        project_count=total,
         created_at=workspace.created_at,
         updated_at=workspace.updated_at,
-        projects=[
-            ProjectInWorkspace(
-                id=str(p.id),
-                title=p.title,
-                status=p.status.value if p.status else "unknown",
-                created_at=p.created_at
-            )
-            for p in projects
-        ]
+        projects=PaginatedProjectsInWorkspace(
+            items=[
+                ProjectInWorkspace(
+                    id=str(p.id),
+                    title=p.title,
+                    status=p.status.value if p.status else "unknown",
+                    created_at=p.created_at
+                )
+                for p in projects
+            ],
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+            has_next=page < total_pages,
+            has_previous=page > 1
+        )
     )
 
 

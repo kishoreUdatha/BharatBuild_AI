@@ -4,10 +4,11 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useProjects } from '@/hooks/useProjects'
 import { ProjectCard } from '@/components/projects/ProjectCard'
+import { Pagination } from '@/components/ui/Pagination'
 
 export default function ProjectsPage() {
   const router = useRouter()
-  const { projects, loading, error, total, page, totalPages, refresh, goToPage } = useProjects()
+  const { projects, loading, error, total, page, pageSize, totalPages, refresh, goToPage, changePageSize } = useProjects()
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
 
@@ -226,55 +227,20 @@ export default function ProjectsPage() {
               ))}
             </div>
 
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-center gap-2 mt-8">
-                <button
-                  onClick={() => goToPage(page - 1)}
-                  disabled={page === 1}
-                  className="px-4 py-2 bg-[#252525] border border-[#333] rounded-lg text-gray-400 hover:text-white hover:border-[#444] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-
-                <div className="flex items-center gap-1">
-                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                    let pageNum: number
-                    if (totalPages <= 5) {
-                      pageNum = i + 1
-                    } else if (page <= 3) {
-                      pageNum = i + 1
-                    } else if (page >= totalPages - 2) {
-                      pageNum = totalPages - 4 + i
-                    } else {
-                      pageNum = page - 2 + i
-                    }
-
-                    return (
-                      <button
-                        key={pageNum}
-                        onClick={() => goToPage(pageNum)}
-                        className={`w-10 h-10 rounded-lg text-sm font-medium transition-colors ${
-                          page === pageNum
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-[#252525] border border-[#333] text-gray-400 hover:text-white hover:border-[#444]'
-                        }`}
-                      >
-                        {pageNum}
-                      </button>
-                    )
-                  })}
-                </div>
-
-                <button
-                  onClick={() => goToPage(page + 1)}
-                  disabled={page === totalPages}
-                  className="px-4 py-2 bg-[#252525] border border-[#333] rounded-lg text-gray-400 hover:text-white hover:border-[#444] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
-              </div>
-            )}
+            {/* Pagination - Always show when there are projects */}
+            <div className="mt-8 border-t border-[#333] pt-6">
+              <Pagination
+                currentPage={page}
+                totalPages={totalPages || 1}
+                onPageChange={goToPage}
+                pageSize={pageSize}
+                onPageSizeChange={changePageSize}
+                pageSizeOptions={[6, 12, 24, 48]}
+                total={total}
+                showTotal={true}
+                showPageSize={true}
+              />
+            </div>
           </>
         )}
       </main>
