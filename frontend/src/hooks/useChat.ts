@@ -252,20 +252,19 @@ Just describe your project or share the code that needs fixing!`)
         if (projectStore.currentProject?.files && projectStore.currentProject.files.length > 0) {
           console.log('[useChat] GENERATE intent with existing project - creating NEW project (Bolt.new style)')
 
-          // Destroy old sandbox on server (fire and forget)
+          // Capture old project info before reset
           const oldProjectId = projectStore.currentProject.id
           const token = localStorage.getItem('access_token')
-          if (token && oldProjectId && oldProjectId !== 'default-project') {
-            fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/sync/sandbox/${oldProjectId}`, {
-              method: 'DELETE',
-              headers: { 'Authorization': `Bearer ${token}` }
-            }).catch(err => console.warn('[useChat] Failed to cleanup old sandbox:', err))
-          }
 
-          // Reset ALL stores for complete isolation
-          projectStore.resetProject()
-          useTerminalStore.getState().clearLogs()
-          useErrorStore.getState().clearErrors()
+          // ATOMIC STATE RESET: Clear all stores in a single synchronous batch
+          // This prevents race conditions where partial state could leak between projects
+          const resetAllStores = () => {
+            // Clear all stores atomically
+            projectStore.resetProject()
+            useTerminalStore.getState().clearLogs()
+            useErrorStore.getState().clearErrors()
+          }
+          resetAllStores()
 
           // Create new empty project with temporary ID (will be replaced by project_id_updated event)
           const newProjectId = `project-${Date.now()}`
@@ -278,6 +277,37 @@ Just describe your project or share the code that needs fixing!`)
             isSynced: false
           })
           console.log(`[useChat] Created fresh project: ${newProjectId}`)
+
+          // Destroy old sandbox on server with retry mechanism (non-blocking)
+          if (token && oldProjectId && oldProjectId !== 'default-project') {
+            const cleanupSandbox = async (retries = 3) => {
+              for (let attempt = 1; attempt <= retries; attempt++) {
+                try {
+                  const response = await fetch(
+                    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/sync/sandbox/${oldProjectId}`,
+                    {
+                      method: 'DELETE',
+                      headers: { 'Authorization': `Bearer ${token}` }
+                    }
+                  )
+                  if (response.ok || response.status === 404) {
+                    console.log(`[useChat] Successfully cleaned up old sandbox: ${oldProjectId}`)
+                    return
+                  }
+                  throw new Error(`HTTP ${response.status}`)
+                } catch (err) {
+                  console.warn(`[useChat] Sandbox cleanup attempt ${attempt}/${retries} failed:`, err)
+                  if (attempt < retries) {
+                    // Wait before retry with exponential backoff
+                    await new Promise(resolve => setTimeout(resolve, 1000 * attempt))
+                  }
+                }
+              }
+              console.error(`[useChat] Failed to cleanup old sandbox after ${retries} attempts: ${oldProjectId}`)
+            }
+            // Fire and forget, but with retries
+            cleanupSandbox()
+          }
         }
         // Continue to generation below
         break
@@ -637,12 +667,11 @@ Just describe your project or share the code that needs fixing!`)
 
               if (opType === 'create') {
                 if (opStatus === 'in_progress') {
-                  // Add file operation to list (shown in PlanView)
-                  addFileOperation(aiMessageId, {
-                    type: 'create',
-                    path: opPath,
-                    description: `Creating ${opPath}`,
-                    status: 'in-progress'
+                  // Update file operation status to in-progress (file was already added by plan_created)
+                  // Use updateFileOperation to avoid duplicates (plan_created already added it as 'pending')
+                  updateFileOperation(aiMessageId, opPath, {
+                    status: 'in-progress',
+                    description: `Creating ${opPath}`
                   })
                 } else if (opStatus === 'complete' && opContent !== undefined) {
                   // Mark file operation as complete
@@ -900,6 +929,23 @@ Just describe your project or share the code that needs fixing!`)
                       }
                     }, 500)
                   }, index * 2500) // Stagger commands
+                })
+              }
+              break
+
+            case 'server_started':
+            case 'preview_ready':
+            case 'docker_running':
+              // Handle server/preview ready events - update projectStore with server URL
+              // Backend may send: server_started, preview_ready, or docker_running
+              const serverUrl = event.data?.url || event.data?.preview_url || event.data?.server_url || event.url
+              const serverPort = event.data?.port || event.port
+              if (serverUrl) {
+                console.log(`[${event.type}] Dev server ready at:`, serverUrl, 'port:', serverPort)
+                // Update the projectStore with server info
+                useProjectStore.setState({
+                  serverUrl,
+                  isServerRunning: true
                 })
               }
               break

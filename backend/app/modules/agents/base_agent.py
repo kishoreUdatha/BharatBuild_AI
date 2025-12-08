@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, InitVar
 from app.utils.claude_client import claude_client
 from app.core.logging_config import logger
 from app.core.config import settings
@@ -14,7 +14,12 @@ class AgentContext:
     """
     user_request: str
     project_id: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: Optional[Dict[str, Any]] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Ensure metadata is never None - always use empty dict as fallback"""
+        if self.metadata is None:
+            self.metadata = {}
 
 
 class BaseAgent(ABC):

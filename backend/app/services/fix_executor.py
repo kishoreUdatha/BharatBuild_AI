@@ -24,7 +24,8 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from app.core.logging_config import logger
-from app.modules.agents.fixer_agent import FixerAgent
+from app.modules.agents.production_fixer_agent import production_fixer_agent
+from app.modules.agents.base_agent import AgentContext
 from app.modules.automation.context_engine import ContextEngine
 from app.services.unified_storage import UnifiedStorageService as UnifiedStorageManager
 from app.services.restart_manager import restart_project
@@ -79,12 +80,17 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
         logger.info(f"[FixExecutor:{project_id}] Scanned {len(all_files_list)} project files")
 
         # Convert to Dict[str, str] format for detect_tech_stack_from_files and other uses
-        # Use 'or' to convert None to empty string (get returns None if key exists but value is None)
-        all_files: Dict[str, str] = {
-            f.get('path', ''): (f.get('content') or '')
-            for f in all_files_list
-            if f.get('path')
-        }
+        # Robust null handling: skip invalid entries, convert None content to empty string
+        all_files: Dict[str, str] = {}
+        for f in all_files_list:
+            if f is None or not isinstance(f, dict):
+                continue
+            path = f.get('path')
+            if not path or not isinstance(path, str):
+                continue
+            content = f.get('content')
+            # Convert None, non-string, or any falsy content to empty string
+            all_files[path] = content if isinstance(content, str) else ''
 
         # Build errors list from log_payload (convert to ContextEngine format)
         errors = []
@@ -152,10 +158,7 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
 
         logger.info(f"[FixExecutor:{project_id}] Built file context with {len(project_files)} files")
 
-        # Initialize Fixer Agent
-        fixer = FixerAgent()
-
-        # Build context for fixer (Bolt.new style - includes missing modules info!)
+        # Build context for ProductionFixerAgent (using AgentContext)
         # Derive sibling files from missing_modules (files in same directory as suggested paths)
         sibling_files = []
         for missing in context_payload.missing_modules:
@@ -168,23 +171,29 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
                     if file_dir == suggested_dir and file_path not in sibling_files:
                         sibling_files.append(file_path)
 
-        file_context = {
-            "files": project_files,
-            "file_tree": list(project_files.keys()),
-            "tech_stack": context_payload.tech_stack,
-            "log_payload": log_payload,
-            "missing_modules": context_payload.missing_modules,  # Tell fixer what files to CREATE
-            "sibling_files": sibling_files  # Files in same directory as missing modules
-        }
-
-        # Call Fixer Agent
-        logger.info(f"[FixExecutor:{project_id}] Calling Fixer Agent with {len(project_files)} files, {len(context_payload.missing_modules)} missing modules")
-
-        result = await fixer.fix_error(
-            error={"description": error_description, "source": "auto-fix"},
+        # Create AgentContext for ProductionFixerAgent
+        agent_context = AgentContext(
             project_id=project_id,
-            file_context=file_context
+            user_request=f"Fix error: {error_description}",
+            metadata={
+                "error_message": error_description,
+                "stack_trace": "\n".join([e.get("stack", "") for e in errors if e.get("stack")]),
+                "project_files": list(project_files.keys()),
+                "file_contents": project_files,
+                "tech_stack": context_payload.tech_stack,
+                "missing_modules": context_payload.missing_modules,
+                "sibling_files": sibling_files,
+                "environment": {
+                    "framework": context_payload.tech_stack,
+                    "project_type": "auto-detected",
+                }
+            }
         )
+
+        # Call ProductionFixerAgent (singleton instance)
+        logger.info(f"[FixExecutor:{project_id}] Calling ProductionFixerAgent with {len(project_files)} files, {len(context_payload.missing_modules)} missing modules")
+
+        result = await production_fixer_agent.process(agent_context)
 
         if not result.get("success"):
             return {
@@ -194,16 +203,22 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
                 "files_modified": []
             }
 
-        # ========== PARSE RESPONSE (Bolt.new style - supports <file> blocks!) ==========
-        response_text = result.get("response", "")
-
-        # First try to parse <file> blocks (for NEW file creation - Bolt.new style)
-        file_blocks = parse_file_blocks(response_text)
-
-        # Also try to parse <patch> blocks (for existing file modifications)
+        # ========== GET FIXES FROM PRODUCTIONFIXTRAGENT (HYBRID) ==========
+        # ProductionFixerAgent now returns:
+        # - fixed_files: Full content for new/missing files
+        # - patches: Unified diff for existing files
+        file_blocks = result.get("fixed_files", [])
         patches = result.get("patches", [])
-        if not patches:
-            patches = parse_patches(response_text)
+
+        # Also check for new_files_created (missing config files)
+        new_files_created = result.get("new_files_created", [])
+        if new_files_created:
+            # Add new files to file_blocks if not already there
+            for new_file in new_files_created:
+                if new_file not in file_blocks:
+                    file_blocks.append(new_file)
+
+        logger.info(f"[FixExecutor:{project_id}] Got {len(patches)} patches + {len(file_blocks)} full files")
 
         if not file_blocks and not patches:
             return {
@@ -235,12 +250,12 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
             except Exception as e:
                 logger.error(f"[FixExecutor:{project_id}] Failed to create file {file_path}: {e}")
 
-        # ========== APPLY PATCHES (MODIFY EXISTING FILES) ==========
+        # ========== APPLY UNIFIED DIFF PATCHES (MODIFY EXISTING FILES) ==========
         patches_applied = 0
 
-        for patch in patches:
-            file_path = patch.get("file")
-            patch_content = patch.get("content")
+        for patch_info in patches:
+            file_path = patch_info.get("path")
+            patch_content = patch_info.get("patch")
 
             if not file_path or not patch_content:
                 continue
@@ -254,19 +269,32 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
                     except Exception:
                         current_content = ""
 
-                # Apply patch
+                # Apply unified diff patch
                 new_content = apply_unified_patch(current_content or "", patch_content)
 
-                if new_content and new_content != current_content:
+                if new_content is None:
+                    # Patch parsing failed - log with details for debugging
+                    logger.error(f"[FixExecutor:{project_id}] ❌ Patch parsing FAILED for {file_path}. "
+                                f"Patch content (first 200 chars): {patch_content[:200]}...")
+                    # Try to recover by applying as full file replacement if patch looks like complete file
+                    if not patch_content.startswith('---') and not patch_content.startswith('@@'):
+                        logger.info(f"[FixExecutor:{project_id}] Attempting full file replacement for {file_path}")
+                        await storage.write_to_sandbox(project_id, file_path, patch_content, user_id)
+                        if file_path not in files_modified:
+                            files_modified.append(file_path)
+                        patches_applied += 1
+                elif new_content != current_content:
                     # Save patched file (use write_to_sandbox with user_id)
                     await storage.write_to_sandbox(project_id, file_path, new_content, user_id)
                     if file_path not in files_modified:
                         files_modified.append(file_path)
                     patches_applied += 1
-                    logger.info(f"[FixExecutor:{project_id}] Applied patch to {file_path}")
+                    logger.info(f"[FixExecutor:{project_id}] ✅ Applied unified diff patch to {file_path}")
+                else:
+                    logger.warning(f"[FixExecutor:{project_id}] ⚠️ Patch produced no changes for {file_path}")
 
             except Exception as e:
-                logger.error(f"[FixExecutor:{project_id}] Failed to apply patch to {file_path}: {e}")
+                logger.error(f"[FixExecutor:{project_id}] ❌ Failed to apply patch to {file_path}: {e}")
 
         # ========== STEP 5: RESTART PROJECT (Bolt.new style) ==========
         # After patches/files are applied, restart Docker/Preview so changes take effect
@@ -303,40 +331,74 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
 
 
 def build_error_description(log_payload: Dict[str, Any]) -> str:
-    """Build error description from LogBus payload"""
+    """Build error description from LogBus payload with robust null handling"""
+    if log_payload is None:
+        return ""
+
     parts = []
 
+    def safe_get(d: Any, key: str, default: str = "") -> str:
+        """Safely get a string value from a dict, handling None and non-dict inputs"""
+        if d is None or not isinstance(d, dict):
+            return default
+        val = d.get(key, default)
+        return str(val) if val is not None else default
+
     # Browser errors
-    for error in log_payload.get("browser_errors", [])[:5]:
-        msg = error.get("message", "")
-        file = error.get("file", "")
-        line = error.get("line", "")
-        parts.append(f"Browser Error: {msg}")
+    browser_errors = log_payload.get("browser_errors") or []
+    for error in browser_errors[:5]:
+        if error is None or not isinstance(error, dict):
+            continue
+        msg = safe_get(error, "message")
+        file = safe_get(error, "file")
+        line = safe_get(error, "line")
+        if msg:
+            parts.append(f"Browser Error: {msg}")
         if file:
             parts.append(f"  Location: {file}:{line}")
-        if error.get("stack"):
-            parts.append(f"  Stack: {error['stack'][:300]}")
+        stack = safe_get(error, "stack")
+        if stack:
+            parts.append(f"  Stack: {stack[:300]}")
 
     # Build errors
-    for error in log_payload.get("build_errors", [])[:5]:
-        msg = error.get("message", "")
-        parts.append(f"Build Error: {msg}")
+    build_errors = log_payload.get("build_errors") or []
+    for error in build_errors[:5]:
+        if error is None or not isinstance(error, dict):
+            continue
+        msg = safe_get(error, "message")
+        if msg:
+            parts.append(f"Build Error: {msg}")
 
     # Backend errors
-    for error in log_payload.get("backend_errors", [])[:3]:
-        msg = error.get("message", "")
-        parts.append(f"Backend Error: {msg}")
+    backend_errors = log_payload.get("backend_errors") or []
+    for error in backend_errors[:3]:
+        if error is None or not isinstance(error, dict):
+            continue
+        msg = safe_get(error, "message")
+        if msg:
+            parts.append(f"Backend Error: {msg}")
 
     # Docker errors
-    for error in log_payload.get("docker_errors", [])[:2]:
-        msg = error.get("message", "")
-        parts.append(f"Docker Error: {msg}")
+    docker_errors = log_payload.get("docker_errors") or []
+    for error in docker_errors[:2]:
+        if error is None:
+            continue
+        if isinstance(error, dict):
+            msg = safe_get(error, "message")
+        else:
+            msg = str(error)
+        if msg:
+            parts.append(f"Docker Error: {msg}")
 
     # Network errors (less common to fix)
-    for error in log_payload.get("network_errors", [])[:2]:
-        msg = error.get("message", "")
-        url = error.get("url", "")
-        parts.append(f"Network Error: {msg} (URL: {url})")
+    network_errors = log_payload.get("network_errors") or []
+    for error in network_errors[:2]:
+        if error is None or not isinstance(error, dict):
+            continue
+        msg = safe_get(error, "message")
+        url = safe_get(error, "url")
+        if msg:
+            parts.append(f"Network Error: {msg} (URL: {url})")
 
     return "\n".join(parts)
 
@@ -454,6 +516,47 @@ def parse_file_blocks(response: str) -> List[Dict[str, str]]:
 
     logger.info(f"[FixExecutor] Parsed {len(file_blocks)} file blocks from response")
     return file_blocks
+
+
+def parse_newfile_blocks(response: str) -> List[Dict[str, str]]:
+    """
+    Parse <newfile> blocks from Fixer Agent response.
+
+    This is for creating missing config files like tsconfig.node.json, postcss.config.js.
+
+    Format:
+    <newfile path="tsconfig.node.json">
+    {
+      "compilerOptions": { ... }
+    }
+    </newfile>
+    """
+    newfile_blocks = []
+
+    # Pattern: <newfile path="...">content</newfile>
+    pattern = r'<newfile\s+path=["\']([^"\']+)["\']>(.*?)</newfile>'
+    for match in re.finditer(pattern, response, re.DOTALL):
+        file_path = match.group(1).strip()
+        content = match.group(2).strip()
+
+        # Remove markdown code blocks if present
+        if content.startswith('```'):
+            lines = content.split('\n')
+            if lines:
+                lines = lines[1:]  # Remove first line (```json etc)
+            if lines and lines[-1].strip() == '```':
+                lines = lines[:-1]  # Remove last line
+            content = '\n'.join(lines)
+
+        newfile_blocks.append({
+            "path": file_path,
+            "content": content.strip()
+        })
+
+    if newfile_blocks:
+        logger.info(f"[FixExecutor] Parsed {len(newfile_blocks)} newfile blocks: {[f['path'] for f in newfile_blocks]}")
+
+    return newfile_blocks
 
 
 def detect_tech_stack_from_files(all_files: Dict[str, str]) -> str:

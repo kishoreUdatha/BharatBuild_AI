@@ -30,6 +30,7 @@ class FixerAgent(BaseAgent):
 
 Your purpose:
 Fix errors in the user's project by returning MINIMAL and SAFE code patches using unified diff format.
+ALSO create missing files when the error is clearly about a file that doesn't exist (ENOENT errors).
 
 You will receive:
 1. The user's problem description
@@ -44,12 +45,14 @@ Your responsibilities:
 - Modify ONLY the files provided.
 - Produce a minimal patch that fixes the exact issue.
 - Do NOT rewrite entire files.
-- Do NOT create new files unless explicitly required for the fix.
+- CREATE missing config files when the error indicates a file is missing (ENOENT, "no such file", "Failed to resolve config file").
 - Do NOT modify unrelated code.
 - NEVER hallucinate file paths or folder names.
 - If you need another file's content, request it explicitly.
 
-Patch Rules:
+Output Rules:
+
+1. For PATCHING existing files, use <patch> blocks:
 - Every modification must be inside <patch> ... </patch>
 - Use standard unified diff format:
   --- path/to/file
@@ -59,6 +62,52 @@ Patch Rules:
   + new line
 - Only output patches, no explanations outside <patch> blocks.
 - If no change is needed, respond with: <patch></patch>
+
+2. For CREATING missing files, use <newfile> blocks:
+- Use <newfile path="path/to/file">content</newfile>
+- This is for creating files that don't exist but are required (config files, missing imports, etc.)
+
+COMMON MISSING CONFIG FILES (use these templates):
+
+tsconfig.node.json (required when tsconfig.json has references to it):
+```json
+{
+  "compilerOptions": {
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "strict": true
+  },
+  "include": ["vite.config.ts"]
+}
+```
+
+postcss.config.js (required for Tailwind CSS):
+```javascript
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+```
+
+tailwind.config.js (required for Tailwind CSS):
+```javascript
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}
+```
 
 Constraints:
 - If logs contradict file content, rely on file content.
@@ -129,7 +178,17 @@ End of rules."""
         Returns:
             Fixed files and instructions
         """
-        metadata = context.metadata or {}
+        if context is None:
+            logger.error("[FixerAgent] Received None context")
+            return {
+                "success": False,
+                "error": "Invalid context: context is None",
+                "fixed_files": [],
+                "instructions": None
+            }
+
+        # Ensure metadata is never None
+        metadata = context.metadata if context.metadata is not None else {}
         error_message = metadata.get("error_message", "")
         stack_trace = metadata.get("stack_trace", "")
         affected_files = metadata.get("affected_files", [])
@@ -271,6 +330,45 @@ If additional commands are needed (npm install, pip install, etc.), use <instruc
             logger.info(f"Fixer requested {len(requested)} additional files: {requested}")
 
         return requested
+
+    def _parse_newfile_blocks(self, response: str) -> List[Dict[str, str]]:
+        """
+        Parse <newfile path="...">...</newfile> blocks from response.
+
+        These are for creating new files that don't exist (missing config files).
+
+        Args:
+            response: Raw response from Claude
+
+        Returns:
+            List of new file dictionaries with path and content
+        """
+        new_files = []
+        newfile_pattern = r'<newfile\s+path="([^"]+)">(.*?)</newfile>'
+        matches = re.findall(newfile_pattern, response, re.DOTALL)
+
+        for path, content in matches:
+            # Clean up content - remove markdown code blocks if present
+            content = content.strip()
+            if content.startswith('```'):
+                lines = content.split('\n')
+                # Remove first line (```json or ```javascript etc)
+                if lines:
+                    lines = lines[1:]
+                # Remove last line if it's just ```
+                if lines and lines[-1].strip() == '```':
+                    lines = lines[:-1]
+                content = '\n'.join(lines)
+
+            new_files.append({
+                "path": path.strip(),
+                "content": content.strip()
+            })
+
+        if new_files:
+            logger.info(f"Parsed {len(new_files)} new files to create: {[f['path'] for f in new_files]}")
+
+        return new_files
 
     async def fix_error(
         self,
@@ -441,7 +539,9 @@ ALL COLLECTED LOGS:
 TECH STACK:
 {context_payload.tech_stack if context_payload else (json.dumps(tech_stack, indent=2) if tech_stack else "Not specified")}
 
-Analyze the error and provide a FIX using unified diff <patch> format.
+Analyze the error and provide a FIX:
+- If the error is about a MISSING FILE (ENOENT, "no such file", "Failed to resolve config file"), CREATE the file using <newfile path="...">content</newfile>
+- For other errors, use <patch> format to fix existing files.
 """
 
         # Call Claude
@@ -455,16 +555,18 @@ Analyze the error and provide a FIX using unified diff <patch> format.
         # Parse response - prefer patches over full files
         patches = self._parse_patch_blocks(response)
         fixed_files = self._parse_file_blocks(response)
+        new_files = self._parse_newfile_blocks(response)  # For creating missing files
         instructions = self._parse_instructions(response)
         requested_files = self._parse_request_files(response)
 
-        logger.info(f"[FixerAgent] Got {len(patches)} patches, {len(fixed_files)} full files, {len(requested_files)} file requests for error: {error_message[:50]}...")
+        logger.info(f"[FixerAgent] Got {len(patches)} patches, {len(fixed_files)} full files, {len(new_files)} new files, {len(requested_files)} file requests for error: {error_message[:50]}...")
 
         return {
             "success": True,
             "response": response,
             "patches": patches,  # Preferred - minimal changes
             "fixed_files": fixed_files,  # Fallback - full file replacement
+            "new_files": new_files,  # For creating missing config files
             "instructions": instructions,
             "requested_files": requested_files,  # Files agent needs for more context
             "error_fixed": error_message
