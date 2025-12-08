@@ -318,6 +318,21 @@ export default {
 }
 ```
 
+### tsconfig.node.json
+```json
+{
+  "compilerOptions": {
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "strict": true
+  },
+  "include": ["vite.config.ts"]
+}
+```
+
 ### index.html
 ```html
 <!DOCTYPE html>
@@ -445,12 +460,30 @@ THINK LIKE BOLT.NEW: Generate fast, beautiful, and working code that impresses u
         Yields:
             Events with file content, progress updates, etc.
         """
+        # Validate input
+        if not user_prompt or not isinstance(user_prompt, str):
+            logger.error("[BoltInstantAgent] Invalid user_prompt provided")
+            yield {
+                "type": "error",
+                "message": "Invalid input: user_prompt is required and must be a string"
+            }
+            return
+
+        user_prompt = user_prompt.strip()
+        if len(user_prompt) < 3:
+            logger.error("[BoltInstantAgent] User prompt too short")
+            yield {
+                "type": "error",
+                "message": "Invalid input: user_prompt is too short"
+            }
+            return
+
         logger.info(f"[BoltInstantAgent] Generating project: {user_prompt[:100]}...")
 
         # Build the message
         message = user_prompt
-        if project_name:
-            message = f"Project Name: {project_name}\n\nDescription: {user_prompt}"
+        if project_name and isinstance(project_name, str):
+            message = f"Project Name: {project_name.strip()}\n\nDescription: {user_prompt}"
 
         try:
             # Stream the response
@@ -481,6 +514,15 @@ THINK LIKE BOLT.NEW: Generate fast, beautiful, and working code that impresses u
         Returns:
             GenerationResult with files and metadata
         """
+        # Validate input
+        if not user_prompt or not isinstance(user_prompt, str):
+            logger.error("[BoltInstantAgent] generate_sync: Invalid user_prompt")
+            return GenerationResult(
+                success=False,
+                files={},
+                error="Invalid input: user_prompt is required and must be a string"
+            )
+
         full_response = ""
 
         async for chunk in self.generate(user_prompt, project_name, stream=False):

@@ -195,6 +195,7 @@ project-name/
 ├── vite.config.ts
 ├── tailwind.config.js
 ├── tsconfig.json
+├── tsconfig.node.json
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example
@@ -1166,14 +1167,25 @@ Example format:
     async def process(self, context: AgentContext) -> Dict[str, Any]:
         """
         Create project plan from user request
-        
+
         Args:
             context: AgentContext with user request
-        
+
         Returns:
             Structured project plan
         """
-        metadata = context.metadata or {}
+        # Validate context
+        if context is None:
+            logger.error("[PlannerAgent] Received None context")
+            return {
+                "success": False,
+                "error": "Invalid context: context is None",
+                "plan": None,
+                "raw_response": ""
+            }
+
+        # Ensure metadata is never None
+        metadata = context.metadata if context.metadata is not None else {}
         
         prompt = f"""
 User Request: {context.user_request}

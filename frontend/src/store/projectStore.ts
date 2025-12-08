@@ -32,6 +32,10 @@ interface ProjectState {
   sessionId: string | null  // Temp session for current generation
   downloadUrl: string | null  // URL to download ZIP
 
+  // Live preview server state
+  serverUrl: string | null  // URL of running dev server
+  isServerRunning: boolean  // Whether server is running
+
   // Actions
   setCurrentProject: (project: Project) => void
   updateProject: (updates: Partial<Project>) => void
@@ -314,16 +318,30 @@ export const useProjectStore = create<ProjectState>()(
   },
 
   loadFromBackend: (projectData) => {
+    // Handle null/undefined projectData
+    if (!projectData) {
+      console.warn('[ProjectStore] loadFromBackend called with null/undefined projectData')
+      return
+    }
+
     // Convert backend tree format to frontend ProjectFile format
     // Backend returns hierarchical tree with: path, name, type ('file'|'folder'), content, language, children
     const convertTree = (items: any[]): ProjectFile[] => {
-      return items.map((item: any) => ({
-        path: item.path,
-        content: item.content || '',
-        language: item.language || 'plaintext',
-        type: item.type === 'folder' ? 'folder' : 'file',
-        children: item.children ? convertTree(item.children) : undefined
-      }))
+      // Handle null/undefined items array
+      if (!items || !Array.isArray(items)) {
+        console.warn('[ProjectStore] convertTree received invalid items:', items)
+        return []
+      }
+
+      return items
+        .filter((item: any) => item != null && typeof item === 'object' && item.path)
+        .map((item: any) => ({
+          path: item.path || '',
+          content: item.content ?? '',
+          language: item.language || 'plaintext',
+          type: item.type === 'folder' ? 'folder' : 'file',
+          children: item.children ? convertTree(item.children) : undefined
+        }))
     }
 
     // Backend now returns `tree` (hierarchical) instead of `files` (flat)
@@ -445,15 +463,20 @@ export const useProjectStore = create<ProjectState>()(
           if (response.ok) {
             const data = await response.json()
             if (data.success && data.tree) {
-              // Convert backend tree to ProjectFile format
+              // Convert backend tree to ProjectFile format with null safety
               const convertTree = (items: any[]): ProjectFile[] => {
-                return items.map((item: any) => ({
-                  path: item.path,
-                  content: item.content || '',
-                  language: item.language || 'plaintext',
-                  type: item.type === 'folder' ? 'folder' : 'file',
-                  children: item.children ? convertTree(item.children) : undefined
-                }))
+                if (!items || !Array.isArray(items)) {
+                  return []
+                }
+                return items
+                  .filter((item: any) => item != null && typeof item === 'object' && item.path)
+                  .map((item: any) => ({
+                    path: item.path || '',
+                    content: item.content ?? '',
+                    language: item.language || 'plaintext',
+                    type: item.type === 'folder' ? 'folder' : 'file',
+                    children: item.children ? convertTree(item.children) : undefined
+                  }))
               }
 
               const files = convertTree(data.tree)
@@ -497,10 +520,20 @@ export const useProjectStore = create<ProjectState>()(
       name: 'bharatbuild-project-storage',
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
-        // Only persist essential data for recovery
-        currentProject: state.currentProject,
-        openTabs: state.openTabs,
-        activeTabPath: state.activeTabPath
+        // Only persist project ID and metadata - NOT files (they come from backend)
+        // This prevents stale files from showing when no project is selected
+        currentProject: state.currentProject ? {
+          id: state.currentProject.id,
+          name: state.currentProject.name,
+          description: state.currentProject.description,
+          files: [],  // Don't persist files - reload from backend
+          createdAt: state.currentProject.createdAt,
+          updatedAt: state.currentProject.updatedAt,
+          isSynced: false  // Mark as not synced so we know to reload
+        } : null,
+        // Don't persist tabs either - they reference files that aren't persisted
+        openTabs: [],
+        activeTabPath: null
       }),
       // Custom serialization to handle Set
       serialize: (state) => JSON.stringify(state),

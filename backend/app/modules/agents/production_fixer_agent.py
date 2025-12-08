@@ -36,11 +36,15 @@ class ErrorAnalysis:
 
 @dataclass
 class FixAttempt:
-    """Track fix attempts to prevent loops"""
+    """Track fix attempts to prevent loops and inform retries"""
     timestamp: datetime
     error_hash: str
     files_modified: List[str]
     success: bool
+    attempt_number: int = 1
+    fix_description: str = ""  # What fix was attempted
+    result_error: str = ""     # Error after this fix (if any)
+    approach_used: str = ""    # e.g., "syntax_fix", "import_fix", "dependency_fix"
 
 
 class ProductionFixerAgent(BaseAgent):
@@ -59,7 +63,7 @@ class ProductionFixerAgent(BaseAgent):
     """
 
     # Safety limits
-    MAX_FIX_ATTEMPTS_PER_ERROR = 3
+    MAX_FIX_ATTEMPTS_PER_ERROR = 10  # Increased to match frontend retry loop
     MAX_FILES_TO_FIX_AT_ONCE = 5
     MAX_PROJECT_FILES_TO_REWRITE = 10  # Prevents mass rewrites
 
@@ -216,28 +220,41 @@ Your job is to analyze errors and generate precise fixes that work the FIRST tim
 - Timeout errors
 - Setup/teardown errors
 
-## OUTPUT FORMAT (STRICT):
+## OUTPUT FORMAT (HYBRID - Bolt.new Style):
 
-<file path="exact/path/to/file.ext">
+### FOR EXISTING FILES - Use UNIFIED DIFF (minimal, fast):
+<patch path="exact/path/to/file.ext">
+--- a/exact/path/to/file.ext
++++ b/exact/path/to/file.ext
+@@ -5,7 +5,8 @@
+ import React from 'react';
+-import { Button } from './Button';
++import { Button } from './components/Button';
++import { Header } from './components/Header';
+
+ function App() {
+</patch>
+
+### FOR NEW/MISSING FILES - Use FULL FILE:
+<file path="config/newfile.json">
 COMPLETE FILE CONTENT
-(No omissions, no "..." placeholders)
 </file>
 
+### FOR PACKAGE COMMANDS:
 <instructions>
-# Package manager commands:
 npm install package-name
 pip install package-name
 go get package
-cargo add package
-bundle install
-composer require package
-
-# Build commands:
-docker build --no-cache .
-npm run build
-go build ./...
-cargo build
 </instructions>
+
+## DIFF FORMAT RULES:
+1. Use unified diff format (like git diff)
+2. Include @@ hunk headers with line numbers
+3. Lines starting with '-' are REMOVED
+4. Lines starting with '+' are ADDED
+5. Lines starting with ' ' (space) are CONTEXT
+6. Keep 3 lines of context around changes
+7. Multiple hunks allowed for multiple changes in same file
 
 ## EXAMPLES BY TECHNOLOGY:
 
@@ -255,19 +272,23 @@ Error: ModuleNotFoundError: No module named 'fastapi'
 pip install fastapi uvicorn
 </instructions>
 
-### Python - Type Error:
+### Python - Type Error (UNIFIED DIFF for existing file):
 Error: TypeError: 'NoneType' object is not subscriptable
 File: app/api/users.py
 
-<file path="app/api/users.py">
-from typing import Optional
-
-def get_user(user_id: int) -> Optional[dict]:
-    user = db.get(user_id)
-    if user is None:
-        return None
-    return user.to_dict()
-</file>
+<patch path="app/api/users.py">
+--- a/app/api/users.py
++++ b/app/api/users.py
+@@ -1,8 +1,12 @@
++from typing import Optional
++
+ def get_user(user_id: int):
+     user = db.get(user_id)
+-    return user.to_dict()
++    if user is None:
++        return None
++    return user.to_dict()
+</patch>
 
 ### Go - Import Error:
 Error: cannot find package "github.com/gin-gonic/gin"
@@ -355,16 +376,49 @@ environment:
 flutter pub get
 </instructions>
 
+## RETRY STRATEGY (When Previous Fixes Failed):
+
+If this is a RETRY attempt (previous_attempts > 0):
+1. READ the "PREVIOUS ATTEMPTS" section carefully
+2. UNDERSTAND why previous fixes failed (new error message)
+3. TRY A DIFFERENT APPROACH - don't repeat what failed
+4. ESCALATE complexity if simple fixes didn't work:
+   - Attempt 1: Fix syntax/typo
+   - Attempt 2: Fix imports/paths
+   - Attempt 3: Add missing dependencies
+   - Attempt 4: Restructure code
+   - Attempt 5+: Consider broader changes
+
+### Strategy by Retry Count:
+- Retry 1-2: Focus on the exact error location
+- Retry 3-4: Look at related files that might cause the issue
+- Retry 5-6: Consider dependency/version issues
+- Retry 7+: More comprehensive refactoring may be needed
+
+### If Error Changed After Previous Fix:
+- Your previous fix partially worked!
+- Now fix the NEW error (different from before)
+- Don't undo your previous fix unless it caused the new error
+
+### If Same Error Persists:
+- Your previous fix didn't address the root cause
+- Look DEEPER at the stack trace
+- Consider if the file path is wrong
+- Check for multiple places where the error could originate
+
 ## CRITICAL RULES:
 
-1. OUTPUT COMPLETE FILES - Never use "..." or "rest unchanged"
-2. FIX ROOT CAUSE - Don't just suppress errors
-3. PRESERVE ARCHITECTURE - Don't restructure the project
-4. MATCH EXISTING PATTERNS - Use same coding style
-5. VALIDATE FIXES - Ensure imports work, types match
-6. MAX {max_files} FILES - Don't fix unrelated files
-7. TECHNOLOGY AWARE - Use correct syntax for the language
-8. PACKAGE MANAGER AWARE - Use correct command (npm/yarn/pnpm, pip/poetry, etc.)
+1. EXISTING FILES → Use <patch> with unified diff (minimal changes)
+2. NEW/MISSING FILES → Use <file> with complete content
+3. FIX ROOT CAUSE - Don't just suppress errors
+4. PRESERVE ARCHITECTURE - Don't restructure the project
+5. MATCH EXISTING PATTERNS - Use same coding style
+6. VALIDATE FIXES - Ensure imports work, types match
+7. MAX {max_files} FILES - Don't fix unrelated files
+8. TECHNOLOGY AWARE - Use correct syntax for the language
+9. PACKAGE MANAGER AWARE - Use correct command (npm/yarn/pnpm, pip/poetry, etc.)
+10. MINIMAL CHANGES - Only change what's necessary to fix the error
+11. ON RETRY - Try a DIFFERENT approach than what failed before
 
 ## WHY YOU SUCCEED:
 - You receive EXACT error logs
@@ -398,11 +452,64 @@ Be surgical. Fix only what's broken. Output complete files.
         # Track fix attempts to prevent infinite loops
         self.fix_history: Dict[str, List[FixAttempt]] = {}
 
+    def _get_previous_attempts_context(self, error_hash: str) -> str:
+        """Build context about previous fix attempts to help Claude try different approaches"""
+        if error_hash not in self.fix_history or not self.fix_history[error_hash]:
+            return ""
+
+        attempts = self.fix_history[error_hash]
+        attempt_count = len(attempts)
+
+        if attempt_count == 0:
+            return ""
+
+        lines = [
+            f"\n## PREVIOUS ATTEMPTS ({attempt_count} failed - TRY A DIFFERENT APPROACH!)",
+            ""
+        ]
+
+        for i, attempt in enumerate(attempts[-3:], 1):  # Show last 3 attempts
+            lines.append(f"### Attempt {attempt.attempt_number}:")
+            lines.append(f"- Files modified: {', '.join(attempt.files_modified) if attempt.files_modified else 'None'}")
+            if attempt.fix_description:
+                lines.append(f"- What was tried: {attempt.fix_description}")
+            if attempt.result_error:
+                lines.append(f"- Result error: {attempt.result_error[:200]}...")
+            if attempt.approach_used:
+                lines.append(f"- Approach: {attempt.approach_used}")
+            lines.append("")
+
+        # Add guidance based on attempt count
+        if attempt_count >= 5:
+            lines.append("⚠️ MULTIPLE FAILURES - Consider:")
+            lines.append("- Is there a deeper architectural issue?")
+            lines.append("- Are there multiple files that need changing together?")
+            lines.append("- Is a dependency missing or wrong version?")
+        elif attempt_count >= 3:
+            lines.append("⚠️ Several attempts failed - try a COMPLETELY different approach!")
+        else:
+            lines.append("💡 Previous fix didn't work - analyze what went wrong and try differently")
+
+        return "\n".join(lines)
+
     async def process(self, context: AgentContext) -> Dict[str, Any]:
         """
-        Fix errors with safety checks and validation
+        Fix errors with safety checks and validation.
+        Supports BOTH fixing existing files AND creating new files (for missing configs).
         """
-        metadata = context.metadata or {}
+        # Validate context
+        if context is None:
+            logger.error("[ProductionFixerAgent] Received None context")
+            return {
+                "success": False,
+                "error": "Invalid context: context is None",
+                "fixed_files": [],
+                "patches": [],
+                "instructions": None
+            }
+
+        # Ensure metadata is never None
+        metadata = context.metadata if context.metadata is not None else {}
 
         # Extract error information
         error_message = metadata.get("error_message", "")
@@ -426,26 +533,78 @@ Be surgical. Fix only what's broken. Output complete files.
             context=context
         )
 
-        # Validate files to fix
+        # Check if this is a MISSING FILE error (ENOENT, "no such file", etc.)
+        missing_file_patterns = [
+            r'ENOENT.*?["\']([^"\']+)["\']',
+            r'Failed to resolve config file.*?["\']([^"\']+)["\']',
+            r'no such file.*?["\']([^"\']+)["\']',
+            r"Cannot find.*?'([^']+)'",
+            r'Module not found.*?["\']([^"\']+)["\']',
+        ]
+
+        missing_files = []
+        for pattern in missing_file_patterns:
+            matches = re.findall(pattern, error_message, re.IGNORECASE)
+            missing_files.extend(matches)
+
+        # Also check stack trace for missing files
+        for pattern in missing_file_patterns:
+            matches = re.findall(pattern, stack_trace, re.IGNORECASE)
+            missing_files.extend(matches)
+
+        missing_files = list(set(missing_files))
+        is_missing_file_error = len(missing_files) > 0
+
+        if is_missing_file_error:
+            logger.info(f"🔍 Detected MISSING FILE error: {missing_files}")
+
+        # Validate files to fix (existing files)
         validated_files = self._validate_target_files(
             analysis.suggested_files_to_fix,
             metadata.get("project_files", [])
         )
 
-        if not validated_files:
+        # For missing file errors, allow creating new files even if they don't exist
+        allowed_new_files = []
+        if is_missing_file_error:
+            # Common config files that are safe to create
+            safe_new_files = [
+                'tsconfig.node.json', 'tsconfig.json', 'tsconfig.app.json',
+                'postcss.config.js', 'postcss.config.cjs', 'postcss.config.mjs',
+                'tailwind.config.js', 'tailwind.config.cjs', 'tailwind.config.ts',
+                'vite.config.ts', 'vite.config.js',
+                '.env', '.env.local', '.env.example',
+                'next.config.js', 'next.config.mjs',
+                'eslint.config.js', '.eslintrc.js', '.eslintrc.json',
+                'jest.config.js', 'vitest.config.ts',
+            ]
+
+            for missing in missing_files:
+                # Extract just the filename
+                filename = missing.split('/')[-1].split('\\')[-1]
+                if filename in safe_new_files or missing.endswith(('.json', '.js', '.ts', '.mjs', '.cjs')):
+                    allowed_new_files.append(missing)
+                    logger.info(f"✅ Allowing creation of missing file: {missing}")
+
+        if not validated_files and not allowed_new_files:
             return {
                 "success": False,
-                "error": "Could not identify valid files to fix",
+                "error": "Could not identify valid files to fix or create",
                 "analysis": analysis
             }
 
         # Safety check: Don't fix too many files at once
-        if len(validated_files) > self.MAX_FILES_TO_FIX_AT_ONCE:
-            logger.warning(f"Too many files to fix ({len(validated_files)}), limiting to {self.MAX_FILES_TO_FIX_AT_ONCE}")
-            validated_files = validated_files[:self.MAX_FILES_TO_FIX_AT_ONCE]
+        all_allowed_files = list(set(validated_files + allowed_new_files))
+        if len(all_allowed_files) > self.MAX_FILES_TO_FIX_AT_ONCE:
+            logger.warning(f"Too many files ({len(all_allowed_files)}), limiting to {self.MAX_FILES_TO_FIX_AT_ONCE}")
+            all_allowed_files = all_allowed_files[:self.MAX_FILES_TO_FIX_AT_ONCE]
 
-        # Get file contents for context
+        # Get file contents for context (existing files only)
         file_contents = await self._get_file_contents(validated_files, context)
+
+        # Get previous attempts context for retry guidance
+        previous_attempts_context = self._get_previous_attempts_context(error_hash)
+        attempt_number = len(self.fix_history.get(error_hash, [])) + 1
 
         # Build safe prompt with constraints
         prompt = self._build_safe_prompt(
@@ -453,7 +612,10 @@ Be surgical. Fix only what's broken. Output complete files.
             stack_trace=stack_trace,
             analysis=analysis,
             file_contents=file_contents,
-            context=context
+            context=context,
+            allowed_new_files=allowed_new_files,  # Pass allowed new files
+            previous_attempts_context=previous_attempts_context,  # Pass retry context
+            attempt_number=attempt_number
         )
 
         # Call Claude with safety-enhanced system prompt
@@ -462,47 +624,59 @@ Be surgical. Fix only what's broken. Output complete files.
                 max_files=self.MAX_FILES_TO_FIX_AT_ONCE
             ),
             user_prompt=prompt,
-            max_tokens=8192,  # Higher for multi-file fixes
-            temperature=0.1   # Very low for precise fixes
+            max_tokens=8192,
+            temperature=0.1
         )
 
-        # Parse and validate response
-        parsed = self._parse_and_validate_response(response, validated_files)
+        # Parse and validate response (allow new files too)
+        parsed = self._parse_and_validate_response(response, all_allowed_files)
 
-        # Safety check: Verify all fixed files were in validated list
+        # Safety check: Verify all fixed files were in validated or allowed list
         unauthorized_files = [
             f['path'] for f in parsed['fixed_files']
-            if f['path'] not in validated_files
+            if f['path'] not in all_allowed_files
         ]
 
         if unauthorized_files:
             logger.error(f"❌ Claude tried to fix unauthorized files: {unauthorized_files}")
-            # Remove unauthorized files
             parsed['fixed_files'] = [
                 f for f in parsed['fixed_files']
-                if f['path'] in validated_files
+                if f['path'] in all_allowed_files
             ]
 
         # Safety check: Verify files are complete (no partial updates)
         for file_info in parsed['fixed_files']:
             if not self._is_complete_file(file_info['content']):
                 logger.warning(f"⚠️ File {file_info['path']} appears incomplete")
-                # Could reject here or request regeneration
 
-        # Record fix attempt
+        # Build description of what was fixed
+        files_fixed = [f['path'] for f in parsed['fixed_files']]
+        patches_applied = [p['path'] for p in parsed.get('patches', [])]
+        all_modified = files_fixed + patches_applied
+
+        fix_description = f"Modified files: {', '.join(all_modified)}" if all_modified else "No files modified"
+        if parsed.get('instructions'):
+            fix_description += f"; Instructions: {parsed['instructions'][:100]}"
+
+        # Record fix attempt with full context
         self._record_fix_attempt(
             error_hash=error_hash,
-            files_modified=[f['path'] for f in parsed['fixed_files']],
-            success=True
+            files_modified=all_modified,
+            success=True,
+            fix_description=fix_description,
+            approach_used=analysis.error_type  # Use error type as approach indicator
         )
 
         return {
             "success": True,
             "analysis": analysis,
-            "fixed_files": parsed['fixed_files'],
+            "fixed_files": parsed['fixed_files'],       # Full files (new/missing)
+            "patches": parsed.get('patches', []),       # Unified diff patches (existing)
             "instructions": parsed.get('instructions'),
             "validated_files": validated_files,
-            "safety_checks_passed": True
+            "new_files_created": [f for f in parsed['fixed_files'] if f['path'] in allowed_new_files],
+            "safety_checks_passed": True,
+            "attempt_number": attempt_number  # Include attempt number in response
         }
 
     async def _analyze_error(
@@ -658,11 +832,15 @@ Be surgical. Fix only what's broken. Output complete files.
         stack_trace: str,
         analysis: ErrorAnalysis,
         file_contents: Dict[str, str],
-        context: AgentContext
+        context: AgentContext,
+        allowed_new_files: List[str] = None,
+        previous_attempts_context: str = "",
+        attempt_number: int = 1
     ) -> str:
-        """Build Bolt.new-style prompt with full context"""
+        """Build Bolt.new-style prompt with full context and retry info"""
 
         metadata = context.metadata or {}
+        allowed_new_files = allowed_new_files or []
 
         # Build file context section (Bolt.new style)
         file_context_parts = []
@@ -692,8 +870,63 @@ Ports: {env_info.get('ports', [])}
 Has Docker: {env_info.get('has_docker', False)}
 """
 
+        # Build section for new files that can be created
+        new_files_section = ""
+        if allowed_new_files:
+            new_files_section = f"""
+## FILES YOU CAN CREATE (MISSING FILES):
+{', '.join(allowed_new_files)}
+
+For these missing config files, use these templates:
+
+tsconfig.node.json:
+```json
+{{
+  "compilerOptions": {{
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "strict": true
+  }},
+  "include": ["vite.config.ts"]
+}}
+```
+
+postcss.config.js:
+```javascript
+export default {{
+  plugins: {{
+    tailwindcss: {{}},
+    autoprefixer: {{}},
+  }},
+}}
+```
+
+tailwind.config.js:
+```javascript
+/** @type {{import('tailwindcss').Config}} */
+export default {{
+  content: ["./index.html", "./src/**/*.{{js,ts,jsx,tsx}}"],
+  theme: {{ extend: {{}} }},
+  plugins: [],
+}}
+```
+"""
+
+        # Build retry indicator
+        retry_indicator = ""
+        if attempt_number > 1:
+            retry_indicator = f"""
+## ⚠️ THIS IS RETRY ATTEMPT #{attempt_number}
+
+Previous fix attempts DID NOT WORK. You MUST try a DIFFERENT approach!
+{previous_attempts_context}
+"""
+
         # Build Bolt.new style prompt
-        prompt = f"""## ERROR TO FIX
+        prompt = f"""## ERROR TO FIX (Attempt #{attempt_number})
 
 **Command:** {metadata.get('command', 'unknown')}
 
@@ -706,15 +939,16 @@ Has Docker: {env_info.get('has_docker', False)}
 ```
 {stack_trace[:2000] if stack_trace else 'No stack trace available'}
 ```
-
+{retry_indicator}
 ## ENVIRONMENT
 {env_str}
 
-## FILES TO FIX (ONLY THESE):
-{', '.join(analysis.suggested_files_to_fix)}
+## FILES TO FIX (EXISTING):
+{', '.join(analysis.suggested_files_to_fix) if analysis.suggested_files_to_fix else 'None identified'}
+{new_files_section}
 
 ## CURRENT FILE CONTENTS:
-{file_context}
+{file_context if file_context.strip() else 'No existing files to show'}
 {config_context}
 
 ## ERROR ANALYSIS:
@@ -723,9 +957,10 @@ Has Docker: {env_info.get('has_docker', False)}
 - Confidence: {analysis.confidence}
 
 ## YOUR TASK:
-1. Identify the exact fix needed
-2. Output COMPLETE fixed files using <file path="...">content</file>
+1. If error is about MISSING FILE, CREATE it using <file path="...">content</file>
+2. If error is in existing file, FIX it using <file path="...">complete content</file> or <patch path="...">unified diff</patch>
 3. If packages needed, output <instructions>npm install X</instructions>
+{"4. THIS IS A RETRY - Try a COMPLETELY DIFFERENT approach than before!" if attempt_number > 1 else ""}
 
 OUTPUT THE FIX NOW:
 """
@@ -737,10 +972,11 @@ OUTPUT THE FIX NOW:
         response: str,
         validated_files: List[str]
     ) -> Dict[str, Any]:
-        """Parse response with robust validation"""
+        """Parse response with robust validation - supports HYBRID format"""
 
         result = {
-            "fixed_files": [],
+            "fixed_files": [],      # Full file content (for new files)
+            "patches": [],          # Unified diff patches (for existing files)
             "instructions": None,
             "analysis": None
         }
@@ -750,7 +986,31 @@ OUTPUT THE FIX NOW:
         if analysis_match:
             result["analysis"] = analysis_match.group(1).strip()
 
-        # Parse file blocks with multiple fallback patterns
+        # ========== PARSE PATCHES (unified diff for existing files) ==========
+        patch_patterns = [
+            r'<patch\s+path=["\']([^"\']+)["\']>(.*?)</patch>',  # Standard
+            r'<patch\s+path=([^\s>]+)>(.*?)</patch>',             # Unquoted
+        ]
+
+        for pattern in patch_patterns:
+            matches = re.findall(pattern, response, re.DOTALL | re.IGNORECASE)
+            for match in matches:
+                path, patch_content = match
+                path = path.strip()
+                patch_content = patch_content.strip()
+
+                # Only add if path is in validated files
+                if path in validated_files:
+                    result["patches"].append({
+                        "path": path,
+                        "patch": patch_content,
+                        "type": "unified_diff"
+                    })
+                    logger.info(f"📝 Parsed unified diff patch for: {path}")
+                else:
+                    logger.warning(f"⚠️ Skipping unauthorized patch: {path}")
+
+        # ========== PARSE FILE BLOCKS (full content for new files) ==========
         file_patterns = [
             r'<file\s+path=["\']([^"\']+)["\']>(.*?)</file>',  # Standard
             r'<file\s+path=([^\s>]+)>(.*?)</file>',             # Unquoted
@@ -776,6 +1036,7 @@ OUTPUT THE FIX NOW:
                         "path": path,
                         "content": content
                     })
+                    logger.info(f"📄 Parsed full file content for: {path}")
                 else:
                     logger.warning(f"⚠️ Skipping unauthorized file: {path}")
 
@@ -784,6 +1045,7 @@ OUTPUT THE FIX NOW:
         if inst_match:
             result["instructions"] = inst_match.group(1).strip()
 
+        logger.info(f"📊 Parsed {len(result['patches'])} patches + {len(result['fixed_files'])} full files")
         return result
 
     def _is_complete_file(self, content: str) -> bool:
@@ -824,18 +1086,27 @@ OUTPUT THE FIX NOW:
         self,
         error_hash: str,
         files_modified: List[str],
-        success: bool
+        success: bool,
+        fix_description: str = "",
+        result_error: str = "",
+        approach_used: str = ""
     ):
-        """Record fix attempt for loop prevention"""
+        """Record fix attempt for loop prevention and retry guidance"""
 
         if error_hash not in self.fix_history:
             self.fix_history[error_hash] = []
+
+        attempt_number = len(self.fix_history[error_hash]) + 1
 
         self.fix_history[error_hash].append(FixAttempt(
             timestamp=datetime.utcnow(),
             error_hash=error_hash,
             files_modified=files_modified,
-            success=success
+            success=success,
+            attempt_number=attempt_number,
+            fix_description=fix_description,
+            result_error=result_error,
+            approach_used=approach_used
         ))
 
     def _hash_error(self, error_message: str, stack_trace: str) -> str:
