@@ -38,6 +38,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/containers", tags=["Container Execution"])
 
 
+def safe_get_container_manager():
+    """
+    Safely get container manager, raising proper HTTP exception if Docker is unavailable.
+
+    This allows frontend to detect Docker unavailability and fall back to direct execution.
+    """
+    try:
+        return get_container_manager()
+    except RuntimeError as e:
+        error_msg = str(e)
+        if "Docker" in error_msg or "docker" in error_msg:
+            raise HTTPException(
+                status_code=503,  # Service Unavailable
+                detail=f"Docker not available: {error_msg}"
+            )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Request/Response Models
 
 class CreateContainerRequest(BaseModel):
@@ -131,7 +149,7 @@ async def create_container(
     Before creating the container, workspace files are restored from
     database if the workspace directory doesn't exist (e.g., after sandbox cleanup).
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     # Restore workspace from database if needed (Bolt.new style)
     try:
@@ -187,12 +205,27 @@ async def create_container(
             config=config,
         )
 
-        # Build preview URLs - Bolt.new style (reverse proxy) + fallback (direct ports)
+        # Build preview URLs - Direct port URLs work better on Windows Docker
         preview_urls = {}
-        for container_port, host_port in container.port_mappings.items():
-            preview_urls[str(container_port)] = f"http://localhost:{host_port}"
+        primary_url = None
 
-        # Primary URL: Bolt.new-style reverse proxy (infinite scaling, no port collision)
+        # Common dev server ports in priority order
+        priority_ports = [3000, 5173, 5174, 4173, 8080, 8000, 5000]
+
+        for container_port, host_port in container.port_mappings.items():
+            direct_url = f"http://localhost:{host_port}"
+            preview_urls[str(container_port)] = direct_url
+
+            # Set primary URL from first matching priority port
+            if primary_url is None and int(container_port) in priority_ports:
+                primary_url = direct_url
+
+        # Fallback to first available port if no priority port found
+        if primary_url is None and container.port_mappings:
+            first_host_port = list(container.port_mappings.values())[0]
+            primary_url = f"http://localhost:{first_host_port}"
+
+        # Also include reverse proxy as fallback (may work in some setups)
         bolt_style_preview_url = f"/api/v1/preview/{project_id}/"
 
         return ContainerInfo(
@@ -201,8 +234,9 @@ async def create_container(
             status=container.status.value,
             ports=container.port_mappings,
             preview_urls={
-                "primary": bolt_style_preview_url,  # Bolt.new-style reverse proxy
-                **preview_urls  # Fallback: direct port URLs for HMR
+                "primary": primary_url or bolt_style_preview_url,  # Direct URL as primary
+                "reverse_proxy": bolt_style_preview_url,  # Reverse proxy as fallback
+                **preview_urls  # All port URLs
             },
             created_at=container.created_at.isoformat(),
             memory_limit=config.memory_limit,
@@ -231,7 +265,7 @@ async def execute_command(
 
     Returns: Server-Sent Events stream with real-time output
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     async def event_stream():
         """Generate SSE events from command execution"""
@@ -274,7 +308,7 @@ async def write_file(
     - User saves file from editor
     - Creating new files
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     try:
         success = await manager.write_file(
@@ -304,7 +338,7 @@ async def list_files(
     - File explorer in UI
     - Getting project structure
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     try:
         files = await manager.list_files(project_id, path)
@@ -329,7 +363,7 @@ async def read_file(
     - Code editor to display file content
     - AI to read existing code
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     try:
         content = await manager.read_file(project_id, file_path)
@@ -362,7 +396,7 @@ async def get_preview_url(
 
     Falls back to direct port mapping for WebSocket HMR support.
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     if project_id not in manager.containers:
         raise HTTPException(status_code=404, detail="Preview not available - container not found")
@@ -396,7 +430,7 @@ async def get_all_ports(project_id: str):
     Returns all mapped ports so the frontend can try them.
     Useful when the dev server falls back to a different port.
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     if project_id not in manager.containers:
         raise HTTPException(status_code=404, detail="Container not found")
@@ -421,7 +455,7 @@ async def get_container_stats(project_id: str):
     - Memory usage
     - Container status
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     stats = await manager.get_container_stats(project_id)
 
@@ -438,7 +472,7 @@ async def stop_container(project_id: str):
 
     Container can be restarted later. Files are preserved.
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     success = await manager.stop_container(project_id)
 
@@ -458,7 +492,7 @@ async def delete_container(
 
     If delete_files=True, also removes all project files (irreversible).
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     success = await manager.delete_container(project_id, delete_files)
 
@@ -477,7 +511,7 @@ async def get_container_status(project_id: str):
     """
     Get container status and info.
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     if project_id not in manager.containers:
         raise HTTPException(status_code=404, detail="Container not found")
@@ -513,7 +547,7 @@ async def batch_write_files(
     More efficient than calling write_file multiple times.
     Used when AI generates multiple files.
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     results = []
     for file in request.files:
@@ -546,7 +580,7 @@ async def batch_execute_commands(
 
     Common use case: npm install && npm run build && npm run dev
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     async def event_stream():
         for i, command in enumerate(request.commands):

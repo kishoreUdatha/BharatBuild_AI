@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { AlertCircle, RefreshCw, ExternalLink, Play, AlertTriangle } from 'lucide-react'
 import { useErrorStore } from '@/store/errorStore'
 import { useFileChangeEvents } from '@/hooks/useFileChangeEvents'
+import { useLogStream } from '@/hooks/useLogStream'
 
 interface LivePreviewProps {
   files: Record<string, string>
@@ -37,6 +38,54 @@ export function LivePreview({
   const { addBrowserError, addNetworkError, getErrorCount, clearErrors } = useErrorStore()
   const errorCount = getErrorCount()
 
+  // Connect to backend log stream to forward errors (enables auto-fix for static preview!)
+  const {
+    forwardBrowserError,
+    forwardBuildError,
+    forwardNetworkError,
+    isConnected: logStreamConnected
+  } = useLogStream({
+    projectId,
+    enabled: !!projectId,
+    onFixStarted: (reason) => {
+      console.log('[LivePreview] Auto-fix started:', reason)
+      setAutoFixStatus('fixing')
+      setAutoFixMessage(reason || 'Fixing errors...')
+    },
+    onFixCompleted: (patchesApplied, filesModified) => {
+      console.log('[LivePreview] Auto-fix completed!', patchesApplied, 'patches')
+      setAutoFixStatus('completed')
+      setAutoFixMessage(`Fixed! ${patchesApplied || 0} patches applied`)
+      clearErrors()
+      // Auto-reload preview after fix
+      setTimeout(() => {
+        setIsLoading(true)
+        setRefreshKey(prev => prev + 1)
+        onReload?.()
+        setTimeout(() => {
+          setAutoFixStatus('idle')
+          setAutoFixMessage(null)
+        }, 2000)
+      }, 500)
+    },
+    onFixFailed: (error) => {
+      console.log('[LivePreview] Auto-fix failed:', error)
+      setAutoFixStatus('failed')
+      setAutoFixMessage(error || 'Fix failed')
+      setTimeout(() => {
+        setAutoFixStatus('idle')
+        setAutoFixMessage(null)
+      }, 5000)
+    },
+    onProjectRestarted: () => {
+      console.log('[LivePreview] Project restarted, reloading preview')
+      setTimeout(() => {
+        handleRefresh()
+        onReload?.()
+      }, 1000)
+    }
+  })
+
   // File change events for auto-reload
   const { hasRecentFix, setReloadCallback, lastChange } = useFileChangeEvents({
     projectId,
@@ -64,9 +113,12 @@ export function LivePreview({
 
   // Switch to server mode when server is running
   useEffect(() => {
+    console.log('[LivePreview] State update:', { isServerRunning, serverUrl, previewMode })
     if (isServerRunning && serverUrl) {
+      console.log('[LivePreview] Switching to server mode with URL:', serverUrl)
       setPreviewMode('server')
     } else {
+      console.log('[LivePreview] Switching to static mode')
       setPreviewMode('static')
     }
   }, [isServerRunning, serverUrl])
@@ -76,10 +128,22 @@ export function LivePreview({
     // Validate message origin and structure
     if (event.data && event.data.type === 'bharatbuild-error') {
       const { message, filename, lineno, colno, stack } = event.data
-      console.log('[LivePreview] Captured browser error:', message)
+      console.log('[LivePreview] 🔴 CAPTURED BROWSER ERROR from iframe:', {
+        message: message?.substring(0, 150),
+        filename,
+        lineno,
+        colno,
+        hasStack: !!stack,
+        projectId,
+        logStreamConnected
+      })
 
-      // Add to error store
+      // Add to error store (local)
       addBrowserError(message, filename, lineno, colno, stack)
+
+      // Forward to backend for auto-fix! (This is the key fix)
+      console.log('[LivePreview] 📤 Forwarding to backend via forwardBrowserError...')
+      forwardBrowserError(message, filename, lineno, colno, stack)
 
       // Call optional callback
       onError?.({ message, file: filename, line: lineno, column: colno, stack })
@@ -87,20 +151,40 @@ export function LivePreview({
       // Also capture console.error calls
       if (event.data.level === 'error') {
         const message = event.data.args?.join(' ') || 'Unknown error'
-        console.log('[LivePreview] Captured console.error:', message)
+        console.log('[LivePreview] 🔴 CAPTURED console.error from iframe:', message?.substring(0, 100))
         addBrowserError(message)
+
+        // Forward to backend for auto-fix!
+        console.log('[LivePreview] 📤 Forwarding console.error to backend...')
+        forwardBrowserError(message)
+
         onError?.({ message })
       }
     } else if (event.data && event.data.type === 'bharatbuild-network') {
       // Network errors (fetch/XHR failures, CORS, timeouts, HTTP errors)
       const { url, method, status, message } = event.data
-      console.log('[LivePreview] Captured network error:', message, 'URL:', url)
+      console.log('[LivePreview] 🌐 CAPTURED NETWORK ERROR from iframe:', {
+        message,
+        url,
+        status,
+        method,
+        projectId,
+        logStreamConnected
+      })
 
       // Add to error store with network-specific info
       addNetworkError(message, url, status, method)
 
+      // Forward to backend for auto-fix!
+      console.log('[LivePreview] 📤 Forwarding network error to backend...')
+      forwardNetworkError(message, url, status, method)
+
       // Call optional callback
       onError?.({ message, file: url })
+    }
+    // Also handle other bharatbuild message types for logging
+    else if (event.data && event.data.type?.startsWith('bharatbuild-')) {
+      console.log('[LivePreview] 📨 Received iframe message:', event.data.type, event.data)
     }
     // ===== AUTO-FIX EVENTS (Bolt.new Magic!) =====
     else if (event.data && event.data.type === 'bharatbuild-fix-started') {
@@ -137,7 +221,7 @@ export function LivePreview({
         setAutoFixMessage(null)
       }, 5000)
     }
-  }, [addBrowserError, addNetworkError, onError, clearErrors, onReload])
+  }, [addBrowserError, addNetworkError, onError, clearErrors, onReload, forwardBrowserError, forwardNetworkError])
 
   // Set up message listener
   useEffect(() => {

@@ -459,6 +459,25 @@ async def get_project_files(
             if project_files:
                 logger.info(f"[Layer 4] Loading {len(project_files)} files from database: {project_id}")
 
+                # IMPORTANT: Restore files to sandbox so they can be executed!
+                # This ensures /execution/run can find the files
+                try:
+                    await unified_storage.create_sandbox(project_id, user_id)
+                    files_restored = 0
+                    for pf in project_files:
+                        if pf.content_inline and not pf.is_folder:
+                            success = await unified_storage.write_to_sandbox(
+                                project_id=project_id,
+                                file_path=pf.path,
+                                content=pf.content_inline,
+                                user_id=user_id
+                            )
+                            if success:
+                                files_restored += 1
+                    logger.info(f"[Layer 4] Restored {files_restored} files to sandbox for execution")
+                except Exception as restore_error:
+                    logger.warning(f"[Layer 4] Failed to restore to sandbox: {restore_error}")
+
                 # Build hierarchical tree from flat file list
                 def build_tree(files):
                     """Convert flat file list to hierarchical tree"""
