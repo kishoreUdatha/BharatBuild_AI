@@ -14,9 +14,14 @@ import {
   ArrowDown,
   CheckCircle,
   XCircle,
-  AlertCircle
+  AlertCircle,
+  Wrench,
+  Loader2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { useProjectStore } from '@/store/projectStore'
+import { useErrorStore } from '@/store/errorStore'
+import { sdkService } from '@/services/sdkService'
 
 interface TerminalLine {
   id: string
@@ -32,6 +37,7 @@ interface TerminalProps {
   isOpen?: boolean
   title?: string
   showTimestamps?: boolean
+  onAutoFix?: (result: { success: boolean; files_modified: string[]; message: string }) => void
 }
 
 // ANSI color codes to CSS classes
@@ -165,7 +171,8 @@ export function Terminal({
   onClose,
   isOpen = true,
   title = 'Terminal',
-  showTimestamps = false
+  showTimestamps = false,
+  onAutoFix
 }: TerminalProps) {
   const [isMinimized, setIsMinimized] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -175,11 +182,16 @@ export function Terminal({
   const [copied, setCopied] = useState(false)
   const [height, setHeight] = useState(300)
   const [isResizing, setIsResizing] = useState(false)
+  const [isFixing, setIsFixing] = useState(false)
 
   const terminalRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const resizeStartY = useRef(0)
   const resizeStartHeight = useRef(0)
+
+  // Stores for Auto Fix
+  const projectStore = useProjectStore()
+  const errorStore = useErrorStore()
 
   // Convert output array to terminal lines with types
   const lines = useMemo<TerminalLine[]>(() => {
@@ -264,6 +276,84 @@ export function Terminal({
       setTimeout(() => searchInputRef.current?.focus(), 100)
     }
   }, [showSearch])
+
+  // Auto Fix - Uses SDK Fixer to automatically fix errors
+  const handleAutoFix = useCallback(async () => {
+    const projectId = projectStore.currentProject?.id
+    if (!projectId) {
+      console.warn('[Terminal] No project selected for auto-fix')
+      return
+    }
+
+    setIsFixing(true)
+
+    try {
+      // Collect errors from error store
+      const unresolvedErrors = errorStore.getUnresolvedErrors()
+
+      // Build error message from terminal output and error store
+      const errorLines = lines
+        .filter(l => l.type === 'error')
+        .map(l => l.content)
+        .join('\n')
+
+      const errorStoreErrors = unresolvedErrors
+        .map(e => `${e.source}: ${e.message}${e.file ? ` (${e.file}:${e.line})` : ''}`)
+        .join('\n')
+
+      const combinedErrors = [errorLines, errorStoreErrors].filter(Boolean).join('\n\n')
+
+      if (!combinedErrors.trim()) {
+        console.log('[Terminal] No errors to fix')
+        setIsFixing(false)
+        return
+      }
+
+      // Get stack traces
+      const stackTrace = unresolvedErrors
+        .filter(e => e.stack)
+        .map(e => e.stack)
+        .join('\n---\n')
+
+      // Call SDK Fixer
+      const result = await sdkService.fixError({
+        project_id: projectId,
+        error_message: combinedErrors,
+        stack_trace: stackTrace,
+        build_command: 'npm run build',
+        max_retries: 3
+      })
+
+      console.log('[Terminal] Auto-fix result:', result)
+
+      // Callback to parent
+      onAutoFix?.({
+        success: result.success && result.error_fixed,
+        files_modified: result.files_modified,
+        message: result.message
+      })
+
+      // Clear errors if fixed
+      if (result.success && result.error_fixed) {
+        errorStore.clearErrors()
+      }
+
+    } catch (error: any) {
+      console.error('[Terminal] Auto-fix error:', error)
+      onAutoFix?.({
+        success: false,
+        files_modified: [],
+        message: error.message || 'Auto-fix failed'
+      })
+    } finally {
+      setIsFixing(false)
+    }
+  }, [projectStore.currentProject?.id, errorStore, lines, onAutoFix])
+
+  // Check if there are errors to fix
+  const hasErrors = useMemo(() => {
+    return lines.some(l => l.type === 'error') || errorStore.getUnresolvedErrors().length > 0
+  }, [lines, errorStore])
 
   // Handle resize
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
@@ -390,6 +480,34 @@ export function Terminal({
         </div>
 
         <div className="flex items-center gap-1">
+          {/* Auto Fix Button - Only show when there are errors */}
+          {hasErrors && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleAutoFix}
+              disabled={isFixing}
+              className={`h-7 px-2 text-xs ${
+                isFixing
+                  ? 'bg-purple-500/20 text-purple-400'
+                  : 'bg-red-500/20 hover:bg-red-500/30 text-red-400 hover:text-red-300'
+              }`}
+              title="Auto-fix errors using SDK"
+            >
+              {isFixing ? (
+                <>
+                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                  Fixing...
+                </>
+              ) : (
+                <>
+                  <Wrench className="w-3 h-3 mr-1" />
+                  Auto Fix
+                </>
+              )}
+            </Button>
+          )}
+
           {/* Search */}
           <Button
             variant="ghost"
