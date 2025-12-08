@@ -9,6 +9,7 @@ import { CodeEditor } from './CodeEditor'
 import { PlanView } from './PlanView'
 import { ProjectSelector } from './ProjectSelector'
 import { ProjectRunControls } from './ProjectRunControls'
+import { WelcomeScreen } from './WelcomeScreen'
 
 // Dynamically import XTerminal to avoid SSR issues
 const XTerminal = dynamic(() => import('./XTerminal'), {
@@ -520,39 +521,9 @@ export function BoltLayout({
           style={{ width: isSidebarOpen ? `${leftPanelWidth}%` : '100%' }}
         >
           {/* Messages */}
-          <div ref={messagesContainerRef} className="flex-1 overflow-y-auto scrollbar-thin">
+          <div ref={messagesContainerRef} className="flex-1 overflow-y-auto scrollbar-thin bg-[#0a0a0f]">
             {messages.length === 0 ? (
-              <div className="h-full flex items-center justify-center">
-                <div className="text-center max-w-2xl px-4">
-                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center mx-auto mb-6">
-                    <Zap className="w-8 h-8 text-white" />
-                  </div>
-                  <h2 className="text-2xl font-bold mb-3 text-[hsl(var(--bolt-text-primary))]">
-                    Welcome to BharatBuild AI
-                  </h2>
-                  <p className="text-[hsl(var(--bolt-text-secondary))] mb-8">
-                    Describe your project and watch as AI agents build it in real-time.
-                    Generate complete academic projects, production-ready code, and more.
-                  </p>
-
-                  <div className="grid grid-cols-2 gap-3 text-left">
-                    {[
-                      'Build a task management app with React',
-                      'Create an e-commerce platform',
-                      'Generate SRS for student project',
-                      'Build a REST API with FastAPI',
-                    ].map((example, index) => (
-                      <button
-                        key={index}
-                        onClick={() => onSendMessage(example)}
-                        className="p-3 rounded-lg bg-[hsl(var(--bolt-bg-secondary))] border border-[hsl(var(--bolt-border))] hover:border-[hsl(var(--bolt-accent))] transition-colors text-left"
-                      >
-                        <p className="text-sm text-[hsl(var(--bolt-text-primary))]">{example}</p>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
+              <WelcomeScreen onExampleClick={onSendMessage} />
             ) : (
               <>
                 {messages.map((message, index) => (

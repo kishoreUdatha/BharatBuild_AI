@@ -16,9 +16,11 @@ import {
 } from '@/services/promptClassifier'
 import { getAgentLabel } from './agentLabelMapping'
 import { sdkService } from '@/services/sdkService'
+import { detectPastedError, extractErrorDetails, sendChatMessage } from '@/services/chatService'
 
 // SDK Fixer configuration
 const USE_SDK_FIXER = true // Enable SDK-based fixing for better reliability
+const USE_REAL_CHAT = true // Enable real conversational AI for CHAT intent
 
 const generateId = () => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 
@@ -201,7 +203,55 @@ export const useChat = () => {
     // 4. Route based on intent
     switch (classification.intent) {
       case 'CHAT':
-        // Simple conversation - use AI-generated response if available, else fallback
+        // Check if the "chat" message is actually a pasted error
+        if (detectPastedError(content)) {
+          console.log('[useChat] Detected pasted error in CHAT intent, switching to FIX')
+          // Switch to FIX intent for pasted errors
+          classification.intent = 'FIX'
+          break // Fall through to FIX handling below
+        }
+
+        // Real conversational AI support
+        if (USE_REAL_CHAT) {
+          try {
+            appendToMessage(aiMessageId, '') // Start streaming indicator
+
+            const chatResult = await sendChatMessage({
+              message: content,
+              conversation_history: messages.slice(-10).map(m => ({
+                role: m.type as 'user' | 'assistant',
+                content: m.content
+              })),
+              context: {
+                project_id: projectStore.currentProject?.id,
+                has_project: (projectStore.currentProject?.files?.length || 0) > 0
+              }
+            })
+
+            if (chatResult.success) {
+              appendToMessage(aiMessageId, chatResult.response)
+            } else {
+              // Fallback to static response
+              const fallbackResponse = classification.chatResponse || getChatResponse(content)
+              appendToMessage(aiMessageId, fallbackResponse)
+            }
+
+            updateMessageStatus(aiMessageId, 'complete')
+            stopStreaming()
+            return
+
+          } catch (chatError) {
+            console.error('[useChat] Real chat error, using fallback:', chatError)
+            // Fallback to static response
+            const fallbackResponse = classification.chatResponse || getChatResponse(content)
+            appendToMessage(aiMessageId, fallbackResponse)
+            updateMessageStatus(aiMessageId, 'complete')
+            stopStreaming()
+            return
+          }
+        }
+
+        // Static fallback (when USE_REAL_CHAT is false)
         const chatResponse = classification.chatResponse || getChatResponse(content)
         appendToMessage(aiMessageId, chatResponse)
         updateMessageStatus(aiMessageId, 'complete')
@@ -209,7 +259,41 @@ export const useChat = () => {
         return
 
       case 'EXPLAIN':
-        // Explanation request - use AI response if available
+        // Check if the "explain" message is actually a pasted error
+        if (detectPastedError(content)) {
+          console.log('[useChat] Detected pasted error in EXPLAIN intent, switching to FIX')
+          classification.intent = 'FIX'
+          break // Fall through to FIX handling
+        }
+
+        // Real conversational AI for explanations
+        if (USE_REAL_CHAT) {
+          try {
+            const explainResult = await sendChatMessage({
+              message: `Please explain: ${content}`,
+              conversation_history: messages.slice(-5).map(m => ({
+                role: m.type as 'user' | 'assistant',
+                content: m.content
+              }))
+            })
+
+            if (explainResult.success) {
+              appendToMessage(aiMessageId, explainResult.response)
+            } else {
+              const fallbackResponse = classification.chatResponse || getExplainResponse(content)
+              appendToMessage(aiMessageId, fallbackResponse)
+            }
+
+            updateMessageStatus(aiMessageId, 'complete')
+            stopStreaming()
+            return
+
+          } catch (explainError) {
+            console.error('[useChat] Explain error, using fallback:', explainError)
+          }
+        }
+
+        // Static fallback
         const explainResponse = classification.chatResponse || getExplainResponse(content)
         appendToMessage(aiMessageId, explainResponse)
         updateMessageStatus(aiMessageId, 'complete')
