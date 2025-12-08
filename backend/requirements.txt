@@ -31,7 +31,7 @@ flower==2.0.1
 # ============================================
 # AI/LLM - Large Language Models
 # ============================================
-anthropic==0.18.0
+anthropic>=0.39.0  # Updated for Agent SDK support with tools
 openai==1.12.0
 langchain==0.1.9
 langchain-community==0.0.24

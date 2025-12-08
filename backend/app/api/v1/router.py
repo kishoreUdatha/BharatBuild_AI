@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import auth, projects, api_keys, billing, tokens, streaming, bolt, automation, orchestrator, logs, execution, documents, adventure, resume, download, containers, preview, jobs, agentic, classify, sync, payments, import_project, paper, feedback, sandbox, workspace, log_stream, retrieval, users
+from app.api.v1.endpoints import auth, projects, api_keys, billing, tokens, streaming, bolt, automation, orchestrator, logs, execution, documents, adventure, resume, download, containers, preview, jobs, agentic, classify, sync, payments, import_project, paper, feedback, sandbox, workspace, log_stream, retrieval, users, sdk_agents
 
 api_router = APIRouter()
 
@@ -34,4 +34,5 @@ api_router.include_router(workspace.router, prefix="/workspace", tags=["Workspac
 api_router.include_router(log_stream.router, prefix="/log-stream", tags=["Log Stream WebSocket"])
 api_router.include_router(retrieval.router, tags=["Project Retrieval"])
 api_router.include_router(users.router, prefix="/users", tags=["User Management"])
+api_router.include_router(sdk_agents.router, tags=["SDK Agents"])
 
