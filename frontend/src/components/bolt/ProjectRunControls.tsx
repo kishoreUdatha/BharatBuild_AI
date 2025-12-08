@@ -19,9 +19,12 @@ import {
   AlertTriangle
 } from 'lucide-react'
 import { useProjectStore } from '@/store/projectStore'
+import { useLogStream } from '@/hooks/useLogStream'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
-const MAX_AUTO_FIX_ATTEMPTS = 3
+const MAX_AUTO_FIX_ATTEMPTS = 10  // Increased for "retry until success" behavior
+const DEFAULT_RETRY_DELAY = 1500  // Base delay between retries (ms)
+const MAX_RETRY_DELAY = 10000     // Max delay with exponential backoff (ms)
 
 type ExecutionMode = 'docker' | 'direct'
 type RunStatus = 'idle' | 'creating' | 'starting' | 'running' | 'stopping' | 'stopped' | 'error' | 'fixing'
@@ -55,6 +58,57 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   const [isFixing, setIsFixing] = useState(false)
   const [maxAttemptsReached, setMaxAttemptsReached] = useState(false)
   const errorBufferRef = useRef<string[]>([]) // Collect error lines
+  const pendingRestartRef = useRef<boolean>(false) // Flag for auto-restart after fix
+  const consecutiveFailuresRef = useRef<number>(0) // Track consecutive failures for backoff
+  const isRetryingRef = useRef<boolean>(false) // Prevent duplicate retries
+
+  // Calculate exponential backoff delay
+  const getRetryDelay = useCallback((failureCount: number): number => {
+    // Exponential backoff: 1.5s, 3s, 6s, 10s (capped)
+    const delay = Math.min(
+      DEFAULT_RETRY_DELAY * Math.pow(2, failureCount),
+      MAX_RETRY_DELAY
+    )
+    return delay
+  }, [])
+
+  // ============= BOLT.NEW STYLE: LOG STREAM FOR AUTO-FIX =============
+  // Forward terminal errors to backend LogBus for auto-fix
+  const {
+    forwardBuildError,
+    isConnected: logStreamConnected
+  } = useLogStream({
+    projectId: currentProject?.id,
+    enabled: !!currentProject?.id && autoFix,
+    onFixStarted: (reason) => {
+      console.log('[ProjectRunControls] Auto-fix started via LogBus:', reason)
+      setStatus('fixing')
+      onOutput?.(`\n🔧 Auto-fix started: ${reason}`)
+    },
+    onFixCompleted: (patchesApplied, filesModified) => {
+      console.log('[ProjectRunControls] Auto-fix completed via LogBus:', patchesApplied, 'patches')
+      onOutput?.(`✅ Auto-fix completed! ${patchesApplied} patches applied`)
+      if (filesModified.length > 0) {
+        onOutput?.(`📄 Files modified: ${filesModified.join(', ')}`)
+      }
+      // Set flag to trigger restart (handled by useEffect)
+      pendingRestartRef.current = true
+      setFixAttempts(0)
+      setLastError(null)
+      setMaxAttemptsReached(false)
+      errorBufferRef.current = []
+      onOutput?.('\n🚀 Restarting project with fixes...\n')
+    },
+    onFixFailed: (error) => {
+      console.log('[ProjectRunControls] Auto-fix failed via LogBus:', error)
+      onOutput?.(`❌ Auto-fix failed: ${error}`)
+      setStatus('error')
+    },
+    onProjectRestarted: () => {
+      console.log('[ProjectRunControls] Project restarted notification')
+      onOutput?.('🔄 Project restarted')
+    }
+  })
 
   // Check if Docker is available on mount
   useEffect(() => {
@@ -63,24 +117,39 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
   const checkDockerAvailability = async () => {
     try {
-      // Try to create a test container - if it fails, Docker is not available
+      // Use AbortController for timeout (3 seconds max)
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 3000)
+
+      // Try to check container status - if it fails with 503/500, Docker is not available
       const response = await fetch(`${API_BASE_URL}/containers/test-docker/status`, {
         method: 'GET',
+        signal: controller.signal
       })
+      clearTimeout(timeoutId)
+
       // If we get 404, that's fine - Docker is available but no container exists
-      // If we get 500 with "Docker not available", Docker is not installed
-      if (response.status === 500) {
+      // If we get 503 (Service Unavailable) or 500 with "Docker", Docker is not installed
+      if (response.status === 503 || response.status === 500) {
         const error = await response.json()
-        if (error.detail?.includes('Docker')) {
+        if (error.detail?.toLowerCase().includes('docker')) {
+          console.log('[Docker] Not available, falling back to direct execution')
           setDockerAvailable(false)
           setExecutionMode('direct')
           return
         }
       }
       setDockerAvailable(true)
-    } catch (e) {
-      // Network error or backend down - assume Docker might be available
-      setDockerAvailable(true)
+      console.log('[Docker] Available')
+    } catch (e: any) {
+      // Network error, timeout, or backend down - assume Docker is NOT available to be safe
+      if (e.name === 'AbortError') {
+        console.log('[Docker] Check timed out, assuming unavailable')
+      } else {
+        console.log('[Docker] Check failed, assuming unavailable:', e)
+      }
+      setDockerAvailable(false)
+      setExecutionMode('direct')
     }
   }
 
@@ -100,7 +169,11 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
   // Detect server start from output
   const detectServerStart = useCallback((output: string) => {
-    console.log('[DetectServer] Checking output:', output.substring(0, 100))
+    // Strip ANSI escape codes for pattern matching (Vite uses colored output)
+    const stripAnsi = (str: string) => str.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\r/g, '')
+    const cleanOutput = stripAnsi(output)
+
+    console.log('[DetectServer] Checking output:', cleanOutput.substring(0, 100))
 
     // Patterns to detect server URL and extract port
     const serverPatterns = [
@@ -114,16 +187,19 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
     // Patterns that indicate server is ready (without needing to extract port)
     const readyPatterns = [
-      /vite.*ready\s+in/i,              // "VITE v5.4.6 ready in 234 ms"
+      /vite.*ready/i,                   // "VITE v5.4.6  ready in 234 ms" (flexible spacing)
+      /ready\s+in\s+\d+/i,              // "ready in 234 ms" without VITE prefix
       /webpack.*compiled/i,             // "webpack compiled successfully"
       /compiled\s+successfully/i,       // Generic compile success
       /development\s+server\s+running/i, // Next.js style
       /ready\s+on/i,                    // "ready on http://localhost:3000"
+      /Local:\s*http/i,                 // Vite "Local: http://localhost:3000/"
+      /➜\s+Local:/i,                    // Vite arrow format
     ]
 
     // First check if server is ready (even if we can't extract port)
     for (const pattern of readyPatterns) {
-      if (pattern.test(output)) {
+      if (pattern.test(cleanOutput)) {
         console.log('[DetectServer] MATCHED readyPattern:', pattern)
         // Server is ready, set status to running
         // Port will be fetched from preview endpoint
@@ -134,7 +210,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
     // Try to extract port from output
     for (const pattern of serverPatterns) {
-      const match = output.match(pattern)
+      const match = cleanOutput.match(pattern)
       if (match && match[1]) {
         const port = match[1]
         const url = `http://localhost:${port}`
@@ -152,6 +228,22 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   const currentCommandRef = useRef<string>('')
 
   const detectError = useCallback((output: string): boolean => {
+    // Ignore these non-fatal errors/warnings (they don't affect the app)
+    const ignoredPatterns = [
+      /spawn xdg-open ENOENT/i,      // Vite trying to open browser on Windows
+      /spawn open ENOENT/i,          // Same for macOS fallback
+      /npm WARN/i,                   // npm warnings are not errors
+      /deprecation warning/i,        // Deprecation warnings
+      /ExperimentalWarning/i,        // Node experimental features
+    ]
+
+    // Check if this is an ignorable error first
+    for (const pattern of ignoredPatterns) {
+      if (pattern.test(output)) {
+        return false // Not a real error
+      }
+    }
+
     // Terminal/Build errors
     const terminalErrorPatterns = [
       /error:/i,
@@ -209,6 +301,141 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       /valueerror/i,
       /keyerror/i,
       /indentationerror/i,
+      /taberror/i,
+      /nameerror/i,
+      /zerodivisionerror/i,
+      /runtimeerror/i,
+      /assertionerror/i,
+      /pip.*error/i,
+      /poetry.*error/i,
+      /django\..*error/i,
+      /flask\..*error/i,
+      /fastapi.*error/i,
+      /pydantic.*error/i,
+    ]
+
+    // Java/Maven/Gradle/Kotlin errors
+    const javaErrorPatterns = [
+      /BUILD FAILURE/i,              // Maven
+      /FAILURE: Build failed/i,      // Gradle
+      /compilation failure/i,
+      /cannot find symbol/i,
+      /package does not exist/i,
+      /java\.lang\.\w+Exception/i,
+      /ClassNotFoundException/i,
+      /NoClassDefFoundError/i,
+      /NullPointerException/i,
+      /ArrayIndexOutOfBoundsException/i,
+      /IllegalArgumentException/i,
+      /mvn.*error/i,
+      /gradle.*error/i,
+      /kotlin.*error/i,
+      /spring.*error/i,
+    ]
+
+    // Go errors
+    const goErrorPatterns = [
+      /go:.*error/i,
+      /cannot find package/i,
+      /undefined:/i,
+      /imported and not used/i,
+      /declared and not used/i,
+      /no required module provides/i,
+      /go mod.*error/i,
+      /panic:/i,
+      /fatal error:/i,
+      /build constraints exclude/i,
+    ]
+
+    // Rust/Cargo errors
+    const rustErrorPatterns = [
+      /error\[E\d+\]/i,              // Rust error codes (E0433, etc.)
+      /cargo.*error/i,
+      /cannot find.*in this scope/i,
+      /unresolved import/i,
+      /no method named/i,
+      /mismatched types/i,
+      /borrow.*moved value/i,
+      /lifetime.*not live long enough/i,
+      /thread.*panicked/i,
+    ]
+
+    // Ruby/Rails errors
+    const rubyErrorPatterns = [
+      /loaderror/i,
+      /nameerror.*uninitialized constant/i,
+      /nomethoderror/i,
+      /argumenterror/i,
+      /bundler.*error/i,
+      /gem.*error/i,
+      /rails.*error/i,
+      /activerecord.*error/i,
+      /actioncontroller.*error/i,
+      /rake.*aborted/i,
+    ]
+
+    // PHP/Laravel/Composer errors
+    const phpErrorPatterns = [
+      /fatal error:/i,
+      /parse error:/i,
+      /php.*error/i,
+      /composer.*error/i,
+      /laravel.*error/i,
+      /symfony.*error/i,
+      /artisan.*error/i,
+      /class.*not found/i,
+      /call to undefined/i,
+    ]
+
+    // C#/.NET errors
+    const dotnetErrorPatterns = [
+      /error CS\d+/i,                // C# error codes
+      /build FAILED/i,
+      /dotnet.*error/i,
+      /nuget.*error/i,
+      /System\..*Exception/i,
+      /NullReferenceException/i,
+      /InvalidOperationException/i,
+      /aspnet.*error/i,
+    ]
+
+    // C/C++ errors
+    const cppErrorPatterns = [
+      /undefined reference/i,
+      /fatal error:.*no such file/i,
+      /error:.*expected/i,
+      /linker error/i,
+      /make.*error/i,
+      /cmake.*error/i,
+      /gcc.*error/i,
+      /g\+\+.*error/i,
+      /clang.*error/i,
+      /segmentation fault/i,
+    ]
+
+    // Flutter/Dart errors
+    const flutterErrorPatterns = [
+      /flutter.*error/i,
+      /dart.*error/i,
+      /pub.*error/i,
+      /analysis_options.*error/i,
+      /the.*getter.*isn't defined/i,
+      /undefined.*class/i,
+      /a value of type.*can't be assigned/i,
+    ]
+
+    // Database errors
+    const databaseErrorPatterns = [
+      /sqlite.*error/i,
+      /postgresql.*error/i,
+      /mysql.*error/i,
+      /mongodb.*error/i,
+      /redis.*error/i,
+      /connection refused/i,
+      /authentication failed/i,
+      /relation.*does not exist/i,
+      /duplicate key/i,
+      /foreign key constraint/i,
     ]
 
     const allPatterns = [
@@ -216,6 +443,15 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       ...dockerErrorPatterns,
       ...bundlerErrorPatterns,
       ...pythonErrorPatterns,
+      ...javaErrorPatterns,
+      ...goErrorPatterns,
+      ...rustErrorPatterns,
+      ...rubyErrorPatterns,
+      ...phpErrorPatterns,
+      ...dotnetErrorPatterns,
+      ...cppErrorPatterns,
+      ...flutterErrorPatterns,
+      ...databaseErrorPatterns,
     ]
 
     for (const pattern of allPatterns) {
@@ -226,11 +462,24 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         if (errorBufferRef.current.length > 30) {
           errorBufferRef.current.shift()
         }
+        console.log('[ErrorDetect] 🔴 TERMINAL ERROR matched pattern:', pattern.toString())
+        console.log('[ErrorDetect]    Output:', output.slice(0, 150))
+        console.log('[ErrorDetect]    Command:', currentCommandRef.current)
+
+        // ========== BOLT.NEW STYLE: Forward to LogBus for auto-fix ==========
+        // This enables the backend AutoFixer to detect and fix errors automatically
+        if (forwardBuildError) {
+          console.log('[ErrorDetect] 📤 Forwarding terminal error to backend for auto-fix...')
+          forwardBuildError(output, currentCommandRef.current || undefined)
+        } else {
+          console.warn('[ErrorDetect] ⚠️ forwardBuildError not available!')
+        }
+
         return true
       }
     }
     return false
-  }, [])
+  }, [forwardBuildError])
 
   // Reset fix state
   const resetFixState = useCallback(() => {
@@ -238,6 +487,8 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     setLastError(null)
     setMaxAttemptsReached(false)
     errorBufferRef.current = []
+    consecutiveFailuresRef.current = 0
+    isRetryingRef.current = false
   }, [])
 
   // ============= BOLT.NEW STYLE AUTO-FIX HANDLER =============
@@ -426,19 +677,19 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   }
 
   // ============= DOCKER EXECUTION =============
-  const runWithDocker = async (): Promise<boolean> => {
-    if (!currentProject?.id) return false
+  const runWithDocker = async (): Promise<{ success: boolean; error?: string }> => {
+    if (!currentProject?.id) return { success: false, error: 'No project' }
 
     // Reset error buffer for this execution
     errorBufferRef.current = []
+    let containerPreviewUrl: string | null = null
 
     onOutput?.('🐳 Starting Docker container...')
 
-    // Get auth token for authenticated requests
     const token = localStorage.getItem('access_token')
 
     try {
-      // Step 1: Create container FIRST (this sets up the user-scoped workspace path)
+      // Step 1: Create container
       const createResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/create`, {
         method: 'POST',
         headers: {
@@ -460,13 +711,22 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       const container = await createResponse.json()
       onOutput?.(`✅ Container created: ${container.container_id}`)
 
-      // Step 2: Sync files to workspace AFTER container is created
-      // This ensures files are written to the correct user-scoped path
+      // Extract preview URL
+      containerPreviewUrl = container.preview_urls?.primary ||
+                            container.preview_urls?.['3000'] ||
+                            container.preview_urls?.['5173'] ||
+                            Object.values(container.preview_urls || {}).find((url: any) => url?.startsWith('http')) as string || null
+
+      if (containerPreviewUrl) {
+        setPreviewUrl(containerPreviewUrl)
+        onPreviewUrlChange?.(containerPreviewUrl)
+        onOutput?.(`📍 Preview: ${containerPreviewUrl}`)
+      }
+
+      // Step 2: Sync files
       const fileSynced = await syncFilesToWorkspace()
       if (!fileSynced && currentProject?.files?.length > 0) {
-        onOutput?.('⚠️ File sync failed - workspace may be empty!')
-        // Don't continue if files couldn't be synced
-        throw new Error('Failed to sync project files to workspace')
+        throw new Error('Failed to sync project files')
       }
 
       setStatus('starting')
@@ -478,16 +738,15 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         ? ['pip install -r requirements.txt', 'python main.py']
         : ['python -m http.server 3000']
 
-      // Identify which commands are long-running (dev servers) vs short (install/build)
-      const isLongRunningCommand = (cmd: string) => {
-        const patterns = ['npm run dev', 'npm start', 'yarn dev', 'yarn start', 'pnpm dev', 'python -m http.server', 'python main.py', 'node server']
-        return patterns.some(p => cmd.includes(p))
+      const isDevServerCommand = (cmd: string) => {
+        return ['npm run dev', 'npm start', 'yarn dev', 'pnpm dev', 'python -m http.server', 'python main.py'].some(p => cmd.includes(p))
       }
 
       for (const command of commands) {
-        // Track current command for Fixer Agent (Bolt.new style)
         currentCommandRef.current = command
         onOutput?.(`$ ${command}`)
+
+        const isDevServer = isDevServerCommand(command)
 
         const execResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/exec`, {
           method: 'POST',
@@ -503,187 +762,192 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
           throw new Error('Failed to execute command')
         }
 
-        // Stream output
         const reader = execResponse.body?.getReader()
         if (!reader) continue
 
-        const decoder = new TextDecoder()
-        let buffer = ''
-        let serverStarted = false
-        let commandDone = false
-        let hasError = false
-        let errorOutput = ''
-        const isDevServer = isLongRunningCommand(command)
+        // Execute command with proper timeout handling
+        const result = await executeCommandWithTimeout(
+          reader,
+          isDevServer,
+          isDevServer ? 10000 : 120000, // 10s for dev server, 2min for install
+          containerPreviewUrl,
+          onOutput
+        )
 
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-
-          buffer += decoder.decode(value, { stream: true })
-          const lines = buffer.split('\n')
-          buffer = lines.pop() || ''
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const event = JSON.parse(line.slice(6))
-                if (event.type === 'stdout' || event.type === 'stderr') {
-                  const text = String(event.data)
-                  onOutput?.(text)
-
-                  // Detect errors in Docker output (for Fixer Agent)
-                  if (detectError(text)) {
-                    hasError = true
-                    errorOutput += text + '\n'
-                    errorBufferRef.current.push(text)
-                  }
-
-                  // Only detect server start for dev server commands
-                  console.log('[SSE] isDevServer:', isDevServer, 'command:', command)
-                  if (isDevServer && detectServerStart(text)) {
-                    console.log('[SSE] Server detected as started!')
-                    serverStarted = true
-                    hasError = false // Server started successfully, ignore earlier warnings
-                  }
-                }
-                // Check for error event from server
-                if (event.type === 'error') {
-                  const errText = String(event.data)
-                  onOutput?.(`❌ ${errText}`)
-                  hasError = true
-                  errorOutput += errText + '\n'
-                  errorBufferRef.current.push(errText)
-                }
-                // Check for done event from server (command completed)
-                if (event.type === 'done') {
-                  commandDone = true
-                }
-              } catch {}
-            }
-          }
-
-          // Break conditions:
-          // 1. Command is done (got 'done' event from server)
-          // 2. Dev server started (detected server URL in output)
-          if (commandDone) {
-            break
-          }
-          if (isDevServer && serverStarted) {
-            onOutput?.('✅ Server started successfully!')
-
-            // IMMEDIATELY fetch preview URL when server starts (Bolt.new style)
-            // Don't wait until the for loop completes!
-            try {
-              const previewResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/preview?port=3000`, {
-                headers: token ? { 'Authorization': `Bearer ${token}` } : {}
-              })
-              if (previewResponse.ok) {
-                const previewData = await previewResponse.json()
-                console.log('[Preview] Backend response (on server start):', previewData)
-
-                // Determine preview URL - handle multiple response formats
-                let finalPreviewUrl: string | null = null
-
-                // Priority 1: Use direct_url if provided (absolute URL from backend)
-                if (previewData.direct_url) {
-                  finalPreviewUrl = previewData.direct_url
-                  console.log('[Preview] Using direct_url:', finalPreviewUrl)
-                }
-                // Priority 2: Use url if it's already an absolute URL
-                else if (previewData.url && previewData.url.startsWith('http')) {
-                  finalPreviewUrl = previewData.url
-                  console.log('[Preview] Using absolute url:', finalPreviewUrl)
-                }
-                // Priority 3: Construct absolute URL from relative url
-                else if (previewData.url) {
-                  finalPreviewUrl = `${API_BASE_URL.replace('/api/v1', '')}${previewData.url}`
-                  console.log('[Preview] Constructed URL from relative:', finalPreviewUrl)
-                }
-
-                if (finalPreviewUrl) {
-                  setPreviewUrl(finalPreviewUrl)
-                  onPreviewUrlChange?.(finalPreviewUrl)
-                  console.log('[Preview] Set preview URL on server start:', finalPreviewUrl)
-                }
-              }
-            } catch (previewError) {
-              console.warn('[Preview] Failed to fetch preview URL:', previewError)
-            }
-
-            break
-          }
-        }
-
-        // If errors detected during this command, save for Fixer Agent
-        if (hasError && !serverStarted) {
-          const fullError = errorOutput || errorBufferRef.current.join('\n')
+        // Check for real errors FIRST (applies to both dev servers and short commands)
+        if (result.hasRealError && !result.serverStarted) {
           setLastError({
-            message: fullError.slice(0, 500),
-            stackTrace: fullError,
+            message: result.errorOutput.slice(0, 500),
+            stackTrace: result.errorOutput,
             detectedAt: new Date()
           })
-          // Return false to trigger auto-fix
-          return false
-        }
-      }
-
-      // Get preview URL - use direct_url for absolute URL (works across ports)
-      const previewResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/preview?port=3000`, {
-        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
-      })
-      if (previewResponse.ok) {
-        const previewData = await previewResponse.json()
-        console.log('[Preview] Backend response:', previewData)
-
-        // Determine preview URL - handle multiple response formats
-        let finalPreviewUrl: string | null = null
-
-        // Priority 1: Use direct_url if provided (absolute URL from backend)
-        if (previewData.direct_url) {
-          finalPreviewUrl = previewData.direct_url
-          console.log('[Preview] Using direct_url:', finalPreviewUrl)
-        }
-        // Priority 2: Use url if it's already an absolute URL
-        else if (previewData.url && previewData.url.startsWith('http')) {
-          finalPreviewUrl = previewData.url
-          console.log('[Preview] Using absolute url:', finalPreviewUrl)
-        }
-        // Priority 3: Construct absolute URL from relative url
-        else if (previewData.url) {
-          finalPreviewUrl = `${API_BASE_URL.replace('/api/v1', '')}${previewData.url}`
-          console.log('[Preview] Constructed URL from relative:', finalPreviewUrl)
+          onOutput?.(`\n❌ Error detected during: ${command}`)
+          onOutput?.(`📋 Error: ${result.errorOutput.slice(0, 200)}...`)
+          return { success: false, error: result.errorOutput }
         }
 
-        if (finalPreviewUrl) {
-          setPreviewUrl(finalPreviewUrl)
-          onPreviewUrlChange?.(finalPreviewUrl)
-          console.log('[Preview] Set preview URL:', finalPreviewUrl)
+        // For dev servers: mark as running after timeout if no errors
+        if (isDevServer) {
+          setStatus('running')
+          if (containerPreviewUrl) {
+            setPreviewUrl(containerPreviewUrl)
+            onPreviewUrlChange?.(containerPreviewUrl)
+          }
+          onOutput?.(`✅ Server is running! Preview: ${containerPreviewUrl || 'Check terminal'}`)
+          return { success: true }
         }
       }
 
       setStatus('running')
-      return true
+      return { success: true }
 
     } catch (error: any) {
-      if (error.name === 'AbortError') return false
+      if (error.name === 'AbortError') return { success: false }
 
-      // Check if Docker-specific error
-      const errorMsg = error.message || ''
-      if (errorMsg.includes('Docker') || errorMsg.includes('container') || errorMsg.includes('daemon')) {
-        onOutput?.(`⚠️ Docker error: ${errorMsg}`)
-        onOutput?.('🔄 Falling back to direct execution...')
+      if (error.message?.includes('Docker') || error.message?.includes('container')) {
+        onOutput?.(`⚠️ Docker error: ${error.message}`)
         setDockerAvailable(false)
         setExecutionMode('direct')
-        return false // Signal to try direct execution
+        return { success: false, error: error.message }
       }
 
       throw error
     }
   }
 
+  // Helper: Execute command with timeout and proper SSE handling
+  const executeCommandWithTimeout = async (
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    isDevServer: boolean,
+    timeoutMs: number,
+    previewUrl: string | null,
+    output?: (line: string) => void
+  ): Promise<{ hasRealError: boolean; errorOutput: string; serverStarted: boolean }> => {
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let hasRealError = false
+    let errorOutput = ''
+    let serverStarted = false
+    let timedOut = false
+
+    // Create timeout promise
+    const timeoutPromise = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        timedOut = true
+        resolve()
+      }, timeoutMs)
+    })
+
+    // Process SSE stream
+    const processStream = async () => {
+      try {
+        while (!timedOut) {
+          // Race between read and a short timeout to check timedOut flag
+          const readWithTimeout = Promise.race([
+            reader.read(),
+            new Promise<{ done: true; value: undefined }>((resolve) =>
+              setTimeout(() => resolve({ done: true, value: undefined }), 500)
+            )
+          ])
+
+          const { done, value } = await readWithTimeout
+
+          if (timedOut) break
+          if (done && value === undefined && !timedOut) continue // Short timeout, retry
+          if (done) break
+
+          if (value) {
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop() || ''
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try {
+                  const event = JSON.parse(line.slice(6))
+                  const text = event.data ? String(event.data) : ''
+
+                  if (event.type === 'stdout' || event.type === 'stderr') {
+                    output?.(text)
+
+                    // Check for real errors (not false positives)
+                    if (detectError(text)) {
+                      hasRealError = true
+                      errorOutput += text + '\n'
+                      errorBufferRef.current.push(text)
+                    }
+
+                    // Server started - clear errors
+                    if (isDevServer && detectServerStart(text)) {
+                      serverStarted = true
+                      hasRealError = false
+                      errorOutput = ''
+                    }
+                  }
+
+                  if (event.type === 'error') {
+                    output?.(`❌ ${text}`)
+                    hasRealError = true
+                    errorOutput += text + '\n'
+                  }
+
+                  if (event.type === 'done') {
+                    // Check exit code for non-zero (error)
+                    const exitCode = event.exit_code || event.exitCode || 0
+                    if (exitCode !== 0) {
+                      hasRealError = true
+                      const exitMsg = `Command exited with code ${exitCode}`
+                      errorOutput += exitMsg + '\n'
+                      console.log('[ExecuteCommand] 🔴 NON-ZERO EXIT CODE:', exitCode)
+                      console.log('[ExecuteCommand]    Command:', currentCommandRef.current)
+                      if (forwardBuildError) {
+                        console.log('[ExecuteCommand] 📤 Forwarding exit code error to backend...')
+                        forwardBuildError(exitMsg, currentCommandRef.current || undefined)
+                      }
+                    } else {
+                      console.log('[ExecuteCommand] ✅ Command completed successfully (exit code 0)')
+                    }
+                    return // Command completed
+                  }
+                } catch {}
+              }
+            }
+
+            // Early exit if server started
+            if (serverStarted) return
+          }
+        }
+      } catch (e) {
+        // Stream error, exit gracefully
+      }
+    }
+
+    // Race between stream processing and timeout
+    await Promise.race([processStream(), timeoutPromise])
+
+    // For dev servers:
+    // - If server started successfully (detected via output), clear errors
+    // - If timeout but NO errors detected, assume server is running
+    // - If timeout WITH errors and server NOT started, keep the errors (trigger auto-fix)
+    if (isDevServer && timedOut) {
+      if (serverStarted) {
+        // Server started successfully, clear any spurious errors
+        hasRealError = false
+        errorOutput = ''
+      } else if (!hasRealError) {
+        // No errors detected, assume server is running (silent startup)
+        serverStarted = true
+      }
+      // If hasRealError is true and serverStarted is false, keep the errors
+      // This allows auto-fix to trigger for dev server startup failures
+    }
+
+    return { hasRealError, errorOutput, serverStarted }
+  }
+
   // ============= DIRECT EXECUTION (FALLBACK) =============
-  const runDirect = async (): Promise<boolean> => {
-    if (!currentProject?.id) return false
+  const runDirect = async (): Promise<{ success: boolean; error?: string }> => {
+    if (!currentProject?.id) return { success: false, error: 'No project' }
 
     onOutput?.('🖥️ Running directly on server...')
     onOutput?.(`📂 Project ID: ${currentProject.id}`)
@@ -717,7 +981,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
       // Stream output
       const reader = response.body?.getReader()
-      if (!reader) return false
+      if (!reader) return { success: false, error: 'No response body' }
 
       const decoder = new TextDecoder()
       let buffer = ''
@@ -777,14 +1041,14 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
           detectedAt: new Date()
         })
 
-        // Return 'needs_fix' indicator for main handler to process
-        return false
+        // Return error for auto-fix
+        return { success: false, error: fullError }
       }
 
-      return true
+      return { success: true }
 
     } catch (error: any) {
-      if (error.name === 'AbortError') return false
+      if (error.name === 'AbortError') return { success: false }
       throw error
     }
   }
@@ -795,7 +1059,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     if (!currentProject?.id) {
       onOutput?.('❌ No project selected. Generate a project first!')
       onOpenTerminal?.()
-      onStartSession?.()  // Keep terminal open even for error
+      onStartSession?.()
       return
     }
 
@@ -804,7 +1068,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     if (!token) {
       onOutput?.('❌ Please log in to run projects.')
       onOpenTerminal?.()
-      onStartSession?.()  // Keep terminal open even for error
+      onStartSession?.()
       return
     }
 
@@ -814,17 +1078,16 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     setStatus('creating')
     setPreviewUrl(null)
 
-    // Start session - opens terminal and keeps it open
     onStartSession?.()
     onOpenTerminal?.()
 
     try {
-      let success = false
+      let result: { success: boolean; error?: string } = { success: false }
 
       // Try Docker first (if available)
       if (executionMode === 'docker' && dockerAvailable !== false) {
         try {
-          success = await runWithDocker()
+          result = await runWithDocker()
         } catch (error: any) {
           onOutput?.(`⚠️ Docker failed: ${error.message}`)
           onOutput?.('🔄 Switching to direct execution...')
@@ -834,48 +1097,111 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       }
 
       // Fallback to direct execution
-      if (!success && (executionMode === 'direct' || dockerAvailable === false)) {
+      if (!result.success && (executionMode === 'direct' || dockerAvailable === false)) {
         setStatus('starting')
-        success = await runDirect()
+        result = await runDirect()
       }
 
-      if (success) {
-        setStatus('running')
-        // Reset fix state on success
+      if (result.success) {
+        // Already set to running by runWithDocker/runDirect
+        console.log('[AutoFix] Project started successfully, no fix needed')
+        if (fixAttempts > 0) {
+          onOutput?.(`\n✨ SUCCESS after ${fixAttempts} fix attempt(s)!`)
+          onOutput?.('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+        }
         resetFixState()
-        onOutput?.('\n✅ Project is running successfully!')
-      } else {
-        // Execution failed - try auto-fix if enabled
-        if (autoFix && fixAttempts < MAX_AUTO_FIX_ATTEMPTS && lastError) {
-          onOutput?.('\n🤖 Attempting auto-fix...')
-          const fixSuccess = await attemptAutoFix(lastError.message, lastError.stackTrace)
+        isRetryingRef.current = false
+      } else if (result.error || lastError) {
+        // ============= FIX → VERIFY → RE-RUN LOOP (Bolt.new style!) =============
+        // This loop continues UNTIL SUCCESS or max attempts reached
+        const errorToFix = result.error || lastError?.stackTrace || 'Unknown error'
+        console.log('[AutoFix] Error detected, triggering auto-fix:', errorToFix.slice(0, 100))
+
+        // Prevent duplicate retries (e.g., from multiple error detections)
+        if (isRetryingRef.current) {
+          console.log('[AutoFix] Already retrying, skipping duplicate trigger')
+          return
+        }
+
+        if (autoFix && fixAttempts < MAX_AUTO_FIX_ATTEMPTS) {
+          isRetryingRef.current = true
+          const attemptNum = fixAttempts + 1
+
+          onOutput?.('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+          onOutput?.(`🔄 AUTO-RETRY LOOP [${attemptNum}/${MAX_AUTO_FIX_ATTEMPTS}]`)
+          onOutput?.('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+          console.log(`[AutoFix] Fix loop iteration ${attemptNum}/${MAX_AUTO_FIX_ATTEMPTS}`)
+
+          setStatus('fixing')
+          const fixSuccess = await attemptAutoFix(
+            errorToFix.slice(0, 500),
+            errorToFix
+          )
 
           if (fixSuccess) {
-            // Recursively try running again after fix
-            setTimeout(() => {
-              handleRun()
-            }, 1000)
+            // ✅ FIX APPLIED → RE-RUN TO VERIFY
+            consecutiveFailuresRef.current = 0 // Reset on successful fix
+            const delay = DEFAULT_RETRY_DELAY
+            onOutput?.(`\n🚀 Fix applied! Re-running to verify in ${delay/1000}s... (verify attempt ${attemptNum})`)
+            isRetryingRef.current = false
+            setTimeout(() => handleRun(), delay)
             return
+          } else {
+            // ❌ FIX FAILED → RETRY WITH BACKOFF
+            consecutiveFailuresRef.current += 1
+            const backoffDelay = getRetryDelay(consecutiveFailuresRef.current)
+
+            if (fixAttempts + 1 < MAX_AUTO_FIX_ATTEMPTS) {
+              onOutput?.(`\n⚠️ Fix attempt ${attemptNum} failed.`)
+              onOutput?.(`⏳ Retrying in ${(backoffDelay/1000).toFixed(1)}s with different approach...`)
+              isRetryingRef.current = false
+              // Continue retry loop - try fixing again
+              setTimeout(() => handleRun(), backoffDelay)
+              return
+            }
           }
         }
+
+        // Max attempts reached or autoFix disabled
+        if (fixAttempts >= MAX_AUTO_FIX_ATTEMPTS) {
+          onOutput?.('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+          onOutput?.(`🛑 MAX ATTEMPTS (${MAX_AUTO_FIX_ATTEMPTS}) REACHED`)
+          onOutput?.('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+          onOutput?.('\n💡 The auto-fixer tried multiple approaches but couldn\'t resolve the issue.')
+          onOutput?.('   Options:')
+          onOutput?.('   1. Check the error message above for clues')
+          onOutput?.('   2. Manually edit the file in Code Editor')
+          onOutput?.('   3. Click "Retry Fix" to reset and try again')
+          onOutput?.('   4. Ask the AI in chat for specific guidance')
+          setMaxAttemptsReached(true)
+        }
+
+        isRetryingRef.current = false
         setStatus('error')
-        onOutput?.('\n❌ Execution completed with errors. Check the output above.')
+        onOutput?.('\n❌ Execution failed. See errors above.')
       }
 
-      // End session but keep terminal open
       onEndSession?.()
 
     } catch (error: any) {
       console.error('Run error:', error)
       onOutput?.(`❌ Error: ${error.message}`)
-      onOutput?.('\n💡 Tips:')
-      onOutput?.('   - Make sure the project was generated successfully')
-      onOutput?.('   - Check that all files are present')
-      onOutput?.('   - Try regenerating the project')
       setStatus('error')
-      onEndSession?.()  // Keep terminal open to show error
+      onEndSession?.()
     }
-  }, [currentProject?.id, executionMode, dockerAvailable, detectProjectType, onOutput, onPreviewUrlChange, detectServerStart, autoFix, fixAttempts, lastError, attemptAutoFix, onStartSession, onEndSession])
+  }, [currentProject?.id, executionMode, dockerAvailable, onOutput, onOpenTerminal, autoFix, fixAttempts, lastError, attemptAutoFix, onStartSession, onEndSession, resetFixState, getRetryDelay])
+
+  // ============= BOLT.NEW: AUTO-RESTART AFTER LOGBUS FIX =============
+  // Check if LogBus auto-fix completed and restart is pending
+  useEffect(() => {
+    if (pendingRestartRef.current && status !== 'fixing') {
+      pendingRestartRef.current = false
+      // Delay restart to let files sync
+      setTimeout(() => {
+        handleRun()
+      }, 1000)
+    }
+  }, [status, handleRun])
 
   // ============= STOP HANDLER =============
   const handleStop = useCallback(async () => {
@@ -939,7 +1265,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       case 'stopped':
         return { icon: Circle, color: 'text-gray-400', label: 'Stopped', bgColor: 'bg-gray-400' }
       case 'fixing':
-        return { icon: Wrench, color: 'text-purple-500', label: 'Fixing...', bgColor: 'bg-purple-500' }
+        return { icon: Wrench, color: 'text-purple-500', label: `Fixing (${fixAttempts + 1}/${MAX_AUTO_FIX_ATTEMPTS})...`, bgColor: 'bg-purple-500' }
       case 'error':
         return { icon: XCircle, color: 'text-red-500', label: 'Error', bgColor: 'bg-red-500' }
       default:
@@ -1000,7 +1326,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
           <span>
             {status === 'creating' ? 'Creating...' :
              status === 'starting' ? 'Starting...' :
-             status === 'fixing' ? 'Fixing...' :
+             status === 'fixing' ? `Fixing (${fixAttempts + 1}/${MAX_AUTO_FIX_ATTEMPTS})...` :
              'Stopping...'}
           </span>
         </button>

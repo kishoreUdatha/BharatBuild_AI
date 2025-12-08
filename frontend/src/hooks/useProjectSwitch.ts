@@ -121,6 +121,8 @@ interface SwitchOptions {
   clearErrors?: boolean    // Clear error logs (default: true)
   clearChat?: boolean      // Clear chat messages (default: true)
   destroyOldSandbox?: boolean  // Delete old sandbox from server (default: true)
+  projectName?: string     // Project name/title to use (default: "Project {id}")
+  projectDescription?: string  // Project description
 }
 
 interface SwitchResult {
@@ -159,7 +161,9 @@ export function useProjectSwitch() {
       clearTerminal = true,
       clearErrors = true,
       clearChat = true,
-      destroyOldSandbox = true
+      destroyOldSandbox = true,
+      projectName,
+      projectDescription
     } = options
 
     const oldProjectId = projectStore.currentProject?.id
@@ -264,7 +268,8 @@ export function useProjectSwitch() {
             // Set new project in store with hierarchical tree
             projectStore.setCurrentProject({
               id: newProjectId,
-              name: `Project ${newProjectId}`,
+              name: projectName || `Project ${newProjectId}`,
+              description: projectDescription,
               files: fileTree,
               createdAt: new Date(),
               updatedAt: new Date(),
@@ -283,7 +288,8 @@ export function useProjectSwitch() {
             // No files found - create empty project
             projectStore.setCurrentProject({
               id: newProjectId,
-              name: `Project ${newProjectId}`,
+              name: projectName || `Project ${newProjectId}`,
+              description: projectDescription,
               files: [],
               createdAt: new Date(),
               updatedAt: new Date(),
@@ -305,7 +311,8 @@ export function useProjectSwitch() {
           // Fallback: create empty project
           projectStore.setCurrentProject({
             id: newProjectId,
-            name: `Project ${newProjectId}`,
+            name: projectName || `Project ${newProjectId}`,
+            description: projectDescription,
             files: [],
             createdAt: new Date(),
             updatedAt: new Date(),
@@ -324,7 +331,8 @@ export function useProjectSwitch() {
         // loadFiles = false - just create empty project
         projectStore.setCurrentProject({
           id: newProjectId,
-          name: `Project ${newProjectId}`,
+          name: projectName || `Project ${newProjectId}`,
+          description: projectDescription,
           files: [],
           createdAt: new Date(),
           updatedAt: new Date(),

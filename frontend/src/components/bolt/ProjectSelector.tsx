@@ -75,7 +75,9 @@ export function ProjectSelector({ onProjectSelect, onNewProject }: ProjectSelect
         clearTerminal: true,   // Clear terminal logs
         clearErrors: true,     // Clear error logs
         clearChat: false,      // Preserve chat history (user preference)
-        destroyOldSandbox: true // Delete old sandbox from server
+        destroyOldSandbox: true, // Delete old sandbox from server
+        projectName: project.title,  // Pass actual project title
+        projectDescription: project.description || undefined
       })
 
       if (result.success) {

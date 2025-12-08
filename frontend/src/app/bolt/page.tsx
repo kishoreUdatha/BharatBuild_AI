@@ -8,6 +8,7 @@ import { ProjectGenerationModal } from '@/components/bolt/ProjectGenerationModal
 import { useChat } from '@/hooks/useChat'
 import { useTokenBalance } from '@/hooks/useTokenBalance'
 import { useProject } from '@/hooks/useProject'
+import { useProjectSwitch } from '@/hooks/useProjectSwitch'
 import { useWorkspaceStore } from '@/store/workspaceStore'
 import { useAuth } from '@/hooks/useAuth'
 import { apiClient } from '@/lib/api-client'
@@ -24,6 +25,7 @@ export default function BoltPage() {
   const { messages, sendMessage, stopGeneration, isStreaming } = useChat()
   const { balance, setBalance } = useTokenBalance()
   const { currentProject, createNewProject } = useProject()
+  const { switchProject } = useProjectSwitch()
   const { currentWorkspace, setCurrentWorkspace, setCurrentProject, getWorkspace } = useWorkspaceStore()
   const { isAuthenticated, isLoading: authLoading, checkAuth } = useAuth()
   const router = useRouter()
@@ -32,6 +34,7 @@ export default function BoltPage() {
   const [serverUrl, setServerUrl] = useState<string | undefined>(undefined)
   const [isMounted, setIsMounted] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
+  const [projectReloaded, setProjectReloaded] = useState(false)
 
   // Convert project files to FileNode format for BoltLayout
   // Files already have full paths from projectStore, just extract the name for display
@@ -46,10 +49,13 @@ export default function BoltPage() {
   }
 
   // Wrap files in a project root folder for proper display
+  // Only show files if there's an actual project selected with files
   const projectName = currentProject?.name || 'Project'
   const projectFiles = currentProject?.files || []
+  const hasProject = currentProject !== null && currentProject.id !== undefined
 
-  const files: FileNode[] = projectFiles.length > 0
+  // Only create file tree if we have a project AND it has files
+  const files: FileNode[] = (hasProject && projectFiles.length > 0)
     ? [{
         name: projectName,
         path: projectName,
@@ -59,6 +65,7 @@ export default function BoltPage() {
     : []
 
   // Build file contents object for LivePreview
+  // Only extract if we have a valid project with synced files
   const fileContents: Record<string, string> = {}
   const extractFileContents = (files: NonNullable<typeof currentProject>['files'] | undefined) => {
     files?.forEach(file => {
@@ -71,7 +78,7 @@ export default function BoltPage() {
       }
     })
   }
-  if (currentProject?.files) {
+  if (hasProject && currentProject?.files && currentProject.files.length > 0) {
     console.log('[BoltPage] Current project files count:', currentProject.files.length)
     extractFileContents(currentProject.files)
     console.log('[BoltPage] Total files for preview:', Object.keys(fileContents).length)
@@ -113,6 +120,36 @@ export default function BoltPage() {
     setAuthChecked(true)
   }, [isMounted, checkAuth, router])
 
+  // Reload project files from backend if project exists but isn't synced
+  // This handles page refresh where we only persist project ID, not files
+  useEffect(() => {
+    if (!isMounted || !authChecked || projectReloaded) return
+
+    const reloadProjectFiles = async () => {
+      // If there's a current project that isn't synced and has no files, reload from backend
+      if (currentProject && !currentProject.isSynced && currentProject.files.length === 0) {
+        console.log('[BoltPage] Reloading project files from backend:', currentProject.id)
+        try {
+          await switchProject(currentProject.id, {
+            loadFiles: true,
+            clearTerminal: false,
+            clearErrors: false,
+            clearChat: false,
+            destroyOldSandbox: false,
+            projectName: currentProject.name,
+            projectDescription: currentProject.description
+          })
+          console.log('[BoltPage] Project files reloaded successfully')
+        } catch (error) {
+          console.error('[BoltPage] Failed to reload project files:', error)
+        }
+      }
+      setProjectReloaded(true)
+    }
+
+    reloadProjectFiles()
+  }, [isMounted, authChecked, currentProject, projectReloaded, switchProject])
+
   // Load token balance, workspace, and check for initial prompt on mount
   useEffect(() => {
     if (!isMounted || !authChecked) return
@@ -135,12 +172,8 @@ export default function BoltPage() {
       sessionStorage.removeItem('projectId')
     }
 
-    // Create default project if none exists
-    if (!currentProject) {
-      const projectName = currentWorkspace?.projects[0]?.name || 'My Project'
-      const projectDesc = currentWorkspace?.projects[0]?.description || 'AI-generated application'
-      createNewProject(projectName, projectDesc)
-    }
+    // Don't auto-create a project - let user select from dropdown or create new
+    // This prevents showing stale files when no project is explicitly selected
 
     // Check if there's an initial prompt from landing page
     const initialPrompt = sessionStorage.getItem('initialPrompt')
@@ -190,6 +223,7 @@ export default function BoltPage() {
         }
         onGenerateProject={() => setIsGenerationModalOpen(true)}
         onServerStart={(url) => {
+          console.log('[BoltPage] onServerStart called with URL:', url)
           setServerUrl(url)
           setIsServerRunning(true)
         }}

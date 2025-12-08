@@ -80,9 +80,9 @@ def get_project_path(project_id: str, user_id: str = None):
 async def verify_project_ownership(project_id: str, current_user: User, db: AsyncSession) -> bool:
     """Helper function to verify project ownership"""
     try:
-        # Use CAST() instead of ::uuid to avoid conflict with SQLAlchemy's :param syntax
+        # GUID columns are String(36), so compare as strings (not UUID)
         result = await db.execute(
-            text("SELECT id FROM projects WHERE id = CAST(:project_id AS uuid) AND user_id = CAST(:user_id AS uuid)"),
+            text("SELECT id FROM projects WHERE id = :project_id AND user_id = :user_id"),
             {"project_id": str(project_id), "user_id": str(current_user.id)}
         )
         return result.scalar_one_or_none() is not None
