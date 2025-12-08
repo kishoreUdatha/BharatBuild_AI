@@ -10,6 +10,7 @@ import { PlanView } from './PlanView'
 import { ProjectSelector } from './ProjectSelector'
 import { ProjectRunControls } from './ProjectRunControls'
 import { WelcomeScreen } from './WelcomeScreen'
+import { QuickActions } from './QuickActions'
 
 // Dynamically import XTerminal to avoid SSR issues
 const XTerminal = dynamic(() => import('./XTerminal'), {
@@ -567,6 +568,13 @@ export function BoltLayout({
               </>
             )}
           </div>
+
+          {/* Quick Actions - Show when project exists */}
+          <QuickActions
+            onAction={onSendMessage}
+            hasProject={(currentProject?.files?.length || 0) > 0}
+            isLoading={isLoading}
+          />
 
           {/* Input */}
           <div className="border-t border-[hsl(var(--bolt-border))]">
