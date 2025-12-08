@@ -15,6 +15,10 @@ import {
   type PromptIntent
 } from '@/services/promptClassifier'
 import { getAgentLabel } from './agentLabelMapping'
+import { sdkService } from '@/services/sdkService'
+
+// SDK Fixer configuration
+const USE_SDK_FIXER = true // Enable SDK-based fixing for better reliability
 
 const generateId = () => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 
@@ -243,7 +247,88 @@ Just describe your project or share the code that needs fixing!`)
           return
         }
 
-        // Continue with fix workflow - context will be attached in metadata below
+        // USE SDK FIXER for more reliable fixes (if enabled)
+        if (USE_SDK_FIXER) {
+          try {
+            appendToMessage(aiMessageId, '🔧 **Auto-Fix Started** (SDK Mode)\n\nAnalyzing errors and applying fixes...\n')
+
+            // Collect error context
+            const errorStoreState = useErrorStore.getState()
+            const terminalStoreState = useTerminalStore.getState()
+
+            // Get unresolved errors
+            const unresolvedErrors = errorStoreState.getUnresolvedErrors()
+            const errorMessage = unresolvedErrors.length > 0
+              ? unresolvedErrors.map(e => `${e.source}: ${e.message}${e.file ? ` (${e.file}:${e.line})` : ''}`).join('\n')
+              : content // Use user's description if no captured errors
+
+            // Get stack traces
+            const stackTrace = unresolvedErrors
+              .filter(e => e.stack)
+              .map(e => e.stack)
+              .join('\n---\n')
+
+            // Get recent terminal output for context
+            const recentLogs = terminalStoreState.logs.slice(-20)
+              .map(l => l.content)
+              .join('\n')
+
+            // Call SDK Fixer
+            const result = await sdkService.fixError({
+              project_id: projectStore.currentProject.id,
+              error_message: `User reported: ${content}\n\nCaptured errors:\n${errorMessage}\n\nRecent terminal output:\n${recentLogs}`,
+              stack_trace: stackTrace,
+              build_command: 'npm run build',
+              max_retries: 3
+            })
+
+            // Report result
+            if (result.success && result.error_fixed) {
+              appendToMessage(aiMessageId, `\n✅ **Fix Applied Successfully!**
+
+**Files Modified:**
+${result.files_modified.map(f => `• \`${f}\``).join('\n')}
+
+**Attempts:** ${result.attempts}
+
+The errors have been fixed. Your preview should update automatically.`)
+
+              // Clear errors from store
+              errorStoreState.clearErrors()
+
+              // Trigger file refresh for modified files
+              result.files_modified.forEach(filePath => {
+                parseFileOperationEvent({
+                  path: filePath,
+                  operation: 'fixed',
+                  status: 'complete'
+                }, projectStore.currentProject?.id || '')
+              })
+            } else {
+              appendToMessage(aiMessageId, `\n⚠️ **Could Not Auto-Fix**
+
+${result.message}
+
+**What you can try:**
+1. Check the error details in the Terminal
+2. Manually review the affected files
+3. Describe the issue in more detail
+
+I'll keep trying to help!`)
+            }
+
+            updateMessageStatus(aiMessageId, 'complete')
+            stopStreaming()
+            return
+
+          } catch (sdkError: any) {
+            console.error('[useChat] SDK Fixer error:', sdkError)
+            appendToMessage(aiMessageId, `\n❌ **SDK Fix Error:** ${sdkError.message}\n\nFalling back to standard fix workflow...`)
+            // Fall through to standard fix workflow
+          }
+        }
+
+        // Continue with standard fix workflow - context will be attached in metadata below
         break
 
       case 'GENERATE':
