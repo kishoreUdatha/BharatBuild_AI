@@ -89,6 +89,41 @@ class UnifiedStorageService:
         self.sandbox_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"UnifiedStorageService initialized. Sandbox: {self.sandbox_path}")
 
+    def _sanitize_xml_content(self, content: str) -> str:
+        """
+        Sanitize XML content to ensure proper formatting.
+
+        CRITICAL: XML files MUST have <?xml declaration on line 1.
+        No whitespace or empty lines are allowed before the XML declaration.
+        This fixes Maven "Non-parseable POM" errors caused by:
+        - Empty lines before <?xml
+        - BOM (Byte Order Mark) characters
+        - Leading whitespace
+        """
+        import re
+
+        # Remove BOM if present
+        if content.startswith('\ufeff'):
+            content = content[1:]
+
+        # Check if content has XML declaration
+        xml_decl_match = re.search(r'<\?xml[^?]*\?>', content)
+        if xml_decl_match:
+            # Strip everything before the XML declaration
+            xml_decl_start = xml_decl_match.start()
+            if xml_decl_start > 0:
+                # There's content before <?xml - remove leading whitespace/empty lines
+                leading_content = content[:xml_decl_start]
+                if leading_content.strip() == '':
+                    # Only whitespace before <?xml - safe to remove
+                    content = content[xml_decl_start:]
+                    logger.debug(f"[XMLSanitize] Removed {xml_decl_start} chars of leading whitespace before <?xml")
+        else:
+            # No XML declaration - just strip leading whitespace for safety
+            content = content.lstrip()
+
+        return content
+
     # ==================== LAYER 1: SANDBOX ====================
 
     def get_sandbox_path(self, project_id: str, user_id: Optional[str] = None) -> Path:
@@ -97,24 +132,37 @@ class UnifiedStorageService:
 
         Path structure: /workspaces/{user_id}/{project_id}/
 
+        IMPORTANT: user_id MUST be provided for proper isolation.
+        Projects without user_id will be created at root level which is NOT recommended.
+
         Args:
             project_id: Project UUID
-            user_id: User UUID (optional for backward compatibility)
+            user_id: User UUID (REQUIRED for proper isolation)
 
         Returns:
             Path to sandbox workspace
         """
         if user_id:
             return self.sandbox_path / user_id / project_id
-        # Fallback for backward compatibility
+        # WARNING: This creates project at root level - not isolated per user!
+        logger.warning(f"[Sandbox] DEPRECATED: Creating project {project_id} WITHOUT user_id - project will NOT be in user folder!")
         return self.sandbox_path / project_id
 
     async def create_sandbox(self, project_id: str, user_id: Optional[str] = None) -> Path:
-        """Create a sandbox workspace for runtime execution"""
+        """
+        Create a sandbox workspace for runtime execution.
+
+        IMPORTANT: user_id MUST be provided for proper project isolation.
+        All projects should be under: /workspace/{user_id}/{project_id}/
+        """
+        if not user_id:
+            logger.error(f"[Sandbox] CRITICAL: Creating sandbox WITHOUT user_id for project {project_id}! "
+                        f"This will create project at root level, breaking user isolation!")
+
         sandbox = self.get_sandbox_path(project_id, user_id)
         sandbox.mkdir(parents=True, exist_ok=True)
         # Log the actual path being created for debugging
-        logger.info(f"[Sandbox] Created at: {sandbox} (user_id={user_id}, project_id={project_id})")
+        logger.info(f"[Sandbox] Created at: {sandbox} (user_id={user_id or 'MISSING!'}, project_id={project_id})")
         return sandbox
 
     async def write_to_sandbox(
@@ -134,6 +182,11 @@ class UnifiedStorageService:
                 raise ValueError("Path traversal detected")
 
             full_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # SANITIZE XML FILES: Ensure <?xml declaration is on line 1
+            # XML files MUST NOT have whitespace before the XML declaration
+            if file_path.endswith('.xml') or file_path.endswith('.pom'):
+                content = self._sanitize_xml_content(content)
 
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
@@ -206,14 +259,21 @@ class UnifiedStorageService:
                     ))
                 else:
                     language = self._detect_language(item.name)
+                    try:
+                        size = item.stat().st_size
+                    except OSError:
+                        # Skip files that can't be accessed (locked by other process)
+                        continue
                     items.append(FileInfo(
                         path=relative_path,
                         name=item.name,
                         type='file',
                         language=language,
-                        size_bytes=item.stat().st_size
+                        size_bytes=size
                     ))
-        except PermissionError:
+        except (PermissionError, OSError) as e:
+            # OSError includes WinError 1920 (file locked by another process)
+            # This commonly happens with node_modules/.bin files on Windows
             pass
 
         return items

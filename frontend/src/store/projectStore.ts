@@ -3,9 +3,13 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 
 export interface ProjectFile {
   path: string
-  content: string
+  content?: string  // Optional - lazy loaded on click (Bolt.new style)
   language: string
   type: 'file' | 'folder'
+  hash?: string  // MD5 hash for change detection (Bolt.new style)
+  size_bytes?: number
+  isLoading?: boolean  // True while content is being fetched
+  isLoaded?: boolean  // True if content has been fetched
   children?: ProjectFile[]
 }
 
@@ -18,6 +22,13 @@ export interface Project {
   createdAt: Date
   updatedAt: Date
   isSynced?: boolean  // Track if synced with backend
+}
+
+// Track recently modified files for fixer context
+export interface RecentlyModifiedFile {
+  path: string
+  timestamp: number
+  action: 'created' | 'updated' | 'deleted'
 }
 
 interface ProjectState {
@@ -35,6 +46,9 @@ interface ProjectState {
   // Live preview server state
   serverUrl: string | null  // URL of running dev server
   isServerRunning: boolean  // Whether server is running
+
+  // Recently modified files tracking (for Bolt.new-style fixer context)
+  recentlyModifiedFiles: RecentlyModifiedFile[]
 
   // Actions
   setCurrentProject: (project: Project) => void
@@ -64,6 +78,18 @@ interface ProjectState {
 
   // Bolt.new-style project switching with isolation
   switchProject: (newProjectId: string, loadFiles?: boolean) => Promise<void>
+
+  // File tree and modification tracking (for Bolt.new-style fixer)
+  trackFileModification: (path: string, action: 'created' | 'updated' | 'deleted') => void
+  getFileTree: () => string[]
+  getRecentlyModifiedFiles: (maxAge?: number) => RecentlyModifiedFile[]
+  clearRecentlyModifiedFiles: () => void
+
+  // Bolt.new-style lazy loading
+  loadFileContent: (path: string) => Promise<string | null>
+  setFileLoading: (path: string, isLoading: boolean) => void
+  setFileContent: (path: string, content: string) => void
+  findFileByPath: (path: string) => ProjectFile | null
 }
 
 export const useProjectStore = create<ProjectState>()(
@@ -79,6 +105,9 @@ export const useProjectStore = create<ProjectState>()(
   // Ephemeral storage state
   sessionId: null,
   downloadUrl: null,
+
+  // Recently modified files (for Bolt.new-style fixer context)
+  recentlyModifiedFiles: [],
 
   setCurrentProject: (project) => {
     set({ currentProject: project })
@@ -151,6 +180,10 @@ export const useProjectStore = create<ProjectState>()(
         }
       }
 
+      // Track file modification for Bolt.new-style fixer context
+      const fullPath = file.path
+      setTimeout(() => get().trackFileModification(fullPath, 'created'), 0)
+
       return {
         currentProject: {
           ...state.currentProject,
@@ -185,6 +218,9 @@ export const useProjectStore = create<ProjectState>()(
         ? { ...state.selectedFile, content }
         : state.selectedFile
 
+      // Track file modification for Bolt.new-style fixer context
+      setTimeout(() => get().trackFileModification(path, 'updated'), 0)
+
       return {
         currentProject: {
           ...state.currentProject,
@@ -209,6 +245,9 @@ export const useProjectStore = create<ProjectState>()(
           return true
         })
       }
+
+      // Track file modification for Bolt.new-style fixer context
+      setTimeout(() => get().trackFileModification(path, 'deleted'), 0)
 
       return {
         currentProject: {
@@ -514,6 +553,215 @@ export const useProjectStore = create<ProjectState>()(
       }
     })
     console.log(`[ProjectStore] Created empty project: ${newProjectId}`)
+  },
+
+  /**
+   * Track a file modification (for Bolt.new-style fixer context)
+   * Keeps last 20 modifications, max 5 minutes old
+   */
+  trackFileModification: (path: string, action: 'created' | 'updated' | 'deleted') => {
+    set((state) => {
+      const now = Date.now()
+      const maxAge = 5 * 60 * 1000 // 5 minutes
+      const maxEntries = 20
+
+      // Filter out old entries and add new one
+      const filtered = state.recentlyModifiedFiles
+        .filter(f => now - f.timestamp < maxAge)
+        .filter(f => f.path !== path) // Remove duplicate path
+
+      const newEntry: RecentlyModifiedFile = { path, timestamp: now, action }
+
+      return {
+        recentlyModifiedFiles: [...filtered, newEntry].slice(-maxEntries)
+      }
+    })
+  },
+
+  /**
+   * Get flat list of all file paths in the project tree
+   */
+  getFileTree: () => {
+    const state = get()
+    if (!state.currentProject) return []
+
+    const paths: string[] = []
+
+    const collectPaths = (files: ProjectFile[]) => {
+      for (const file of files) {
+        paths.push(file.path)
+        if (file.children) {
+          collectPaths(file.children)
+        }
+      }
+    }
+
+    collectPaths(state.currentProject.files)
+    return paths
+  },
+
+  /**
+   * Get recently modified files (within maxAge ms, default 5 minutes)
+   */
+  getRecentlyModifiedFiles: (maxAge: number = 5 * 60 * 1000) => {
+    const state = get()
+    const now = Date.now()
+    return state.recentlyModifiedFiles.filter(f => now - f.timestamp < maxAge)
+  },
+
+  /**
+   * Clear recently modified files tracking
+   */
+  clearRecentlyModifiedFiles: () => {
+    set({ recentlyModifiedFiles: [] })
+  },
+
+  /**
+   * Find a file by path in the project tree (recursive)
+   */
+  findFileByPath: (path: string): ProjectFile | null => {
+    const state = get()
+    if (!state.currentProject) return null
+
+    const findInTree = (files: ProjectFile[]): ProjectFile | null => {
+      for (const file of files) {
+        if (file.path === path) return file
+        if (file.children) {
+          const found = findInTree(file.children)
+          if (found) return found
+        }
+      }
+      return null
+    }
+
+    return findInTree(state.currentProject.files)
+  },
+
+  /**
+   * Set file loading state (for UI feedback)
+   */
+  setFileLoading: (path: string, isLoading: boolean) => {
+    set((state) => {
+      if (!state.currentProject) return state
+
+      const updateLoadingState = (files: ProjectFile[]): ProjectFile[] => {
+        return files.map((file) => {
+          if (file.path === path) {
+            return { ...file, isLoading }
+          }
+          if (file.children) {
+            return { ...file, children: updateLoadingState(file.children) }
+          }
+          return file
+        })
+      }
+
+      return {
+        currentProject: {
+          ...state.currentProject,
+          files: updateLoadingState(state.currentProject.files)
+        }
+      }
+    })
+  },
+
+  /**
+   * Set file content after lazy loading
+   */
+  setFileContent: (path: string, content: string) => {
+    set((state) => {
+      if (!state.currentProject) return state
+
+      const updateContent = (files: ProjectFile[]): ProjectFile[] => {
+        return files.map((file) => {
+          if (file.path === path) {
+            return { ...file, content, isLoading: false, isLoaded: true }
+          }
+          if (file.children) {
+            return { ...file, children: updateContent(file.children) }
+          }
+          return file
+        })
+      }
+
+      // Also update open tabs if the file is open
+      const updatedTabs = state.openTabs.map(tab =>
+        tab.path === path ? { ...tab, content, isLoading: false, isLoaded: true } : tab
+      )
+
+      const updatedSelectedFile = state.selectedFile?.path === path
+        ? { ...state.selectedFile, content, isLoading: false, isLoaded: true }
+        : state.selectedFile
+
+      return {
+        currentProject: {
+          ...state.currentProject,
+          files: updateContent(state.currentProject.files)
+        },
+        openTabs: updatedTabs,
+        selectedFile: updatedSelectedFile
+      }
+    })
+  },
+
+  /**
+   * Bolt.new-style lazy loading: fetch file content only when user clicks
+   *
+   * This is the key to Bolt's performance - files are loaded on-demand!
+   */
+  loadFileContent: async (path: string): Promise<string | null> => {
+    const state = get()
+    if (!state.currentProject) return null
+
+    // Check if already loaded
+    const file = get().findFileByPath(path)
+    if (file?.isLoaded && file.content !== undefined) {
+      console.log(`[ProjectStore] File already loaded: ${path}`)
+      return file.content
+    }
+
+    // Set loading state
+    get().setFileLoading(path, true)
+
+    try {
+      const token = localStorage.getItem('access_token')
+      if (!token) {
+        console.warn('[ProjectStore] No access token for lazy load')
+        get().setFileLoading(path, false)
+        return null
+      }
+
+      const projectId = state.currentProject.id
+      const encodedPath = encodeURIComponent(path)
+
+      console.log(`[ProjectStore] Lazy loading file: ${path}`)
+
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/projects/${projectId}/files/${encodedPath}`,
+        {
+          headers: { 'Authorization': `Bearer ${token}` }
+        }
+      )
+
+      if (response.ok) {
+        const data = await response.json()
+        const content = data.content || ''
+
+        // Update store with loaded content
+        get().setFileContent(path, content)
+
+        console.log(`[ProjectStore] Loaded file content: ${path} (${content.length} chars)`)
+        return content
+      } else {
+        console.warn(`[ProjectStore] Failed to load file: ${path}`, response.status)
+        get().setFileLoading(path, false)
+        return null
+      }
+    } catch (err) {
+      console.error(`[ProjectStore] Error loading file: ${path}`, err)
+      get().setFileLoading(path, false)
+      return null
+    }
   }
 }),
     {

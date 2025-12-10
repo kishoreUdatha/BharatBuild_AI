@@ -40,10 +40,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   lastVisibilityChange: 0,
 
   startSession: () => {
-    console.log('[Terminal] Starting session - setting visible: true')
+    // Only mark session as active, do NOT auto-open terminal
+    // Terminal should only be visible in Code mode, not Preview mode
+    console.log('[Terminal] Starting session - NOT opening terminal (user must click Code tab)')
     set({
       sessionActive: true,
-      isVisible: true,
+      // isVisible is NOT changed here - terminal stays closed in Preview mode
       lastVisibilityChange: Date.now()
     })
   },

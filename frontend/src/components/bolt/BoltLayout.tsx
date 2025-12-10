@@ -33,10 +33,7 @@ import {
   ChevronDown,
   ChevronUp,
   ListTodo,
-  FolderKanban,
-  MessageSquare,
 } from 'lucide-react'
-import { FeedbackModal } from '@/components/feedback/FeedbackModal'
 import { useRouter } from 'next/navigation'
 import { useTerminal } from '@/hooks/useTerminal'
 import { Message, useChatStore } from '@/store/chatStore'
@@ -55,6 +52,9 @@ interface FileNode {
   type: 'file' | 'folder'
   children?: FileNode[]
   content?: string
+  hash?: string  // MD5 hash for change detection (Bolt.new style)
+  isLoading?: boolean  // True while content is being fetched
+  isLoaded?: boolean  // True if content has been fetched
 }
 
 interface BoltLayoutProps {
@@ -65,7 +65,6 @@ interface BoltLayoutProps {
   isLoading?: boolean
   tokenBalance?: number
   livePreview?: React.ReactNode
-  onGenerateProject?: () => void
   onServerStart?: (url: string) => void
   onServerStop?: () => void
 }
@@ -74,7 +73,6 @@ export function BoltLayout({
   onSendMessage,
   onStopGeneration,
   messages,
-  onGenerateProject,
   files,
   isLoading = false,
   tokenBalance = 0,
@@ -87,7 +85,6 @@ export function BoltLayout({
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null)
   const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview')
   const [isPlanViewVisible, setIsPlanViewVisible] = useState(true)
-  const [showFeedback, setShowFeedback] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
 
@@ -373,7 +370,13 @@ export function BoltLayout({
           {/* Code & Preview Buttons */}
           <div className="flex items-center gap-1 ml-4">
             <button
-              onClick={() => setActiveTab('code')}
+              onClick={() => {
+                setActiveTab('code')
+                // Auto-open terminal if there's output when switching to Code tab
+                if (terminalLogs.length > 0) {
+                  openTerminal()
+                }
+              }}
               className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                 activeTab === 'code'
                   ? 'bg-[hsl(var(--bolt-accent))] text-white'
@@ -401,17 +404,6 @@ export function BoltLayout({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Generate Project */}
-          {onGenerateProject && (
-            <button
-              onClick={onGenerateProject}
-              className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:from-blue-700 hover:to-purple-700 transition-colors"
-              title="Generate Complete Project"
-            >
-              <Sparkles className="w-4 h-4" />
-              Generate
-            </button>
-          )}
 
           {/* Project Run Controls (Docker) */}
           <ProjectRunControls
@@ -427,9 +419,12 @@ export function BoltLayout({
               }
             }}
             onOutput={(line) => {
-              // Show terminal (use openTerminal to avoid race conditions with toggle)
-              openTerminal()
-              // Add output to terminal
+              // Only open terminal if in Code mode, NOT in Preview mode
+              // User must click Code tab to see terminal output
+              if (activeTab === 'code') {
+                openTerminal()
+              }
+              // Always add output to terminal buffer (user can view later)
               addLog({
                 type: 'output',
                 content: line
@@ -438,6 +433,8 @@ export function BoltLayout({
             onStartSession={() => {
               // Start session - keeps terminal open during and after execution
               startSession()
+              // Switch to Preview tab when Run is clicked
+              setActiveTab('preview')
             }}
             onEndSession={() => {
               // End session but keep terminal open for user to review output
@@ -484,26 +481,6 @@ export function BoltLayout({
               {tokenBalance.toLocaleString()} tokens
             </span>
           </div>
-
-          {/* My Projects */}
-          <button
-            onClick={() => router.push('/projects')}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
-            title="My Projects"
-          >
-            <FolderKanban className="w-4 h-4" />
-            <span className="text-sm hidden sm:inline">Projects</span>
-          </button>
-
-          {/* Feedback */}
-          <button
-            onClick={() => setShowFeedback(true)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
-            title="Send Feedback"
-          >
-            <MessageSquare className="w-4 h-4" />
-            <span className="text-sm hidden sm:inline">Feedback</span>
-          </button>
 
           {/* Settings */}
           <button
@@ -609,14 +586,47 @@ export function BoltLayout({
                     >
                       <FileExplorer
                         files={files}
-                        onFileSelect={(file) => {
-                          // Convert FileNode to ProjectFile and open in tab
-                          openTab({
-                            path: file.path || file.name,
-                            content: file.content || '',
-                            language: '',
-                            type: 'file'
-                          })
+                        onFileSelect={async (file) => {
+                          // Bolt.new-style lazy loading: content is loaded on-demand
+                          const filePath = file.path || file.name
+
+                          // Check if content already loaded
+                          if (file.content !== undefined && file.content !== null) {
+                            // Content already available, open tab immediately
+                            openTab({
+                              path: filePath,
+                              content: file.content,
+                              language: '',
+                              type: 'file'
+                            })
+                          } else {
+                            // Content not loaded yet - lazy load from backend
+                            console.log(`[BoltLayout] Lazy loading file: ${filePath}`)
+
+                            // Open tab with loading state
+                            openTab({
+                              path: filePath,
+                              content: '// Loading...',
+                              language: '',
+                              type: 'file',
+                              isLoading: true
+                            })
+
+                            // Load content from store (which fetches from backend)
+                            const { loadFileContent } = useProjectStore.getState()
+                            const content = await loadFileContent(filePath)
+
+                            if (content !== null) {
+                              // Update the tab with loaded content
+                              openTab({
+                                path: filePath,
+                                content: content,
+                                language: '',
+                                type: 'file',
+                                isLoaded: true
+                              })
+                            }
+                          }
                         }}
                         selectedFile={selectedFile?.name}
                       />
@@ -641,17 +651,17 @@ export function BoltLayout({
               )}
 
               {activeTab === 'preview' && (
-                <div className={`flex-1 flex flex-col bg-white ${showTerminal ? '' : 'h-full'}`}>
-                  {/* Preview Content */}
+                <div className="flex-1 flex flex-col bg-white h-full">
+                  {/* Preview Content - Full height, no terminal in preview mode */}
                   <div className="flex-1 h-full">
                     {livePreview || <div className="h-full w-full" />}
                   </div>
                 </div>
               )}
 
-              {/* Shared Terminal Panel - Single instance, persists across tab switches */}
+              {/* Terminal Panel - Only visible in Code mode */}
               <div
-                className={`border-t border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))] flex flex-col flex-shrink-0 ${showTerminal ? '' : 'hidden'}`}
+                className={`border-t border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))] flex flex-col flex-shrink-0 ${showTerminal && activeTab === 'code' ? '' : 'hidden'}`}
                 style={{ height: `${terminalHeight}px` }}
               >
                 {/* Terminal Header */}
@@ -719,7 +729,6 @@ export function BoltLayout({
       </div>
 
       {/* Feedback Modal */}
-      <FeedbackModal isOpen={showFeedback} onClose={() => setShowFeedback(false)} />
     </div>
   )
 }

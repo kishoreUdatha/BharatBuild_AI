@@ -22,7 +22,8 @@ from anthropic import AsyncAnthropic
 from app.core.logging_config import logger
 from app.core.config import settings
 from app.modules.sdk_agents.sdk_tools import SDKToolManager, SDK_FIXER_SYSTEM_PROMPT
-from app.services.sandbox_storage import storage
+from app.services.unified_storage import unified_storage as storage
+from app.services.smart_project_analyzer import smart_analyzer, Technology, ProjectStructure
 
 
 @dataclass
@@ -45,13 +46,19 @@ class SDKFixerAgent:
     - Built-in error handling
     - Context management
     - Retry logic
+    - SMART PROJECT ANALYSIS for technology-aware fixing
 
     This replaces the manual implementation in fixer_agent.py with
-    a cleaner, SDK-based approach.
+    a cleaner, SDK-based approach that supports ALL technologies:
+    - React, Vue, Angular, Svelte, Next.js
+    - Python (FastAPI, Django, Flask)
+    - Java (Spring Boot)
+    - Go, Rust
+    - Fullstack monorepos
     """
 
     MAX_ATTEMPTS = 5
-    MAX_TOOL_ITERATIONS = 20
+    MAX_TOOL_ITERATIONS = 40  # Increased from 20 for complex fullstack projects
 
     def __init__(
         self,
@@ -64,6 +71,34 @@ class SDKFixerAgent:
         self.max_tokens = max_tokens
         self.tools = SDKToolManager.get_fixer_tools()
         self.system_prompt = SDK_FIXER_SYSTEM_PROMPT
+        # Cache for project structures
+        self._project_cache: Dict[str, ProjectStructure] = {}
+
+    async def _get_project_structure(
+        self,
+        project_id: str,
+        user_id: str
+    ) -> Optional[ProjectStructure]:
+        """
+        Get project structure from cache or analyze.
+
+        This enables technology-aware fixing with proper working directories.
+        """
+        cache_key = f"{project_id}:{user_id}"
+
+        if cache_key not in self._project_cache:
+            try:
+                structure = await smart_analyzer.analyze_project(
+                    project_id=project_id,
+                    user_id=user_id
+                )
+                self._project_cache[cache_key] = structure
+                logger.info(f"[SDKFixerAgent:{project_id}] Analyzed project: {structure.technology.value}")
+            except Exception as e:
+                logger.warning(f"[SDKFixerAgent:{project_id}] Failed to analyze project: {e}")
+                return None
+
+        return self._project_cache.get(cache_key)
 
     async def fix_error(
         self,
@@ -75,7 +110,7 @@ class SDKFixerAgent:
         context_files: Optional[Dict[str, str]] = None
     ) -> FixResult:
         """
-        Fix an error using the SDK tool loop.
+        Fix an error using the SDK tool loop with technology awareness.
 
         Args:
             project_id: Project identifier
@@ -90,12 +125,16 @@ class SDKFixerAgent:
         """
         logger.info(f"[SDKFixerAgent:{project_id}] Starting fix for: {error_message[:100]}...")
 
-        # Build initial message with error context
+        # Get project structure for technology-aware fixing
+        project_structure = await self._get_project_structure(project_id, user_id)
+
+        # Build initial message with error context AND technology info
         user_message = self._build_error_prompt(
             error_message=error_message,
             stack_trace=stack_trace,
             command=command,
-            context_files=context_files
+            context_files=context_files,
+            project_structure=project_structure
         )
 
         # Initialize conversation
@@ -151,7 +190,7 @@ class SDKFixerAgent:
                             )
 
                             # Track modified files
-                            if block.name in ["str_replace", "create_file", "insert_lines"]:
+                            if block.name in ["str_replace", "str_replace_all", "create_file", "insert_lines"]:
                                 file_path = block.input.get("path", "")
                                 if file_path and file_path not in files_modified:
                                     files_modified.append(file_path)
@@ -282,34 +321,122 @@ class SDKFixerAgent:
         error_message: str,
         stack_trace: str = "",
         command: str = "",
-        context_files: Optional[Dict[str, str]] = None
+        context_files: Optional[Dict[str, str]] = None,
+        project_structure: Optional[ProjectStructure] = None
     ) -> str:
-        """Build the initial prompt with error context"""
-        parts = [
+        """Build the initial prompt with error context and technology info"""
+        parts = []
+
+        # Add technology context if available
+        if project_structure:
+            parts.append("## Project Context\n")
+            parts.append(f"**Technology:** {project_structure.technology.value}\n")
+            parts.append(f"**Working Directory:** {project_structure.working_directory.name}/\n")
+            parts.append(f"**Install Command:** `{project_structure.install_command}`\n")
+            parts.append(f"**Run Command:** `{project_structure.run_command}`\n")
+            if project_structure.entry_points:
+                parts.append(f"**Entry Points:** {', '.join(project_structure.entry_points)}\n")
+            parts.append("\n")
+
+        parts.extend([
             "## Error to Fix\n",
             f"**Command:** `{command}`\n" if command else "",
             f"**Error Message:**\n```\n{error_message}\n```\n",
-        ]
+        ])
 
         if stack_trace:
             parts.append(f"**Stack Trace:**\n```\n{stack_trace[:2000]}\n```\n")
 
         if context_files:
-            parts.append("\n## Related Files\n")
-            for path, content in list(context_files.items())[:5]:
-                truncated = content[:1500] if len(content) > 1500 else content
-                parts.append(f"### {path}\n```\n{truncated}\n```\n")
+            parts.append("\n## Related Files (READ THESE FIRST)\n")
+            # Prioritize build config files
+            build_configs = ["pom.xml", "build.gradle", "package.json", "requirements.txt", "go.mod", "Cargo.toml"]
+            sorted_files = sorted(
+                context_files.items(),
+                key=lambda x: (0 if any(cfg in x[0] for cfg in build_configs) else 1, x[0])
+            )
+            # Include more context files - up to 15
+            for path, content in sorted_files[:15]:
+                # Truncate based on file type - build configs get more space
+                is_build_config = any(cfg in path for cfg in build_configs)
+                max_size = 3000 if is_build_config else 2000
+                truncated = content[:max_size] if len(content) > max_size else content
+                # Identify file type for syntax highlighting
+                ext = path.split('.')[-1] if '.' in path else ''
+                lang = {'java': 'java', 'py': 'python', 'ts': 'typescript', 'tsx': 'tsx',
+                        'js': 'javascript', 'json': 'json', 'xml': 'xml', 'properties': 'properties',
+                        'go': 'go', 'rs': 'rust', 'toml': 'toml', 'gradle': 'groovy'}.get(ext, '')
+                parts.append(f"### {path}\n```{lang}\n{truncated}\n```\n")
 
-        parts.append("""
+        # Technology-specific fix guidance
+        tech_guidance = ""
+        if project_structure:
+            tech = project_structure.technology
+            if tech in [Technology.REACT_VITE, Technology.VUE_VITE]:
+                tech_guidance = """
+**React/Vite Specific:**
+- For import errors, check if the package exists in package.json
+- For "Failed to resolve import", the file might be missing - create it
+- For TypeScript errors, check tsconfig.json settings
+- Working directory is where package.json is located
+"""
+            elif tech in [Technology.FASTAPI, Technology.FLASK, Technology.DJANGO]:
+                tech_guidance = """
+**Python Specific:**
+- For import errors, check if the package is in requirements.txt
+- For module not found, check the file path and __init__.py files
+- For FastAPI, check Pydantic model definitions
+- Run pip install -r requirements.txt if dependencies are missing
+"""
+            elif tech in [Technology.SPRING_BOOT_MAVEN, Technology.SPRING_BOOT_GRADLE]:
+                tech_guidance = """
+**Java/Spring Boot Specific:**
+- **CRITICAL**: Spring Boot 3+ uses `jakarta.*` instead of `javax.*` - replace ALL occurrences
+  - `javax.validation.*` → `jakarta.validation.*`
+  - `javax.persistence.*` → `jakarta.persistence.*`
+  - `javax.servlet.*` → `jakarta.servlet.*`
+- Use `str_replace_all` to fix all javax imports in a file at once
+- For "cannot find symbol" on getters/setters: Check if Entity class has Lombok @Data or explicit getters
+- For "package does not exist": Add the correct dependency to pom.xml
+- Build command: `mvn clean compile` (not install, just compile to test)
+- Check pom.xml for Spring Boot version - if 3.x, ALL javax must be jakarta
+"""
+            elif tech in [Technology.GO]:
+                tech_guidance = """
+**Go Specific:**
+- For import errors, check go.mod and run go mod tidy
+- For undefined errors, check function/type visibility (capitalization)
+- For struct errors, check field names and types
+"""
+            elif tech in [Technology.RUST]:
+                tech_guidance = """
+**Rust Specific:**
+- For borrow checker errors, consider using references or cloning
+- For missing trait implementations, add #[derive] or impl blocks
+- For type mismatches, check ownership and lifetimes
+- Run cargo build after changes
+"""
+
+        parts.append(f"""
 ## Your Task
 
-1. Analyze the error and identify the root cause
-2. Use `view_file` to read the problematic file(s)
-3. Use `str_replace` to make minimal fixes
-4. If a file is missing, use `create_file` to create it
-5. Explain what you fixed
+1. **Analyze** the error message and identify the root cause
+2. **Read the build config** (pom.xml, package.json, etc.) to understand dependencies
+3. **Read the error file** using `view_file` to see the exact code
+4. **Fix the issue**:
+   - Use `str_replace` for single fixes
+   - Use `str_replace_all` for fixing ALL occurrences (e.g., javax→jakarta)
+   - Use `create_file` for missing files
+5. **Verify** by running the build command with `bash`
+6. **Repeat** if there are more errors
+{tech_guidance}
+**IMPORTANT:**
+- Working directory: {project_structure.working_directory.name if project_structure else 'project root'}
+- Read files BEFORE modifying them
+- Fix ALL related errors, not just the first one
+- Run the build after each major fix to see remaining errors
 
-Start by reading the file mentioned in the error.
+Start by analyzing the error and reading the relevant build config file.
 """)
 
         return "".join(parts)
@@ -343,6 +470,8 @@ Start by reading the file mentioned in the error.
                 return await self._execute_view_file(project_id, user_id, tool_input)
             elif tool_name == "str_replace":
                 return await self._execute_str_replace(project_id, user_id, tool_input)
+            elif tool_name == "str_replace_all":
+                return await self._execute_str_replace_all(project_id, user_id, tool_input)
             elif tool_name == "create_file":
                 return await self._execute_create_file(project_id, user_id, tool_input)
             elif tool_name == "insert_lines":
@@ -365,7 +494,7 @@ Start by reading the file mentioned in the error.
         user_id: str,
         tool_input: Dict[str, Any]
     ) -> str:
-        """Execute a bash command in the sandbox"""
+        """Execute a bash command in the sandbox with smart working directory"""
         command = tool_input.get("command", "")
         timeout = tool_input.get("timeout", 120)
 
@@ -376,11 +505,33 @@ Start by reading the file mentioned in the error.
             # Get sandbox path
             sandbox_path = storage.get_sandbox_path(project_id, user_id)
 
-            # Execute command
+            # Use smart working directory from cached project structure
+            cache_key = f"{project_id}:{user_id}"
+            working_dir = sandbox_path
+
+            if cache_key in self._project_cache:
+                project_structure = self._project_cache[cache_key]
+                # Use the smart analyzer's detected working directory
+                working_dir = str(project_structure.working_directory)
+                logger.info(f"[SDKFixerAgent:{project_id}] Using smart working dir: {working_dir}")
+            else:
+                # Try to get working directory from smart analyzer
+                try:
+                    project_structure = await smart_analyzer.analyze_project(
+                        project_id=project_id,
+                        user_id=user_id
+                    )
+                    working_dir = str(project_structure.working_directory)
+                    self._project_cache[cache_key] = project_structure
+                    logger.info(f"[SDKFixerAgent:{project_id}] Analyzed and using working dir: {working_dir}")
+                except Exception as e:
+                    logger.warning(f"[SDKFixerAgent:{project_id}] Could not analyze, using sandbox root: {e}")
+
+            # Execute command in the correct working directory
             result = subprocess.run(
                 command,
                 shell=True,
-                cwd=sandbox_path,
+                cwd=working_dir,
                 capture_output=True,
                 text=True,
                 timeout=timeout
@@ -463,13 +614,52 @@ Start by reading the file mentioned in the error.
             if old_str not in content:
                 return f"Error: Could not find the exact string to replace in {path}. Make sure old_str matches exactly (including whitespace)."
 
-            # Replace
+            # Replace (single occurrence)
             new_content = content.replace(old_str, new_str, 1)
 
             # Write back
             await storage.write_to_sandbox(project_id, path, new_content, user_id)
 
             return f"Successfully replaced text in {path}"
+
+        except Exception as e:
+            return f"Error replacing text: {str(e)}"
+
+    async def _execute_str_replace_all(
+        self,
+        project_id: str,
+        user_id: str,
+        tool_input: Dict[str, Any]
+    ) -> str:
+        """Replace ALL occurrences of a string in a file"""
+        path = tool_input.get("path", "")
+        old_str = tool_input.get("old_str", "")
+        new_str = tool_input.get("new_str", "")
+
+        if not path or not old_str:
+            return "Error: path and old_str are required"
+
+        try:
+            # Read current content
+            content = await storage.read_from_sandbox(project_id, path, user_id)
+
+            if content is None:
+                return f"Error: File not found: {path}"
+
+            # Check if old_str exists
+            if old_str not in content:
+                return f"Error: Could not find the string '{old_str}' in {path}"
+
+            # Count occurrences
+            count = content.count(old_str)
+
+            # Replace ALL occurrences
+            new_content = content.replace(old_str, new_str)
+
+            # Write back
+            await storage.write_to_sandbox(project_id, path, new_content, user_id)
+
+            return f"Successfully replaced {count} occurrence(s) of '{old_str}' with '{new_str}' in {path}"
 
         except Exception as e:
             return f"Error replacing text: {str(e)}"

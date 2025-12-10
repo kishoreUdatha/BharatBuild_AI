@@ -33,6 +33,8 @@ from app.models.project import Project, ProjectStatus, ProjectMode
 from app.models.user import User
 from app.modules.auth.dependencies import get_current_user
 from app.services.sandbox_cleanup import touch_project
+from app.services.enterprise_tracker import EnterpriseTracker
+from uuid import UUID as UUID_type
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +159,16 @@ class WorkflowExecuteRequest(BaseModel):
     user_request: str = Field(..., description="User's request for code generation")
     project_id: str = Field(..., description="Project ID to work on")
     workflow_name: str = Field(default="bolt_standard", description="Workflow to execute")
-    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional metadata")
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="""Additional metadata. Supports:
+        - color_theme: Custom UI colors for generated projects
+          - preset: "ecommerce", "healthcare", "finance", "education", "social", "ai", "blockchain", "gaming", "portfolio", "food", "travel", "fitness"
+          - OR: primary + secondary colors (e.g., {"primary": "pink", "secondary": "rose"})
+        - project_name: Optional project name
+        - user_id: User ID for authenticated requests
+        """
+    )
 
 
 class AgentUpdatePromptRequest(BaseModel):
@@ -201,7 +212,8 @@ async def event_generator(
     user_request: str,
     project_id: str,
     workflow_name: str,
-    metadata: Optional[Dict[str, Any]]
+    metadata: Optional[Dict[str, Any]],
+    tracker: Optional[EnterpriseTracker] = None
 ):
     """
     Generator for Server-Sent Events (SSE) streaming.
@@ -211,6 +223,8 @@ async def event_generator(
 
     IMPORTANT: Each yield MUST be followed by an await to allow the event loop
     to flush the data to the client. Without this, events get buffered.
+
+    If tracker is provided, important agent responses will be saved to the database.
     """
     try:
         logger.info("[SSE Generator] Starting event generator...")
@@ -244,6 +258,46 @@ async def event_generator(
             # Log plan_created events for debugging
             if event_type == "plan_created":
                 logger.info(f"[SSE] Sending plan_created event to client with {len(event.data.get('tasks', []))} tasks")
+
+            # Track important agent responses to database
+            if tracker:
+                try:
+                    project_uuid = UUID_type(project_id)
+
+                    # Track plan creation (planner agent response)
+                    if event_type == "plan_created":
+                        plan_content = json.dumps(event.data, indent=2)
+                        await tracker.track_agent_response(
+                            project_id=project_uuid,
+                            agent_type="planner",
+                            content=plan_content,
+                            tokens_used=0,  # Actual tokens tracked in orchestrator
+                            model_used="claude-3-5-sonnet-20241022"
+                        )
+                        logger.debug(f"[SSE] Tracked planner response for project {project_id}")
+
+                    # Track file completions (writer agent)
+                    elif event_type == "file_complete":
+                        file_path = event.data.get("file_path", "unknown")
+                        await tracker.track_agent_response(
+                            project_id=project_uuid,
+                            agent_type="writer",
+                            content=f"Generated file: {file_path}",
+                            tokens_used=0
+                        )
+
+                    # Track step completions with agent info
+                    elif event_type == "step_complete" and event.agent:
+                        step_summary = event.data.get("message", "") or event.data.get("status", "completed")
+                        await tracker.track_agent_response(
+                            project_id=project_uuid,
+                            agent_type=event.agent,
+                            content=f"Step completed: {step_summary}",
+                            tokens_used=0
+                        )
+
+                except Exception as track_err:
+                    logger.warning(f"[SSE] Failed to track agent response: {track_err}")
 
             # Convert OrchestratorEvent to SSE format
             # Use event.type.value to ensure enum is serialized as string
@@ -369,9 +423,21 @@ async def execute_workflow(
             # Update project status
             db_project.status = ProjectStatus.PROCESSING
             await db.commit()
+
+            # Track user message in database (Enterprise feature)
+            tracker = EnterpriseTracker(db)
+            try:
+                await tracker.track_user_message(
+                    project_id=UUID_type(actual_project_id),
+                    content=request.user_request
+                )
+                logger.info(f"[Execute Workflow] Tracked user message for project {actual_project_id}")
+            except Exception as e:
+                logger.warning(f"[Execute Workflow] Failed to track user message: {e}")
         else:
             # Anonymous user - use the provided project_id as-is
             logger.info(f"[Execute Workflow] Anonymous user, using provided project_id: {actual_project_id}")
+            tracker = None  # No tracking for anonymous users
 
         # Add user context to metadata
         enhanced_metadata = request.metadata or {}
@@ -415,7 +481,8 @@ async def execute_workflow(
                     user_request=request.user_request,
                     project_id=actual_project_id,
                     workflow_name=request.workflow_name,
-                    metadata=enhanced_metadata
+                    metadata=enhanced_metadata,
+                    tracker=tracker if current_user else None
                 ):
                     # Encode to bytes for proper streaming
                     yield event.encode('utf-8')

@@ -134,7 +134,7 @@ async def list_projects(
     user_id_str = str(current_user.id)
     logger.info(f"[Projects] Listing projects for user: {current_user.email} (ID: {user_id_str})")
 
-    # Count total
+    # Count total with explicit string comparison
     count_query = select(func.count(Project.id)).where(Project.user_id == user_id_str)
     total = await db.scalar(count_query)
     logger.info(f"[Projects] Found {total} projects for user {current_user.email}")
@@ -166,6 +166,202 @@ async def get_project(
 ):
     """Get project details"""
     return project
+
+
+# ========== Bolt-style Metadata Endpoint ==========
+
+class FileTreeItem(BaseModel):
+    """File tree item with hash for change detection (Bolt.new style)"""
+    path: str
+    name: str
+    type: str  # 'file' or 'folder'
+    hash: Optional[str] = None  # MD5 hash for change detection
+    language: Optional[str] = None
+    size_bytes: Optional[int] = None
+    children: Optional[List['FileTreeItem']] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ProjectMetadataResponse(BaseModel):
+    """
+    Bolt.new-style project metadata response.
+
+    Returns:
+    - Project info (title, description, status)
+    - File tree (paths + hashes, NO content)
+    - Chat messages count
+
+    Files are NOT loaded here - they're lazy-loaded when user clicks.
+    """
+    success: bool
+    project_id: str
+    project_title: str
+    project_description: Optional[str] = None
+    status: str
+    technology: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    file_tree: List[FileTreeItem]
+    total_files: int
+    messages_count: int
+
+
+@router.get("/{project_id}/metadata", response_model=ProjectMetadataResponse)
+async def get_project_metadata(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Bolt.new-style project metadata endpoint.
+
+    STEP 1 of project loading:
+    - Returns project info + file tree (NO content)
+    - File tree includes hash for change detection
+    - Frontend shows file tree immediately
+    - Content is lazy-loaded when user clicks a file
+
+    This is much faster than loading all files at once!
+    """
+    from app.models.project_file import ProjectFile
+    from sqlalchemy import cast, String
+    import hashlib
+
+    # Get project
+    result = await db.execute(
+        select(Project).where(
+            Project.id == project_id,
+            Project.user_id == current_user.id
+        )
+    )
+    project = result.scalar_one_or_none()
+
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+
+    # Get files from database (ProjectFile table) - METADATA ONLY, NO CONTENT
+    db_result = await db.execute(
+        select(ProjectFile).where(ProjectFile.project_id == cast(project_id, String(36)))
+    )
+    project_files = db_result.scalars().all()
+
+    # Build hierarchical file tree with hashes
+    def build_file_tree(files) -> List[FileTreeItem]:
+        """Convert flat file list to hierarchical tree with hashes"""
+        root = []
+        folder_registry = {}
+
+        for pf in files:
+            if pf.is_folder:
+                continue  # Folders are created from file paths
+
+            file_path = pf.path
+
+            # Calculate hash from content (for change detection)
+            content_hash = None
+            if pf.content_inline:
+                content_hash = hashlib.md5(pf.content_inline.encode()).hexdigest()[:12]
+
+            # Detect language from extension
+            ext = file_path.rsplit(".", 1)[-1] if "." in file_path else ""
+            lang_map = {
+                "ts": "typescript", "tsx": "typescript",
+                "js": "javascript", "jsx": "javascript",
+                "py": "python", "json": "json",
+                "html": "html", "css": "css",
+                "md": "markdown", "yaml": "yaml", "yml": "yaml"
+            }
+            language = lang_map.get(ext, "plaintext")
+
+            # Split path into parts
+            parts = file_path.split("/")
+
+            if len(parts) == 1:
+                # Root level file
+                root.append(FileTreeItem(
+                    path=file_path,
+                    name=file_path,
+                    type="file",
+                    hash=content_hash,
+                    language=language,
+                    size_bytes=pf.size_bytes
+                ))
+            else:
+                # Nested file - create folder structure
+                current_level = root
+                current_path = ""
+
+                for i, part in enumerate(parts[:-1]):
+                    current_path = f"{current_path}/{part}" if current_path else part
+
+                    if current_path in folder_registry:
+                        folder = folder_registry[current_path]
+                    else:
+                        # Find or create folder
+                        folder = None
+                        for item in current_level:
+                            if item.type == "folder" and item.path == current_path:
+                                folder = item
+                                break
+
+                        if not folder:
+                            folder = FileTreeItem(
+                                path=current_path,
+                                name=part,
+                                type="folder",
+                                children=[]
+                            )
+                            current_level.append(folder)
+                            folder_registry[current_path] = folder
+
+                    # Ensure folder has a children list and get reference to it
+                    if folder.children is None:
+                        folder.children = []
+                    current_level = folder.children
+
+                # Add file to current folder
+                current_level.append(FileTreeItem(
+                    path=file_path,
+                    name=parts[-1],
+                    type="file",
+                    hash=content_hash,
+                    language=language,
+                    size_bytes=pf.size_bytes
+                ))
+
+        return root
+
+    file_tree = build_file_tree(project_files)
+
+    # Count messages
+    from app.models.project_message import ProjectMessage
+    msg_result = await db.execute(
+        select(func.count(ProjectMessage.id)).where(
+            ProjectMessage.project_id == project_id
+        )
+    )
+    messages_count = msg_result.scalar() or 0
+
+    logger.info(f"[Metadata] Loaded metadata for project {project_id}: {len(project_files)} files, {messages_count} messages")
+
+    return ProjectMetadataResponse(
+        success=True,
+        project_id=project_id,
+        project_title=project.title,
+        project_description=project.description,
+        status=project.status.value if project.status else "draft",
+        technology=project.technology,
+        created_at=project.created_at.isoformat() if project.created_at else None,
+        updated_at=project.updated_at.isoformat() if project.updated_at else None,
+        file_tree=file_tree,
+        total_files=len([f for f in project_files if not f.is_folder]),
+        messages_count=messages_count
+    )
 
 
 @router.post("/{project_id}/execute")
@@ -1037,4 +1233,103 @@ async def fix_multiple_errors(
         return FixErrorResponse(
             success=False,
             message=str(e)
+        )
+
+
+# ========== Project Messages Endpoints ==========
+
+class ProjectMessageResponse(BaseModel):
+    """Response for a single project message"""
+    id: str
+    role: str
+    agent_type: Optional[str]
+    content: str
+    tokens_used: int
+    model_used: Optional[str]
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
+
+class ProjectMessagesResponse(BaseModel):
+    """Response for listing project messages"""
+    success: bool
+    project_id: str
+    messages: List[ProjectMessageResponse]
+    total: int
+
+
+@router.get("/{project_id}/messages", response_model=ProjectMessagesResponse)
+async def get_project_messages(
+    project_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get chat history (user prompts and Claude responses) for a project.
+
+    Returns messages in chronological order with pagination support.
+
+    This is used to restore conversation context when loading a project.
+    """
+    from app.services.message_service import MessageService
+    from uuid import UUID
+
+    try:
+        # Verify project belongs to user
+        result = await db.execute(
+            select(Project).where(
+                Project.id == project_id,
+                Project.user_id == current_user.id
+            )
+        )
+        project = result.scalar_one_or_none()
+
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found"
+            )
+
+        # Get messages
+        message_service = MessageService(db)
+        messages = await message_service.get_messages(
+            project_id=UUID(project_id),
+            limit=limit,
+            offset=offset
+        )
+
+        # Convert to response format
+        message_responses = [
+            ProjectMessageResponse(
+                id=str(msg.id),
+                role=msg.role,
+                agent_type=msg.agent_type,
+                content=msg.content,
+                tokens_used=msg.tokens_used or 0,
+                model_used=msg.model_used,
+                created_at=msg.created_at.isoformat() if msg.created_at else ""
+            )
+            for msg in messages
+        ]
+
+        logger.info(f"[Messages] Loaded {len(message_responses)} messages for project {project_id}")
+
+        return ProjectMessagesResponse(
+            success=True,
+            project_id=project_id,
+            messages=message_responses,
+            total=len(message_responses)
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting project messages: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
         )

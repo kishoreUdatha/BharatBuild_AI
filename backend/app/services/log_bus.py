@@ -28,6 +28,7 @@ import json
 import os
 
 from app.core.logging_config import logger
+from app.services.log_rebuilder import log_rebuilder, DetectedError
 
 
 @dataclass
@@ -493,14 +494,62 @@ class LogBus:
 
         return env
 
+    def _rebuild_error_logs(self, errors: List[LogEntry], context: Optional[Dict] = None) -> List[Dict]:
+        """
+        Rebuild error logs using Log Rebuilder for complete context.
+
+        Even if sandbox sends truncated logs, this ensures Claude gets
+        full stack traces and error context.
+        """
+        rebuilt_errors = []
+        for error in errors:
+            # Handle both LogEntry objects and dicts
+            if isinstance(error, LogEntry):
+                message = error.message
+            elif isinstance(error, dict):
+                message = error.get("message", "")
+            else:
+                message = str(error)
+
+            if not message:
+                continue
+
+            try:
+                # Use Log Rebuilder to complete truncated logs
+                detected = log_rebuilder.rebuild(message, context)
+
+                rebuilt_errors.append({
+                    "original": message,
+                    "rebuilt": detected.rebuilt_log,
+                    "error_type": detected.error_type.value,
+                    "file": detected.file,
+                    "line": detected.line,
+                    "module": detected.module,
+                    "confidence": detected.confidence,
+                })
+            except Exception as e:
+                logger.warning(f"[LogBus] Failed to rebuild error log: {e}")
+                # Fallback to original message
+                rebuilt_errors.append({
+                    "original": message,
+                    "rebuilt": message,
+                    "error_type": "unknown",
+                    "confidence": 0.0,
+                })
+
+        return rebuilt_errors
+
     def get_bolt_fixer_payload(self, project_path: str, command: str = None, error_message: str = None) -> Dict[str, Any]:
         """
         Get complete Bolt.new-style fixer payload for Claude.
 
         This is the exact format that enables Claude to fix accurately:
-        - exact logs
+        - exact logs (rebuilt with full stack traces)
         - exact file code
         - environment details
+
+        The Log Rebuilder ensures even truncated logs are completed
+        with template-based stack traces, giving Claude full context.
 
         Returns structured fixer_payload.json
         """
@@ -513,9 +562,49 @@ class LogBus:
         # Get all errors
         all_errors = self.get_errors()
 
-        # Build the payload
+        # Context for log rebuilding (helps with file path inference)
+        rebuild_context = {
+            "project_path": project_path,
+            "framework": environment.get("framework"),
+            "project_type": environment.get("project_type"),
+            "error_files": list(self._error_files),
+        }
+
+        # Rebuild error logs with full context using Log Rebuilder
+        browser_errors = self._rebuild_error_logs(
+            [e for e in self._logs["browser"] if e.level == "error"],
+            rebuild_context
+        )[-10:]
+
+        build_errors = self._rebuild_error_logs(
+            [e for e in self._logs["build"] if e.level == "error"],
+            rebuild_context
+        )[-10:]
+
+        docker_errors = self._rebuild_error_logs(
+            [e for e in self._logs["docker"] if e.level == "error"],
+            rebuild_context
+        )[-10:]
+
+        backend_errors = self._rebuild_error_logs(
+            [e for e in self._logs["backend"] if e.level == "error"],
+            rebuild_context
+        )[-10:]
+
+        # Use rebuilt primary error message
+        primary_error = error_message
+        if not primary_error and all_errors:
+            # Get the rebuilt version of the primary error
+            primary_rebuilt = self._rebuild_error_logs([all_errors[0]], rebuild_context)
+            if primary_rebuilt:
+                primary_error = primary_rebuilt[0].get("rebuilt", all_errors[0]["message"])
+            else:
+                primary_error = all_errors[0]["message"]
+        primary_error = primary_error or "Unknown error"
+
+        # Build the payload with rebuilt logs
         payload = {
-            "error": error_message or (all_errors[0]["message"] if all_errors else "Unknown error"),
+            "error": primary_error,
             "command": command or "unknown",
             "fileContext": {
                 "package.json": file_context.get("package_json"),
@@ -528,19 +617,31 @@ class LogBus:
                 **file_context.get("source_files", {}),
             },
             "environment": environment,
+            # Rebuilt error logs with full context
             "errorLogs": {
-                "browser": [e["message"] for e in self.get_errors("browser")][-10:],
-                "build": [e["message"] for e in self.get_errors("build")][-10:],
-                "docker": [e["message"] for e in self.get_errors("docker")][-10:],
-                "backend": [e["message"] for e in self.get_errors("backend")][-10:],
+                "browser": browser_errors,
+                "build": build_errors,
+                "docker": docker_errors,
+                "backend": backend_errors,
+            },
+            # Also include simple message arrays for backward compatibility
+            "errorMessages": {
+                "browser": [e.get("rebuilt", e.get("original", "")) for e in browser_errors],
+                "build": [e.get("rebuilt", e.get("original", "")) for e in build_errors],
+                "docker": [e.get("rebuilt", e.get("original", "")) for e in docker_errors],
+                "backend": [e.get("rebuilt", e.get("original", "")) for e in backend_errors],
             },
             "stackTraces": self._stack_traces[-5:],
             "errorFiles": list(self._error_files),
             "timestamp": datetime.utcnow().isoformat(),
+            # Log Rebuilder metadata
+            "logRebuilderUsed": True,
         }
 
         # Remove None values from fileContext
         payload["fileContext"] = {k: v for k, v in payload["fileContext"].items() if v is not None}
+
+        logger.info(f"[LogBus:{self.project_id}] Built fixer payload with {len(build_errors)} rebuilt build errors")
 
         return payload
 

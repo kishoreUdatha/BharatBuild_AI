@@ -64,13 +64,19 @@ OUTPUT FORMAT (MANDATORY):
   <notes>...</notes>
 </plan>
 
-CRITICAL: The <files> section is REQUIRED!
-- Extract ALL file paths from your <project_structure> and list them in <files>
-- Each file will be generated one at a time by the Writer Agent
-- Priority 1 = generated first, Priority 2 = generated second, etc.
-- Order files logically: config files first, then models, then utilities, then components, then pages
-- The <files> list must match EXACTLY what you show in <project_structure>
-- DO NOT copy the example files - generate files specific to the USER'S REQUEST
+CRITICAL: The <files> section is MANDATORY AND MUST BE COMPLETE!
+
+⚠️ THIS IS THE MOST IMPORTANT REQUIREMENT ⚠️
+
+- YOU MUST list EVERY SINGLE FILE from your <project_structure> in <files>
+- If you show a file in <project_structure>, it MUST appear in <files> with its FULL PATH
+- Example: If structure shows "frontend/src/pages/LoginPage.tsx", the <files> section MUST include:
+  <file path="frontend/src/pages/LoginPage.tsx" priority="X"><description>...</description></file>
+- MISSING FILES WILL CAUSE BUILD ERRORS - This is a production system!
+- Priority order: config (1-5) → models/types (6-15) → services (16-25) → components (26-40) → pages (41-60)
+- Count your files: The number of <file> tags MUST EQUAL the number of files in <project_structure>
+- DO NOT skip page files, component files, or any source files
+- For React apps: App.tsx MUST import pages/components that MUST be in the <files> list
 
 RULES:
 - NEVER output <file>.
@@ -1213,7 +1219,12 @@ Be thorough, specific, and ensure all tasks are actionable by automation agents.
 
         # Parse the plan from the response
         plan = self._parse_plan(response)
-        
+
+        # Validate and complete the files list
+        if plan and not plan.get("error"):
+            plan = self.validate_and_complete_files(plan)
+            logger.info(f"[PlannerAgent] Final plan has {len(plan.get('files', []))} files")
+
         return {
             "success": True,
             "plan": plan,
@@ -1334,39 +1345,264 @@ Be thorough, specific, and ensure all tasks are actionable by automation agents.
         """
         Fallback: Extract file paths from project_structure tree.
 
+        ENHANCED: More robust parsing that handles various tree formats and
+        extracts ALL files from the structure properly.
+
         Args:
-            structure: Project structure tree string
+            structure: Project structure tree string (ASCII tree format)
 
         Returns:
-            List of file dictionaries extracted from structure
+            List of file dictionaries with FULL paths extracted from structure
         """
         import re
 
         files = []
         priority = 1
 
-        # Match file paths (lines with file extensions)
-        # Looks for patterns like: │   ├── filename.ext or └── filename.ext
-        file_extensions = r'\.(tsx?|jsx?|py|json|ya?ml|md|css|scss|html|sql|sh|dockerfile|env|txt|toml|cfg|ini)$'
+        # Expanded file extensions to detect (including common ones that were missing)
+        file_extensions = r'\.(tsx?|jsx?|py|json|ya?ml|md|css|scss|less|html|sql|sh|dockerfile|env|txt|toml|cfg|ini|xml|gradle|properties|java|kt|swift|go|rs|c|cpp|h|hpp|rb|php|vue|svelte|astro|mjs|cjs|mts|cts|prisma|graphql|gql)$'
 
-        for line in structure.split('\n'):
-            # Remove tree characters and whitespace
-            clean_line = re.sub(r'^[\s│├└─]+', '', line).strip()
+        # Also match files without extensions that are commonly needed
+        special_files = ['Dockerfile', 'Makefile', 'Procfile', '.env', '.env.example', '.env.local', '.gitignore', '.dockerignore', '.eslintrc', '.prettierrc']
 
-            if clean_line and re.search(file_extensions, clean_line, re.IGNORECASE):
+        # Track directory stack for full path reconstruction
+        dir_stack = []
+
+        # Split into lines and process
+        lines = structure.split('\n')
+
+        for i, line in enumerate(lines):
+            if not line.strip():
+                continue
+
+            # Remove tree drawing characters more robustly
+            # Handle both Unicode box-drawing chars and ASCII variants
+            # │ (U+2502), ├ (U+251C), └ (U+2514), ─ (U+2500), | (pipe), ` (backtick)
+            tree_chars = r'[│├└─┬┴┼|`\-]'
+
+            # Count indent level by looking at leading whitespace + tree chars
+            # Each "level" in a tree is typically represented by 2-4 chars
+            stripped = line.lstrip()
+            leading = line[:len(line) - len(stripped)]
+
+            # Count indent more robustly
+            # Remove tree characters and count remaining spaces
+            leading_without_tree = re.sub(tree_chars, ' ', leading)
+            indent_level = len(leading_without_tree.replace(' ', '')) + len(leading_without_tree) // 4
+
+            # Better approach: count actual indentation by finding position of content
+            content_start = 0
+            for j, char in enumerate(line):
+                if char not in ' │├└─┬┴┼|\t-`':
+                    content_start = j
+                    break
+
+            # Each level is roughly 4 characters in tree view
+            indent_level = content_start // 4
+
+            # Extract the actual name (remove all tree characters)
+            clean_name = re.sub(r'^[\s│├└─┬┴┼|\-`]+', '', line).strip()
+
+            # Also handle lines like "├── filename.ext" or "|-- filename.ext"
+            clean_name = re.sub(r'^[─\-]+\s*', '', clean_name).strip()
+
+            if not clean_name:
+                continue
+
+            # Skip comments in structure (lines starting with #)
+            if clean_name.startswith('#'):
+                continue
+
+            # Check if this is a directory (ends with /)
+            is_directory = clean_name.endswith('/')
+
+            if is_directory:
+                # It's a directory - update the directory stack
+                dir_name = clean_name.rstrip('/')
+
+                # Pop directories from stack until we're at the right level
+                while len(dir_stack) > indent_level:
+                    dir_stack.pop()
+
+                # Push this directory onto the stack
+                dir_stack.append(dir_name)
+
+                logger.debug(f"[PlannerAgent] Dir at level {indent_level}: {dir_name}, stack: {dir_stack}")
+
+            else:
+                # Check if it's a file (has extension or is a special file)
+                is_file = (
+                    re.search(file_extensions, clean_name, re.IGNORECASE) or
+                    clean_name in special_files or
+                    clean_name.startswith('.env')
+                )
+
+                if is_file:
+                    # Pop directories from stack until we're at the right level
+                    while len(dir_stack) > indent_level:
+                        dir_stack.pop()
+
+                    # Build full path
+                    if dir_stack:
+                        full_path = '/'.join(dir_stack) + '/' + clean_name
+                    else:
+                        full_path = clean_name
+
+                    # Normalize path (remove double slashes, etc.)
+                    full_path = re.sub(r'/+', '/', full_path)
+
+                    files.append({
+                        "path": full_path,
+                        "priority": priority,
+                        "description": f"Auto-extracted from project structure"
+                    })
+                    priority += 1
+
+                    logger.debug(f"[PlannerAgent] File extracted: {full_path} (level={indent_level})")
+
+        logger.info(f"[PlannerAgent] Extracted {len(files)} files from project_structure")
+
+        # Also try simple regex extraction as additional fallback
+        # This catches file paths written inline like "src/App.tsx" without tree formatting
+        simple_paths = re.findall(r'\b([a-zA-Z_][\w\-]*(?:/[\w\-\.]+)+\.[a-zA-Z0-9]+)\b', structure)
+        for path in simple_paths:
+            # Check if this path is already extracted
+            if not any(f['path'] == path for f in files):
                 files.append({
-                    "path": clean_line,
+                    "path": path,
                     "priority": priority,
-                    "description": f"Auto-extracted from project structure"
+                    "description": "Auto-extracted from inline path"
                 })
                 priority += 1
+                logger.debug(f"[PlannerAgent] Inline path extracted: {path}")
 
-        # Try to determine full paths by tracking directory context
-        # This is a simplified extraction - full paths may need manual correction
-
-        logger.info(f"[PlannerAgent] Extracted {len(files)} files from project_structure (fallback)")
+        # Log summary
+        if files:
+            logger.info(f"[PlannerAgent] Total files extracted: {len(files)}")
+            for f in files[:10]:  # Log first 10
+                logger.debug(f"[PlannerAgent]   - {f['path']}")
+            if len(files) > 10:
+                logger.debug(f"[PlannerAgent]   ... and {len(files) - 10} more")
+        else:
+            logger.warning("[PlannerAgent] No files extracted from project_structure!")
 
         return files
+
+
+    def validate_and_complete_files(self, plan: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate that the files list is complete and add any missing essential files.
+
+        This ensures that:
+        1. All referenced components/pages have corresponding files
+        2. Essential config files are always present
+        3. The folder structure matches the tech stack
+
+        Args:
+            plan: Parsed plan dictionary
+
+        Returns:
+            Updated plan with validated/completed files list
+        """
+        files = plan.get("files", [])
+        tech_stack = plan.get("tech_stack", "").lower()
+        structure = plan.get("project_structure", "")
+
+        # Essential files by tech stack
+        essential_files = {
+            "react": [
+                "package.json",
+                "vite.config.ts",
+                "tailwind.config.js",
+                "postcss.config.js",
+                "tsconfig.json",
+                "tsconfig.node.json",
+                "index.html",
+                "src/main.tsx",
+                "src/App.tsx",
+                "src/index.css"
+            ],
+            "next": [
+                "package.json",
+                "next.config.js",
+                "tailwind.config.ts",
+                "postcss.config.js",
+                "tsconfig.json"
+            ],
+            "fastapi": [
+                "requirements.txt",
+                "main.py",
+                "Dockerfile"
+            ],
+            "django": [
+                "requirements.txt",
+                "manage.py",
+                "Dockerfile"
+            ],
+            "spring": [
+                "pom.xml",
+                "Dockerfile"
+            ]
+        }
+
+        # Determine which essential files to check
+        essentials = []
+        if "react" in tech_stack and "next" not in tech_stack:
+            essentials.extend(essential_files["react"])
+        elif "next" in tech_stack:
+            essentials.extend(essential_files["next"])
+
+        if "fastapi" in tech_stack:
+            essentials.extend(essential_files["fastapi"])
+        elif "django" in tech_stack:
+            essentials.extend(essential_files["django"])
+        elif "spring" in tech_stack:
+            essentials.extend(essential_files["spring"])
+
+        # Check for monorepo structure
+        is_monorepo = "frontend/" in structure or "backend/" in structure
+
+        # Get existing file paths
+        existing_paths = {f["path"] for f in files}
+
+        # Add missing essential files
+        missing_added = []
+        for essential in essentials:
+            # Handle monorepo paths
+            if is_monorepo:
+                # Check both root and frontend/ paths
+                paths_to_check = [essential]
+                if essential.startswith("src/") or essential in ["package.json", "vite.config.ts", "tailwind.config.js", "index.html"]:
+                    paths_to_check.append(f"frontend/{essential}")
+
+                found = any(p in existing_paths for p in paths_to_check)
+            else:
+                found = essential in existing_paths
+
+            if not found:
+                # Determine correct path
+                if is_monorepo and (essential.startswith("src/") or essential in ["package.json", "vite.config.ts", "tailwind.config.js", "index.html", "postcss.config.js", "tsconfig.json", "tsconfig.node.json"]):
+                    path = f"frontend/{essential}"
+                else:
+                    path = essential
+
+                files.append({
+                    "path": path,
+                    "priority": len(files) + 1,
+                    "description": f"Essential file (auto-added for completeness)"
+                })
+                missing_added.append(path)
+
+        if missing_added:
+            logger.info(f"[PlannerAgent] Added {len(missing_added)} missing essential files: {missing_added[:5]}...")
+
+        # Re-sort by priority
+        files.sort(key=lambda x: x["priority"])
+
+        plan["files"] = files
+        plan["files_validated"] = True
+
+        return plan
 
 
 # Singleton instance

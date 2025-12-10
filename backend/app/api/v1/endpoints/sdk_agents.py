@@ -13,7 +13,7 @@ import json
 import asyncio
 
 from app.core.logging_config import logger
-from app.api.deps import get_current_user
+from app.modules.auth.dependencies import get_current_user
 from app.modules.sdk_agents.sdk_fixer_agent import sdk_fixer_agent
 from app.modules.sdk_agents.sdk_orchestrator import sdk_orchestrator
 

@@ -93,7 +93,7 @@ export function ChatInput({
             onKeyDown={handleKeyDown}
             onFocus={() => setIsFocused(true)}
             onBlur={() => setIsFocused(false)}
-            placeholder={placeholder || "What do you want to build?"}
+            placeholder={placeholder || "Describe what you want to build..."}
             disabled={isLoading || disabled}
             rows={1}
             className="flex-1 bg-transparent text-white text-[15px] placeholder:text-white/40 resize-none focus:outline-none py-3.5 pr-2 max-h-[200px] scrollbar-thin disabled:opacity-50"
