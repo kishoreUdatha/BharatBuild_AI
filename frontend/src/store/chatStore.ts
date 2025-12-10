@@ -58,6 +58,7 @@ interface ChatState {
 
   // Actions
   addMessage: (message: Message) => void
+  setMessages: (messages: Message[]) => void  // Load messages from backend
   updateMessage: (id: string, updates: Partial<Message>) => void
   deleteMessage: (id: string) => void
   clearMessages: () => void
@@ -81,6 +82,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => ({
       messages: [...state.messages, message]
     }))
+  },
+
+  setMessages: (messages) => {
+    console.log('[chatStore.setMessages] Setting messages:', messages.length)
+    set({ messages })
   },
 
   updateMessage: (id, updates) => {

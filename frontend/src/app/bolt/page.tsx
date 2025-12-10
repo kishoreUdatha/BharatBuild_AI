@@ -10,6 +10,7 @@ import { useTokenBalance } from '@/hooks/useTokenBalance'
 import { useProject } from '@/hooks/useProject'
 import { useProjectSwitch } from '@/hooks/useProjectSwitch'
 import { useWorkspaceStore } from '@/store/workspaceStore'
+import { useProjectStore } from '@/store/projectStore'
 import { useAuth } from '@/hooks/useAuth'
 import { apiClient } from '@/lib/api-client'
 
@@ -122,14 +123,39 @@ export default function BoltPage() {
 
   // Reload project files from backend if project exists but isn't synced
   // This handles page refresh where we only persist project ID, not files
+  // IMPORTANT: First verify the project exists in the database to avoid loading stale localStorage data
   useEffect(() => {
     if (!isMounted || !authChecked || projectReloaded) return
 
     const reloadProjectFiles = async () => {
       // If there's a current project that isn't synced and has no files, reload from backend
       if (currentProject && !currentProject.isSynced && currentProject.files.length === 0) {
-        console.log('[BoltPage] Reloading project files from backend:', currentProject.id)
+        console.log('[BoltPage] Verifying project exists in database:', currentProject.id)
+
         try {
+          // FIRST: Verify project exists in database before loading files
+          // This prevents loading stale files from sandbox when project was deleted
+          const projectExists = await apiClient.get(`/projects/${currentProject.id}/metadata`)
+            .then(() => true)
+            .catch((err: any) => {
+              if (err.response?.status === 404 || err.status === 404) {
+                return false
+              }
+              // For other errors, assume project might exist
+              console.warn('[BoltPage] Error checking project existence:', err)
+              return true
+            })
+
+          if (!projectExists) {
+            console.log('[BoltPage] Project not found in database, clearing stale localStorage data')
+            // Clear the stale project from localStorage
+            const { resetProject } = useProjectStore.getState()
+            resetProject()
+            setProjectReloaded(true)
+            return
+          }
+
+          console.log('[BoltPage] Project verified, reloading files from backend:', currentProject.id)
           await switchProject(currentProject.id, {
             loadFiles: true,
             clearTerminal: false,
@@ -142,6 +168,9 @@ export default function BoltPage() {
           console.log('[BoltPage] Project files reloaded successfully')
         } catch (error) {
           console.error('[BoltPage] Failed to reload project files:', error)
+          // On error, clear the stale project to avoid showing phantom files
+          const { resetProject } = useProjectStore.getState()
+          resetProject()
         }
       }
       setProjectReloaded(true)

@@ -72,9 +72,10 @@ export function ProjectSelector({ onProjectSelect, onNewProject }: ProjectSelect
       // Use Bolt.new-style project switching with complete teardown
       const result = await switchProject(project.id, {
         loadFiles: true,       // Load files from server
+        loadMessages: true,    // Load chat history from server
         clearTerminal: true,   // Clear terminal logs
         clearErrors: true,     // Clear error logs
-        clearChat: false,      // Preserve chat history (user preference)
+        clearChat: true,       // Clear chat before loading history from server
         destroyOldSandbox: true, // Delete old sandbox from server
         projectName: project.title,  // Pass actual project title
         projectDescription: project.description || undefined

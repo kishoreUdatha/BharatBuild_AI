@@ -68,11 +68,11 @@ class PlanXMLSchema:
     # Required tags - now supports 'files' as alternative to 'tasks'
     REQUIRED_TAGS = {'plan'}  # 'files' OR 'tasks' required
 
-    # Optional tags
-    OPTIONAL_TAGS = {'project_name', 'project_description', 'project_type', 'category', 'complexity', 'tech_stack', 'notes', 'features', 'estimated_files'}
+    # Optional tags - PRODUCTION FIX: Added 'project_structure' as valid fallback source for files
+    OPTIONAL_TAGS = {'project_name', 'project_description', 'project_type', 'category', 'complexity', 'tech_stack', 'notes', 'features', 'estimated_files', 'project_structure'}
 
     # All allowed tags
-    ALLOWED_TAGS = REQUIRED_TAGS | OPTIONAL_TAGS | {'files', 'file', 'description', 'tasks', 'step', 'frontend', 'backend', 'database', 'feature'}
+    ALLOWED_TAGS = REQUIRED_TAGS | OPTIONAL_TAGS | {'files', 'file', 'description', 'tasks', 'step', 'frontend', 'backend', 'database', 'feature', 'category'}
 
     @staticmethod
     def validate(xml_string: str) -> Dict[str, Any]:
@@ -97,12 +97,13 @@ class PlanXMLSchema:
                 result['errors'].append(f"Root tag must be <plan>, got <{root.tag}>")
                 return result
 
-            # Check for required tags - must have either <files> or <tasks>
+            # PRODUCTION FIX: Check for required tags - must have <files>, <tasks>, or <project_structure>
             files_elem = root.find('files')
             tasks_elem = root.find('tasks')
+            structure_elem = root.find('project_structure')
 
-            if files_elem is None and tasks_elem is None:
-                result['errors'].append("Missing required tag: <files> or <tasks>")
+            if files_elem is None and tasks_elem is None and structure_elem is None:
+                result['errors'].append("Missing required tag: <files>, <tasks>, or <project_structure>")
 
             # Check for disallowed tags
             for elem in root.iter():
@@ -148,9 +149,91 @@ class PlanXMLSchema:
         return result
 
     @staticmethod
+    def _extract_files_from_structure(structure_text: str) -> List[Dict[str, Any]]:
+        """
+        PRODUCTION FIX: Extract file paths from ASCII tree <project_structure>
+
+        This parses structures like:
+        frontend/
+        ├── src/
+        │   ├── pages/
+        │   │   ├── LoginPage.tsx
+        │   │   └── Dashboard.tsx
+        │   ├── App.tsx
+        │   └── main.tsx
+        └── package.json
+
+        Returns:
+            List of file dicts with full paths reconstructed from tree
+        """
+        import re
+        files = []
+
+        # Track directory stack for full path reconstruction
+        dir_stack = []
+
+        # File extension patterns
+        file_extensions = r'\.(tsx?|jsx?|py|java|html|css|scss|json|yaml|yml|md|txt|sql|sh|bat|xml|gradle|properties|toml|lock|config\.js|config\.ts|Dockerfile|gitignore|env)$'
+
+        for line in structure_text.split('\n'):
+            if not line.strip():
+                continue
+
+            # Calculate indent level by counting leading spaces/tree chars
+            # Remove tree characters: │ ├ └ ─ and spaces
+            indent_chars = ""
+            clean_name = line
+            for i, char in enumerate(line):
+                if char in '│├└─ \t':
+                    indent_chars += char
+                else:
+                    clean_name = line[i:].strip()
+                    break
+
+            # Approximate indent level (4 chars = 1 level typically)
+            indent_level = len(indent_chars) // 4
+
+            # Skip empty or comment lines
+            if not clean_name or clean_name.startswith('#') or clean_name.startswith('//'):
+                continue
+
+            # Check if directory (ends with /)
+            is_directory = clean_name.endswith('/')
+
+            if is_directory:
+                dir_name = clean_name.rstrip('/')
+                # Adjust stack to current level
+                while len(dir_stack) > indent_level:
+                    dir_stack.pop()
+                dir_stack.append(dir_name)
+            elif re.search(file_extensions, clean_name, re.IGNORECASE):
+                # This is a file - reconstruct full path
+                while len(dir_stack) > indent_level:
+                    dir_stack.pop()
+
+                if dir_stack:
+                    full_path = '/'.join(dir_stack) + '/' + clean_name
+                else:
+                    full_path = clean_name
+
+                # Clean up path (remove any double slashes)
+                full_path = re.sub(r'/+', '/', full_path)
+
+                files.append({
+                    'path': full_path,
+                    'description': f"Generated from project structure",
+                    'priority': len(files) + 1,
+                    'status': 'pending'
+                })
+
+        return files
+
+    @staticmethod
     def parse_files_from_plan(xml_string: str) -> List[Dict[str, Any]]:
         """
         Parse <files> from plan XML - new file-based format
+
+        PRODUCTION FIX: Falls back to <project_structure> if <files> is missing
 
         Returns:
             List of file dicts with path, description, priority
@@ -180,7 +263,18 @@ class PlanXMLSchema:
 
                 # Sort by priority
                 files.sort(key=lambda x: x['priority'])
-                logger.info(f"[PlanXMLSchema] Parsed {len(files)} files from plan")
+                logger.info(f"[PlanXMLSchema] Parsed {len(files)} files from <files> section")
+
+            # PRODUCTION FIX: Fallback to <project_structure> if no <files>
+            if not files:
+                structure_elem = root.find('project_structure')
+                if structure_elem is not None and structure_elem.text:
+                    structure_text = structure_elem.text.strip()
+                    files = PlanXMLSchema._extract_files_from_structure(structure_text)
+                    if files:
+                        logger.info(f"[PlanXMLSchema] [FALLBACK] Extracted {len(files)} files from <project_structure>")
+                    else:
+                        logger.warning("[PlanXMLSchema] No files found in <project_structure>")
 
         except ET.ParseError as e:
             logger.error(f"[PlanXMLSchema] Failed to parse files: {e}")
@@ -1487,6 +1581,18 @@ class DynamicOrchestrator:
 
                 logger.info(f"[lxml DOM Parser] Extracted {len(result['tasks'])} tasks from lxml DOM (legacy mode)")
 
+            # PRODUCTION FIX: Fallback to <project_structure> if no <files> extracted
+            # This ensures we always have file paths for the writer agent
+            if not result['files']:
+                structure_elem = dom.find('project_structure')
+                if structure_elem is not None and structure_elem.text:
+                    structure_text = structure_elem.text.strip()
+                    result['files'] = PlanXMLSchema._extract_files_from_structure(structure_text)
+                    if result['files']:
+                        logger.info(f"[lxml DOM Parser] [FALLBACK] Extracted {len(result['files'])} files from <project_structure>")
+                    else:
+                        logger.warning("[lxml DOM Parser] No files found in <project_structure>")
+
             # Extract project_name from lxml DOM
             project_name_elem = dom.find('project_name')
             if project_name_elem is not None:
@@ -2313,10 +2419,13 @@ class DynamicOrchestrator:
 🚨 CRITICAL INSTRUCTION: {complexity_info['hint']}
 """
 
+        # Build color theme instruction if user specified colors
+        color_instruction = self._build_color_instruction(context)
+
         user_prompt = f"""
 USER REQUEST:
 {context.user_request}
-
+{color_instruction}
 {complexity_hint}
 
 PROJECT CONTEXT:
@@ -2717,12 +2826,15 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
         - No risk of truncation or incomplete files
         """
 
+        # Build color theme instruction if user specified colors
+        color_instruction = self._build_color_instruction(context)
+
         # Build prompt for single file generation
         user_prompt = f"""
 FILE TO GENERATE:
 Path: {file_path}
 Description: {file_description}
-
+{color_instruction}
 PROJECT CONTEXT:
 User Request: {context.user_request}
 Project Type: {context.project_type or 'Web Application'}
@@ -2833,6 +2945,9 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
     ) -> AsyncGenerator[OrchestratorEvent, None]:
         """Execute writer agent for a single task"""
 
+        # Build color theme instruction if user specified colors
+        color_instruction = self._build_color_instruction(context)
+
         if task:
             user_prompt = f"""
 CURRENT TASK:
@@ -2843,7 +2958,7 @@ FULL PLAN CONTEXT:
 
 USER REQUEST:
 {context.user_request}
-
+{color_instruction}
 Generate ONLY the files needed for THIS SPECIFIC TASK (Step {task['number']}).
 Use <file path="...">CONTENT</file> tags.
 Do NOT generate files for other steps - focus only on Step {task['number']}.
@@ -2852,7 +2967,7 @@ Do NOT generate files for other steps - focus only on Step {task['number']}.
             user_prompt = f"""
 TASK:
 {context.user_request}
-
+{color_instruction}
 PLAN:
 {context.plan.get('raw', 'No plan available') if context.plan else 'No plan available'}
 
@@ -5408,6 +5523,86 @@ htmlcov
     def _get_summarizer_prompt(self) -> str:
         """Get Summarizer prompt for context management (Bolt.new Agent 5)"""
         return SummarizerAgent.SYSTEM_PROMPT
+
+    # =========================================================================
+    # COLOR THEME SUPPORT - User-selectable colors for UI projects
+    # =========================================================================
+
+    # Color presets for user-selectable themes
+    COLOR_PRESETS = {
+        "ecommerce": {"primary": "orange", "secondary": "amber"},
+        "healthcare": {"primary": "teal", "secondary": "emerald"},
+        "finance": {"primary": "blue", "secondary": "indigo"},
+        "education": {"primary": "purple", "secondary": "violet"},
+        "social": {"primary": "pink", "secondary": "rose"},
+        "ai": {"primary": "cyan", "secondary": "sky"},
+        "blockchain": {"primary": "lime", "secondary": "green"},
+        "gaming": {"primary": "red", "secondary": "orange"},
+        "portfolio": {"primary": "purple", "secondary": "cyan"},
+        "food": {"primary": "orange", "secondary": "yellow"},
+        "travel": {"primary": "cyan", "secondary": "teal"},
+        "fitness": {"primary": "green", "secondary": "lime"},
+    }
+
+    def _build_color_instruction(self, context: ExecutionContext) -> str:
+        """
+        Build color theme instruction from context.metadata.color_theme.
+
+        Args:
+            context: ExecutionContext containing metadata with optional color_theme
+
+        Returns:
+            Color instruction string to include in prompts, or empty string
+        """
+        if not context.metadata:
+            return ""
+
+        color_theme = context.metadata.get("color_theme")
+        if not color_theme:
+            return ""
+
+        primary = None
+        secondary = None
+
+        # Check for preset first
+        preset = color_theme.get("preset") if isinstance(color_theme, dict) else None
+        if preset and preset.lower() in self.COLOR_PRESETS:
+            preset_colors = self.COLOR_PRESETS[preset.lower()]
+            primary = preset_colors["primary"]
+            secondary = preset_colors["secondary"]
+            logger.info(f"[ColorTheme] Using preset '{preset}': {primary}/{secondary}")
+
+        # Override with explicit colors if provided
+        if isinstance(color_theme, dict):
+            if color_theme.get("primary"):
+                primary = color_theme["primary"]
+            if color_theme.get("secondary"):
+                secondary = color_theme["secondary"]
+
+        if not primary and not secondary:
+            return ""
+
+        # Build the instruction
+        instruction = f"""
+🎨 USER-SELECTED COLOR THEME - USE THESE COLORS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PRIMARY COLOR: {primary}
+SECONDARY COLOR: {secondary or primary}
+
+Apply these colors to ALL UI elements:
+• Gradients: from-{primary}-600 to-{secondary or primary}-600
+• Buttons: bg-gradient-to-r from-{primary}-600 to-{secondary or primary}-600
+• Glows/Shadows: shadow-{primary}-500/25
+• Hover states: hover:border-{primary}-500/50
+• Focus rings: focus:ring-{primary}-500
+• Animated orbs: bg-{primary}-500 and bg-{secondary or primary}-500
+• Text accents: text-{primary}-400, text-{secondary or primary}-400
+
+⚠️ IMPORTANT: Use THESE colors instead of auto-detecting from project type!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+        logger.info(f"[ColorTheme] Color instruction built: primary={primary}, secondary={secondary}")
+        return instruction
 
 
 # Singleton instance

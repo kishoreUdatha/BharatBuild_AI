@@ -141,11 +141,41 @@ async def run_project(
         user_id = str(current_user.id) if current_user else None
         project_path = get_project_path(project_id, user_id)
 
+        # Check if sandbox needs restoration (files might have been cleaned up)
+        # Restore from database if sandbox is empty or missing key folders
+        needs_restore = False
+        if not project_path.exists():
+            needs_restore = True
+        else:
+            # Check if project has actual content (not just metadata)
+            has_frontend = (project_path / "frontend").exists()
+            has_backend = (project_path / "backend").exists()
+            has_src = (project_path / "src").exists()
+            has_package = (project_path / "package.json").exists()
+
+            # If it looks like a monorepo but missing folders, restore
+            if has_package and not has_frontend and not has_backend and not has_src:
+                # Check if this is supposed to be a monorepo by looking at DB file count
+                needs_restore = True
+                logger.info(f"[Execution] Sandbox appears incomplete, will restore from database")
+
+        if needs_restore:
+            logger.info(f"[Execution] Restoring project {project_id} from database...")
+            restored_files = await unified_storage.restore_project_from_database(project_id, user_id)
+            if restored_files:
+                logger.info(f"[Execution] Restored {len(restored_files)} files")
+                # Update project_path after restore
+                project_path = get_project_path(project_id, user_id)
+            else:
+                logger.warning(f"[Execution] No files restored from database")
+
         if not project_path.exists():
             logger.error(f"[Execution] Project not found: {project_id}")
             raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
 
         logger.info(f"[Execution] Running project from: {project_path}")
+        logger.info(f"[Execution] Path has frontend: {(project_path / 'frontend').exists()}")
+        logger.info(f"[Execution] Path has backend: {(project_path / 'backend').exists()}")
 
         # Stream Docker execution
         return StreamingResponse(
@@ -262,13 +292,20 @@ async def fix_runtime_error(
         project_files = []
         file_contents = {}
 
+        # Skip patterns - check BEFORE calling is_file() to avoid Windows file lock errors
+        skip_patterns = ['node_modules', '__pycache__', '.git', '.env', 'dist', 'build', '.bin']
+
         for file_path in project_path.rglob("*"):
-            if file_path.is_file():
+            try:
+                # Get relative path first to check skip patterns
                 rel_path = str(file_path.relative_to(project_path)).replace("\\", "/")
 
-                # Skip certain directories and files
-                skip_patterns = ['node_modules', '__pycache__', '.git', '.env', 'dist', 'build']
+                # Skip certain directories and files BEFORE checking is_file()
                 if any(pattern in rel_path for pattern in skip_patterns):
+                    continue
+
+                # Now safely check if it's a file (can fail with WinError 1920 on locked files)
+                if not file_path.is_file():
                     continue
 
                 project_files.append(rel_path)
@@ -285,13 +322,18 @@ async def fix_runtime_error(
                     except Exception as e:
                         logger.warning(f"Could not read file {rel_path}: {e}")
 
+            except OSError as e:
+                # Handle WinError 1920 and other OS errors for locked files
+                # This is common on Windows when node_modules/.bin files are in use
+                continue
+
         # Merge file contents from LogBus payload
         file_contents.update(fixer_payload.get("fileContext", {}))
 
         # Prepare context for fixer agent (Bolt.new style)
         context = AgentContext(
             project_id=project_id,
-            user_prompt=f"Fix this error: {request.error_message}",
+            user_request=f"Fix this error: {request.error_message}",
             metadata={
                 "error_message": request.error_message,
                 "stack_trace": request.stack_trace or "",
@@ -780,10 +822,19 @@ async def get_project_status(
 
         # Check what's in the project
         files = []
+        # Skip patterns to avoid Windows file lock errors (WinError 1920)
+        skip_patterns = ['node_modules', '__pycache__', '.git', '.env', 'dist', 'build', '.bin']
         for file_path in project_path.rglob("*"):
-            if file_path.is_file() and not str(file_path).startswith('.'):
-                rel_path = file_path.relative_to(project_path)
-                files.append(str(rel_path))
+            try:
+                rel_path_str = str(file_path.relative_to(project_path)).replace("\\", "/")
+                # Skip system/locked directories before calling is_file()
+                if any(pattern in rel_path_str for pattern in skip_patterns):
+                    continue
+                if file_path.is_file() and not rel_path_str.startswith('.'):
+                    files.append(rel_path_str)
+            except OSError:
+                # Handle WinError 1920 and other OS errors for locked files
+                continue
 
         # Detect project type
         project_info = _detect_project_type(project_path)
@@ -844,33 +895,43 @@ async def export_project(
         files_added = 0
 
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            # Skip certain files/folders - check BEFORE is_file() to avoid WinError 1920
+            skip_patterns = [
+                '.project_metadata.json',
+                '__pycache__',
+                'node_modules',
+                '.git',
+                '.DS_Store',
+                'Thumbs.db',
+                '.bin'
+            ]
+
             # Walk through all files in project
             for file_path in project_path.rglob("*"):
-                if file_path.is_file():
-                    # Get relative path
+                try:
+                    # Get relative path and check skip patterns FIRST (before is_file())
                     rel_path = file_path.relative_to(project_path)
+                    rel_path_str = str(rel_path)
 
-                    # Skip certain files/folders
-                    skip_patterns = [
-                        '.project_metadata.json',
-                        '__pycache__',
-                        'node_modules',
-                        '.git',
-                        '.DS_Store',
-                        'Thumbs.db'
-                    ]
-
-                    # Check if should skip
+                    # Check if should skip - do this BEFORE is_file() to avoid Windows file lock errors
                     should_skip = any(
-                        pattern in str(rel_path)
+                        pattern in rel_path_str
                         for pattern in skip_patterns
                     )
 
-                    if not should_skip:
+                    if should_skip:
+                        continue
+
+                    # Now safe to check is_file() after skip patterns
+                    if file_path.is_file():
                         # Add file to ZIP
                         zip_file.write(file_path, rel_path)
                         files_added += 1
                         logger.debug(f"[Export] Added to ZIP: {rel_path}")
+                except OSError as e:
+                    # Handle WinError 1920 and other OS errors for locked files
+                    logger.warning(f"[Export] Skipping locked file: {file_path} - {e}")
+                    continue
 
         # Get ZIP data
         zip_buffer.seek(0)

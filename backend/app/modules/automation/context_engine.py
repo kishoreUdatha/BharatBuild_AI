@@ -317,8 +317,14 @@ class ContextEngine:
         seen = set()
 
         for error in errors:
-            message = error.get('message', '')
-            stack = error.get('stack', '')
+            # SAFETY: Handle None values from error dict (key exists but value is None)
+            message = error.get('message', '') or ''
+            stack = error.get('stack', '') or ''
+            # Ensure they are strings
+            if not isinstance(message, str):
+                message = str(message) if message else ''
+            if not isinstance(stack, str):
+                stack = str(stack) if stack else ''
             full_text = f"{message}\n{stack}"
 
             for pattern, missing_group, source_group in self.MISSING_MODULE_PATTERNS:
@@ -511,15 +517,19 @@ class ContextEngine:
                     files.append((file_path, line, "error_file"))
                     seen.add(file_path)
 
-            # Parse message
-            message = error.get("message", "")
+            # Parse message (with null safety)
+            message = error.get("message", "") or ""
+            if not isinstance(message, str):
+                message = str(message) if message else ""
             for match in self._extract_file_refs(message):
                 if match[0] not in seen:
                     files.append((match[0], match[1], "error_message"))
                     seen.add(match[0])
 
-            # Parse stack trace
-            stack = error.get("stack", "")
+            # Parse stack trace (with null safety)
+            stack = error.get("stack", "") or ""
+            if not isinstance(stack, str):
+                stack = str(stack) if stack else ""
             for match in self._extract_file_refs(stack):
                 if match[0] not in seen:
                     files.append((match[0], match[1], "stack_trace"))
@@ -550,6 +560,10 @@ class ContextEngine:
     def _extract_file_refs(self, text: str) -> List[Tuple[str, Optional[int]]]:
         """Extract file references from text using patterns"""
         refs = []
+
+        # SAFETY: Handle None or non-string text
+        if text is None or not isinstance(text, str):
+            return refs
 
         for pattern in self.ERROR_FILE_PATTERNS:
             for match in re.finditer(pattern, text, re.MULTILINE):

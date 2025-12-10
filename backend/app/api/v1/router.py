@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import auth, projects, api_keys, billing, tokens, streaming, bolt, automation, orchestrator, logs, execution, documents, adventure, resume, download, containers, preview, jobs, agentic, classify, sync, payments, import_project, paper, feedback, sandbox, workspace, log_stream, retrieval, users, sdk_agents
+from app.api.v1.endpoints import auth, projects, api_keys, billing, tokens, streaming, bolt, automation, orchestrator, logs, execution, documents, adventure, resume, download, containers, preview, preview_proxy, jobs, agentic, classify, sync, payments, import_project, paper, feedback, sandbox, workspace, log_stream, retrieval, users, sdk_agents, errors, autofixer_metrics
 
 api_router = APIRouter()
 
@@ -35,4 +35,6 @@ api_router.include_router(log_stream.router, prefix="/log-stream", tags=["Log St
 api_router.include_router(retrieval.router, tags=["Project Retrieval"])
 api_router.include_router(users.router, prefix="/users", tags=["User Management"])
 api_router.include_router(sdk_agents.router, tags=["SDK Agents"])
+api_router.include_router(errors.router, prefix="/errors", tags=["Unified Error Handler"])
+api_router.include_router(autofixer_metrics.router, prefix="/autofixer", tags=["Auto-Fixer Metrics"])
 

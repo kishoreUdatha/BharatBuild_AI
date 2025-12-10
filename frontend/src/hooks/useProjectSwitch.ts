@@ -117,9 +117,10 @@ function buildFileTree(flatFiles: Array<{ path: string; content: string; languag
 
 interface SwitchOptions {
   loadFiles?: boolean      // Load files from backend (default: true)
+  loadMessages?: boolean   // Load chat history from backend (default: true)
   clearTerminal?: boolean  // Clear terminal logs (default: true)
   clearErrors?: boolean    // Clear error logs (default: true)
-  clearChat?: boolean      // Clear chat messages (default: true)
+  clearChat?: boolean      // Clear chat messages before loading history (default: true)
   destroyOldSandbox?: boolean  // Delete old sandbox from server (default: true)
   projectName?: string     // Project name/title to use (default: "Project {id}")
   projectDescription?: string  // Project description
@@ -129,6 +130,7 @@ interface SwitchResult {
   success: boolean
   projectId: string
   fileCount: number
+  messageCount: number  // Number of chat messages loaded
   layer: string  // 'sandbox' | 's3' | 'none'
   error?: string
 }
@@ -158,6 +160,7 @@ export function useProjectSwitch() {
   ): Promise<SwitchResult> => {
     const {
       loadFiles = true,
+      loadMessages = true,
       clearTerminal = true,
       clearErrors = true,
       clearChat = true,
@@ -232,55 +235,107 @@ export function useProjectSwitch() {
         success: false,
         projectId: newProjectId,
         fileCount: 0,
+        messageCount: 0,
         layer: 'none'
       }
 
       if (loadFiles) {
         try {
-          // Use /sync/files endpoint which returns hierarchical tree and works reliably
-          // The /projects/{id}/load endpoint has auth issues
-          console.log(`[ProjectSwitch] Loading project files via /sync/files/${newProjectId}`)
-          const data = await apiClient.get(`/sync/files/${newProjectId}`)
+          // BOLT.NEW STYLE: Use /projects/{id}/metadata endpoint
+          // This returns ONLY file tree (no content) for fast loading
+          // Content is lazy-loaded when user clicks a file
+          console.log(`[ProjectSwitch] Loading project metadata via /projects/${newProjectId}/metadata`)
 
-          // The /sync/files endpoint returns { success, project_id, tree, layer, total }
-          // tree is already hierarchical with folders/children structure
-          if (data.success && data.tree && data.tree.length > 0) {
+          let data: any = null
+          let useMetadataEndpoint = true
+
+          // Try the new /metadata endpoint first
+          try {
+            data = await apiClient.get(`/projects/${newProjectId}/metadata`)
+            console.log(`[ProjectSwitch] Metadata response:`, data)
+          } catch (metadataErr: any) {
+            console.warn(`[ProjectSwitch] /metadata endpoint failed, falling back to /sync/files:`, metadataErr)
+            useMetadataEndpoint = false
+
+            // Fallback to old /sync/files endpoint (loads content too, but works)
+            data = await apiClient.get(`/sync/files/${newProjectId}`)
+            console.log(`[ProjectSwitch] Fallback /sync/files response:`, data)
+          }
+
+          // Handle response from either endpoint
+          // /metadata returns: { success, project_id, project_title, file_tree, total_files, messages_count }
+          // /sync/files returns: { success, project_id, tree, total, layer, project_title? }
+          const fileTreeData = data.file_tree || data.tree || []
+          const totalFiles = data.total_files || data.total || 0
+          const projectTitle = data.project_title || projectName || `Project ${newProjectId}`
+          const projectDesc = data.project_description || projectDescription
+
+          console.log(`[ProjectSwitch] Processing file data:`, {
+            success: data.success,
+            fileTreeLength: fileTreeData.length,
+            totalFiles,
+            projectTitle,
+            useMetadataEndpoint,
+            layer: data.layer
+          })
+
+          if (data.success && fileTreeData.length > 0) {
             // Convert backend tree format to frontend ProjectFile format
             const convertTree = (items: any[]): ProjectFile[] => {
               return items.map((item: any) => ({
                 path: item.path,
-                content: item.content || '',
+                // If using /sync/files (fallback), content is included
+                // If using /metadata, content is undefined (lazy load)
+                content: useMetadataEndpoint ? undefined : (item.content || ''),
                 language: item.language || 'plaintext',
                 type: item.type === 'folder' ? 'folder' : 'file',
+                hash: item.hash,  // For change detection
+                size_bytes: item.size_bytes,
+                isLoading: false,
+                isLoaded: !useMetadataEndpoint,  // Already loaded if from /sync/files
                 children: item.children ? convertTree(item.children) : undefined
               }))
             }
 
-            const fileTree = convertTree(data.tree)
+            const fileTree = convertTree(fileTreeData)
 
-            console.log(`[ProjectSwitch] Loaded file tree: ${fileTree.length} root items, ${data.total} total files from layer: ${data.layer}`)
-            console.log('[ProjectSwitch] Tree structure:', JSON.stringify(fileTree.map(f => ({
-              path: f.path,
-              type: f.type,
-              childrenCount: f.children?.length || 0
-            })), null, 2))
+            console.log(`[ProjectSwitch] Loaded file tree: ${fileTree.length} root items, ${totalFiles} total files`)
+            console.log(`[ProjectSwitch] Project: "${projectTitle}" (${data.messages_count || 0} messages)`)
 
             // Set new project in store with hierarchical tree
-            projectStore.setCurrentProject({
+            const newProject = {
               id: newProjectId,
-              name: projectName || `Project ${newProjectId}`,
-              description: projectDescription,
+              name: projectTitle,
+              description: projectDesc,
               files: fileTree,
-              createdAt: new Date(),
-              updatedAt: new Date(),
+              createdAt: new Date(data.created_at || Date.now()),
+              updatedAt: new Date(data.updated_at || Date.now()),
               isSynced: true
+            }
+
+            console.log(`[ProjectSwitch] Setting project in store:`, {
+              id: newProject.id,
+              name: newProject.name,
+              filesCount: newProject.files.length,
+              firstFile: newProject.files[0] ? { path: newProject.files[0].path, type: newProject.files[0].type } : null
+            })
+
+            projectStore.setCurrentProject(newProject)
+
+            // Verify the store was updated
+            const verifyProject = projectStore.currentProject
+            console.log(`[ProjectSwitch] Verified store project:`, {
+              id: verifyProject?.id,
+              name: verifyProject?.name,
+              filesCount: verifyProject?.files?.length || 0
             })
 
             result = {
               success: true,
               projectId: newProjectId,
-              fileCount: data.total || fileTree.length,
-              layer: data.layer || 'unknown'
+              fileCount: totalFiles || fileTree.length,
+              messageCount: data.messages_count || 0,
+              layer: data.layer || 'database'
             }
 
             console.log(`[ProjectSwitch] ✓ Loaded ${result.fileCount} files from ${result.layer}`)
@@ -288,8 +343,8 @@ export function useProjectSwitch() {
             // No files found - create empty project
             projectStore.setCurrentProject({
               id: newProjectId,
-              name: projectName || `Project ${newProjectId}`,
-              description: projectDescription,
+              name: projectTitle,
+              description: projectDesc,
               files: [],
               createdAt: new Date(),
               updatedAt: new Date(),
@@ -300,13 +355,14 @@ export function useProjectSwitch() {
               success: true,
               projectId: newProjectId,
               fileCount: 0,
+              messageCount: 0,
               layer: 'none'
             }
 
             console.log('[ProjectSwitch] ✓ Project loaded but no files found')
           }
         } catch (err: any) {
-          console.warn('[ProjectSwitch] Failed to load project files:', err)
+          console.warn('[ProjectSwitch] Failed to load project metadata:', err)
 
           // Fallback: create empty project
           projectStore.setCurrentProject({
@@ -323,6 +379,7 @@ export function useProjectSwitch() {
             success: true,  // Still "success" - we have a project, just no files
             projectId: newProjectId,
             fileCount: 0,
+            messageCount: 0,
             layer: 'none',
             error: err.message
           }
@@ -343,10 +400,141 @@ export function useProjectSwitch() {
           success: true,
           projectId: newProjectId,
           fileCount: 0,
+          messageCount: 0,
           layer: 'none'
         }
 
         console.log('[ProjectSwitch] ✓ Created empty project (loadFiles=false)')
+      }
+
+      // ============================================================
+      // STEP 4: LOAD CHAT HISTORY FROM SERVER (User prompts + Claude responses)
+      // ============================================================
+
+      if (loadMessages) {
+        try {
+          console.log(`[ProjectSwitch] Loading chat history for project ${newProjectId}`)
+          const messagesData = await apiClient.get(`/projects/${newProjectId}/messages`)
+          console.log(`[ProjectSwitch] Messages API response:`, messagesData)
+
+          if (messagesData.success && messagesData.messages && messagesData.messages.length > 0) {
+            // Convert backend message format to frontend chat format
+            // Backend returns: { id, role (user/planner/writer/fixer/assistant), content, created_at }
+            // Frontend expects: { id, type (user/assistant), content, timestamp }
+
+            // Helper: Check if content is internal JSON (not displayable)
+            const isInternalJson = (content: string): boolean => {
+              if (!content) return false
+              const trimmed = content.trim()
+              // Check if it starts with { and contains internal workflow keys
+              if (trimmed.startsWith('{')) {
+                try {
+                  const parsed = JSON.parse(trimmed)
+                  // Internal workflow messages have these keys
+                  if (parsed.tasks || parsed.plan || parsed.files || parsed.raw) {
+                    return true
+                  }
+                } catch {
+                  // Not valid JSON, might be displayable
+                }
+              }
+              return false
+            }
+
+            // Helper: Extract human-readable summary from internal JSON
+            const extractSummary = (content: string, role: string): string | null => {
+              if (!content) return null
+              const trimmed = content.trim()
+
+              try {
+                if (trimmed.startsWith('{')) {
+                  const parsed = JSON.parse(trimmed)
+
+                  // Plan message - extract project description
+                  if (parsed.plan?.raw) {
+                    // Try to extract project_description from XML
+                    const descMatch = parsed.plan.raw.match(/<project_description>([\s\S]*?)<\/project_description>/)
+                    if (descMatch) {
+                      return `**Project Plan Created**\n\n${descMatch[1].trim()}`
+                    }
+                    // Try to extract project_name
+                    const nameMatch = parsed.plan.raw.match(/<project_name>([\s\S]*?)<\/project_name>/)
+                    if (nameMatch) {
+                      return `**Planning: ${nameMatch[1].trim()}**\n\nI've created a plan for your project. The files are being generated...`
+                    }
+                  }
+
+                  // Tasks message - just note that tasks were created
+                  if (parsed.tasks && Array.isArray(parsed.tasks)) {
+                    return null  // Skip tasks messages entirely
+                  }
+                }
+              } catch {
+                // Not JSON, return as-is
+              }
+
+              return null
+            }
+
+            const chatMessages = messagesData.messages
+              .map((msg: any, index: number) => {
+                const content = msg.content || ''
+
+                // Skip internal workflow messages entirely
+                if (msg.role !== 'user' && isInternalJson(content)) {
+                  const summary = extractSummary(content, msg.role)
+                  if (!summary) {
+                    return null  // Skip this message
+                  }
+                  // Use extracted summary instead of raw JSON
+                  return {
+                    id: msg.id || `loaded-${index}-${Date.now()}`,
+                    content: summary,
+                    timestamp: new Date(msg.created_at || Date.now()),
+                    type: 'assistant' as const,
+                    isStreaming: false,
+                    status: 'complete' as const
+                  }
+                }
+
+                const baseMessage = {
+                  id: msg.id || `loaded-${index}-${Date.now()}`,
+                  content: content,
+                  timestamp: new Date(msg.created_at || Date.now())
+                }
+
+                // Map backend 'role' to frontend 'type'
+                // Only 'user' stays as 'user', all agent roles become 'assistant'
+                if (msg.role === 'user') {
+                  return {
+                    ...baseMessage,
+                    type: 'user' as const
+                  }
+                } else {
+                  // All other roles (planner, writer, fixer, assistant, etc.) -> 'assistant'
+                  return {
+                    ...baseMessage,
+                    type: 'assistant' as const,
+                    isStreaming: false,
+                    status: 'complete' as const
+                  }
+                }
+              })
+              .filter((msg): msg is NonNullable<typeof msg> => msg !== null)  // Filter out skipped messages
+
+            // Add messages to chat store
+            console.log(`[ProjectSwitch] Setting ${chatMessages.length} messages to chatStore`)
+            chatStore.setMessages(chatMessages)
+            result.messageCount = chatMessages.length
+
+            console.log(`[ProjectSwitch] ✓ Loaded ${chatMessages.length} chat messages`)
+          } else {
+            console.log('[ProjectSwitch] No chat history found for project (success:', messagesData.success, ', messages:', messagesData.messages?.length || 0, ')')
+          }
+        } catch (err: any) {
+          console.warn('[ProjectSwitch] Failed to load chat history:', err.message || err)
+          // Don't fail the switch - messages are optional
+        }
       }
 
       setLastSwitchResult(result)
@@ -360,6 +548,7 @@ export function useProjectSwitch() {
         success: false,
         projectId: newProjectId,
         fileCount: 0,
+        messageCount: 0,
         layer: 'none',
         error: err.message
       }

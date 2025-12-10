@@ -451,14 +451,35 @@ async def log_stream(websocket: WebSocket, project_id: str):
                     )
 
                 elif source == "build":
-                    message_str = str(log_data.get("data", log_data))
+                    # Extract message - handle nested dict structures
+                    # Format could be: {"message": "...", ...} or {"data": {"message": "..."}, ...}
+                    message_str = log_data.get("message")
+                    if message_str is None:
+                        data_field = log_data.get("data")
+                        if isinstance(data_field, dict):
+                            message_str = data_field.get("message", str(data_field))
+                        elif data_field is not None:
+                            message_str = str(data_field)
+                        else:
+                            message_str = str(log_data)
+                    message_str = str(message_str)
                     if log_type == "stderr" or is_build_error(message_str):
                         log_bus.add_build_error(message=message_str)
                     else:
                         log_bus.add_build_log(message_str)
 
                 elif source == "backend":
-                    message_str = str(log_data.get("data", log_data))
+                    # Extract message - handle nested dict structures
+                    message_str = log_data.get("message")
+                    if message_str is None:
+                        data_field = log_data.get("data")
+                        if isinstance(data_field, dict):
+                            message_str = data_field.get("message", str(data_field))
+                        elif data_field is not None:
+                            message_str = str(data_field)
+                        else:
+                            message_str = str(log_data)
+                    message_str = str(message_str)
                     # Check if this is actually a build error (Vite/Webpack from container)
                     if is_build_error(message_str):
                         log_bus.add_build_error(message=message_str)
@@ -468,7 +489,17 @@ async def log_stream(websocket: WebSocket, project_id: str):
                         log_bus.add_backend_log(message_str)
 
                 elif source == "docker":
-                    message_str = str(log_data.get("data", log_data))
+                    # Extract message - handle nested dict structures
+                    message_str = log_data.get("message")
+                    if message_str is None:
+                        data_field = log_data.get("data")
+                        if isinstance(data_field, dict):
+                            message_str = data_field.get("message", str(data_field))
+                        elif data_field is not None:
+                            message_str = str(data_field)
+                        else:
+                            message_str = str(log_data)
+                    message_str = str(message_str)
                     # Check if this is actually a build error (Vite/Webpack from container)
                     if is_build_error(message_str):
                         log_bus.add_build_error(message=message_str)

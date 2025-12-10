@@ -347,10 +347,27 @@ async def get_project_files(
     1. Check Layer 1 (sandbox) - if exists, use it (active editing)
     2. Check Layer 3 (PostgreSQL) for s3_path and file_index
     3. Fetch from Layer 2 (S3) using file_index
+
+    Response includes project_title for proper display in frontend.
     """
     try:
         user_id = str(current_user.id)
         actual_user_id = user_id  # Track actual user_id used
+
+        # Fetch project title from database upfront
+        project_title = None
+        project_description = None
+        try:
+            db_result = await db.execute(
+                select(Project).where(Project.id == cast(project_id, String(36)))
+            )
+            project_record = db_result.scalar_one_or_none()
+            if project_record:
+                project_title = project_record.title
+                project_description = project_record.description
+                logger.debug(f"[get_project_files] Found project: {project_title}")
+        except Exception as e:
+            logger.warning(f"[get_project_files] Could not fetch project title: {e}")
 
         # Helper function to load files from sandbox
         async def load_from_sandbox(proj_id: str, uid: str, layer_name: str):
@@ -384,7 +401,12 @@ async def get_project_files(
             sandbox_files = await unified_storage.list_sandbox_files(project_id, user_id)
             if sandbox_files:  # Has files, use sandbox
                 logger.info(f"[Layer 1] Loading from sandbox: {user_id}/{project_id} ({len(sandbox_files)} files)")
-                return await load_from_sandbox(project_id, user_id, "sandbox")
+                result = await load_from_sandbox(project_id, user_id, "sandbox")
+                # Add project title from database lookup
+                if project_title:
+                    result["project_title"] = project_title
+                    result["project_description"] = project_description
+                return result
             else:
                 logger.info(f"[Layer 1] Sandbox exists but empty for {user_id}/{project_id}, falling through to database")
 
@@ -401,7 +423,12 @@ async def get_project_files(
                     if potential_project_path.exists() and any(potential_project_path.iterdir()):
                         found_user_id = potential_user_dir.name
                         logger.info(f"[Layer 1.5] Found project in {found_user_id}/{project_id} (current user: {user_id})")
-                        return await load_from_sandbox(project_id, found_user_id, "sandbox_found")
+                        result = await load_from_sandbox(project_id, found_user_id, "sandbox_found")
+                        # Add project title from database lookup
+                        if project_title:
+                            result["project_title"] = project_title
+                            result["project_description"] = project_description
+                        return result
 
         # 2. Check PostgreSQL (Layer 3) for metadata
         # Note: Project.id is String(36) not UUID, use cast() to prevent asyncpg UUID conversion
@@ -440,6 +467,8 @@ async def get_project_files(
                 return {
                     "success": True,
                     "project_id": project_id,
+                    "project_title": project_title,
+                    "project_description": project_description,
                     "tree": tree,
                     "layer": "s3",
                     "total": len(project.file_index or [])
@@ -482,9 +511,16 @@ async def get_project_files(
                 def build_tree(files):
                     """Convert flat file list to hierarchical tree"""
                     root = []
-                    folders = {}
+                    # Track folders by path to avoid duplicates
+                    folder_registry = {}
 
+                    # First pass: identify all folder paths from files
+                    # This prevents creating duplicate folders
                     for pf in files:
+                        if pf.is_folder:
+                            # Skip folder records - they'll be created from file paths
+                            continue
+
                         file_path = pf.path
                         content = pf.content_inline or ""
 
@@ -519,21 +555,26 @@ async def get_project_files(
                             for i, part in enumerate(parts[:-1]):
                                 current_path = f"{current_path}/{part}" if current_path else part
 
-                                # Find or create folder
-                                folder = None
-                                for item in current_level:
-                                    if item.get("type") == "folder" and item.get("path") == current_path:
-                                        folder = item
-                                        break
+                                # Check if folder already exists in registry
+                                if current_path in folder_registry:
+                                    folder = folder_registry[current_path]
+                                else:
+                                    # Find or create folder in current level
+                                    folder = None
+                                    for item in current_level:
+                                        if item.get("type") == "folder" and item.get("path") == current_path:
+                                            folder = item
+                                            break
 
-                                if not folder:
-                                    folder = {
-                                        "path": current_path,
-                                        "name": part,
-                                        "type": "folder",
-                                        "children": []
-                                    }
-                                    current_level.append(folder)
+                                    if not folder:
+                                        folder = {
+                                            "path": current_path,
+                                            "name": part,
+                                            "type": "folder",
+                                            "children": []
+                                        }
+                                        current_level.append(folder)
+                                        folder_registry[current_path] = folder
 
                                 current_level = folder.get("children", [])
                                 if "children" not in folder:
@@ -555,6 +596,8 @@ async def get_project_files(
                 return {
                     "success": True,
                     "project_id": project_id,
+                    "project_title": project_title,
+                    "project_description": project_description,
                     "tree": tree,
                     "layer": "database",
                     "total": len(project_files)
@@ -566,6 +609,8 @@ async def get_project_files(
         return {
             "success": True,
             "project_id": project_id,
+            "project_title": project_title,
+            "project_description": project_description,
             "tree": [],
             "layer": "none",
             "message": "No files found for this project"

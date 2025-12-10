@@ -5,21 +5,14 @@ import {
   Play,
   Square,
   RefreshCw,
-  ExternalLink,
   Loader2,
-  Terminal,
-  Circle,
-  CheckCircle2,
-  XCircle,
-  Container,
-  Server,
   Wrench,
   Zap,
   RotateCcw,
   AlertTriangle
 } from 'lucide-react'
 import { useProjectStore } from '@/store/projectStore'
-import { useLogStream } from '@/hooks/useLogStream'
+import { useErrorCollector } from '@/hooks/useErrorCollector'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
 const MAX_AUTO_FIX_ATTEMPTS = 10  // Increased for "retry until success" behavior
@@ -58,9 +51,11 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   const [isFixing, setIsFixing] = useState(false)
   const [maxAttemptsReached, setMaxAttemptsReached] = useState(false)
   const errorBufferRef = useRef<string[]>([]) // Collect error lines
+  const outputBufferRef = useRef<string[]>([]) // Collect ALL recent output for context
   const pendingRestartRef = useRef<boolean>(false) // Flag for auto-restart after fix
   const consecutiveFailuresRef = useRef<number>(0) // Track consecutive failures for backoff
   const isRetryingRef = useRef<boolean>(false) // Prevent duplicate retries
+  const forwardDebounceRef = useRef<NodeJS.Timeout | null>(null) // Debounce error forwarding
 
   // Calculate exponential backoff delay
   const getRetryDelay = useCallback((failureCount: number): number => {
@@ -72,21 +67,27 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     return delay
   }, [])
 
-  // ============= BOLT.NEW STYLE: LOG STREAM FOR AUTO-FIX =============
-  // Forward terminal errors to backend LogBus for auto-fix
+  // ============= CENTRALIZED ERROR HANDLING FOR AUTO-FIX =============
+  // Single entry point for all error collection and auto-fix
   const {
-    forwardBuildError,
-    isConnected: logStreamConnected
-  } = useLogStream({
+    reportError,
+    detectAndReport,
+    addOutput: addErrorOutput,
+    setCurrentCommand: setErrorCommand,
+    forwardNow,
+    clearBuffers,
+    isConnected: errorCollectorConnected
+  } = useErrorCollector({
     projectId: currentProject?.id,
     enabled: !!currentProject?.id && autoFix,
+    debounceMs: 800,
     onFixStarted: (reason) => {
-      console.log('[ProjectRunControls] Auto-fix started via LogBus:', reason)
+      console.log('[ProjectRunControls] Auto-fix started:', reason)
       setStatus('fixing')
       onOutput?.(`\n🔧 Auto-fix started: ${reason}`)
     },
     onFixCompleted: (patchesApplied, filesModified) => {
-      console.log('[ProjectRunControls] Auto-fix completed via LogBus:', patchesApplied, 'patches')
+      console.log('[ProjectRunControls] Auto-fix completed:', patchesApplied, 'patches')
       onOutput?.(`✅ Auto-fix completed! ${patchesApplied} patches applied`)
       if (filesModified.length > 0) {
         onOutput?.(`📄 Files modified: ${filesModified.join(', ')}`)
@@ -97,29 +98,40 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       setLastError(null)
       setMaxAttemptsReached(false)
       errorBufferRef.current = []
+      outputBufferRef.current = []
+      // Clear any pending debounce timer
+      if (forwardDebounceRef.current) {
+        clearTimeout(forwardDebounceRef.current)
+        forwardDebounceRef.current = null
+      }
       onOutput?.('\n🚀 Restarting project with fixes...\n')
     },
     onFixFailed: (error) => {
-      console.log('[ProjectRunControls] Auto-fix failed via LogBus:', error)
+      console.log('[ProjectRunControls] Auto-fix failed:', error)
       onOutput?.(`❌ Auto-fix failed: ${error}`)
       setStatus('error')
-    },
-    onProjectRestarted: () => {
-      console.log('[ProjectRunControls] Project restarted notification')
-      onOutput?.('🔄 Project restarted')
     }
   })
 
   // Check if Docker is available on mount
+  // On Windows, default to direct execution since Docker Desktop is often not installed
   useEffect(() => {
+    // Check if running on Windows - default to direct execution
+    const isWindows = typeof window !== 'undefined' && navigator.platform.toLowerCase().includes('win')
+    if (isWindows) {
+      console.log('[Docker] Windows detected, defaulting to direct execution')
+      setDockerAvailable(false)
+      setExecutionMode('direct')
+      return
+    }
     checkDockerAvailability()
   }, [])
 
   const checkDockerAvailability = async () => {
     try {
-      // Use AbortController for timeout (3 seconds max)
+      // Use AbortController for timeout (2 seconds max - faster timeout)
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 3000)
+      const timeoutId = setTimeout(() => controller.abort(), 2000)
 
       // Try to check container status - if it fails with 503/500, Docker is not available
       const response = await fetch(`${API_BASE_URL}/containers/test-docker/status`, {
@@ -454,32 +466,40 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       ...databaseErrorPatterns,
     ]
 
+    // First, add ALL output lines to output buffer (for context)
+    outputBufferRef.current.push(output)
+    // Keep last 50 lines of all output for full context
+    if (outputBufferRef.current.length > 50) {
+      outputBufferRef.current.shift()
+    }
+
     for (const pattern of allPatterns) {
       if (pattern.test(output)) {
-        // Add to error buffer
+        // Add to local error buffer for UI display
         errorBufferRef.current.push(output)
-        // Keep last 30 lines for context (increased for Bolt.new style)
         if (errorBufferRef.current.length > 30) {
           errorBufferRef.current.shift()
         }
+
         console.log('[ErrorDetect] 🔴 TERMINAL ERROR matched pattern:', pattern.toString())
         console.log('[ErrorDetect]    Output:', output.slice(0, 150))
         console.log('[ErrorDetect]    Command:', currentCommandRef.current)
 
-        // ========== BOLT.NEW STYLE: Forward to LogBus for auto-fix ==========
-        // This enables the backend AutoFixer to detect and fix errors automatically
-        if (forwardBuildError) {
-          console.log('[ErrorDetect] 📤 Forwarding terminal error to backend for auto-fix...')
-          forwardBuildError(output, currentCommandRef.current || undefined)
+        // ========== CENTRALIZED ERROR HANDLING ==========
+        // The detectAndReport function handles all buffering, debouncing, and forwarding
+        // This is the SINGLE ENTRY POINT for error handling
+        if (detectAndReport) {
+          detectAndReport(output, 'build')
+          console.log('[ErrorDetect] ✅ Error sent to centralized ErrorCollector')
         } else {
-          console.warn('[ErrorDetect] ⚠️ forwardBuildError not available!')
+          console.warn('[ErrorDetect] ⚠️ detectAndReport not available!')
         }
 
         return true
       }
     }
     return false
-  }, [forwardBuildError])
+  }, [detectAndReport])
 
   // Reset fix state
   const resetFixState = useCallback(() => {
@@ -487,9 +507,17 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     setLastError(null)
     setMaxAttemptsReached(false)
     errorBufferRef.current = []
+    outputBufferRef.current = [] // Also clear output buffer
     consecutiveFailuresRef.current = 0
     isRetryingRef.current = false
-  }, [])
+    // Clear any pending debounce timer
+    if (forwardDebounceRef.current) {
+      clearTimeout(forwardDebounceRef.current)
+      forwardDebounceRef.current = null
+    }
+    // Clear centralized error collector buffers
+    clearBuffers?.()
+  }, [clearBuffers])
 
   // ============= BOLT.NEW STYLE AUTO-FIX HANDLER =============
   const attemptAutoFix = useCallback(async (errorMessage: string, stackTrace: string) => {
@@ -744,6 +772,8 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
       for (const command of commands) {
         currentCommandRef.current = command
+        // Also set command in centralized error collector for context
+        setErrorCommand?.(command)
         onOutput?.(`$ ${command}`)
 
         const isDevServer = isDevServerCommand(command)
@@ -877,11 +907,13 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
                       errorBufferRef.current.push(text)
                     }
 
-                    // Server started - clear errors
+                    // Server started - but DON'T clear errors
+                    // Vite/webpack dev servers continue running even with compile errors
+                    // We still need to trigger auto-fix for those errors
                     if (isDevServer && detectServerStart(text)) {
                       serverStarted = true
-                      hasRealError = false
-                      errorOutput = ''
+                      // NOTE: Don't clear hasRealError or errorOutput here
+                      // Errors detected before server start should still trigger fix
                     }
                   }
 
@@ -900,9 +932,24 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
                       errorOutput += exitMsg + '\n'
                       console.log('[ExecuteCommand] 🔴 NON-ZERO EXIT CODE:', exitCode)
                       console.log('[ExecuteCommand]    Command:', currentCommandRef.current)
-                      if (forwardBuildError) {
-                        console.log('[ExecuteCommand] 📤 Forwarding exit code error to backend...')
-                        forwardBuildError(exitMsg, currentCommandRef.current || undefined)
+
+                      // ========== CENTRALIZED ERROR HANDLING ==========
+                      // Forward full output context to the error collector
+                      const fullContext = outputBufferRef.current.join('\n') + '\n' + exitMsg
+                      console.log('[ExecuteCommand] 📤 Forwarding error to centralized ErrorCollector...')
+                      console.log('[ExecuteCommand]    Output buffer size:', outputBufferRef.current.length, 'lines')
+
+                      // Clear any pending debounce and forward immediately
+                      if (forwardDebounceRef.current) {
+                        clearTimeout(forwardDebounceRef.current)
+                        forwardDebounceRef.current = null
+                      }
+
+                      // Report through centralized error collector
+                      if (reportError) {
+                        reportError('build', fullContext, { severity: 'error' })
+                        // Force immediate forward
+                        forwardNow?.()
                       }
                     } else {
                       console.log('[ExecuteCommand] ✅ Command completed successfully (exit code 0)')
@@ -926,20 +973,16 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     await Promise.race([processStream(), timeoutPromise])
 
     // For dev servers:
-    // - If server started successfully (detected via output), clear errors
+    // - If timeout WITH errors, keep the errors (trigger auto-fix) regardless of server status
     // - If timeout but NO errors detected, assume server is running
-    // - If timeout WITH errors and server NOT started, keep the errors (trigger auto-fix)
+    // NOTE: Don't clear errors when server starts - Vite/webpack continue running even with compile errors
     if (isDevServer && timedOut) {
-      if (serverStarted) {
-        // Server started successfully, clear any spurious errors
-        hasRealError = false
-        errorOutput = ''
-      } else if (!hasRealError) {
-        // No errors detected, assume server is running (silent startup)
+      if (!hasRealError) {
+        // No errors detected, assume server is running
         serverStarted = true
       }
-      // If hasRealError is true and serverStarted is false, keep the errors
-      // This allows auto-fix to trigger for dev server startup failures
+      // If hasRealError is true, keep the errors - don't clear them!
+      // This allows auto-fix to trigger for compile errors even if dev server is running
     }
 
     return { hasRealError, errorOutput, serverStarted }
@@ -1016,16 +1059,33 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
                 hasError = true
                 errorOutput += content + '\n'
                 errorBufferRef.current.push(content)
+                // Also add to output buffer for full context
+                outputBufferRef.current.push(content)
+                if (outputBufferRef.current.length > 50) {
+                  outputBufferRef.current.shift()
+                }
+                // Forward to centralized error collector
+                if (reportError) {
+                  reportError('build', content, { severity: 'error' })
+                }
               } else if (data.type === 'server_started') {
                 // Use preview_url from Docker if available, otherwise construct from port
                 const url = data.preview_url || `http://localhost:${data.port || 3000}`
                 setPreviewUrl(url)
                 onPreviewUrlChange?.(url)
-                hasError = false // Server started successfully
+                // NOTE: Don't reset hasError here - errors detected before server start should still trigger fix
+                // Vite/webpack dev servers continue running even with compile errors
                 onOutput?.(`🚀 Server running at: ${url}`)
               } else if (data.type === 'command_complete' && data.data?.success === false) {
                 hasError = true
-                onOutput?.(`❌ Command failed with exit code ${data.data?.exit_code}`)
+                const errorMsg = `Command failed with exit code ${data.data?.exit_code}`
+                onOutput?.(`❌ ${errorMsg}`)
+                // Forward full context to centralized error collector
+                const fullContext = outputBufferRef.current.join('\n') + '\n' + errorMsg
+                if (reportError) {
+                  reportError('build', fullContext, { severity: 'error' })
+                  forwardNow?.()
+                }
               }
             } catch {}
           }
@@ -1053,12 +1113,22 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     }
   }
 
+  // ============= CHECK IF SERVER IS ALREADY RUNNING =============
+  // Track if we started from existing server (for Stop button handling)
+  const startedFromExistingServerRef = useRef<boolean>(false)
+
+  const checkExistingServer = useCallback(async (): Promise<string | null> => {
+    // DISABLED: This was detecting BharatBuild itself and other apps
+    // Always let the backend start the project on a dynamic port
+    console.log('[ProjectRunControls] checkExistingServer DISABLED - always use backend execution')
+    return null
+  }, [])
+
   // ============= MAIN RUN HANDLER =============
   const handleRun = useCallback(async () => {
     // Check if project exists
     if (!currentProject?.id) {
       onOutput?.('❌ No project selected. Generate a project first!')
-      onOpenTerminal?.()
       onStartSession?.()
       return
     }
@@ -1067,7 +1137,6 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     const token = localStorage.getItem('access_token')
     if (!token) {
       onOutput?.('❌ Please log in to run projects.')
-      onOpenTerminal?.()
       onStartSession?.()
       return
     }
@@ -1079,7 +1148,19 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     setPreviewUrl(null)
 
     onStartSession?.()
-    onOpenTerminal?.()
+    // NOTE: Terminal is NOT auto-opened here. User must click "Code" tab to see terminal.
+
+    // First, check if a server is already running
+    const existingServerUrl = await checkExistingServer()
+    if (existingServerUrl) {
+      onOutput?.(`✅ Found existing server at ${existingServerUrl}`)
+      setPreviewUrl(existingServerUrl)
+      onPreviewUrlChange?.(existingServerUrl)
+      setStatus('running')
+      startedFromExistingServerRef.current = true  // Track that we detected existing server
+      return
+    }
+    startedFromExistingServerRef.current = false  // Reset for fresh starts
 
     try {
       let result: { success: boolean; error?: string } = { success: false }
@@ -1189,7 +1270,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       setStatus('error')
       onEndSession?.()
     }
-  }, [currentProject?.id, executionMode, dockerAvailable, onOutput, onOpenTerminal, autoFix, fixAttempts, lastError, attemptAutoFix, onStartSession, onEndSession, resetFixState, getRetryDelay])
+  }, [currentProject?.id, executionMode, dockerAvailable, onOutput, autoFix, fixAttempts, lastError, attemptAutoFix, onStartSession, onEndSession, resetFixState, getRetryDelay])
 
   // ============= BOLT.NEW: AUTO-RESTART AFTER LOGBUS FIX =============
   // Check if LogBus auto-fix completed and restart is pending
@@ -1209,6 +1290,16 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
     // Abort current execution
     abortControllerRef.current?.abort()
+
+    // If we detected an existing server (not started by us), just close the preview
+    if (startedFromExistingServerRef.current) {
+      setStatus('stopped')
+      setPreviewUrl(null)
+      onPreviewUrlChange?.(null)
+      onOutput?.('🛑 Preview closed (external server still running)')
+      startedFromExistingServerRef.current = false
+      return
+    }
 
     try {
       const token = localStorage.getItem('access_token')
@@ -1248,32 +1339,6 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     }
     await attemptAutoFix(lastError.message, lastError.stackTrace)
   }, [lastError, attemptAutoFix, onOutput])
-
-  // Get status info
-  const getStatusInfo = (status: RunStatus) => {
-    switch (status) {
-      case 'idle':
-        return { icon: Circle, color: 'text-gray-400', label: 'Idle', bgColor: 'bg-gray-400' }
-      case 'creating':
-        return { icon: Container, color: 'text-blue-500', label: 'Creating...', bgColor: 'bg-blue-500' }
-      case 'starting':
-        return { icon: Loader2, color: 'text-yellow-500', label: 'Starting...', bgColor: 'bg-yellow-500' }
-      case 'running':
-        return { icon: CheckCircle2, color: 'text-green-500', label: 'Running', bgColor: 'bg-green-500' }
-      case 'stopping':
-        return { icon: Loader2, color: 'text-orange-500', label: 'Stopping...', bgColor: 'bg-orange-500' }
-      case 'stopped':
-        return { icon: Circle, color: 'text-gray-400', label: 'Stopped', bgColor: 'bg-gray-400' }
-      case 'fixing':
-        return { icon: Wrench, color: 'text-purple-500', label: `Fixing (${fixAttempts + 1}/${MAX_AUTO_FIX_ATTEMPTS})...`, bgColor: 'bg-purple-500' }
-      case 'error':
-        return { icon: XCircle, color: 'text-red-500', label: 'Error', bgColor: 'bg-red-500' }
-      default:
-        return { icon: Circle, color: 'text-gray-400', label: 'Unknown', bgColor: 'bg-gray-400' }
-    }
-  }
-
-  const statusInfo = getStatusInfo(status)
   const isRunning = status === 'running'
   const isLoading = status === 'creating' || status === 'starting' || status === 'stopping' || status === 'fixing'
   const canRun = !isLoading && !isRunning && currentProject
@@ -1281,27 +1346,6 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
   return (
     <div className="flex items-center gap-2">
-      {/* Execution Mode Indicator */}
-      <div
-        className={`flex items-center gap-1 px-2 py-1 rounded-md ${
-          executionMode === 'docker' ? 'bg-blue-500/10 text-blue-400' : 'bg-orange-500/10 text-orange-400'
-        }`}
-        title={executionMode === 'docker'
-          ? 'Running in Docker container (isolated & secure)'
-          : 'Running directly on server (Docker unavailable)'
-        }
-      >
-        {executionMode === 'docker' ? <Container className="w-3 h-3" /> : <Server className="w-3 h-3" />}
-        <span className="text-xs font-medium">{executionMode === 'docker' ? 'Docker' : 'Direct'}</span>
-      </div>
-
-      {/* Status Indicator */}
-      <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[hsl(var(--bolt-bg-secondary))]">
-        <div className={`w-2 h-2 rounded-full ${statusInfo.bgColor} ${isRunning ? 'animate-pulse' : ''}`} />
-        <span className={`text-xs font-medium ${statusInfo.color}`}>
-          {statusInfo.label}
-        </span>
-      </div>
 
       {/* Run/Stop Buttons */}
       {!isRunning && !isLoading ? (
@@ -1389,33 +1433,6 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
           <RefreshCw className="w-4 h-4" />
         </button>
       )}
-
-      {/* Preview URL */}
-      {previewUrl && (
-        <a
-          href={previewUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-1.5 px-2 py-1.5 rounded-md
-            bg-[hsl(var(--bolt-accent)/0.1)] text-[hsl(var(--bolt-accent))]
-            text-xs font-medium hover:bg-[hsl(var(--bolt-accent)/0.2)] transition-colors"
-          title={`Open ${previewUrl}`}
-        >
-          <ExternalLink className="w-3.5 h-3.5" />
-          <span>Preview</span>
-        </a>
-      )}
-
-      {/* Terminal Toggle */}
-      <button
-        onClick={onOpenTerminal}
-        className="flex items-center justify-center w-8 h-8 rounded-md
-          bg-[hsl(var(--bolt-bg-secondary))] hover:bg-[hsl(var(--bolt-bg-tertiary))]
-          text-[hsl(var(--bolt-text-secondary))] transition-colors"
-        title="Toggle Terminal"
-      >
-        <Terminal className="w-4 h-4" />
-      </button>
     </div>
   )
 }

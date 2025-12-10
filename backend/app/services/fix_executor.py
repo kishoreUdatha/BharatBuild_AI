@@ -20,10 +20,60 @@ BOLT.NEW STYLE IMPROVEMENTS:
 """
 
 import re
+import time
+import asyncio
+import subprocess
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from app.core.logging_config import logger
+
+# ========== FIX RATE LIMITER ==========
+# Prevents infinite fix loops by enforcing cooldowns between fix attempts
+_fix_timestamps: Dict[str, List[float]] = {}  # project_id -> list of timestamps
+_FIX_COOLDOWN_SECONDS = 30  # Minimum seconds between fix attempts
+_MAX_FIXES_PER_WINDOW = 5  # Max fix attempts per window
+_FIX_WINDOW_SECONDS = 300  # 5 minute window for max attempts
+
+
+def _can_attempt_fix(project_id: str) -> tuple[bool, str]:
+    """
+    Check if we can attempt a fix for this project (rate limiting).
+    Returns (allowed, reason) tuple.
+    """
+    now = time.time()
+
+    # Initialize if needed
+    if project_id not in _fix_timestamps:
+        _fix_timestamps[project_id] = []
+
+    timestamps = _fix_timestamps[project_id]
+
+    # Clean old timestamps outside the window
+    timestamps[:] = [t for t in timestamps if now - t < _FIX_WINDOW_SECONDS]
+
+    # Check cooldown from last fix
+    if timestamps and now - timestamps[-1] < _FIX_COOLDOWN_SECONDS:
+        remaining = _FIX_COOLDOWN_SECONDS - (now - timestamps[-1])
+        return False, f"Cooldown active ({remaining:.1f}s remaining)"
+
+    # Check max attempts in window
+    if len(timestamps) >= _MAX_FIXES_PER_WINDOW:
+        oldest = timestamps[0]
+        reset_in = _FIX_WINDOW_SECONDS - (now - oldest)
+        return False, f"Max attempts ({_MAX_FIXES_PER_WINDOW}) reached. Resets in {reset_in:.0f}s"
+
+    return True, "OK"
+
+
+def _record_fix_attempt(project_id: str):
+    """Record a fix attempt timestamp"""
+    now = time.time()
+    if project_id not in _fix_timestamps:
+        _fix_timestamps[project_id] = []
+    _fix_timestamps[project_id].append(now)
+
+
 from app.modules.agents.production_fixer_agent import production_fixer_agent
 from app.modules.agents.base_agent import AgentContext
 from app.modules.automation.context_engine import ContextEngine
@@ -32,7 +82,63 @@ from app.services.restart_manager import restart_project
 from app.core.config import settings
 
 
-async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str, Any]:
+class FixExecutor:
+    """
+    Fix Executor class - Wrapper for executing fixes via Fixer Agent.
+
+    Usage:
+        fix_executor = FixExecutor(project_id)
+        result = await fix_executor.execute_fix(
+            error_message="...",
+            stack_trace="...",
+            command="npm run dev",
+            context={"file_tree": [...], "recently_modified": [...]}
+        )
+    """
+
+    def __init__(self, project_id: str):
+        self.project_id = project_id
+
+    async def execute_fix(
+        self,
+        error_message: str,
+        stack_trace: str = "",
+        command: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Execute fix with the new interface that accepts error_message, stack_trace, command, context.
+
+        This wraps the module-level execute_fix function, converting the new interface
+        to the old log_payload format.
+        """
+        # Build log_payload format from the new parameters
+        log_payload = {
+            "browser_errors": [{
+                "message": error_message,
+                "stack": stack_trace,
+                "file": "",
+                "line": None
+            }] if error_message else [],
+            "build_errors": [],
+            "backend_errors": [],
+            "docker_errors": [],
+            "network_errors": [],
+            # Include Bolt.new-style context
+            "context": context or {}
+        }
+
+        # If we have recently_modified files in context, prioritize those in the fixer
+        if context and context.get("recently_modified"):
+            logger.info(f"[FixExecutor:{self.project_id}] Using {len(context['recently_modified'])} recently modified files as hints")
+
+        if context and context.get("file_tree"):
+            logger.info(f"[FixExecutor:{self.project_id}] File tree has {len(context['file_tree'])} files")
+
+        return await execute_fix_internal(self.project_id, log_payload)
+
+
+async def execute_fix_internal(project_id: str, log_payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Execute fix using Fixer Agent with FULL CONTEXT (Bolt.new style).
 
@@ -47,6 +153,23 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
         Result dict with success status and applied patches
     """
     logger.info(f"[FixExecutor:{project_id}] Starting automatic fix")
+
+    # ========== RATE LIMIT CHECK ==========
+    # Prevent infinite fix loops
+    can_fix, reason = _can_attempt_fix(project_id)
+    if not can_fix:
+        logger.warning(f"[FixExecutor:{project_id}] Rate limited: {reason}")
+        return {
+            "success": False,
+            "error": f"Fix rate limited: {reason}",
+            "rate_limited": True,
+            "files_created": 0,
+            "patches_applied": 0,
+            "files_modified": []
+        }
+
+    # Record this attempt
+    _record_fix_attempt(project_id)
 
     try:
         # Get storage manager
@@ -93,44 +216,57 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
             all_files[path] = content if isinstance(content, str) else ''
 
         # Build errors list from log_payload (convert to ContextEngine format)
+        # SAFETY: Use `or ""` to convert None values to empty strings
         errors = []
-        for error in log_payload.get("browser_errors", []):
+        for error in log_payload.get("browser_errors") or []:
+            if error is None or not isinstance(error, dict):
+                continue
             errors.append({
-                "message": error.get("message", ""),
-                "file": error.get("file", ""),
+                "message": error.get("message") or "",
+                "file": error.get("file") or "",
                 "line": error.get("line"),
-                "stack": error.get("stack", ""),
+                "stack": error.get("stack") or "",
                 "source": "browser"
             })
-        for error in log_payload.get("build_errors", []):
+        for error in log_payload.get("build_errors") or []:
+            if error is None or not isinstance(error, dict):
+                continue
             errors.append({
-                "message": error.get("message", ""),
-                "file": error.get("file", ""),
-                "stack": error.get("stack", ""),
+                "message": error.get("message") or "",
+                "file": error.get("file") or "",
+                "stack": error.get("stack") or "",
                 "source": "build"
             })
-        for error in log_payload.get("backend_errors", []):
+        for error in log_payload.get("backend_errors") or []:
+            if error is None or not isinstance(error, dict):
+                continue
             errors.append({
-                "message": error.get("message", ""),
-                "file": error.get("file", ""),
-                "stack": error.get("stack", ""),
+                "message": error.get("message") or "",
+                "file": error.get("file") or "",
+                "stack": error.get("stack") or "",
                 "source": "backend"
             })
-        for error in log_payload.get("docker_errors", []):
+        for error in log_payload.get("docker_errors") or []:
+            if error is None:
+                continue
             errors.append({
-                "message": error.get("message", "") if isinstance(error, dict) else str(error),
+                "message": (error.get("message") or "") if isinstance(error, dict) else str(error),
                 "source": "docker"
             })
 
         # Build context using ContextEngine (extracts missing modules, sibling files, etc.)
         # NOTE: build_context expects List[Dict] format, so use all_files_list
         # detect_tech_stack_from_files expects Dict[str, str] format, so use all_files
+        # IMPORTANT: tech_stack expects List[str], convert comma-separated string to list
+        detected_stack = detect_tech_stack_from_files(all_files)
+        tech_stack_list = [s.strip() for s in detected_stack.split(",")] if detected_stack and detected_stack != "Unknown" else None
+
         context_payload = context_engine.build_context(
             user_message=build_error_description(log_payload),
             errors=errors,
             terminal_logs=[],  # Could add terminal logs if available
             all_files=all_files_list,  # Pass list format to build_context
-            tech_stack=detect_tech_stack_from_files(all_files)  # Pass dict format here
+            tech_stack=tech_stack_list  # Pass list format for tech_stack
         )
 
         logger.info(f"[FixExecutor:{project_id}] Context: {len(context_payload.relevant_files)} files, {len(context_payload.missing_modules)} missing modules")
@@ -171,6 +307,13 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
                     if file_dir == suggested_dir and file_path not in sibling_files:
                         sibling_files.append(file_path)
 
+        # Extract Bolt.new-style context (file_tree, recently_modified) from log_payload
+        bolt_context = log_payload.get("context", {}) or {}
+        frontend_file_tree = bolt_context.get("file_tree", []) or []
+        recently_modified = bolt_context.get("recently_modified", []) or []
+
+        logger.info(f"[FixExecutor:{project_id}] Bolt.new context: {len(frontend_file_tree)} files in tree, {len(recently_modified)} recently modified")
+
         # Create AgentContext for ProductionFixerAgent
         agent_context = AgentContext(
             project_id=project_id,
@@ -183,6 +326,9 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
                 "tech_stack": context_payload.tech_stack,
                 "missing_modules": context_payload.missing_modules,
                 "sibling_files": sibling_files,
+                # Bolt.new-style context for Claude
+                "file_tree": frontend_file_tree if frontend_file_tree else list(all_files.keys()),
+                "recently_modified": recently_modified,
                 "environment": {
                     "framework": context_payload.tech_stack,
                     "project_type": "auto-detected",
@@ -218,15 +364,25 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
                 if new_file not in file_blocks:
                     file_blocks.append(new_file)
 
-        logger.info(f"[FixExecutor:{project_id}] Got {len(patches)} patches + {len(file_blocks)} full files")
+        # Get runCommand (instructions) from fixer agent
+        run_command = result.get("instructions")
 
-        if not file_blocks and not patches:
+        logger.info(f"[FixExecutor:{project_id}] Got {len(patches)} patches + {len(file_blocks)} full files + runCommand: {run_command}")
+
+        if not file_blocks and not patches and not run_command:
             return {
                 "success": False,
-                "error": "No patches or file blocks generated",
+                "error": "No patches, file blocks, or commands generated",
                 "patches_applied": 0,
                 "files_modified": []
             }
+
+        # ========== EXECUTE RUN COMMAND (npm install, pip install, etc.) ==========
+        command_executed = False
+        if run_command:
+            command_executed = await execute_install_command(project_path, run_command)
+            if command_executed:
+                logger.info(f"[FixExecutor:{project_id}] Successfully executed: {run_command}")
 
         # ========== APPLY FILE BLOCKS (CREATE NEW FILES - Bolt.new style!) ==========
         files_modified = []
@@ -237,6 +393,11 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
             file_content = file_block.get("content")
 
             if not file_path or file_content is None:
+                continue
+
+            # Skip node_modules and other system directories (locked files on Windows)
+            if 'node_modules' in file_path or '.git' in file_path:
+                logger.warning(f"[FixExecutor:{project_id}] Skipping system file: {file_path}")
                 continue
 
             try:
@@ -258,6 +419,11 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
             patch_content = patch_info.get("patch")
 
             if not file_path or not patch_content:
+                continue
+
+            # Skip node_modules and other system directories (locked files on Windows)
+            if 'node_modules' in file_path or '.git' in file_path:
+                logger.warning(f"[FixExecutor:{project_id}] Skipping system file patch: {file_path}")
                 continue
 
             try:
@@ -298,9 +464,9 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
 
         # ========== STEP 5: RESTART PROJECT (Bolt.new style) ==========
         # After patches/files are applied, restart Docker/Preview so changes take effect
-        total_changes = patches_applied + files_created
+        total_changes = patches_applied + files_created + (1 if command_executed else 0)
         if total_changes > 0:
-            logger.info(f"[FixExecutor:{project_id}] Restarting project after {files_created} files created, {patches_applied} patches")
+            logger.info(f"[FixExecutor:{project_id}] Restarting project after {files_created} files created, {patches_applied} patches, command_executed={command_executed}")
             try:
                 restart_result = await restart_project(
                     project_id,
@@ -317,6 +483,7 @@ async def execute_fix(project_id: str, log_payload: Dict[str, Any]) -> Dict[str,
             "patches_applied": patches_applied,
             "files_created": files_created,
             "files_modified": files_modified,
+            "command_executed": run_command if command_executed else None,
             "error": None if total_changes > 0 else "No changes could be applied"
         }
 
@@ -448,6 +615,11 @@ def parse_patches(response: str) -> List[Dict[str, str]]:
     """Parse <patch> blocks from Fixer Agent response"""
     patches = []
 
+    # SAFETY: Handle None or empty response
+    if response is None or not isinstance(response, str):
+        logger.warning("[FixExecutor] parse_patches received None or non-string response")
+        return patches
+
     # Pattern to match <patch> blocks
     patch_pattern = r'<patch>\s*(.*?)\s*</patch>'
     matches = re.findall(patch_pattern, response, re.DOTALL)
@@ -480,6 +652,11 @@ def parse_file_blocks(response: str) -> List[Dict[str, str]]:
     </file>
     """
     file_blocks = []
+
+    # SAFETY: Handle None or empty response
+    if response is None or not isinstance(response, str):
+        logger.warning("[FixExecutor] parse_file_blocks received None or non-string response")
+        return file_blocks
 
     # Pattern 1: <file path="...">content</file>
     pattern1 = r'<file\s+path=["\']([^"\']+)["\']>(.*?)</file>'
@@ -532,6 +709,11 @@ def parse_newfile_blocks(response: str) -> List[Dict[str, str]]:
     </newfile>
     """
     newfile_blocks = []
+
+    # SAFETY: Handle None or empty response
+    if response is None or not isinstance(response, str):
+        logger.warning("[FixExecutor] parse_newfile_blocks received None or non-string response")
+        return newfile_blocks
 
     # Pattern: <newfile path="...">content</newfile>
     pattern = r'<newfile\s+path=["\']([^"\']+)["\']>(.*?)</newfile>'
@@ -746,6 +928,13 @@ def apply_unified_patch(original: str, patch: str) -> Optional[str]:
 
     Returns patched content or None if patch failed.
     """
+    # SAFETY: Handle None or empty inputs
+    if original is None:
+        original = ""
+    if patch is None or not isinstance(patch, str):
+        logger.warning("[FixExecutor] apply_unified_patch received None or non-string patch")
+        return None
+
     try:
         lines = original.split('\n')
         result_lines = lines.copy()
@@ -811,3 +1000,99 @@ def apply_unified_patch(original: str, patch: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"[FixExecutor] Patch application failed: {e}")
         return None
+
+
+# ============= EXECUTE INSTALL COMMANDS =============
+# Allowed commands for security (only npm/pip install)
+ALLOWED_INSTALL_COMMANDS = [
+    "npm install",
+    "npm i",
+    "pip install",
+    "pip3 install",
+    "yarn add",
+    "pnpm add",
+]
+
+
+async def execute_install_command(project_path: Path, command: str) -> bool:
+    """
+    Execute install commands (npm install, pip install) in the project directory.
+
+    Security: Only allows whitelisted install commands to prevent arbitrary code execution.
+
+    Args:
+        project_path: Path to the project directory
+        command: Command to execute (e.g., "npm install @tailwindcss/forms")
+
+    Returns:
+        True if command executed successfully, False otherwise
+    """
+    if not command or not isinstance(command, str):
+        return False
+
+    command = command.strip()
+
+    # Security: Only allow whitelisted install commands
+    is_allowed = False
+    for allowed_cmd in ALLOWED_INSTALL_COMMANDS:
+        if command.startswith(allowed_cmd):
+            is_allowed = True
+            break
+
+    if not is_allowed:
+        logger.warning(f"[FixExecutor] Blocked unsafe command: {command}")
+        return False
+
+    # Determine the correct working directory
+    # For monorepo projects, install in the appropriate subfolder
+    work_dir = project_path
+
+    # Check if command is for frontend dependencies (common patterns)
+    if any(pkg in command for pkg in ["@tailwindcss", "react", "vite", "tailwind", "postcss", "autoprefixer"]):
+        frontend_path = project_path / "frontend"
+        if frontend_path.exists() and (frontend_path / "package.json").exists():
+            work_dir = frontend_path
+            logger.info(f"[FixExecutor] Running npm install in frontend/ folder")
+
+    # For backend dependencies
+    if any(pkg in command for pkg in ["fastapi", "uvicorn", "sqlalchemy", "pydantic"]):
+        backend_path = project_path / "backend"
+        if backend_path.exists() and (backend_path / "requirements.txt").exists():
+            work_dir = backend_path
+
+    logger.info(f"[FixExecutor] Executing command: {command} in {work_dir}")
+
+    try:
+        # Run the command asynchronously
+        process = await asyncio.create_subprocess_shell(
+            command,
+            cwd=str(work_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120)
+
+        if process.returncode == 0:
+            logger.info(f"[FixExecutor] ✅ Command succeeded: {command}")
+            if stdout:
+                logger.debug(f"[FixExecutor] stdout: {stdout.decode()[:500]}")
+            return True
+        else:
+            logger.error(f"[FixExecutor] ❌ Command failed (exit {process.returncode}): {command}")
+            if stderr:
+                logger.error(f"[FixExecutor] stderr: {stderr.decode()[:500]}")
+            return False
+
+    except asyncio.TimeoutError:
+        logger.error(f"[FixExecutor] ⏱️ Command timed out after 120s: {command}")
+        return False
+    except Exception as e:
+        logger.error(f"[FixExecutor] ❌ Command execution failed: {e}")
+        return False
+
+
+# ============= MODULE-LEVEL ALIAS =============
+# This alias is used by main.py to register the auto-fix callback
+# AutoFixer calls: fix_callback(project_id, log_payload)
+execute_fix = execute_fix_internal

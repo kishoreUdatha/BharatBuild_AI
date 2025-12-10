@@ -220,32 +220,36 @@ Your job is to analyze errors and generate precise fixes that work the FIRST tim
 - Timeout errors
 - Setup/teardown errors
 
-## OUTPUT FORMAT (HYBRID - Bolt.new Style):
+## OUTPUT FORMAT (JSON - Production Standard):
 
-### FOR EXISTING FILES - Use UNIFIED DIFF (minimal, fast):
-<patch path="exact/path/to/file.ext">
---- a/exact/path/to/file.ext
-+++ b/exact/path/to/file.ext
-@@ -5,7 +5,8 @@
- import React from 'react';
--import { Button } from './Button';
-+import { Button } from './components/Button';
-+import { Header } from './components/Header';
+You MUST return a valid JSON object with this structure:
+```json
+{{
+  "patches": [
+    {{
+      "path": "src/App.jsx",
+      "diff": "--- a/src/App.jsx\\n+++ b/src/App.jsx\\n@@ -1,5 +1,6 @@\\n import React from 'react';\\n-import Header from './Header';\\n+import Header from './components/Header';",
+      "type": "patch"
+    }}
+  ],
+  "newFiles": [
+    {{
+      "path": "tsconfig.node.json",
+      "content": "{{ ... full file content ... }}",
+      "type": "create"
+    }}
+  ],
+  "runCommand": "npm install missing-package"
+}}
+```
 
- function App() {
-</patch>
-
-### FOR NEW/MISSING FILES - Use FULL FILE:
-<file path="config/newfile.json">
-COMPLETE FILE CONTENT
-</file>
-
-### FOR PACKAGE COMMANDS:
-<instructions>
-npm install package-name
-pip install package-name
-go get package
-</instructions>
+### RULES:
+1. `patches` - Array of unified diffs for EXISTING files (minimal changes)
+2. `newFiles` - Array of NEW files to create (full content)
+3. `runCommand` - Optional command to run (npm install, pip install, etc.)
+4. Return ONLY the JSON object - no explanations before or after
+5. Escape newlines in diff as \\n
+6. If no patches needed, use empty array: `"patches": []`
 
 ## DIFF FORMAT RULES:
 1. Use unified diff format (like git diff)
@@ -256,125 +260,55 @@ go get package
 6. Keep 3 lines of context around changes
 7. Multiple hunks allowed for multiple changes in same file
 
-## EXAMPLES BY TECHNOLOGY:
+## EXAMPLES (JSON FORMAT):
 
 ### JavaScript - Missing Module:
-Error: Cannot find module 'express'
-
-<instructions>
-npm install express
-</instructions>
+```json
+{{"patches": [], "newFiles": [], "runCommand": "npm install express"}}
+```
 
 ### Python - Import Error:
-Error: ModuleNotFoundError: No module named 'fastapi'
+```json
+{{"patches": [], "newFiles": [], "runCommand": "pip install fastapi uvicorn"}}
+```
 
-<instructions>
-pip install fastapi uvicorn
-</instructions>
-
-### Python - Type Error (UNIFIED DIFF for existing file):
-Error: TypeError: 'NoneType' object is not subscriptable
-File: app/api/users.py
-
-<patch path="app/api/users.py">
---- a/app/api/users.py
-+++ b/app/api/users.py
-@@ -1,8 +1,12 @@
-+from typing import Optional
-+
- def get_user(user_id: int):
-     user = db.get(user_id)
--    return user.to_dict()
-+    if user is None:
-+        return None
-+    return user.to_dict()
-</patch>
-
-### Go - Import Error:
-Error: cannot find package "github.com/gin-gonic/gin"
-
-<instructions>
-go get github.com/gin-gonic/gin
-go mod tidy
-</instructions>
-
-### Rust - Borrow Error:
-Error: cannot borrow `x` as mutable because it is also borrowed as immutable
-
-<file path="src/main.rs">
-fn main() {{
-    let mut x = vec![1, 2, 3];
-    // Fixed: Use clone or reorganize borrows
-    let y = x.clone();
-    x.push(4);
-    println!("{{:?}} {{:?}}", x, y);
+### Python - Type Error (patch existing file):
+```json
+{{
+  "patches": [{{
+    "path": "app/api/users.py",
+    "diff": "--- a/app/api/users.py\\n+++ b/app/api/users.py\\n@@ -1,5 +1,8 @@\\n+from typing import Optional\\n+\\n def get_user(user_id: int):\\n     user = db.get(user_id)\\n-    return user.to_dict()\\n+    if user is None:\\n+        return None\\n+    return user.to_dict()",
+    "type": "patch"
+  }}],
+  "newFiles": [],
+  "runCommand": null
 }}
-</file>
+```
 
-### Docker - Build Error:
-Error: npm ERR! could not determine executable to run
+### Missing Config File (create new file):
+```json
+{{
+  "patches": [],
+  "newFiles": [{{
+    "path": "tsconfig.node.json",
+    "content": "{{\\n  \\"compilerOptions\\": {{\\n    \\"composite\\": true,\\n    \\"module\\": \\"ESNext\\"\\n  }},\\n  \\"include\\": [\\"vite.config.ts\\"]\\n}}",
+    "type": "create"
+  }}],
+  "runCommand": null
+}}
+```
 
-<file path="Dockerfile">
-FROM node:20-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm install
-COPY . .
-EXPOSE 3000
-CMD ["npm", "run", "dev", "--", "--host"]
-</file>
-
-### Docker Compose - Port Conflict:
-Error: Port 3000 already in use
-
-<file path="docker-compose.yml">
-version: '3.8'
-services:
-  app:
-    build: .
-    ports:
-      - "5173:5173"
-    environment:
-      - PORT=5173
-</file>
-
-### Django - Migration Error:
-Error: django.db.utils.OperationalError: no such table
-
-<instructions>
-python manage.py makemigrations
-python manage.py migrate
-</instructions>
-
-### Rails - Gem Error:
-Error: Could not find gem 'rails'
-
-<instructions>
-bundle install
-</instructions>
-
-### Java/Spring - Build Error:
-Error: package org.springframework.boot does not exist
-
-<file path="pom.xml">
-<!-- Add Spring Boot parent and dependencies -->
-</file>
-
-<instructions>
-mvn clean install
-</instructions>
-
-### Flutter - Build Error:
-Error: Cannot run with sound null safety
-
-<file path="pubspec.yaml">
-environment:
-  sdk: ">=2.12.0 <3.0.0"
-</file>
-
-<instructions>
-flutter pub get
-</instructions>
+### Import Path Fix:
+```json
+{{
+  "patches": [{{
+    "path": "src/App.jsx",
+    "diff": "--- a/src/App.jsx\\n+++ b/src/App.jsx\\n@@ -1,3 +1,3 @@\\n-import Header from './Header';\\n+import Header from './components/Header';",
+    "type": "patch"
+  }}],
+  "newFiles": [],
+  "runCommand": null
+}}
 
 ## RETRY STRATEGY (When Previous Fixes Failed):
 
@@ -408,28 +342,27 @@ If this is a RETRY attempt (previous_attempts > 0):
 
 ## CRITICAL RULES:
 
-1. EXISTING FILES → Use <patch> with unified diff (minimal changes)
-2. NEW/MISSING FILES → Use <file> with complete content
-3. FIX ROOT CAUSE - Don't just suppress errors
-4. PRESERVE ARCHITECTURE - Don't restructure the project
-5. MATCH EXISTING PATTERNS - Use same coding style
-6. VALIDATE FIXES - Ensure imports work, types match
+1. OUTPUT ONLY JSON - No text before or after the JSON object
+2. EXISTING FILES → Use "patches" array with unified diff
+3. NEW/MISSING FILES → Use "newFiles" array with full content
+4. FIX ROOT CAUSE - Don't just suppress errors
+5. PRESERVE ARCHITECTURE - Don't restructure the project
+6. MATCH EXISTING PATTERNS - Use same coding style
 7. MAX {max_files} FILES - Don't fix unrelated files
-8. TECHNOLOGY AWARE - Use correct syntax for the language
-9. PACKAGE MANAGER AWARE - Use correct command (npm/yarn/pnpm, pip/poetry, etc.)
-10. MINIMAL CHANGES - Only change what's necessary to fix the error
-11. ON RETRY - Try a DIFFERENT approach than what failed before
+8. MINIMAL CHANGES - Only change what's necessary
+9. ON RETRY - Try a DIFFERENT approach than what failed before
+10. VALID JSON - Ensure your output is parseable JSON
 
 ## WHY YOU SUCCEED:
 - You receive EXACT error logs
 - You receive EXACT file contents
-- You understand the project context
+- You understand the project context via fileTree
 - You support ALL major technologies
-- You generate precise, complete fixes
+- You generate precise, minimal patches
 - The system auto-applies your patches
 - The system auto-reruns after fix
 
-Be surgical. Fix only what's broken. Output complete files.
+Be surgical. Fix only what's broken. Output valid JSON only.
 """
 
     def __init__(self, model: str = "sonnet"):
@@ -511,9 +444,16 @@ Be surgical. Fix only what's broken. Output complete files.
         # Ensure metadata is never None
         metadata = context.metadata if context.metadata is not None else {}
 
-        # Extract error information
-        error_message = metadata.get("error_message", "")
-        stack_trace = metadata.get("stack_trace", "")
+        # Extract error information with robust null handling
+        # metadata.get() returns None if key exists but value is None, so use "or" fallback
+        error_message = metadata.get("error_message") or ""
+        stack_trace = metadata.get("stack_trace") or ""
+
+        # Ensure they are strings for regex operations
+        if not isinstance(error_message, str):
+            error_message = str(error_message) if error_message else ""
+        if not isinstance(stack_trace, str):
+            stack_trace = str(stack_trace) if stack_trace else ""
 
         # Generate error hash for loop detection
         error_hash = self._hash_error(error_message, stack_trace)
@@ -533,89 +473,66 @@ Be surgical. Fix only what's broken. Output complete files.
             context=context
         )
 
-        # Check if this is a MISSING FILE error (ENOENT, "no such file", etc.)
-        missing_file_patterns = [
-            r'ENOENT.*?["\']([^"\']+)["\']',
-            r'Failed to resolve config file.*?["\']([^"\']+)["\']',
-            r'no such file.*?["\']([^"\']+)["\']',
-            r"Cannot find.*?'([^']+)'",
-            r'Module not found.*?["\']([^"\']+)["\']',
-        ]
+        # ============= BOLT.NEW STYLE: DYNAMIC FILE SELECTION =============
+        # Step 1: Identify files mentioned in error
+        # Step 2: Load those files
+        # Step 3: Load nearby files (same directory)
+        # Step 4: Send error + file tree + relevant content to Claude
 
-        missing_files = []
-        for pattern in missing_file_patterns:
-            matches = re.findall(pattern, error_message, re.IGNORECASE)
-            missing_files.extend(matches)
+        project_files = metadata.get("project_files", [])
 
-        # Also check stack trace for missing files
-        for pattern in missing_file_patterns:
-            matches = re.findall(pattern, stack_trace, re.IGNORECASE)
-            missing_files.extend(matches)
+        # Step 1: Get files mentioned in error/stack trace (dynamic extraction)
+        error_mentioned_files = analysis.suggested_files_to_fix
+        logger.info(f"[ProductionFixerAgent] DYNAMIC Step 1: Error mentions files: {error_mentioned_files}")
 
-        missing_files = list(set(missing_files))
-        is_missing_file_error = len(missing_files) > 0
+        # Step 2: Find which error-mentioned files exist in project
+        existing_files = self._validate_target_files(error_mentioned_files, project_files)
+        logger.info(f"[ProductionFixerAgent] DYNAMIC Step 2: Found existing files: {existing_files}")
 
-        if is_missing_file_error:
-            logger.info(f"🔍 Detected MISSING FILE error: {missing_files}")
+        # Step 3: Load nearby files (same directory) for context
+        nearby_files = self._get_nearby_files(existing_files, project_files)
+        logger.info(f"[ProductionFixerAgent] DYNAMIC Step 3: Nearby files: {nearby_files}")
 
-        # Validate files to fix (existing files)
-        validated_files = self._validate_target_files(
-            analysis.suggested_files_to_fix,
-            metadata.get("project_files", [])
-        )
+        # Combine: error files + nearby files (limit total to avoid token overflow)
+        files_to_load = list(set(existing_files + nearby_files))[:10]  # Max 10 files
 
-        # For missing file errors, allow creating new files even if they don't exist
-        allowed_new_files = []
-        if is_missing_file_error:
-            # Common config files that are safe to create
-            safe_new_files = [
-                'tsconfig.node.json', 'tsconfig.json', 'tsconfig.app.json',
-                'postcss.config.js', 'postcss.config.cjs', 'postcss.config.mjs',
-                'tailwind.config.js', 'tailwind.config.cjs', 'tailwind.config.ts',
-                'vite.config.ts', 'vite.config.js',
-                '.env', '.env.local', '.env.example',
-                'next.config.js', 'next.config.mjs',
-                'eslint.config.js', '.eslintrc.js', '.eslintrc.json',
-                'jest.config.js', 'vitest.config.ts',
-            ]
+        # Files that don't exist are potential new files to create
+        missing_files = [f for f in error_mentioned_files if f not in existing_files]
+        logger.info(f"[ProductionFixerAgent] DYNAMIC: Missing files (can be created): {missing_files}")
 
-            for missing in missing_files:
-                # Extract just the filename
-                filename = missing.split('/')[-1].split('\\')[-1]
-                if filename in safe_new_files or missing.endswith(('.json', '.js', '.ts', '.mjs', '.cjs')):
-                    allowed_new_files.append(missing)
-                    logger.info(f"✅ Allowing creation of missing file: {missing}")
+        # Build file tree metadata (Bolt.new style - structure only, no content)
+        file_tree = self._build_file_tree(project_files)
 
-        if not validated_files and not allowed_new_files:
-            return {
-                "success": False,
-                "error": "Could not identify valid files to fix or create",
-                "analysis": analysis
-            }
+        # DYNAMIC: Allow Claude to fix/create ANY file it identifies
+        # We don't restrict to hardcoded safe lists anymore
+        all_allowed_files = list(set(existing_files + error_mentioned_files))
 
         # Safety check: Don't fix too many files at once
-        all_allowed_files = list(set(validated_files + allowed_new_files))
         if len(all_allowed_files) > self.MAX_FILES_TO_FIX_AT_ONCE:
-            logger.warning(f"Too many files ({len(all_allowed_files)}), limiting to {self.MAX_FILES_TO_FIX_AT_ONCE}")
+            logger.warning(f"[ProductionFixerAgent] Too many files ({len(all_allowed_files)}), limiting to {self.MAX_FILES_TO_FIX_AT_ONCE}")
             all_allowed_files = all_allowed_files[:self.MAX_FILES_TO_FIX_AT_ONCE]
 
-        # Get file contents for context (existing files only)
-        file_contents = await self._get_file_contents(validated_files, context)
+        # Step 4: Get file contents for error files + nearby files (openFiles in Bolt.new style)
+        file_contents = await self._get_file_contents(files_to_load, context)
 
         # Get previous attempts context for retry guidance
         previous_attempts_context = self._get_previous_attempts_context(error_hash)
         attempt_number = len(self.fix_history.get(error_hash, [])) + 1
 
-        # Build safe prompt with constraints
+        # Build Bolt.new-style prompt with:
+        # - openFiles (file contents for error-mentioned files)
+        # - fileTree (structure metadata, no content)
+        # - error (message, stack, filename, line)
         prompt = self._build_safe_prompt(
             error_message=error_message,
             stack_trace=stack_trace,
             analysis=analysis,
             file_contents=file_contents,
             context=context,
-            allowed_new_files=allowed_new_files,  # Pass allowed new files
-            previous_attempts_context=previous_attempts_context,  # Pass retry context
-            attempt_number=attempt_number
+            allowed_new_files=missing_files,  # Files that can be created
+            previous_attempts_context=previous_attempts_context,
+            attempt_number=attempt_number,
+            file_tree=file_tree  # Bolt.new-style file tree metadata
         )
 
         # Call Claude with safety-enhanced system prompt
@@ -628,26 +545,22 @@ Be surgical. Fix only what's broken. Output complete files.
             temperature=0.1
         )
 
-        # Parse and validate response (allow new files too)
+        # Parse response (DYNAMIC - accept any file path Claude outputs)
         parsed = self._parse_and_validate_response(response, all_allowed_files)
 
-        # Safety check: Verify all fixed files were in validated or allowed list
-        unauthorized_files = [
-            f['path'] for f in parsed['fixed_files']
-            if f['path'] not in all_allowed_files
-        ]
-
-        if unauthorized_files:
-            logger.error(f"❌ Claude tried to fix unauthorized files: {unauthorized_files}")
-            parsed['fixed_files'] = [
-                f for f in parsed['fixed_files']
-                if f['path'] in all_allowed_files
-            ]
+        # DYNAMIC: We now trust Claude's file identification
+        # Log any files Claude identified that weren't in our initial list (for debugging)
+        claude_identified_files = [f['path'] for f in parsed['fixed_files']]
+        extra_files = [f for f in claude_identified_files if f not in all_allowed_files]
+        if extra_files:
+            logger.info(f"[ProductionFixerAgent] DYNAMIC: Claude identified additional files: {extra_files}")
+            # Add these to allowed files for safety check bypass
+            all_allowed_files.extend(extra_files)
 
         # Safety check: Verify files are complete (no partial updates)
         for file_info in parsed['fixed_files']:
             if not self._is_complete_file(file_info['content']):
-                logger.warning(f"⚠️ File {file_info['path']} appears incomplete")
+                logger.warning(f"[ProductionFixerAgent] File {file_info['path']} appears incomplete")
 
         # Build description of what was fixed
         files_fixed = [f['path'] for f in parsed['fixed_files']]
@@ -673,10 +586,12 @@ Be surgical. Fix only what's broken. Output complete files.
             "fixed_files": parsed['fixed_files'],       # Full files (new/missing)
             "patches": parsed.get('patches', []),       # Unified diff patches (existing)
             "instructions": parsed.get('instructions'),
-            "validated_files": validated_files,
-            "new_files_created": [f for f in parsed['fixed_files'] if f['path'] in allowed_new_files],
+            "existing_files": existing_files,           # Files that existed before
+            "missing_files": missing_files,             # Files that need to be created
+            "claude_identified_files": claude_identified_files,  # All files Claude found
             "safety_checks_passed": True,
-            "attempt_number": attempt_number  # Include attempt number in response
+            "attempt_number": attempt_number,
+            "mode": "dynamic"  # Mark as using dynamic mode
         }
 
     async def _analyze_error(
@@ -720,6 +635,11 @@ Be surgical. Fix only what's broken. Output complete files.
         """Extract file paths from stack trace"""
         files = []
 
+        # SAFETY: Handle None or non-string stack_trace
+        if stack_trace is None or not isinstance(stack_trace, str):
+            logger.info(f"[ProductionFixerAgent] Empty or invalid stack trace, returning empty files list")
+            return files
+
         # Pattern: File "path/to/file.py", line X
         pattern = r'File\s+"([^"]+)"'
         matches = re.findall(pattern, stack_trace)
@@ -738,28 +658,181 @@ Be surgical. Fix only what's broken. Output complete files.
         # Deduplicate and clean
         files = list(set([f.strip() for f in files if f.strip()]))
 
-        logger.info(f"📁 Extracted {len(files)} files from stack trace: {files}")
+        logger.info(f"[ProductionFixerAgent] Extracted {len(files)} files from stack trace: {files}")
         return files
 
     def _extract_files_from_error(self, error_message: str) -> List[str]:
-        """Extract file paths mentioned in error message"""
+        """
+        DYNAMIC file extraction from error message (Bolt.new style).
+        Extracts ANY file path mentioned, not hardcoded patterns.
+        """
         files = []
 
-        # Common patterns in error messages
+        # SAFETY: Handle None or non-string error_message
+        if error_message is None or not isinstance(error_message, str):
+            return files
+
+        # Common file extensions to look for
+        extensions = r'(?:tsx?|jsx?|vue|svelte|py|rs|go|java|rb|php|cs|cpp|c|h|hpp|swift|kt|scala|json|yaml|yml|toml|xml|html|css|scss|sass|less|md|sql)'
+
+        # DYNAMIC patterns - catch any file path format
         patterns = [
-            r'in\s+([\w/\\.]+\.[\w]+)',
-            r'from\s+([\w/\\.]+\.[\w]+)',
-            r'module\s+["\']?([\w/\\.]+)["\']?',
+            # TypeScript error format: src/file.tsx(12,5): error TS1234
+            # MUST be FIRST to capture before more generic patterns
+            rf'([a-zA-Z0-9_\-./\\]+\.{extensions})\(\d+,\d+\)',
+            # Path with line:col: src/App.tsx:12:5
+            rf'([a-zA-Z0-9_\-./\\]+\.{extensions}):\d+(?::\d+)?',
+            # Quoted paths: "src/file.tsx" or 'src/file.tsx'
+            rf'["\']([a-zA-Z0-9_\-./\\]+\.{extensions})["\']',
+            # Module resolution: Cannot find module './Header'
+            r'(?:module|from|import)\s*["\']([^"\']+)["\']',
+            # Error in format: Error in src/App.jsx:12
+            rf'(?:error|warning|info)\s+(?:in\s+)?([a-zA-Z0-9_\-./\\]+\.{extensions})',
+            # At format: at src/file.ts:123
+            rf'at\s+([a-zA-Z0-9_\-./\\]+\.{extensions})',
+            # File not found: File 'xxx' not found
+            r'[Ff]ile\s*["\']([^"\']+)["\']',
+            # Standard path with extension (LAST - most generic): src/file.tsx, ./src/file.js
+            rf'(?:^|[^a-zA-Z0-9_])([a-zA-Z0-9_][a-zA-Z0-9_\-./\\]*\.{extensions})(?:[^a-zA-Z0-9_]|$)',
         ]
 
         for pattern in patterns:
-            matches = re.findall(pattern, error_message)
-            files.extend(matches)
+            try:
+                matches = re.findall(pattern, error_message, re.IGNORECASE)
+                files.extend(matches)
+            except re.error:
+                continue
 
-        return list(set(files))
+        # Clean up paths
+        cleaned_files = []
+        for f in files:
+            # Remove leading ./ or ./
+            f = re.sub(r'^\.?[/\\]', '', f)
+            # Skip node_modules, .git, etc.
+            if 'node_modules' in f or '.git' in f:
+                continue
+            # Skip if it's just an extension or too short
+            if len(f) < 3 or f.startswith('.'):
+                continue
+            cleaned_files.append(f)
+
+        result = list(set(cleaned_files))
+        logger.info(f"[ProductionFixerAgent] Extracted {len(result)} files from error message: {result}")
+        return result
+
+    def _build_file_tree(self, project_files: List[str]) -> Dict[str, Any]:
+        """
+        Build file tree metadata (Bolt.new style).
+        Returns structure only, NO file contents.
+        """
+        tree = {}
+
+        for file_path in project_files:
+            # Normalize path separators
+            parts = file_path.replace('\\', '/').split('/')
+            current = tree
+
+            for i, part in enumerate(parts):
+                if i == len(parts) - 1:
+                    # It's a file
+                    current[part] = True
+                else:
+                    # It's a directory
+                    if part not in current:
+                        current[part] = {}
+                    current = current[part]
+
+        return tree
+
+    def _resolve_import_path(self, import_path: str, from_file: str, project_files: List[str]) -> Optional[str]:
+        """
+        Resolve relative import to actual file path.
+        Example: './Header' from 'src/App.jsx' -> 'src/Header.jsx' or 'src/components/Header.jsx'
+        """
+        if not import_path.startswith('.'):
+            return None  # Not a relative import
+
+        # Get directory of the importing file
+        from_dir = '/'.join(from_file.replace('\\', '/').split('/')[:-1])
+
+        # Resolve the relative path
+        if import_path.startswith('./'):
+            resolved = f"{from_dir}/{import_path[2:]}"
+        elif import_path.startswith('../'):
+            parts = from_dir.split('/')
+            import_parts = import_path.split('/')
+            up_count = sum(1 for p in import_parts if p == '..')
+            resolved = '/'.join(parts[:-up_count]) + '/' + '/'.join(p for p in import_parts if p not in ['..', '.'])
+        else:
+            resolved = import_path
+
+        # Try common extensions
+        extensions = ['', '.tsx', '.ts', '.jsx', '.js', '.vue', '.svelte', '/index.tsx', '/index.ts', '/index.jsx', '/index.js']
+
+        for ext in extensions:
+            candidate = resolved + ext
+            # Check if file exists in project
+            for pf in project_files:
+                pf_normalized = pf.replace('\\', '/')
+                if pf_normalized == candidate or pf_normalized.endswith('/' + candidate):
+                    return pf
+
+        return None
+
+    def _get_nearby_files(self, error_files: List[str], project_files: List[str], max_nearby: int = 5) -> List[str]:
+        """
+        Get nearby files (same directory) for context.
+        Bolt.new Step 3: Load nearby files to help Claude understand context.
+
+        Example: If error is in src/pages/Home.tsx, also load:
+        - src/pages/About.tsx
+        - src/pages/index.ts
+        But NOT src/components/Button.tsx (different directory)
+        """
+        nearby = []
+
+        # Get directories of error files
+        error_dirs = set()
+        for f in error_files:
+            normalized = f.replace('\\', '/')
+            if '/' in normalized:
+                error_dirs.add('/'.join(normalized.split('/')[:-1]))
+            else:
+                error_dirs.add('')  # Root directory
+
+        # Find files in same directories
+        for pf in project_files:
+            if pf in error_files:
+                continue  # Skip files we already have
+
+            normalized = pf.replace('\\', '/')
+            if '/' in normalized:
+                pf_dir = '/'.join(normalized.split('/')[:-1])
+            else:
+                pf_dir = ''
+
+            if pf_dir in error_dirs:
+                # Same directory - include it
+                nearby.append(pf)
+
+                if len(nearby) >= max_nearby:
+                    break
+
+        # Prioritize certain files: index, types, constants, utils
+        priority_patterns = ['index.', 'types.', 'constants.', 'utils.', 'helpers.']
+        nearby.sort(key=lambda x: (
+            0 if any(p in x.lower() for p in priority_patterns) else 1,
+            x
+        ))
+
+        return nearby[:max_nearby]
 
     def _classify_error(self, error_message: str) -> str:
         """Classify error type"""
+        # SAFETY: Handle None or non-string error_message
+        if error_message is None or not isinstance(error_message, str):
+            return 'logic'
+
         error_lower = error_message.lower()
 
         if any(x in error_lower for x in ['syntaxerror', 'unexpected token', 'invalid syntax']):
@@ -775,6 +848,10 @@ Be surgical. Fix only what's broken. Output complete files.
 
     def _extract_root_cause(self, error_message: str, stack_trace: str) -> str:
         """Extract concise root cause from error"""
+        # SAFETY: Handle None or non-string error_message
+        if error_message is None or not isinstance(error_message, str):
+            return "Unknown error"
+
         # Take first line of error message
         lines = error_message.strip().split('\n')
         return lines[0][:200] if lines else "Unknown error"
@@ -821,7 +898,7 @@ Be surgical. Fix only what's broken. Output complete files.
             if path in file_contents:
                 contents[path] = file_contents[path]
             else:
-                logger.warning(f"⚠️ File content not provided for {path}")
+                logger.warning(f"[ProductionFixerAgent] File content not provided for {path}")
                 contents[path] = "# File content not available"
 
         return contents
@@ -835,26 +912,29 @@ Be surgical. Fix only what's broken. Output complete files.
         context: AgentContext,
         allowed_new_files: List[str] = None,
         previous_attempts_context: str = "",
-        attempt_number: int = 1
+        attempt_number: int = 1,
+        file_tree: Dict[str, Any] = None
     ) -> str:
-        """Build Bolt.new-style prompt with full context and retry info"""
+        """Build Bolt.new-style prompt with openFiles + fileTree + error"""
 
         metadata = context.metadata or {}
         allowed_new_files = allowed_new_files or []
+        file_tree = file_tree or {}
 
-        # Build file context section (Bolt.new style)
-        file_context_parts = []
+        # ============= BOLT.NEW STYLE: openFiles =============
+        # Only the files mentioned in error, with full content
+        open_files_parts = []
         for path, content in file_contents.items():
             # Limit file size but keep complete enough for context
-            truncated = len(content) > 3000
-            file_context_parts.append(f"""
+            truncated = len(content) > 4000
+            open_files_parts.append(f"""
 === {path} ===
-{content[:3000]}{"... (truncated)" if truncated else ""}
+{content[:4000]}{"... (truncated)" if truncated else ""}
 """)
 
-        file_context = "\n".join(file_context_parts)
+        open_files_context = "\n".join(open_files_parts)
 
-        # Get additional config files from metadata
+        # Get additional config files from metadata (always useful for builds)
         config_context = ""
         if "package_json" in metadata.get("file_contents", {}):
             config_context += f"\n=== package.json ===\n{metadata['file_contents']['package_json'][:2000]}\n"
@@ -868,6 +948,48 @@ Framework: {env_info.get('framework', 'unknown')}
 Project Type: {env_info.get('project_type', 'unknown')}
 Ports: {env_info.get('ports', [])}
 Has Docker: {env_info.get('has_docker', False)}
+"""
+
+        # ============= BOLT.NEW STYLE: fileTree (structure only, no content) =============
+        # Convert tree dict to readable format
+        def tree_to_string(tree: Dict, indent: int = 0) -> str:
+            lines = []
+            for name, value in sorted(tree.items()):
+                prefix = "  " * indent
+                if value is True:
+                    lines.append(f"{prefix}{name}")
+                elif isinstance(value, dict):
+                    lines.append(f"{prefix}{name}/")
+                    lines.append(tree_to_string(value, indent + 1))
+            return "\n".join(lines)
+
+        file_tree_str = tree_to_string(file_tree) if file_tree else "No file tree available"
+        # Limit tree size
+        if len(file_tree_str) > 3000:
+            file_tree_str = file_tree_str[:3000] + "\n... (truncated)"
+
+        file_tree_section = f"""
+## FILE TREE (structure only - use to validate paths):
+```
+{file_tree_str}
+```
+"""
+
+        # Recently modified files from metadata
+        recently_modified = metadata.get("recently_modified", [])
+
+        # Build recently modified files context (shows Claude which files were recently changed)
+        recently_modified_section = ""
+        if recently_modified:
+            recent_entries = []
+            for entry in recently_modified[:10]:  # Show last 10 modified files
+                path = entry.get('path', 'unknown')
+                action = entry.get('action', 'modified')
+                recent_entries.append(f"  - {path} ({action})")
+
+            recently_modified_section = f"""
+## RECENTLY MODIFIED FILES (prioritize these for fixes):
+{chr(10).join(recent_entries)}
 """
 
         # Build section for new files that can be created
@@ -942,13 +1064,10 @@ Previous fix attempts DID NOT WORK. You MUST try a DIFFERENT approach!
 {retry_indicator}
 ## ENVIRONMENT
 {env_str}
-
-## FILES TO FIX (EXISTING):
-{', '.join(analysis.suggested_files_to_fix) if analysis.suggested_files_to_fix else 'None identified'}
+{file_tree_section}{recently_modified_section}
+## OPEN FILES (content for error-mentioned files):
+{open_files_context if open_files_context.strip() else 'No files to show - this may be a missing file error'}
 {new_files_section}
-
-## CURRENT FILE CONTENTS:
-{file_context if file_context.strip() else 'No existing files to show'}
 {config_context}
 
 ## ERROR ANALYSIS:
@@ -972,7 +1091,7 @@ OUTPUT THE FIX NOW:
         response: str,
         validated_files: List[str]
     ) -> Dict[str, Any]:
-        """Parse response with robust validation - supports HYBRID format"""
+        """Parse JSON response from Fixer Agent (Bolt.new production format)"""
 
         result = {
             "fixed_files": [],      # Full file content (for new files)
@@ -981,72 +1100,236 @@ OUTPUT THE FIX NOW:
             "analysis": None
         }
 
-        # Parse analysis if present
-        analysis_match = re.search(r'<analysis>(.*?)</analysis>', response, re.DOTALL | re.IGNORECASE)
-        if analysis_match:
-            result["analysis"] = analysis_match.group(1).strip()
+        # SAFETY: Handle None or empty response gracefully
+        if response is None:
+            logger.warning("[ProductionFixerAgent] Response is None - Claude may have failed to respond")
+            return result
 
-        # ========== PARSE PATCHES (unified diff for existing files) ==========
+        if not isinstance(response, str):
+            logger.warning(f"[ProductionFixerAgent] Response is not a string: {type(response)}")
+            return result
+
+        if not response.strip():
+            logger.warning("[ProductionFixerAgent] Response is empty")
+            return result
+
+        # ========== PARSE JSON RESPONSE ==========
+        try:
+            # Try to extract JSON from response (Claude might add text before/after)
+            json_match = re.search(r'\{[\s\S]*\}', response)
+            if json_match:
+                json_str = json_match.group(0)
+                parsed_json = json.loads(json_str)
+
+                logger.info(f"[ProductionFixerAgent] Successfully parsed JSON response")
+
+                # Extract patches (unified diffs for existing files)
+                for patch in parsed_json.get("patches", []):
+                    path = patch.get("path", "")
+                    diff = patch.get("diff", "")
+                    if path and diff:
+                        # SAFETY VALIDATION for JSON patches
+                        safety_result = self._validate_patch_safety(path, diff, "patch")
+                        if not safety_result["valid"]:
+                            logger.warning(f"[ProductionFixerAgent] SAFETY: Rejected JSON patch for {path}: {safety_result['reason']}")
+                            continue
+
+                        if safety_result["warnings"]:
+                            for warn in safety_result["warnings"]:
+                                logger.warning(f"[ProductionFixerAgent] SAFETY WARNING ({path}): {warn}")
+
+                        result["patches"].append({
+                            "path": path,
+                            "patch": diff,
+                            "type": "unified_diff",
+                            "is_validated": path in validated_files,
+                            "safety_warnings": safety_result["warnings"]
+                        })
+                        logger.info(f"[ProductionFixerAgent] JSON: Parsed patch for: {path}")
+
+                # Extract new files (full content for missing files)
+                for new_file in parsed_json.get("newFiles", []):
+                    path = new_file.get("path", "")
+                    content = new_file.get("content", "")
+                    if path and content:
+                        # SAFETY VALIDATION for JSON new files
+                        safety_result = self._validate_patch_safety(path, content, "file")
+                        if not safety_result["valid"]:
+                            logger.warning(f"[ProductionFixerAgent] SAFETY: Rejected JSON file {path}: {safety_result['reason']}")
+                            continue
+
+                        if safety_result["warnings"]:
+                            for warn in safety_result["warnings"]:
+                                logger.warning(f"[ProductionFixerAgent] SAFETY WARNING ({path}): {warn}")
+
+                        result["fixed_files"].append({
+                            "path": path,
+                            "content": content,
+                            "is_validated": path in validated_files,
+                            "safety_warnings": safety_result["warnings"]
+                        })
+                        logger.info(f"[ProductionFixerAgent] JSON: Parsed new file: {path}")
+
+                # Extract run command
+                run_cmd = parsed_json.get("runCommand")
+                if run_cmd:
+                    result["instructions"] = run_cmd
+                    logger.info(f"[ProductionFixerAgent] JSON: Parsed runCommand: {run_cmd}")
+
+                logger.info(f"[ProductionFixerAgent] Parsed {len(result['patches'])} patches + {len(result['fixed_files'])} new files")
+                return result
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"[ProductionFixerAgent] JSON parse failed: {e}, falling back to XML/regex")
+
+        # ========== FALLBACK: XML/Regex parsing (backward compatibility) ==========
+        logger.info("[ProductionFixerAgent] Using fallback XML/regex parsing")
+
+        # Parse patches
         patch_patterns = [
-            r'<patch\s+path=["\']([^"\']+)["\']>(.*?)</patch>',  # Standard
-            r'<patch\s+path=([^\s>]+)>(.*?)</patch>',             # Unquoted
+            r'<patch\s+path=["\']([^"\']+)["\']>(.*?)</patch>',
+            r'<patch\s+path=([^\s>]+)>(.*?)</patch>',
         ]
-
         for pattern in patch_patterns:
             matches = re.findall(pattern, response, re.DOTALL | re.IGNORECASE)
             for match in matches:
                 path, patch_content = match
-                path = path.strip()
-                patch_content = patch_content.strip()
+                # Strip quotes and whitespace from path
+                path = path.strip().strip('"').strip("'")
 
-                # Only add if path is in validated files
-                if path in validated_files:
-                    result["patches"].append({
-                        "path": path,
-                        "patch": patch_content,
-                        "type": "unified_diff"
-                    })
-                    logger.info(f"📝 Parsed unified diff patch for: {path}")
-                else:
-                    logger.warning(f"⚠️ Skipping unauthorized patch: {path}")
+                # SAFETY VALIDATION for fallback patches
+                safety_result = self._validate_patch_safety(path, patch_content, "patch")
+                if not safety_result["valid"]:
+                    logger.warning(f"[ProductionFixerAgent] SAFETY: Rejected patch for {path}: {safety_result['reason']}")
+                    continue
 
-        # ========== PARSE FILE BLOCKS (full content for new files) ==========
+                if safety_result["warnings"]:
+                    for warn in safety_result["warnings"]:
+                        logger.warning(f"[ProductionFixerAgent] SAFETY WARNING ({path}): {warn}")
+
+                result["patches"].append({
+                    "path": path,
+                    "patch": patch_content,
+                    "type": "unified_diff",
+                    "is_validated": path in validated_files,
+                    "safety_warnings": safety_result["warnings"]
+                })
+
+        # Parse file blocks
         file_patterns = [
-            r'<file\s+path=["\']([^"\']+)["\']>(.*?)</file>',  # Standard
-            r'<file\s+path=([^\s>]+)>(.*?)</file>',             # Unquoted
-            r'```(\w+)\s+([\w/\\.]+)\s*\n(.*?)\n```',           # Markdown fallback
+            r'<file\s+path=["\']([^"\']+)["\']>(.*?)</file>',
+            r'<file\s+path=([^\s>]+)>(.*?)</file>',
         ]
-
         for pattern in file_patterns:
             matches = re.findall(pattern, response, re.DOTALL | re.IGNORECASE)
             for match in matches:
-                if len(match) == 2:  # file path pattern
-                    path, content = match
-                elif len(match) == 3:  # markdown pattern
-                    _, path, content = match
-                else:
-                    continue
-
+                path, content = match
                 path = path.strip()
                 content = content.strip()
 
-                # Only add if path is in validated files
-                if path in validated_files:
-                    result["fixed_files"].append({
-                        "path": path,
-                        "content": content
-                    })
-                    logger.info(f"📄 Parsed full file content for: {path}")
-                else:
-                    logger.warning(f"⚠️ Skipping unauthorized file: {path}")
+                # SAFETY VALIDATION for new files
+                safety_result = self._validate_patch_safety(path, content, "file")
+                if not safety_result["valid"]:
+                    logger.warning(f"[ProductionFixerAgent] SAFETY: Rejected file {path}: {safety_result['reason']}")
+                    continue
+
+                if safety_result["warnings"]:
+                    for warn in safety_result["warnings"]:
+                        logger.warning(f"[ProductionFixerAgent] SAFETY WARNING ({path}): {warn}")
+
+                result["fixed_files"].append({
+                    "path": path,
+                    "content": content,
+                    "is_validated": path in validated_files,
+                    "safety_warnings": safety_result["warnings"]
+                })
 
         # Parse instructions
         inst_match = re.search(r'<instructions>(.*?)</instructions>', response, re.DOTALL | re.IGNORECASE)
         if inst_match:
             result["instructions"] = inst_match.group(1).strip()
 
-        logger.info(f"📊 Parsed {len(result['patches'])} patches + {len(result['fixed_files'])} full files")
+        logger.info(f"[ProductionFixerAgent] Fallback parsed {len(result['patches'])} patches + {len(result['fixed_files'])} files")
         return result
+
+    def _validate_patch_safety(self, path: str, content: str, patch_type: str = "patch") -> Dict[str, Any]:
+        """
+        SAFETY VALIDATION for patches and new files.
+        Prevents malicious/invalid content from being applied.
+
+        Returns: {"valid": bool, "reason": str, "warnings": List[str]}
+        """
+        warnings = []
+
+        # 1. Path traversal prevention
+        normalized_path = path.replace('\\', '/').strip()
+        if '..' in normalized_path or normalized_path.startswith('/'):
+            return {
+                "valid": False,
+                "reason": f"Path traversal detected in: {path}",
+                "warnings": []
+            }
+
+        # 2. Dangerous file extensions
+        dangerous_extensions = ['.exe', '.dll', '.so', '.dylib', '.bat', '.cmd', '.ps1', '.sh']
+        if any(normalized_path.lower().endswith(ext) for ext in dangerous_extensions):
+            return {
+                "valid": False,
+                "reason": f"Dangerous file extension in: {path}",
+                "warnings": []
+            }
+
+        # 3. Check for shell injection patterns in content
+        shell_patterns = [
+            r'`[^`]+`',  # Backtick execution
+            r'\$\([^)]+\)',  # $() execution
+            r'eval\s*\(',  # eval()
+            r'exec\s*\(',  # exec()
+            r'os\.system\s*\(',  # os.system()
+            r'subprocess\.(?:call|run|Popen)',  # subprocess
+            r'child_process',  # Node child_process
+            r'require\s*\(\s*[\'"]child_process',  # require('child_process')
+        ]
+
+        # Only check for shell patterns in code files (not configs)
+        config_extensions = ['.json', '.yaml', '.yml', '.toml', '.xml', '.md', '.txt']
+        is_config = any(normalized_path.lower().endswith(ext) for ext in config_extensions)
+
+        if not is_config:
+            for pattern in shell_patterns:
+                if re.search(pattern, content):
+                    warnings.append(f"Potential shell execution pattern found: {pattern}")
+
+        # 4. Suspiciously large patch (might be full file replacement)
+        if patch_type == "patch":
+            # Unified diff should have reasonable line additions/removals
+            add_lines = content.count('\n+')
+            del_lines = content.count('\n-')
+            total_changes = add_lines + del_lines
+
+            if total_changes > 500:
+                warnings.append(f"Large patch ({total_changes} changes) - may be full file replacement")
+
+        # 5. Validate unified diff format (basic check)
+        if patch_type == "patch" and content.strip():
+            # Should have at least one hunk header
+            if not re.search(r'^@@\s*-\d+,?\d*\s*\+\d+,?\d*\s*@@', content, re.MULTILINE):
+                # Not a valid unified diff format - might be full content
+                warnings.append("Patch doesn't appear to be valid unified diff format")
+
+        # 6. Empty content check
+        if not content.strip():
+            return {
+                "valid": False,
+                "reason": f"Empty content for: {path}",
+                "warnings": []
+            }
+
+        return {
+            "valid": True,
+            "reason": "Passed safety validation",
+            "warnings": warnings
+        }
 
     def _is_complete_file(self, content: str) -> bool:
         """Check if file content appears complete"""

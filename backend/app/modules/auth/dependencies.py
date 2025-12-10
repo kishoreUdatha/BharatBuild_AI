@@ -89,6 +89,10 @@ async def get_current_admin(
     return current_user
 
 
+# Alias for require_admin (used in some endpoints)
+require_admin = get_current_admin
+
+
 async def get_current_faculty(
     current_user: User = Depends(get_current_user)
 ) -> User:
