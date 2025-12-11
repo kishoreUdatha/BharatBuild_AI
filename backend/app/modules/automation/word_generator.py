@@ -105,12 +105,38 @@ class WordDocumentGenerator:
                 output_dir = settings.GENERATED_DIR / "documents"
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            filename = f"{project_data.get('project_name', 'Document')}_{document_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+            project_name = project_data.get('project_name', 'Document')
+            filename = f"{project_name}_{document_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
             file_path = output_dir / filename
 
             self.document.save(str(file_path))
 
             logger.info(f"[WordGenerator] Created document: {file_path}")
+
+            # Save to S3 and PostgreSQL if project_id and user_id are available
+            if project_id and user_id:
+                try:
+                    from app.services.document_storage_service import document_storage
+
+                    save_result = await document_storage.save_document(
+                        user_id=user_id,
+                        project_id=project_id,
+                        local_file_path=str(file_path),
+                        title=f"{project_name} - {document_type.upper()}",
+                        doc_type=document_type,
+                        extra_metadata={
+                            'project_name': project_name,
+                            'document_type': document_type,
+                            'generated_at': datetime.now().isoformat()
+                        }
+                    )
+
+                    if save_result:
+                        logger.info(f"[WordGenerator] Saved to S3+DB: {save_result.get('s3_key')}")
+                    else:
+                        logger.warning(f"[WordGenerator] Failed to save to cloud storage")
+                except Exception as e:
+                    logger.error(f"[WordGenerator] Error saving to S3+DB: {e}")
 
             return str(file_path)
 

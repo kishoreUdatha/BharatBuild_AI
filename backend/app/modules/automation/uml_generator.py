@@ -986,6 +986,95 @@ class UMLGenerator:
 
         return diagrams
 
+    async def generate_all_diagrams_and_save(
+        self,
+        project_data: Dict,
+        project_id: str,
+        user_id: str
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Generate all UML diagrams and save them to S3 + PostgreSQL.
+
+        Args:
+            project_data: Project data with features, classes, etc.
+            project_id: Project UUID (required for storage)
+            user_id: User UUID (required for storage)
+
+        Returns:
+            Dict mapping diagram type to storage result:
+            {
+                'use_case': {
+                    'local_path': '/path/to/file.png',
+                    's3_key': 'documents/user/project/diagrams/...',
+                    'file_url': 'https://...',
+                    'document_id': 'uuid'
+                },
+                ...
+            }
+        """
+        from app.services.document_storage_service import document_storage
+
+        if not project_id or not user_id:
+            logger.error("[UMLGenerator] project_id and user_id are required for saving diagrams")
+            # Fall back to local-only generation
+            local_diagrams = self.generate_all_diagrams(project_data, project_id, user_id)
+            return {k: {'local_path': v, 's3_key': None, 'file_url': None} for k, v in local_diagrams.items()}
+
+        project_name = project_data.get('project_name', 'System')
+        logger.info(f"[UMLGenerator] Generating and saving diagrams for {project_name} to S3+DB")
+
+        # Generate diagrams locally first
+        local_diagrams = self.generate_all_diagrams(project_data, project_id, user_id)
+
+        # Save each diagram to S3 and DB
+        results = {}
+        for diagram_type, local_path in local_diagrams.items():
+            if not local_path or local_path.startswith('['):
+                # Skip placeholders
+                results[diagram_type] = {'local_path': local_path, 'error': 'Placeholder or failed'}
+                continue
+
+            try:
+                save_result = await document_storage.save_diagram(
+                    user_id=user_id,
+                    project_id=project_id,
+                    local_file_path=local_path,
+                    diagram_type=diagram_type,
+                    extra_metadata={
+                        'project_name': project_name,
+                        'generated_at': datetime.now().isoformat()
+                    }
+                )
+
+                if save_result:
+                    results[diagram_type] = {
+                        'local_path': local_path,
+                        's3_key': save_result.get('s3_key'),
+                        'file_url': save_result.get('file_url'),
+                        'document_id': save_result.get('document_id'),
+                        'saved_to_cloud': True
+                    }
+                    logger.info(f"[UMLGenerator] Saved {diagram_type} diagram to S3+DB")
+                else:
+                    results[diagram_type] = {
+                        'local_path': local_path,
+                        'saved_to_cloud': False,
+                        'error': 'Failed to save to cloud'
+                    }
+
+            except Exception as e:
+                logger.error(f"[UMLGenerator] Error saving {diagram_type}: {e}")
+                results[diagram_type] = {
+                    'local_path': local_path,
+                    'saved_to_cloud': False,
+                    'error': str(e)
+                }
+
+        saved_count = sum(1 for r in results.values() if r.get('saved_to_cloud'))
+        logger.info(f"[UMLGenerator] Saved {saved_count}/{len(results)} diagrams to S3+DB")
+
+        return results
+
     def _extract_actors_from_project(self, project_data: Dict) -> List[str]:
         """Dynamically extract actors from project data"""
         actors = set()
