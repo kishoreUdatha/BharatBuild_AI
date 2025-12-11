@@ -1767,7 +1767,7 @@ Place: {ci.college_name}
 
     async def _generate_all_diagrams(self, project_data: Dict, project_id: str = None, user_id: str = None) -> Dict[str, str]:
         """
-        Generate all UML diagrams for the document.
+        Generate all UML diagrams for the document using DYNAMIC project data.
 
         Args:
             project_data: Project data for diagram generation
@@ -1777,105 +1777,26 @@ Place: {ci.college_name}
         Returns:
             Dict mapping diagram type to file path
         """
-        diagrams = {}
+        project_name = project_data.get('project_name', 'System')
+        logger.info(f"[ChunkedDoc] Generating DYNAMIC UML diagrams for {project_name} (project_id={project_id}, user_id={user_id})")
+        logger.info(f"[ChunkedDoc] Project features: {project_data.get('features', [])[:5]}")
+        logger.info(f"[ChunkedDoc] Project tables: {project_data.get('database_tables', [])[:5]}")
+        logger.info(f"[ChunkedDoc] Project technologies: {project_data.get('technologies', {})}")
 
         try:
-            project_name = project_data.get('project_name', 'System')
-            features = project_data.get('features', [])
-            database_tables = project_data.get('database_tables', [])
-
-            logger.info(f"[ChunkedDoc] Generating UML diagrams for {project_name} (project_id={project_id}, user_id={user_id})")
-
-            # 1. Use Case Diagram
-            try:
-                actors = ['User', 'Admin']
-                if 'authentication' in str(features).lower():
-                    actors.append('Guest')
-                use_cases = features[:8] if features else ['Login', 'Register', 'View Dashboard', 'Manage Data']
-
-                diagrams['use_case'] = uml_generator.generate_use_case_diagram(
-                    project_name=project_name,
-                    actors=actors,
-                    use_cases=use_cases,
-                    project_id=project_id,
-                    user_id=user_id
-                )
-                logger.info("[ChunkedDoc] Generated Use Case Diagram")
-            except Exception as e:
-                logger.error(f"[ChunkedDoc] Use Case Diagram error: {e}")
-
-            # 2. Class Diagram
-            try:
-                classes = self._extract_classes_for_diagram(project_data)
-                diagrams['class'] = uml_generator.generate_class_diagram(classes, project_id=project_id, user_id=user_id)
-                logger.info("[ChunkedDoc] Generated Class Diagram")
-            except Exception as e:
-                logger.error(f"[ChunkedDoc] Class Diagram error: {e}")
-
-            # 3. Sequence Diagram
-            try:
-                participants = ['User', 'Frontend', 'API', 'Database']
-                messages = [
-                    {'from': 'User', 'to': 'Frontend', 'message': 'Submit Request'},
-                    {'from': 'Frontend', 'to': 'API', 'message': 'API Call'},
-                    {'from': 'API', 'to': 'Database', 'message': 'Query'},
-                    {'from': 'Database', 'to': 'API', 'message': 'Result', 'type': 'return'},
-                    {'from': 'API', 'to': 'Frontend', 'message': 'Response', 'type': 'return'},
-                    {'from': 'Frontend', 'to': 'User', 'message': 'Display', 'type': 'return'},
-                ]
-                diagrams['sequence'] = uml_generator.generate_sequence_diagram(participants, messages, project_id=project_id, user_id=user_id)
-                logger.info("[ChunkedDoc] Generated Sequence Diagram")
-            except Exception as e:
-                logger.error(f"[ChunkedDoc] Sequence Diagram error: {e}")
-
-            # 4. Activity Diagram
-            try:
-                activities = [
-                    'Start Application',
-                    'User Authentication',
-                    'Load Dashboard',
-                    'Process User Request',
-                    'Update Database',
-                    'Return Response'
-                ]
-                diagrams['activity'] = uml_generator.generate_activity_diagram(activities, project_id=project_id, user_id=user_id)
-                logger.info("[ChunkedDoc] Generated Activity Diagram")
-            except Exception as e:
-                logger.error(f"[ChunkedDoc] Activity Diagram error: {e}")
-
-            # 5. ER Diagram
-            try:
-                entities = self._extract_entities_for_diagram(project_data)
-                diagrams['er'] = uml_generator.generate_er_diagram(entities, project_id=project_id, user_id=user_id)
-                logger.info("[ChunkedDoc] Generated ER Diagram")
-            except Exception as e:
-                logger.error(f"[ChunkedDoc] ER Diagram error: {e}")
-
-            # 6. DFD Level 0
-            try:
-                diagrams['dfd_0'] = uml_generator.generate_dfd(
-                    level=0,
-                    processes=[project_name],
-                    data_stores=['Database'],
-                    external_entities=['User', 'Admin'],
-                    data_flows=[
-                        {'from': 'User', 'to': project_name, 'data': 'Request'},
-                        {'from': project_name, 'to': 'User', 'data': 'Response'},
-                        {'from': project_name, 'to': 'Database', 'data': 'Query'},
-                    ],
-                    project_id=project_id,
-                    user_id=user_id
-                )
-                logger.info("[ChunkedDoc] Generated DFD Level 0")
-            except Exception as e:
-                logger.error(f"[ChunkedDoc] DFD error: {e}")
-
-            logger.info(f"[ChunkedDoc] Generated {len(diagrams)} UML diagrams")
+            # Use uml_generator's generate_all_diagrams which has DYNAMIC extraction methods
+            # This extracts actors, use cases, classes, activities, etc. from actual project_data
+            diagrams = uml_generator.generate_all_diagrams(
+                project_data=project_data,
+                project_id=project_id,
+                user_id=user_id
+            )
+            logger.info(f"[ChunkedDoc] Generated {len(diagrams)} DYNAMIC UML diagrams: {list(diagrams.keys())}")
+            return diagrams
 
         except Exception as e:
-            logger.error(f"[ChunkedDoc] Error generating diagrams: {e}")
-
-        return diagrams
+            logger.error(f"[ChunkedDoc] Error generating diagrams: {e}", exc_info=True)
+            return {}
 
     def _extract_classes_for_diagram(self, project_data: Dict) -> List[Dict]:
         """Extract class information for class diagram"""
