@@ -94,12 +94,38 @@ class PPTGeneratorV2:
                 output_dir = settings.GENERATED_DIR / "presentations"
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            filename = f"{project_data.get('project_name', 'Presentation')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
+            project_name = project_data.get('project_name', 'Presentation')
+            filename = f"{project_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
             file_path = output_dir / filename
 
             self.prs.save(str(file_path))
 
             logger.info(f"[PPTGenerator] Created presentation: {file_path}")
+
+            # Save to S3 and PostgreSQL if project_id and user_id are available
+            if project_id and user_id:
+                try:
+                    from app.services.document_storage_service import document_storage
+
+                    save_result = await document_storage.save_document(
+                        user_id=user_id,
+                        project_id=project_id,
+                        local_file_path=str(file_path),
+                        title=f"{project_name} - Presentation",
+                        doc_type='ppt',
+                        extra_metadata={
+                            'project_name': project_name,
+                            'document_type': 'ppt',
+                            'generated_at': datetime.now().isoformat()
+                        }
+                    )
+
+                    if save_result:
+                        logger.info(f"[PPTGenerator] Saved to S3+DB: {save_result.get('s3_key')}")
+                    else:
+                        logger.warning(f"[PPTGenerator] Failed to save to cloud storage")
+                except Exception as e:
+                    logger.error(f"[PPTGenerator] Error saving to S3+DB: {e}")
 
             return str(file_path)
 

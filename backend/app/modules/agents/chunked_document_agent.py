@@ -1768,6 +1768,7 @@ Place: {ci.college_name}
     async def _generate_all_diagrams(self, project_data: Dict, project_id: str = None, user_id: str = None) -> Dict[str, str]:
         """
         Generate all UML diagrams for the document using DYNAMIC project data.
+        Saves diagrams to S3 and PostgreSQL for persistence.
 
         Args:
             project_data: Project data for diagram generation
@@ -1775,7 +1776,7 @@ Place: {ci.college_name}
             user_id: User ID for isolation
 
         Returns:
-            Dict mapping diagram type to file path
+            Dict mapping diagram type to file path (local paths for document assembly)
         """
         project_name = project_data.get('project_name', 'System')
         logger.info(f"[ChunkedDoc] Generating DYNAMIC UML diagrams for {project_name} (project_id={project_id}, user_id={user_id})")
@@ -1784,15 +1785,36 @@ Place: {ci.college_name}
         logger.info(f"[ChunkedDoc] Project technologies: {project_data.get('technologies', {})}")
 
         try:
-            # Use uml_generator's generate_all_diagrams which has DYNAMIC extraction methods
-            # This extracts actors, use cases, classes, activities, etc. from actual project_data
-            diagrams = uml_generator.generate_all_diagrams(
-                project_data=project_data,
-                project_id=project_id,
-                user_id=user_id
-            )
-            logger.info(f"[ChunkedDoc] Generated {len(diagrams)} DYNAMIC UML diagrams: {list(diagrams.keys())}")
-            return diagrams
+            # Use the new method that saves to S3 + PostgreSQL
+            if project_id and user_id:
+                # Generate and save to cloud storage
+                results = await uml_generator.generate_all_diagrams_and_save(
+                    project_data=project_data,
+                    project_id=project_id,
+                    user_id=user_id
+                )
+
+                # Extract local paths for document assembly (Word/PPT needs local files)
+                diagrams = {}
+                for diagram_type, result in results.items():
+                    local_path = result.get('local_path')
+                    if local_path and not local_path.startswith('['):
+                        diagrams[diagram_type] = local_path
+                        if result.get('saved_to_cloud'):
+                            logger.info(f"[ChunkedDoc] {diagram_type} saved to S3: {result.get('s3_key')}")
+
+                logger.info(f"[ChunkedDoc] Generated {len(diagrams)} DYNAMIC UML diagrams (saved to S3+DB)")
+                return diagrams
+            else:
+                # Fallback to local-only generation if no user_id/project_id
+                logger.warning("[ChunkedDoc] No project_id/user_id - saving diagrams locally only")
+                diagrams = uml_generator.generate_all_diagrams(
+                    project_data=project_data,
+                    project_id=project_id,
+                    user_id=user_id
+                )
+                logger.info(f"[ChunkedDoc] Generated {len(diagrams)} DYNAMIC UML diagrams (local only)")
+                return diagrams
 
         except Exception as e:
             logger.error(f"[ChunkedDoc] Error generating diagrams: {e}", exc_info=True)
