@@ -124,6 +124,40 @@ class UnifiedStorageService:
 
         return content
 
+    def _sanitize_source_content(self, content: str, file_path: str) -> str:
+        """
+        Sanitize source code content to ensure proper formatting.
+
+        Fixes:
+        - Empty first line (AI often generates files with leading newlines)
+        - Missing trailing newline (POSIX convention)
+        - BOM characters
+        """
+        # Remove BOM if present
+        if content.startswith('﻿'):
+            content = content[1:]
+
+        # Source file extensions that should start with code on line 1
+        source_extensions = {
+            '.py', '.js', '.ts', '.tsx', '.jsx', '.java', '.go', '.rs', '.c', '.cpp',
+            '.h', '.hpp', '.cs', '.rb', '.php', '.swift', '.kt', '.scala', '.vue',
+            '.svelte', '.css', '.scss', '.less', '.html', '.json', '.yaml', '.yml',
+            '.toml', '.ini', '.cfg', '.properties', '.env', '.sh', '.bash', '.sql',
+            '.md', '.txt', '.gradle'
+        }
+
+        # Get file extension
+        ext = '.' + file_path.rsplit('.', 1)[-1].lower() if '.' in file_path else ''
+
+        # Only sanitize known source files
+        if ext in source_extensions or file_path.lower() in {'dockerfile', 'makefile', '.gitignore', '.dockerignore'}:
+            # Remove leading empty lines (content should start from line 1)
+            content = content.lstrip('\n')
+            # Ensure file ends with exactly one newline (POSIX convention)
+            content = content.rstrip() + '\n'
+
+        return content
+
     # ==================== LAYER 1: SANDBOX ====================
 
     def get_sandbox_path(self, project_id: str, user_id: Optional[str] = None) -> Path:
@@ -187,6 +221,10 @@ class UnifiedStorageService:
             # XML files MUST NOT have whitespace before the XML declaration
             if file_path.endswith('.xml') or file_path.endswith('.pom'):
                 content = self._sanitize_xml_content(content)
+            else:
+                # SANITIZE ALL SOURCE FILES: Remove leading empty lines
+                # AI often generates files with empty first line - content should start from line 1
+                content = self._sanitize_source_content(content, file_path)
 
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)

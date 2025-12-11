@@ -1138,54 +1138,130 @@ I'll keep trying to help!`)
                 useProjectStore.getState().setDownloadUrl(event.data.download_url)
               }
 
-              // Generate completion summary with bullet points
+              // Generate comprehensive completion summary for students
               const projectStore = useProjectStore.getState()
               const aiMessage = currentMessage?.type === 'assistant' ? currentMessage : null
               const completedFiles = aiMessage?.fileOperations?.filter(f => f.status === 'complete') || []
               const completedSteps = aiMessage?.thinkingSteps?.filter(s => s.status === 'complete') || []
 
               if (completedFiles.length > 0 || completedSteps.length > 0) {
-                let summary = '\n\n---\n\n✅ **Project Generated Successfully!**\n\n'
+                let summary = '\n\n---\n\n'
+                summary += '## Project Generation Complete\n\n'
 
-                // What was built
+                // Project Overview Section
+                const projectName = projectStore.currentProject?.name || 'Your Project'
+                summary += `### ${projectName}\n\n`
+
+                // What was accomplished
                 if (completedSteps.length > 0) {
-                  summary += '**What was built:**\n'
+                  summary += '#### What We Built\n'
                   completedSteps.forEach(step => {
-                    summary += `• ${step.label}\n`
+                    summary += `- ${step.label}\n`
                   })
                   summary += '\n'
                 }
 
-                // Files created
+                // Files breakdown with categories
                 if (completedFiles.length > 0) {
-                  summary += `**Files created:** ${completedFiles.length} files\n`
+                  summary += `#### Project Files (${completedFiles.length} files created)\n\n`
 
-                  // Group files by type
-                  const components = completedFiles.filter(f => f.path.includes('component') || f.path.endsWith('.tsx') || f.path.endsWith('.jsx'))
-                  const styles = completedFiles.filter(f => f.path.endsWith('.css') || f.path.endsWith('.scss'))
-                  const configs = completedFiles.filter(f => f.path.includes('config') || f.path.endsWith('.json') || f.path.endsWith('.ts') && f.path.includes('config'))
-                  const others = completedFiles.filter(f => !components.includes(f) && !styles.includes(f) && !configs.includes(f))
+                  // Categorize files
+                  const sourceFiles = completedFiles.filter(f =>
+                    f.path.endsWith('.tsx') || f.path.endsWith('.jsx') ||
+                    f.path.endsWith('.ts') || f.path.endsWith('.js') ||
+                    f.path.endsWith('.java') || f.path.endsWith('.py')
+                  )
+                  const styleFiles = completedFiles.filter(f =>
+                    f.path.endsWith('.css') || f.path.endsWith('.scss') || f.path.endsWith('.sass')
+                  )
+                  const configFiles = completedFiles.filter(f =>
+                    f.path.endsWith('.json') || f.path.endsWith('.yaml') || f.path.endsWith('.yml') ||
+                    f.path.includes('config') || f.path.endsWith('.xml') || f.path.endsWith('.properties')
+                  )
+                  const docFiles = completedFiles.filter(f =>
+                    f.path.endsWith('.md') || f.path.endsWith('.txt') ||
+                    f.path.endsWith('.docx') || f.path.endsWith('.pdf') || f.path.endsWith('.pptx')
+                  )
+                  const testFiles = completedFiles.filter(f =>
+                    f.path.includes('test') || f.path.includes('spec') || f.path.includes('__tests__')
+                  )
 
-                  if (components.length > 0) {
-                    summary += `• ${components.length} component${components.length > 1 ? 's' : ''}\n`
+                  if (sourceFiles.length > 0) {
+                    summary += `| Category | Count |\n|----------|-------|\n`
+                    summary += `| Source Code | ${sourceFiles.length} files |\n`
+                    if (styleFiles.length > 0) summary += `| Stylesheets | ${styleFiles.length} files |\n`
+                    if (configFiles.length > 0) summary += `| Configuration | ${configFiles.length} files |\n`
+                    if (testFiles.length > 0) summary += `| Tests | ${testFiles.length} files |\n`
+                    if (docFiles.length > 0) summary += `| Documentation | ${docFiles.length} files |\n`
+                    summary += '\n'
                   }
-                  if (styles.length > 0) {
-                    summary += `• ${styles.length} style file${styles.length > 1 ? 's' : ''}\n`
+
+                  // Key files to explore
+                  const keyFiles = completedFiles.slice(0, 5)
+                  if (keyFiles.length > 0) {
+                    summary += '**Key files to explore:**\n'
+                    keyFiles.forEach(f => {
+                      const fileName = f.path.split('/').pop() || f.path
+                      summary += `- \`${fileName}\`\n`
+                    })
+                    if (completedFiles.length > 5) {
+                      summary += `- ...and ${completedFiles.length - 5} more files\n`
+                    }
+                    summary += '\n'
                   }
-                  if (configs.length > 0) {
-                    summary += `• ${configs.length} config file${configs.length > 1 ? 's' : ''}\n`
-                  }
-                  if (others.length > 0) {
-                    summary += `• ${others.length} other file${others.length > 1 ? 's' : ''}\n`
-                  }
+                }
+
+                // Documents section (for academic projects)
+                const academicDocs = completedFiles.filter(f =>
+                  f.path.endsWith('.docx') || f.path.endsWith('.pdf') || f.path.endsWith('.pptx')
+                )
+                if (academicDocs.length > 0) {
+                  summary += '#### Academic Documents Generated\n'
+                  academicDocs.forEach(doc => {
+                    const docName = doc.path.split('/').pop() || doc.path
+                    if (docName.includes('project_report') || docName.includes('ProjectReport')) {
+                      summary += `- **Project Report** - Complete documentation with UML diagrams\n`
+                    } else if (docName.includes('srs') || docName.includes('SRS')) {
+                      summary += `- **SRS Document** - Software Requirements Specification\n`
+                    } else if (docName.includes('ppt') || docName.includes('presentation')) {
+                      summary += `- **Presentation** - Ready for project defense\n`
+                    } else if (docName.includes('viva') || docName.includes('qa')) {
+                      summary += `- **Viva Q&A** - Common questions and answers\n`
+                    } else {
+                      summary += `- \`${docName}\`\n`
+                    }
+                  })
                   summary += '\n'
                 }
 
-                // Next steps
-                summary += '**Next steps:**\n'
-                summary += '• Browse files in the editor on the right\n'
-                summary += '• Click "Preview" to see your app in action\n'
-                summary += '• Use "Export" to download as ZIP\n'
+                // Tech Stack (infer from files)
+                const techStack: string[] = []
+                const fileExts = completedFiles.map(f => f.path.split('.').pop()?.toLowerCase())
+                if (fileExts.includes('tsx') || fileExts.includes('jsx')) techStack.push('React')
+                if (fileExts.includes('vue')) techStack.push('Vue.js')
+                if (fileExts.includes('java')) techStack.push('Java')
+                if (fileExts.includes('py')) techStack.push('Python')
+                if (completedFiles.some(f => f.path.includes('spring') || f.path.includes('pom.xml'))) techStack.push('Spring Boot')
+                if (completedFiles.some(f => f.path.includes('next.config') || f.path.includes('_app'))) techStack.push('Next.js')
+                if (completedFiles.some(f => f.path.includes('vite.config'))) techStack.push('Vite')
+                if (fileExts.includes('ts') || fileExts.includes('tsx')) techStack.push('TypeScript')
+
+                if (techStack.length > 0) {
+                  summary += `**Tech Stack:** ${techStack.join(' • ')}\n\n`
+                }
+
+                // Next steps for students
+                summary += '#### What You Can Do Now\n'
+                summary += '1. **Explore Code** - Browse files in the editor panel on the right\n'
+                summary += '2. **Run Preview** - Click the "Run" button to see your app in action\n'
+                summary += '3. **Download Project** - Use "Export" to download everything as ZIP\n'
+                if (academicDocs.length > 0) {
+                  summary += '4. **Download Documents** - Go to Dashboard to download all academic documents\n'
+                }
+                summary += '\n'
+
+                // Tips
+                summary += '> **Tip:** Click on any file in the file explorer to view and edit the code.\n'
 
                 appendToMessage(aiMessageId, summary)
               }
@@ -1196,6 +1272,13 @@ I'll keep trying to help!`)
               const errorMsg = event.data?.error || event.data?.message || 'Unknown error'
               appendToMessage(aiMessageId, `\n\n⚠️ Error: ${errorMsg}`)
               break
+
+            case 'cancelled':
+              // Backend confirmed cancellation - update UI
+              console.log('[useChat] Generation cancelled by backend')
+              updateMessageStatus(aiMessageId, 'complete')
+              stopStreaming()
+              return  // Exit early - don't process more events
 
             case 'warning':
               // Don't show warnings in chat - only log them

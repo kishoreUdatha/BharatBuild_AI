@@ -15,7 +15,9 @@ import { useProjectStore } from '@/store/projectStore'
 import { useErrorCollector } from '@/hooks/useErrorCollector'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
-const MAX_AUTO_FIX_ATTEMPTS = 10  // Increased for "retry until success" behavior
+// COST OPTIMIZATION: Reduced from 10 to 3 (with 3 inner iterations = max 9 API calls)
+// If 3 outer retries don't fix it, stop and ask user - prevents runaway costs
+const MAX_AUTO_FIX_ATTEMPTS = 3
 const DEFAULT_RETRY_DELAY = 1500  // Base delay between retries (ms)
 const MAX_RETRY_DELAY = 10000     // Max delay with exponential backoff (ms)
 
@@ -209,26 +211,27 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       /➜\s+Local:/i,                    // Vite arrow format
     ]
 
-    // First check if server is ready (even if we can't extract port)
+    // FIRST try to extract port from output (more specific patterns)
+    for (const pattern of serverPatterns) {
+      const match = cleanOutput.match(pattern)
+      if (match && match[1]) {
+        const port = match[1]
+        const url = `http://localhost:${port}`
+        console.log('[DetectServer] MATCHED serverPattern:', pattern, '-> port:', port, '-> url:', url)
+        setPreviewUrl(url)
+        setStatus('running')
+        onPreviewUrlChange?.(url)
+        return true
+      }
+    }
+
+    // Fall back to readyPatterns (when port can't be extracted)
     for (const pattern of readyPatterns) {
       if (pattern.test(cleanOutput)) {
         console.log('[DetectServer] MATCHED readyPattern:', pattern)
         // Server is ready, set status to running
         // Port will be fetched from preview endpoint
         setStatus('running')
-        return true
-      }
-    }
-
-    // Try to extract port from output
-    for (const pattern of serverPatterns) {
-      const match = cleanOutput.match(pattern)
-      if (match && match[1]) {
-        const port = match[1]
-        const url = `http://localhost:${port}`
-        setPreviewUrl(url)
-        setStatus('running')
-        onPreviewUrlChange?.(url)
         return true
       }
     }

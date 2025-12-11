@@ -43,6 +43,27 @@ router = APIRouter(prefix="/orchestrator", tags=["orchestrator"])
 # Global orchestrator instance
 orchestrator = DynamicOrchestrator()
 
+# ==================== Cancellation Registry ====================
+# Track cancelled project IDs to stop ongoing generation
+_cancelled_projects: set = set()
+
+
+def is_project_cancelled(project_id: str) -> bool:
+    """Check if a project has been cancelled"""
+    return project_id in _cancelled_projects
+
+
+def cancel_project(project_id: str):
+    """Mark a project as cancelled"""
+    _cancelled_projects.add(project_id)
+    logger.info(f"[Cancellation] Project {project_id} marked as cancelled")
+
+
+def clear_cancellation(project_id: str):
+    """Clear cancellation flag for a project"""
+    _cancelled_projects.discard(project_id)
+    logger.info(f"[Cancellation] Project {project_id} cancellation cleared")
+
 # Optional security for SSE endpoints (auth is optional but recommended)
 optional_security = HTTPBearer(auto_error=False)
 
@@ -244,6 +265,9 @@ async def event_generator(
 
         logger.info("[SSE Generator] Starting workflow execution...")
 
+        # Clear any previous cancellation for this project
+        clear_cancellation(project_id)
+
         # Execute workflow and stream events
         async for event in orchestrator.execute_workflow(
             user_request=user_request,
@@ -251,6 +275,22 @@ async def event_generator(
             workflow_name=workflow_name,
             metadata=metadata
         ):
+            # Check for cancellation before processing each event
+            if is_project_cancelled(project_id):
+                logger.info(f"[SSE Generator] Project {project_id} cancelled, stopping generation")
+                cancelled_event = {
+                    "type": "cancelled",
+                    "data": {"message": "Generation stopped by user"},
+                    "step": None,
+                    "agent": None,
+                    "timestamp": None
+                }
+                yield f"data: {json.dumps(cancelled_event)}\n\n"
+                await asyncio.sleep(0)
+                # Clear cancellation flag after sending event
+                clear_cancellation(project_id)
+                return  # Exit the generator
+
             # Log all events for debugging
             event_type = event.type.value if hasattr(event.type, 'value') else str(event.type)
             logger.info(f"[SSE Generator] Yielding event: {event_type}")
@@ -947,6 +987,49 @@ async def regenerate_project(
         raise
     except Exception as e:
         logger.error(f"[Regenerate] Failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Cancellation Endpoint ====================
+
+class CancelRequest(BaseModel):
+    """Request to cancel an ongoing workflow"""
+    project_id: str = Field(..., description="Project ID to cancel")
+
+
+@router.post("/cancel")
+async def cancel_workflow(
+    request: CancelRequest,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Cancel an ongoing workflow for a project.
+
+    This immediately marks the project as cancelled, which will:
+    - Stop any ongoing file generation
+    - Skip remaining workflow steps
+    - Return a cancellation event to the frontend
+
+    The cancellation is checked:
+    - Before each workflow step
+    - During file content streaming
+    - Before each agent execution
+    """
+    try:
+        logger.info(f"[Cancel] Received cancel request for project: {request.project_id}")
+
+        # Mark project as cancelled
+        cancel_project(request.project_id)
+
+        return {
+            "success": True,
+            "message": f"Cancellation requested for project {request.project_id}",
+            "project_id": request.project_id
+        }
+
+    except Exception as e:
+        logger.error(f"[Cancel] Failed to cancel project: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

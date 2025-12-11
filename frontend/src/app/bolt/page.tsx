@@ -96,9 +96,10 @@ export default function BoltPage() {
       id: currentProject?.id,
       name: currentProject?.name,
       filesCount: currentProject?.files?.length || 0,
-      isSynced: currentProject?.isSynced
+      isSynced: currentProject?.isSynced,
+      firstFilePath: currentProject?.files?.[0]?.path || 'NO FILES'
     })
-    if (currentProject?.files) {
+    if (currentProject?.files && currentProject.files.length > 0) {
       console.log('[BoltPage] Files structure:', currentProject.files.map(f => ({
         path: f.path,
         type: f.type,
@@ -106,6 +107,11 @@ export default function BoltPage() {
       })))
     }
   }, [currentProject])
+
+  // Debug: Log the files array passed to BoltLayout
+  useEffect(() => {
+    console.log('[BoltPage] files array for BoltLayout:', files.length, hasProject, projectFiles.length)
+  }, [files, hasProject, projectFiles])
 
   // Check authentication on mount
   useEffect(() => {

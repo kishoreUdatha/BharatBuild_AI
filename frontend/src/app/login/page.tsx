@@ -76,8 +76,9 @@ export default function LoginPage() {
       const redirectUrl = sessionStorage.getItem('redirectAfterLogin')
       sessionStorage.removeItem('redirectAfterLogin')
 
-      // Redirect to stored URL or default to bolt page
-      router.push(redirectUrl || '/bolt')
+      // Redirect to stored URL or default to dashboard
+      // Use replace to prevent back navigation to login
+      router.replace(redirectUrl || '/dashboard')
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Login failed. Please check your credentials.')
     } finally {

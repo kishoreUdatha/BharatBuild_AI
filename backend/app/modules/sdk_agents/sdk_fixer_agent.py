@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import re
-import subprocess
 import os
 
 from anthropic import AsyncAnthropic
@@ -527,26 +526,34 @@ Start by analyzing the error and reading the relevant build config file.
                 except Exception as e:
                     logger.warning(f"[SDKFixerAgent:{project_id}] Could not analyze, using sandbox root: {e}")
 
-            # Execute command in the correct working directory
-            result = subprocess.run(
+            # Execute command in the correct working directory (non-blocking)
+            process = await asyncio.create_subprocess_shell(
                 command,
-                shell=True,
                 cwd=working_dir,
-                capture_output=True,
-                text=True,
-                timeout=timeout
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
 
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                return f"Error: Command timed out after {timeout} seconds"
+
             output = ""
-            if result.stdout:
-                output += f"STDOUT:\n{result.stdout}\n"
-            if result.stderr:
-                output += f"STDERR:\n{result.stderr}\n"
-            output += f"Exit Code: {result.returncode}"
+            if stdout:
+                output += f"STDOUT:\n{stdout.decode('utf-8', errors='replace')}\n"
+            if stderr:
+                output += f"STDERR:\n{stderr.decode('utf-8', errors='replace')}\n"
+            output += f"Exit Code: {process.returncode}"
 
             return output if output else "Command completed with no output"
 
-        except subprocess.TimeoutExpired:
+        except asyncio.TimeoutError:
             return f"Error: Command timed out after {timeout} seconds"
         except Exception as e:
             return f"Error executing command: {str(e)}"
@@ -772,15 +779,23 @@ Start by analyzing the error and reading the relevant build config file.
             if include:
                 cmd = f'grep -rn --include="{include}" "{pattern}" "{search_path}"'
 
-            result = subprocess.run(
+            process = await asyncio.create_subprocess_shell(
                 cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=30
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
 
-            output = result.stdout or result.stderr
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=30
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                return f"Error: Grep command timed out after 30 seconds"
+
+            output = stdout.decode('utf-8', errors='replace') or stderr.decode('utf-8', errors='replace')
             if not output:
                 return f"No matches found for: {pattern}"
 
@@ -788,6 +803,8 @@ Start by analyzing the error and reading the relevant build config file.
             lines = output.split("\n")[:30]
             return "\n".join(lines)
 
+        except asyncio.TimeoutError:
+            return f"Error: Grep command timed out after 30 seconds"
         except Exception as e:
             return f"Error searching: {str(e)}"
 

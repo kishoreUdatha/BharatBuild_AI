@@ -9,8 +9,7 @@ import { CodeEditor } from './CodeEditor'
 import { PlanView } from './PlanView'
 import { ProjectSelector } from './ProjectSelector'
 import { ProjectRunControls } from './ProjectRunControls'
-import { WelcomeScreen } from './WelcomeScreen'
-import { QuickActions } from './QuickActions'
+// WelcomeScreen and QuickActions removed - now showing clean empty state
 
 // Dynamically import XTerminal to avoid SSR issues
 const XTerminal = dynamic(() => import('./XTerminal'), {
@@ -90,7 +89,7 @@ export function BoltLayout({
 
   // Resizable panel states - thin like border lines
   const [leftPanelWidth, setLeftPanelWidth] = useState(28) // percentage (balanced chat panel)
-  const [fileExplorerWidth, setFileExplorerWidth] = useState(180) // pixels (balanced file explorer)
+  const [fileExplorerWidth, setFileExplorerWidth] = useState(260) // pixels (wider for readable file names)
   const [isResizingMain, setIsResizingMain] = useState(false)
   const [isResizingExplorer, setIsResizingExplorer] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -186,7 +185,10 @@ export function BoltLayout({
     // Third try: Legacy backend export (if project saved permanently)
     if (currentProject?.id) {
       try {
-        const response = await fetch(`${API_BASE_URL}/execution/export/${currentProject.id}`)
+        const token = localStorage.getItem('access_token')
+        const response = await fetch(`${API_BASE_URL}/execution/export/${currentProject.id}`, {
+          headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+        })
         if (!response.ok) {
           throw new Error("Failed to export: " + response.statusText)
         }
@@ -312,6 +314,10 @@ export function BoltLayout({
   const lastMessageContent = lastMessage?.content || ''
   const lastMessageIsStreaming = lastMessage?.type === 'assistant' && (lastMessage as any).isStreaming || false
 
+  // Track thinkingSteps and fileOperations for auto-scroll during generation
+  const lastMessageThinkingSteps = (lastMessage as any)?.thinkingSteps?.length || 0
+  const lastMessageFileOperations = (lastMessage as any)?.fileOperations?.length || 0
+
   useEffect(() => {
     if (lastMessageIsStreaming) {
       // Use requestAnimationFrame for smoother scroll during streaming
@@ -327,6 +333,15 @@ export function BoltLayout({
       scrollToBottom(true)
     }
   }, [isLoading, scrollToBottom])
+
+  // Auto-scroll when thinkingSteps or fileOperations update (PlanView content)
+  useEffect(() => {
+    if (lastMessageThinkingSteps > 0 || lastMessageFileOperations > 0) {
+      requestAnimationFrame(() => {
+        scrollToBottom(true)
+      })
+    }
+  }, [lastMessageThinkingSteps, lastMessageFileOperations, scrollToBottom])
 
   // Auto-switch to Code tab when files are generated
   useEffect(() => {
@@ -501,7 +516,15 @@ export function BoltLayout({
           {/* Messages */}
           <div ref={messagesContainerRef} className="flex-1 overflow-y-auto scrollbar-thin bg-[#0a0a0f]">
             {messages.length === 0 ? (
-              <WelcomeScreen onExampleClick={onSendMessage} />
+              <div className="h-full flex flex-col items-center justify-center text-center px-6">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center mb-4">
+                  <Zap className="w-8 h-8 text-white" />
+                </div>
+                <h2 className="text-xl font-semibold text-white mb-2">Start a conversation</h2>
+                <p className="text-sm text-gray-400 max-w-xs">
+                  Describe your project and AI will build it for you
+                </p>
+              </div>
             ) : (
               <>
                 {messages.map((message, index) => (
@@ -513,28 +536,47 @@ export function BoltLayout({
                   />
                 ))}
 
-                {/* Task Progress Panel - Only show when generating project */}
+                {/* Generation Progress Panel - Shows during code generation */}
                 {messages.some(m => m.type === 'assistant' && ((m.thinkingSteps?.length ?? 0) > 0 || (m.fileOperations?.length ?? 0) > 0)) && (
-                  <div className="border-t border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))]">
+                  <div className="bg-[#0d0d12]">
+                    {/* Collapsible Header */}
                     <button
                       onClick={() => setIsPlanViewVisible(!isPlanViewVisible)}
-                      className="w-full flex items-center justify-between px-4 py-2 hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
+                      className="w-full flex items-center justify-between px-3 py-2 hover:bg-white/5 transition-colors border-t border-white/10"
                     >
                       <div className="flex items-center gap-2">
-                        <ListTodo className="w-4 h-4 text-[hsl(var(--bolt-accent))]" />
-                        <span className="text-sm font-medium text-[hsl(var(--bolt-text-primary))]">
+                        <div className="w-5 h-5 rounded bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center">
+                          <ListTodo className="w-3 h-3 text-white" />
+                        </div>
+                        <span className="text-sm font-medium text-white/90">
                           Generation Progress
                         </span>
+                        {/* File count badge */}
+                        {(() => {
+                          const lastAssistantMsg = messages.filter(m => m.type === 'assistant').slice(-1)[0]
+                          const fileOps = (lastAssistantMsg as any)?.fileOperations || []
+                          const completed = fileOps.filter((f: any) => f.status === 'complete').length
+                          const total = fileOps.length
+                          if (total > 0) {
+                            return (
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-500/20 text-cyan-400">
+                                {completed}/{total} files
+                              </span>
+                            )
+                          }
+                          return null
+                        })()}
                       </div>
                       {isPlanViewVisible ? (
-                        <ChevronUp className="w-4 h-4 text-[hsl(var(--bolt-text-secondary))]" />
+                        <ChevronUp className="w-4 h-4 text-white/50" />
                       ) : (
-                        <ChevronDown className="w-4 h-4 text-[hsl(var(--bolt-text-secondary))]" />
+                        <ChevronDown className="w-4 h-4 text-white/50" />
                       )}
                     </button>
 
+                    {/* Expanded Content - Full height scroll */}
                     {isPlanViewVisible && (
-                      <div className="border-t border-[hsl(var(--bolt-border))] max-h-[300px] overflow-y-auto">
+                      <div className="border-t border-white/10 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 400px)' }}>
                         <PlanView />
                       </div>
                     )}
@@ -545,13 +587,6 @@ export function BoltLayout({
               </>
             )}
           </div>
-
-          {/* Quick Actions - Show when project exists */}
-          <QuickActions
-            onAction={onSendMessage}
-            hasProject={(currentProject?.files?.length || 0) > 0}
-            isLoading={isLoading}
-          />
 
           {/* Input */}
           <div className="border-t border-[hsl(var(--bolt-border))]">
