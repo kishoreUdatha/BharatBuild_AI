@@ -24,10 +24,10 @@ export default function Home() {
     'Create a microservices architecture with Docker and Kubernetes'
   ]
 
-  // Redirect authenticated users to dashboard
+  // Redirect authenticated users to main app page
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      router.replace('/dashboard')
+      router.replace('/bolt')
     }
   }, [isAuthenticated, isLoading, router])
 
