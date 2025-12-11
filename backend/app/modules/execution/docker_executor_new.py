@@ -550,18 +550,46 @@ class DockerExecutor:
 
     async def _check_docker_available(self) -> bool:
         """Check if Docker is available and running"""
+        import shutil
         try:
-            process = await asyncio.create_subprocess_exec(
-                "docker", "info",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            await process.wait()
-            return process.returncode == 0
+            # First check if docker is in PATH
+            docker_path = shutil.which("docker")
+            if not docker_path:
+                logger.warning("[DockerExecutor] Docker not found in PATH")
+                return False
+
+            logger.info(f"[DockerExecutor] Found docker at: {docker_path}")
+
+            # Use shell=True on Windows for better compatibility
+            import sys
+            if sys.platform == "win32":
+                process = await asyncio.create_subprocess_shell(
+                    "docker info",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+            else:
+                process = await asyncio.create_subprocess_exec(
+                    "docker", "info",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+
+            stdout, stderr = await process.communicate()
+
+            if process.returncode == 0:
+                logger.info("[DockerExecutor] Docker is available and running")
+                return True
+            else:
+                stderr_text = stderr.decode('utf-8', errors='replace') if stderr else ''
+                logger.warning(f"[DockerExecutor] Docker info failed (code {process.returncode}): {stderr_text[:200]}")
+                return False
+
         except FileNotFoundError:
+            logger.warning("[DockerExecutor] Docker executable not found")
             return False
         except Exception as e:
-            logger.error(f"Error checking Docker: {e}")
+            logger.error(f"[DockerExecutor] Error checking Docker: {type(e).__name__}: {e}")
             return False
 
     async def build_image(

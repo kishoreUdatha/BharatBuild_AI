@@ -10,7 +10,7 @@ import { useAuth } from '@/hooks/useAuth'
 
 export default function Home() {
   const { createWorkspaceWithProject } = useWorkspaceStore()
-  const { isAuthenticated, checkAuth } = useAuth()
+  const { isAuthenticated, isLoading, checkAuth } = useAuth()
   const router = useRouter()
   const [placeholderIndex, setPlaceholderIndex] = useState(0)
   const placeholders = [
@@ -23,6 +23,13 @@ export default function Home() {
     'Build a GraphQL API with Apollo Server and Prisma',
     'Create a microservices architecture with Docker and Kubernetes'
   ]
+
+  // Redirect authenticated users to dashboard
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) {
+      router.replace('/dashboard')
+    }
+  }, [isAuthenticated, isLoading, router])
 
   useEffect(() => {
     const interval = setInterval(() => {

@@ -1473,6 +1473,7 @@ The section includes relevant technical details, design decisions, and implement
                 return pre_generated[diagram_type]
 
             project_name = project_data.get('project_name', 'System')
+            project_id = project_data.get('project_id')  # For user isolation
             features = project_data.get('features', [])
             database_tables = project_data.get('database_tables', [])
 
@@ -1485,13 +1486,14 @@ The section includes relevant technical details, design decisions, and implement
                 return uml_generator.generate_use_case_diagram(
                     project_name=project_name,
                     actors=actors,
-                    use_cases=use_cases
+                    use_cases=use_cases,
+                    project_id=project_id
                 )
 
             elif diagram_type == "class":
                 # Generate class diagram
                 classes = self._extract_classes(project_data)
-                return uml_generator.generate_class_diagram(classes)
+                return uml_generator.generate_class_diagram(classes, project_id=project_id)
 
             elif diagram_type == "sequence":
                 # Generate sequence diagram
@@ -1504,7 +1506,7 @@ The section includes relevant technical details, design decisions, and implement
                     {'from': 'API', 'to': 'Frontend', 'message': 'Response', 'type': 'return'},
                     {'from': 'Frontend', 'to': 'User', 'message': 'Display', 'type': 'return'},
                 ]
-                return uml_generator.generate_sequence_diagram(participants, messages)
+                return uml_generator.generate_sequence_diagram(participants, messages, project_id=project_id)
 
             elif diagram_type == "activity":
                 # Generate activity diagram
@@ -1516,12 +1518,12 @@ The section includes relevant technical details, design decisions, and implement
                     'Update Database',
                     'Return Response'
                 ]
-                return uml_generator.generate_activity_diagram(activities)
+                return uml_generator.generate_activity_diagram(activities, project_id=project_id)
 
             elif diagram_type == "er":
                 # Generate ER diagram
                 entities = self._extract_entities(project_data)
-                return uml_generator.generate_er_diagram(entities)
+                return uml_generator.generate_er_diagram(entities, project_id=project_id)
 
             elif diagram_type == "dfd_0":
                 # Generate DFD Level 0
@@ -1534,12 +1536,13 @@ The section includes relevant technical details, design decisions, and implement
                         {'from': 'User', 'to': project_name, 'data': 'Request'},
                         {'from': project_name, 'to': 'User', 'data': 'Response'},
                         {'from': project_name, 'to': 'Database', 'data': 'Query'},
-                    ]
+                    ],
+                    project_id=project_id
                 )
 
             elif diagram_type == "system_architecture":
                 # Generate System Architecture Diagram
-                return uml_generator.generate_system_architecture_diagram(project_data)
+                return uml_generator.generate_system_architecture_diagram(project_data, project_id=project_id)
 
             return None
 

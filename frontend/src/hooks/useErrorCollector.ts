@@ -167,11 +167,36 @@ export function useErrorCollector(options: UseErrorCollectorOptions = {}) {
     return () => clearInterval(interval)
   }, [])
 
+  // Store callbacks in refs to avoid dependency issues causing reconnections
+  const onFixStartedRef = useRef(onFixStarted)
+  const onFixCompletedRef = useRef(onFixCompleted)
+  const onFixFailedRef = useRef(onFixFailed)
+
+  // Update refs when callbacks change (without triggering reconnection)
+  useEffect(() => {
+    onFixStartedRef.current = onFixStarted
+    onFixCompletedRef.current = onFixCompleted
+    onFixFailedRef.current = onFixFailed
+  }, [onFixStarted, onFixCompleted, onFixFailed])
+
   // WebSocket connection for real-time fix notifications from backend
+  // IMPORTANT: Only reconnect when projectId or enabled changes, NOT on callback changes
   useEffect(() => {
     if (!projectId || !enabled) return
 
+    // Prevent duplicate connections
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      console.log('[useErrorCollector] WebSocket already connected, skipping')
+      return
+    }
+
     const connectWebSocket = () => {
+      // Extra guard: don't create new connection if one exists and is connecting/open
+      if (wsRef.current && (wsRef.current.readyState === WebSocket.CONNECTING || wsRef.current.readyState === WebSocket.OPEN)) {
+        console.log('[useErrorCollector] WebSocket connection in progress or open, skipping')
+        return
+      }
+
       try {
         // Build WebSocket URL
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -197,20 +222,20 @@ export function useErrorCollector(options: UseErrorCollectorOptions = {}) {
             const msg = JSON.parse(event.data)
             console.log('[useErrorCollector] WebSocket message:', msg)
 
-            // Handle fix notifications from backend
+            // Handle fix notifications from backend (use refs to get latest callbacks)
             if (msg.type === 'fix_started') {
               console.log('[useErrorCollector] Fix started:', msg.reason)
               setFixing(true)
-              onFixStarted?.(msg.reason || 'Auto-fix started')
+              onFixStartedRef.current?.(msg.reason || 'Auto-fix started')
             } else if (msg.type === 'fix_completed') {
               console.log('[useErrorCollector] Fix completed:', msg.patches_applied, 'patches')
               setFixing(false)
               markAllResolved()
-              onFixCompleted?.(msg.patches_applied || 0, msg.files_modified || [])
+              onFixCompletedRef.current?.(msg.patches_applied || 0, msg.files_modified || [])
             } else if (msg.type === 'fix_failed') {
               console.log('[useErrorCollector] Fix failed:', msg.error)
               setFixing(false)
-              onFixFailed?.(msg.error || 'Fix failed')
+              onFixFailedRef.current?.(msg.error || 'Fix failed')
             }
           } catch (e) {
             console.error('[useErrorCollector] Failed to parse WebSocket message:', e)
@@ -254,7 +279,7 @@ export function useErrorCollector(options: UseErrorCollectorOptions = {}) {
       }
       setIsConnected(false)
     }
-  }, [projectId, enabled, onFixStarted, onFixCompleted, onFixFailed, setFixing, markAllResolved])
+  }, [projectId, enabled, setFixing, markAllResolved]) // Removed callback dependencies - use refs instead
 
   // Watch terminal logs for errors (legacy support)
   useEffect(() => {

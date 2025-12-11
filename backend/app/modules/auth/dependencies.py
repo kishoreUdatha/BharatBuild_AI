@@ -11,6 +11,40 @@ from app.models.user import User, UserRole
 from app.models.project import Project
 
 security = HTTPBearer()
+optional_security = HTTPBearer(auto_error=False)
+
+
+async def get_optional_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
+    db: AsyncSession = Depends(get_db)
+) -> Optional[User]:
+    """Get current user if token provided, None otherwise (for dev/optional auth)"""
+    if not credentials:
+        return None
+
+    try:
+        token = credentials.credentials
+        payload = decode_token(token)
+
+        if payload.get("type") != "access":
+            return None
+
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+
+        try:
+            uuid.UUID(user_id)
+        except ValueError:
+            return None
+
+        result = await db.execute(
+            select(User).where(User.id == user_id)
+        )
+        user = result.scalar_one_or_none()
+        return user if user and user.is_active else None
+    except Exception:
+        return None
 
 
 async def get_current_user(

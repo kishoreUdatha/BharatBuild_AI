@@ -1,0 +1,320 @@
+# =============================================================================
+# GitHub Actions CI/CD Pipeline for AWS ECS Deployment
+# =============================================================================
+
+name: Deploy to AWS ECS
+
+on:
+  push:
+    branches:
+      - main
+      - production
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com
+  ECS_CLUSTER: bharatbuild-cluster
+  BACKEND_SERVICE: bharatbuild-backend
+  FRONTEND_SERVICE: bharatbuild-frontend
+  CELERY_SERVICE: bharatbuild-celery
+
+jobs:
+  # =============================================================================
+  # Test Job
+  # =============================================================================
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install backend dependencies
+        working-directory: ./backend
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
+
+      - name: Run backend tests
+        working-directory: ./backend
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test_db
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key
+          JWT_SECRET_KEY: test-jwt-secret
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          pytest --cov=app --cov-report=xml
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Run frontend lint
+        working-directory: ./frontend
+        run: npm run lint || true
+
+      - name: Build frontend
+        working-directory: ./frontend
+        env:
+          NEXT_PUBLIC_API_URL: https://api.example.com
+        run: npm run build
+
+  # =============================================================================
+  # Build and Push Docker Images
+  # =============================================================================
+  build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    outputs:
+      backend_image: ${{ steps.build-backend.outputs.image }}
+      frontend_image: ${{ steps.build-frontend.outputs.image }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push backend image
+        id: build-backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.cpu
+          push: true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/bharatbuild/backend:${{ github.sha }}
+            ${{ env.ECR_REGISTRY }}/bharatbuild/backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend image
+        id: build-frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/bharatbuild/frontend:${{ github.sha }}
+            ${{ env.ECR_REGISTRY }}/bharatbuild/frontend:latest
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://${{ secrets.DOMAIN_NAME }}/api/v1
+            NEXT_PUBLIC_WS_URL=wss://${{ secrets.DOMAIN_NAME }}/ws
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push celery image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.cpu
+          push: true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/bharatbuild/celery:${{ github.sha }}
+            ${{ env.ECR_REGISTRY }}/bharatbuild/celery:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # =============================================================================
+  # Deploy to ECS
+  # =============================================================================
+  deploy:
+    name: Deploy to ECS
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/production'
+    environment:
+      name: ${{ github.event.inputs.environment || 'production' }}
+      url: https://${{ secrets.DOMAIN_NAME }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download task definition
+        run: |
+          aws ecs describe-task-definition --task-definition bharatbuild-backend \
+            --query taskDefinition > backend-task-definition.json
+          aws ecs describe-task-definition --task-definition bharatbuild-frontend \
+            --query taskDefinition > frontend-task-definition.json
+          aws ecs describe-task-definition --task-definition bharatbuild-celery \
+            --query taskDefinition > celery-task-definition.json
+
+      - name: Update backend task definition
+        id: task-def-backend
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: backend-task-definition.json
+          container-name: backend
+          image: ${{ env.ECR_REGISTRY }}/bharatbuild/backend:${{ github.sha }}
+
+      - name: Update frontend task definition
+        id: task-def-frontend
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: frontend-task-definition.json
+          container-name: frontend
+          image: ${{ env.ECR_REGISTRY }}/bharatbuild/frontend:${{ github.sha }}
+
+      - name: Update celery task definition
+        id: task-def-celery
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: celery-task-definition.json
+          container-name: celery
+          image: ${{ env.ECR_REGISTRY }}/bharatbuild/celery:${{ github.sha }}
+
+      - name: Deploy backend to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def-backend.outputs.task-definition }}
+          service: ${{ env.BACKEND_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Deploy frontend to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def-frontend.outputs.task-definition }}
+          service: ${{ env.FRONTEND_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Deploy celery to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def-celery.outputs.task-definition }}
+          service: ${{ env.CELERY_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+
+      - name: Notify deployment success
+        if: success()
+        run: |
+          echo "Deployment successful!"
+          echo "Application URL: https://${{ secrets.DOMAIN_NAME }}"
+
+      - name: Notify deployment failure
+        if: failure()
+        run: |
+          echo "Deployment failed!"
+          # Add Slack/Discord webhook notification here
+
+  # =============================================================================
+  # Database Migration (Manual Trigger)
+  # =============================================================================
+  migrate:
+    name: Run Database Migrations
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    needs: deploy
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run migrations via ECS Exec
+        run: |
+          # Get a running task ID
+          TASK_ARN=$(aws ecs list-tasks \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service-name ${{ env.BACKEND_SERVICE }} \
+            --query 'taskArns[0]' \
+            --output text)
+
+          # Run migrations
+          aws ecs execute-command \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --task $TASK_ARN \
+            --container backend \
+            --interactive \
+            --command "python -m alembic upgrade head"

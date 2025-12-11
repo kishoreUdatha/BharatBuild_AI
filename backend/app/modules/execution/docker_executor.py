@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from app.core.logging_config import logger
+from app.utils.config_templates import get_template, VITE_REACT_TEMPLATES
 from app.services.log_bus import get_log_bus
 from app.services.fix_executor import FixExecutor
 from app.services.universal_autofixer import UniversalAutoFixer, fix_error_universal, ErrorCategory
@@ -25,6 +26,7 @@ from app.services.production_autofixer import ProductionAutoFixer, fix_error_pro
 from app.services.fullstack_integrator import FullstackIntegrator
 from app.services.smart_project_analyzer import smart_analyzer, Technology
 from app.modules.sdk_agents.sdk_fixer_agent import SDKFixerAgent
+from app.services.simple_fixer import simple_fixer
 
 
 class FrameworkType(Enum):
@@ -419,6 +421,11 @@ DEFAULT_PORTS: Dict[FrameworkType, int] = {
     FrameworkType.SOLIDITY: 8545,  # Hardhat/Ganache default
     FrameworkType.RUST_SOLANA: 8899,  # Solana validator default
 
+    # Fullstack (frontend port - backend gets +1000)
+    FrameworkType.FULLSTACK_REACT_SPRING: 5173,
+    FrameworkType.FULLSTACK_REACT_EXPRESS: 5173,
+    FrameworkType.FULLSTACK_REACT_FASTAPI: 5173,
+
     # Other
     FrameworkType.UNKNOWN: 3000,
 }
@@ -477,17 +484,15 @@ class DockerExecutor:
         # ===== ALWAYS use AI for these complex error types =====
 
         # 1. Compilation/Build errors (require code understanding)
+        # NOTE: Be very specific to avoid false positives from Spring Boot logs
         compilation_indicators = [
             'cannot find symbol',
             'package .* does not exist',
-            'does not exist',
             'compilation error',
             'compile error',
             'compilation failure',
-            'build failure',
-            'build failed',
-            '[error]',  # Maven/Gradle error prefix
-            'error:',   # Generic compiler error
+            '[error] compilation error',  # Maven compilation error (specific)
+            '[error] failed to execute goal',  # Maven goal failure (specific)
             'cannot resolve',
             'unresolved reference',
             'undefined reference',
@@ -496,10 +501,25 @@ class DockerExecutor:
             'missing method',
             'method .* not found',
             'no such method',
-            'syntax error',
             'unexpected token',
             'expected.*but got',
+            'enoent: no such file',  # File not found (Vite/Node)
+            '[plugin:vite:',  # Vite plugin errors
+            'failed to resolve import',
         ]
+
+        # Patterns that should NOT trigger AI fixer (false positives)
+        false_positive_indicators = [
+            '[info] build failure',  # Maven dependency output (NOT an error)
+            'build success',
+            'started application',
+            'tomcat started',
+            '\\/ ___ \'',  # Spring Boot ASCII art
+        ]
+
+        # Check for false positives first
+        if any(fp in error_lower for fp in false_positive_indicators):
+            return False
 
         if any(indicator in error_lower for indicator in compilation_indicators):
             return True
@@ -727,94 +747,47 @@ class DockerExecutor:
             return
 
         async def run_production_auto_fix():
+            """
+            SIMPLIFIED Auto-Fix - Bolt.new Style
+
+            Let AI decide what's an error and how to fix it.
+            No complex routing, no pattern matching, just simple AI-powered fixing.
+            """
             try:
                 self._fix_in_progress[project_id] = True
-                logger.info(f"[DockerExecutor:{project_id}] [PRODUCTION] Auto-fix triggered")
+                logger.info(f"[DockerExecutor:{project_id}] [SIMPLE] Auto-fix triggered")
 
-                # ===== SMART ROUTING: Detect if this needs AI-powered fixing =====
-                # Complex errors (compilation, build failures) should go directly to AI
-                needs_ai_fix = self._should_use_ai_fixer(error_message, project_path)
+                # First, let SimpleFixer decide if this is a real error
+                should_fix = await simple_fixer.should_fix(None, error_message)
 
-                if needs_ai_fix:
-                    # Route DIRECTLY to SDK Fixer Agent for complex errors
-                    logger.info(f"[DockerExecutor:{project_id}] Routing to SDK Fixer Agent (complex error detected)")
-                    logger.info(f"[DockerExecutor:{project_id}] Using user_id: {user_id}")
-                    context_files = await self._get_context_files_for_fix(project_path, error_message)
-                    sdk_fixer = SDKFixerAgent()
-                    ai_result = await sdk_fixer.fix_error(
-                        project_id=project_id,
-                        user_id=user_id,  # user_id extracted from project_path above
-                        error_message=error_message,
-                        stack_trace="",
-                        command=command or "",
-                        context_files=context_files
-                    )
-                    # Convert to FixResult format
-                    from app.services.production_autofixer import FixResult, ParsedError, ErrorCategory, FixStrategy
-                    result = FixResult(
-                        success=ai_result.success,
-                        error=ParsedError(
-                            raw_message=error_message,
-                            category=ErrorCategory.COMPILE_ERROR,
-                            technology=None,
-                            fix_strategy=FixStrategy.AI_FIX,
-                            fix_confidence=0.8
-                        ),
-                        fix_applied=ai_result.message,
-                        files_modified=ai_result.files_modified,
-                    )
-                else:
-                    # Use Production Auto-Fixer for simple pattern-based errors
-                    # Create AI fixer callback for fallback
-                    async def ai_fixer_callback(error_msg: str, proj_path: str, technologies: list) -> dict:
-                        """Fallback to SDK Fixer Agent for complex fixes"""
-                        try:
-                            ctx_files = await self._get_context_files_for_fix(Path(proj_path), error_msg)
-                            sdk_fixer = SDKFixerAgent()
-                            res = await sdk_fixer.fix_error(
-                                project_id=project_id,
-                                user_id=user_id,  # user_id extracted from project_path above
-                                error_message=error_msg,
-                                stack_trace="",
-                                command=command or "",
-                                context_files=ctx_files
-                            )
-                            return {
-                                "success": res.success,
-                                "files_modified": res.files_modified,
-                                "message": res.message
-                            }
-                        except Exception as e:
-                            logger.error(f"[DockerExecutor:{project_id}] AI fixer callback failed: {e}")
-                            return {"success": False, "error": str(e)}
+                if not should_fix:
+                    logger.info(f"[DockerExecutor:{project_id}] SimpleFixer: No fix needed (not a real error)")
+                    return
 
-                    result = await fix_error_production(
-                        project_id=project_id,
-                        project_path=project_path,
-                        error_message=error_message,
-                        user_id=user_id,
-                        ai_fixer=ai_fixer_callback,
-                    )
+                # Use SimpleFixer for all errors - let AI decide
+                logger.info(f"[DockerExecutor:{project_id}] Using SimpleFixer (Bolt.new style)")
+                result = await simple_fixer.fix(
+                    project_path=project_path,
+                    command=command or "unknown",
+                    output=error_message,
+                    exit_code=None
+                )
 
                 # Log result
                 if result.success:
-                    logger.info(f"[DockerExecutor:{project_id}] [PRODUCTION] Fix successful: {result.fix_applied}")
-                    logger.info(f"[DockerExecutor:{project_id}] [PRODUCTION] Files modified: {result.files_modified}")
+                    logger.info(f"[DockerExecutor:{project_id}] [SIMPLE] Fix successful: {result.message}")
+                    logger.info(f"[DockerExecutor:{project_id}] [SIMPLE] Files modified: {result.files_modified}")
 
                     # Notify frontend
                     log_bus = get_log_bus(project_id)
                     if log_bus:
                         log_bus.add_log(
                             source="autofixer",
-                            message=f"[OK] Auto-fix: {result.fix_applied}",
-                            severity="success"
+                            level="success",
+                            message=f"[OK] Auto-fix applied successfully"
                         )
                 else:
-                    logger.warning(f"[DockerExecutor:{project_id}] [PRODUCTION] Fix failed: {result.fix_applied}")
-
-                    # Log metrics for debugging
-                    metrics = get_global_metrics()
-                    logger.info(f"[DockerExecutor:{project_id}] [PRODUCTION] Global metrics: {metrics}")
+                    logger.warning(f"[DockerExecutor:{project_id}] [SIMPLE] Fix failed: {result.message}")
 
             except Exception as e:
                 logger.error(f"[DockerExecutor:{project_id}] [PRODUCTION] Auto-fix error: {e}")
@@ -877,8 +850,8 @@ class DockerExecutor:
             if log_bus:
                 log_bus.add_log(
                     source="autofixer",
-                    message=f"✅ Auto-fix applied: {', '.join(autofixer.fixes_applied) or 'Files updated'}",
-                    severity="success"
+                    level="success",
+                    message=f"Auto-fix applied: {', '.join(autofixer.fixes_applied) or 'Files updated'}"
                 )
         else:
             logger.warning(f"[DockerExecutor:{project_id}] ⚠️ UNIVERSAL AUTO-FIX: First attempt failed, trying AI fix...")
@@ -929,7 +902,9 @@ class DockerExecutor:
             "frontend/vite.config.ts",
             "frontend/vite.config.js",
             "frontend/tsconfig.json",
+            "frontend/tsconfig.node.json",
             "tsconfig.json",
+            "tsconfig.node.json",
             "frontend/tailwind.config.js",
             "frontend/postcss.config.js",
             # Application config
@@ -1572,18 +1547,46 @@ class DockerExecutor:
 
     async def _check_docker_available(self) -> bool:
         """Check if Docker is available and running"""
+        import shutil
         try:
-            process = await asyncio.create_subprocess_exec(
-                "docker", "info",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            await process.wait()
-            return process.returncode == 0
+            # First check if docker is in PATH
+            docker_path = shutil.which("docker")
+            if not docker_path:
+                logger.warning("[DockerExecutor] Docker not found in PATH")
+                return False
+
+            logger.info(f"[DockerExecutor] Found docker at: {docker_path}")
+
+            # Use shell=True on Windows for better compatibility
+            import sys
+            if sys.platform == "win32":
+                process = await asyncio.create_subprocess_shell(
+                    "docker info",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+            else:
+                process = await asyncio.create_subprocess_exec(
+                    "docker", "info",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+
+            stdout, stderr = await process.communicate()
+
+            if process.returncode == 0:
+                logger.info("[DockerExecutor] Docker is available and running")
+                return True
+            else:
+                stderr_text = stderr.decode('utf-8', errors='replace') if stderr else ''
+                logger.warning(f"[DockerExecutor] Docker info failed (code {process.returncode}): {stderr_text[:200]}")
+                return False
+
         except FileNotFoundError:
+            logger.warning("[DockerExecutor] Docker executable not found")
             return False
         except Exception as e:
-            logger.error(f"Error checking Docker: {e}")
+            logger.error(f"[DockerExecutor] Error checking Docker: {type(e).__name__}: {e}")
             return False
 
     async def build_image(
@@ -1718,13 +1721,22 @@ class DockerExecutor:
                         detected_port = self._extract_port_from_output(output, framework)
                         if detected_port:
                             port_detected = True
-                            yield f"\n{'='*50}\n"
-                            yield f"SERVER STARTED!\n"
-                            yield f"Preview URL: {preview_url}\n"
-                            yield f"{'='*50}\n\n"
-
-                            # Send special event for frontend
-                            yield f"__SERVER_STARTED__:{preview_url}\n"
+                            # For FULLSTACK projects, ALWAYS use the frontend port for preview
+                            if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
+                                preview_url = f"http://localhost:{host_port}"
+                                backend_port = host_port + 1000
+                                yield f"\n{'='*50}\n"
+                                yield f"FULLSTACK SERVERS STARTED!\n"
+                                yield f"Frontend (Preview): {preview_url}\n"
+                                yield f"Backend API: http://localhost:{backend_port}\n"
+                                yield f"{'='*50}\n\n"
+                                yield f"__SERVER_STARTED__:{preview_url}\n"
+                            else:
+                                yield f"\n{'='*50}\n"
+                                yield f"SERVER STARTED!\n"
+                                yield f"Preview URL: {preview_url}\n"
+                                yield f"{'='*50}\n\n"
+                                yield f"__SERVER_STARTED__:{preview_url}\n"
 
                     # Check for common "ready" messages
                     ready_patterns = [
@@ -1738,11 +1750,22 @@ class DockerExecutor:
                     ]
                     if not port_detected and any(p in output.lower() for p in ready_patterns):
                         port_detected = True
-                        yield f"\n{'='*50}\n"
-                        yield f"SERVER STARTED!\n"
-                        yield f"Preview URL: {preview_url}\n"
-                        yield f"{'='*50}\n\n"
-                        yield f"__SERVER_STARTED__:{preview_url}\n"
+                        # For FULLSTACK projects, ALWAYS use the frontend port for preview
+                        if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
+                            preview_url = f"http://localhost:{host_port}"
+                            backend_port = host_port + 1000
+                            yield f"\n{'='*50}\n"
+                            yield f"FULLSTACK SERVERS STARTED!\n"
+                            yield f"Frontend (Preview): {preview_url}\n"
+                            yield f"Backend API: http://localhost:{backend_port}\n"
+                            yield f"{'='*50}\n\n"
+                            yield f"__SERVER_STARTED__:{preview_url}\n"
+                        else:
+                            yield f"\n{'='*50}\n"
+                            yield f"SERVER STARTED!\n"
+                            yield f"Preview URL: {preview_url}\n"
+                            yield f"{'='*50}\n\n"
+                            yield f"__SERVER_STARTED__:{preview_url}\n"
 
             await process.wait()
             yield f"Container exited with code: {process.returncode}\n"
@@ -2363,8 +2386,13 @@ class DockerExecutor:
 
                 # WINDOWS FIX: Use synchronous subprocess for reliable output capture
                 if sys.platform == 'win32':
-                    is_install = 'install' in command.lower()
-                    logger.info(f"[DockerExecutor:{project_id}] Windows mode, install={is_install}")
+                    # Detect if this is ONLY an install command (not followed by a dev server)
+                    # Commands like "npm install && npm run dev" should NOT be treated as install-only
+                    cmd_lower = command.lower()
+                    has_install = 'install' in cmd_lower or 'dependency:resolve' in cmd_lower
+                    has_dev_server = any(p in cmd_lower for p in ['npm run dev', 'npm start', 'run dev', 'spring-boot:run', 'bootrun', 'uvicorn', 'flask run', 'streamlit'])
+                    is_install = has_install and not has_dev_server
+                    logger.info(f"[DockerExecutor:{project_id}] Windows mode, install={is_install}, has_dev={has_dev_server}")
 
                     if is_install:
                         result = sync_subprocess.run(
@@ -2388,27 +2416,46 @@ class DockerExecutor:
                         output_lines = []
                         output_queue = queue.Queue()  # Queue to share output with background monitor
 
-                        # Define critical error patterns here so they're available to the reader thread
+                        # Define critical error patterns - MUST be very specific to avoid false positives
+                        # These patterns indicate ACTUAL errors that need fixing
                         critical_error_patterns_for_reader = [
+                            # Vite/Frontend errors (very specific)
                             'Failed to resolve import',
-                            'Does the file exist',
-                            '[plugin:vite',
+                            'Does the file exist?',  # More specific with question mark
+                            '[plugin:vite:',  # Must have colon after vite
                             'Cannot find module',
-                            'Module not found',
-                            '[FATAL]',
+                            'Module not found:',  # More specific with colon
+                            'ENOENT: no such file',  # File not found
+                            'SyntaxError:',  # JS/TS syntax errors
+                            'TypeError:',  # Type errors
+                            # Maven/Java errors (very specific)
+                            '[ERROR] COMPILATION ERROR',  # Maven compilation error
                             'Non-parseable POM',
-                            'BUILD FAILURE',
-                            'Compilation failure',
-                            'FATAL ERROR',
-                            'fatal error',
-                            '[postcss]',  # PostCSS errors
+                            '[ERROR] Failed to execute goal',
+                            'java.lang.NullPointerException',
+                            'java.lang.ClassNotFoundException',
+                            # PostCSS/Tailwind
+                            '[postcss] ',  # PostCSS with space
+                        ]
+
+                        # Patterns that should NOT trigger auto-fix (false positives)
+                        false_positive_patterns = [
+                            '[INFO] BUILD FAILURE',  # This appears during SUCCESSFUL dependency resolution
+                            'BUILD SUCCESS',
+                            'Started Application',
+                            'Tomcat started on port',
+                            'DispatcherServlet',
+                            '\\/ ___ \'',  # Spring Boot ASCII art
+                            '( ( )\\_',  # Spring Boot ASCII art
+                            'Hibernate:',  # Normal Hibernate SQL logging
+                            '--- maven',  # Maven lifecycle output
                         ]
 
                         # Reference to self for the thread
                         executor_self = self
                         reader_error_buffer = []
                         last_fix_time = [0]  # Use list to allow mutation in closure
-                        FIX_COOLDOWN = 30
+                        FIX_COOLDOWN = 60  # Increased to 60 seconds to prevent spam
 
                         def read_output_with_monitoring():
                             """Read output and also monitor for errors that occur after server starts"""
@@ -2425,14 +2472,18 @@ class DockerExecutor:
                                             reader_error_buffer.pop(0)
 
                                         # Check for critical errors CONTINUOUSLY
-                                        if any(p in line_stripped for p in critical_error_patterns_for_reader):
+                                        # First check if it's a false positive
+                                        is_false_positive = any(fp in line_stripped for fp in false_positive_patterns)
+                                        is_critical_error = any(p in line_stripped for p in critical_error_patterns_for_reader)
+
+                                        if is_critical_error and not is_false_positive:
                                             current_time = time_module.time()
 
                                             # Rate limit fix attempts
                                             if current_time - last_fix_time[0] >= FIX_COOLDOWN:
                                                 last_fix_time[0] = current_time
                                                 full_context = '\n'.join(reader_error_buffer[-50:])
-                                                logger.info(f"[DockerExecutor:{project_id}] Reader thread detected error: {line_stripped[:100]}")
+                                                logger.info(f"[DockerExecutor:{project_id}] Reader thread detected REAL error: {line_stripped[:100]}")
 
                                                 # Trigger auto-fix
                                                 executor_self._trigger_auto_fix_background(
@@ -2462,28 +2513,9 @@ class DockerExecutor:
                         if any(p in line for p in error_patterns):
                             has_error = True
                             # Check for critical errors that need immediate auto-fix
-                            # (even if server is still running)
-                            critical_error_patterns = [
-                                'Failed to resolve import',
-                                'Does the file exist',
-                                '[plugin:vite',
-                                'Cannot find module',
-                                'Module not found',
-                                # Maven/Java critical errors
-                                '[FATAL]',
-                                'Non-parseable POM',
-                                'BUILD FAILURE',
-                                'Compilation failure',
-                                # General fatal errors
-                                'FATAL ERROR',
-                                'fatal error',
-                            ]
-                            if any(p in line for p in critical_error_patterns):
-                                full_context = '\n'.join(error_buffer[-50:])
-                                log_bus.add_build_error(message=f"Critical error detected:\n\n{full_context}")
-                                # Trigger auto-fix immediately for critical errors
-                                self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None))
-                                logger.info(f"[DockerExecutor:{project_id}] Critical error triggered auto-fix: {line[:100]}")
+                            # Uses the same patterns defined above for the reader thread
+                            # NOTE: We no longer trigger auto-fix here since the reader thread handles it
+                            # This prevents duplicate triggers and race conditions
                         # Detect port conflicts for auto-retry
                         if self._is_port_conflict(line):
                             port_conflict_detected = True
@@ -2493,8 +2525,16 @@ class DockerExecutor:
                             detected_port = self._extract_port_from_output(line, framework)
                             if detected_port:
                                 server_started = True
-                                preview_url = f"http://localhost:{detected_port}"
-                                yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+                                # For FULLSTACK projects, ALWAYS use the frontend port for preview
+                                # (backend port may be detected first but users want to see the UI)
+                                if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
+                                    # host_port is the frontend port, backend is +1000
+                                    preview_url = f"http://localhost:{host_port}"
+                                    backend_port = host_port + 1000
+                                    yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+                                else:
+                                    preview_url = f"http://localhost:{detected_port}"
+                                    yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
 
                     # NOTE: Background error monitoring is now handled by the reader thread itself
                     # (read_output_with_monitoring) which continues running after the 15s join timeout
@@ -2559,8 +2599,14 @@ class DockerExecutor:
                                 detected_port = self._extract_port_from_output(line, framework)
                                 if detected_port:
                                     server_started = True
-                                    preview_url = f"http://localhost:{detected_port}"
-                                    yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+                                    # For FULLSTACK projects, ALWAYS use the frontend port for preview
+                                    if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
+                                        preview_url = f"http://localhost:{host_port}"
+                                        backend_port = host_port + 1000
+                                        yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+                                    else:
+                                        preview_url = f"http://localhost:{detected_port}"
+                                        yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
 
                     # ============================================================
                     # DYNAMIC AUTO-FIX: Triggered for ANY failure, not just patterns!
@@ -2633,8 +2679,14 @@ class DockerExecutor:
                                     detected_port = self._extract_port_from_output(output, framework)
                                     if detected_port:
                                         server_started = True
-                                        preview_url = f"http://localhost:{detected_port}"
-                                        yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+                                        # For FULLSTACK projects, ALWAYS use the frontend port for preview
+                                        if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
+                                            preview_url = f"http://localhost:{host_port}"
+                                            backend_port = host_port + 1000
+                                            yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+                                        else:
+                                            preview_url = f"http://localhost:{detected_port}"
+                                            yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
 
                     await process.wait()
 
@@ -2676,8 +2728,14 @@ class DockerExecutor:
                                         detected_port = self._extract_port_from_output(output, framework)
                                         if detected_port:
                                             server_started = True
-                                            preview_url = f"http://localhost:{detected_port}"
-                                            yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+                                            # For FULLSTACK projects, ALWAYS use the frontend port for preview
+                                            if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
+                                                preview_url = f"http://localhost:{host_port}"
+                                                backend_port = host_port + 1000
+                                                yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+                                            else:
+                                                preview_url = f"http://localhost:{detected_port}"
+                                                yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
                         await process.wait()
 
                     if process.returncode != 0 and not port_conflict_detected:
@@ -2728,20 +2786,153 @@ class DockerExecutor:
                 self._trigger_auto_fix_background(project_id, project_path, context_msg, command, getattr(self, '_current_user_id', None))
 
     async def stop_direct(self, project_id: str) -> bool:
-        """Stop a directly running process"""
+        """Stop a directly running process and all its children (Windows-compatible)"""
+        stopped = False
+
+        # Method 1: Kill process from our tracking dict
         if project_id in self._running_processes:
             process = self._running_processes[project_id]
+            pid = process.pid
             try:
+                # On Windows, we need to kill the entire process tree
+                import platform
+                if platform.system() == 'Windows':
+                    # Use taskkill to kill process tree on Windows
+                    import subprocess
+                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)],
+                                   capture_output=True, timeout=10)
+                    logger.info(f"[Stop] Killed process tree for PID {pid}")
+                else:
+                    # On Unix, send SIGTERM to process group
+                    import os
+                    import signal
+                    try:
+                        os.killpg(os.getpgid(pid), signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+
                 process.terminate()
-                await asyncio.wait_for(process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                process.kill()
+                # Wait for process to finish (process.wait() is synchronous for subprocess.Popen)
+                # Since we already killed the process tree with taskkill, just poll
+                process.poll()
+            except Exception as e:
+                logger.warning(f"[Stop] Error stopping process {pid}: {e}")
             finally:
                 del self._running_processes[project_id]
-                if project_id in self._assigned_ports:
-                    del self._assigned_ports[project_id]
-            return True
+                stopped = True
+
+        # Method 2: Kill any processes using the assigned port
+        if project_id in self._assigned_ports:
+            port = self._assigned_ports[project_id]
+            try:
+                await self._kill_process_on_port(port)
+                logger.info(f"[Stop] Killed processes on port {port}")
+            except Exception as e:
+                logger.warning(f"[Stop] Error killing process on port {port}: {e}")
+            finally:
+                del self._assigned_ports[project_id]
+                stopped = True
+
+        return stopped
+
+    async def _kill_process_on_port(self, port: int) -> bool:
+        """Kill any process listening on the specified port"""
+        import platform
+        import subprocess
+
+        try:
+            if platform.system() == 'Windows':
+                # Find PID using netstat
+                result = subprocess.run(
+                    ['netstat', '-ano'],
+                    capture_output=True, text=True, timeout=10
+                )
+                for line in result.stdout.splitlines():
+                    if f':{port}' in line and 'LISTENING' in line:
+                        parts = line.split()
+                        if parts:
+                            pid = parts[-1]
+                            if pid.isdigit():
+                                subprocess.run(['taskkill', '/F', '/PID', pid],
+                                             capture_output=True, timeout=10)
+                                logger.info(f"[Stop] Killed PID {pid} on port {port}")
+                                return True
+            else:
+                # Unix: use lsof or fuser
+                result = subprocess.run(
+                    ['lsof', '-t', f'-i:{port}'],
+                    capture_output=True, text=True, timeout=10
+                )
+                pids = result.stdout.strip().splitlines()
+                for pid in pids:
+                    if pid.isdigit():
+                        subprocess.run(['kill', '-9', pid], capture_output=True, timeout=10)
+                        logger.info(f"[Stop] Killed PID {pid} on port {port}")
+                        return True
+        except Exception as e:
+            logger.warning(f"[Stop] Error finding/killing process on port {port}: {e}")
+
         return False
+
+
+    async def _ensure_essential_configs(self, project_path: Path, project_id: str) -> list:
+        """
+        Ensure essential config files exist for the project.
+        Creates missing files from templates if they don't exist.
+        
+        Returns list of created files.
+        """
+        created_files = []
+        
+        # Detect project type
+        frontend_path = project_path / 'frontend'
+        has_frontend = frontend_path.exists()
+        
+        # Check for React/Vite indicators
+        is_vite_react = False
+        package_json_path = frontend_path / 'package.json' if has_frontend else project_path / 'package.json'
+        
+        if package_json_path.exists():
+            try:
+                import json
+                with open(package_json_path, 'r') as f:
+                    pkg = json.load(f)
+                deps = {**pkg.get('dependencies', {}), **pkg.get('devDependencies', {})}
+                is_vite_react = 'vite' in deps or 'react' in deps
+            except:
+                pass
+        
+        if not is_vite_react:
+            return created_files
+            
+        # Essential files for Vite/React projects
+        essential_files = {
+            'tsconfig.json': VITE_REACT_TEMPLATES.get('tsconfig.json'),
+            'tsconfig.node.json': VITE_REACT_TEMPLATES.get('tsconfig.node.json'),
+            'tailwind.config.js': VITE_REACT_TEMPLATES.get('tailwind.config.js'),
+            'postcss.config.js': VITE_REACT_TEMPLATES.get('postcss.config.js'),
+            'vite.config.ts': VITE_REACT_TEMPLATES.get('vite.config.ts'),
+        }
+        
+        # Determine base path
+        base_path = frontend_path if has_frontend else project_path
+        
+        for filename, template_content in essential_files.items():
+            if not template_content:
+                continue
+                
+            file_path = base_path / filename
+            if not file_path.exists():
+                try:
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write(template_content)
+                    created_files.append(str(filename))
+                    logger.info(f'[DockerExecutor:{project_id}] Created missing config: {filename}')
+                except Exception as e:
+                    logger.warning(f'[DockerExecutor:{project_id}] Failed to create {filename}: {e}')
+        
+        return created_files
 
     # ============= SMART RUN (DOCKER WITH FALLBACK) =============
 
@@ -2840,6 +3031,16 @@ class DockerExecutor:
         else:
             yield "⚠️ Missing imports detected - SDK Fixer Agent triggered in background\n"
             yield "   (The server will start while missing files are being generated)\n\n"
+
+        # ===== ENSURE ESSENTIAL CONFIG FILES: Create missing tsconfig, tailwind, etc. =====
+        yield "📋 Checking essential config files...\n"
+        created_configs = await self._ensure_essential_configs(project_path, project_id)
+        if created_configs:
+            for cfg in created_configs:
+                yield f"  + Created missing: {cfg}\n"
+            yield f"✅ Created {len(created_configs)} missing config files\n\n"
+        else:
+            yield "✅ All config files present\n\n"
 
         # Ensure Dockerfile exists
         framework, dockerfile_created = await self.ensure_dockerfile(project_path)
@@ -4231,13 +4432,30 @@ class DockerComposeExecutor:
                                 server_started = True
                                 # Try to extract port
                                 match = re.search(r':(\d+)', output)
-                                port = int(match.group(1)) if match else 3000
-                                preview_url = f"http://localhost:{port}"
-                                yield f"\n{'='*50}\n"
-                                yield f"SERVER STARTED!\n"
-                                yield f"Preview URL: {preview_url}\n"
-                                yield f"{'='*50}\n"
-                                yield f"__SERVER_STARTED__:{preview_url}\n"
+                                detected_port = int(match.group(1)) if match else 3000
+
+                                # For fullstack Docker Compose, prefer the frontend port
+                                is_fullstack = (project_path / "frontend").exists() and (project_path / "backend").exists()
+                                allocated = port_allocator.get_ports(project_id)
+
+                                if is_fullstack and allocated:
+                                    # Use frontend port for preview (user wants to see UI, not API)
+                                    frontend_port = allocated.get("frontend", detected_port)
+                                    backend_port_val = allocated.get("backend", detected_port + 1000)
+                                    preview_url = f"http://localhost:{frontend_port}"
+                                    yield f"\n{'='*50}\n"
+                                    yield f"FULLSTACK SERVERS STARTED!\n"
+                                    yield f"Frontend (Preview): {preview_url}\n"
+                                    yield f"Backend API: http://localhost:{backend_port_val}\n"
+                                    yield f"{'='*50}\n"
+                                    yield f"__SERVER_STARTED__:{preview_url}\n"
+                                else:
+                                    preview_url = f"http://localhost:{detected_port}"
+                                    yield f"\n{'='*50}\n"
+                                    yield f"SERVER STARTED!\n"
+                                    yield f"Preview URL: {preview_url}\n"
+                                    yield f"{'='*50}\n"
+                                    yield f"__SERVER_STARTED__:{preview_url}\n"
                                 break
 
             await process.wait()

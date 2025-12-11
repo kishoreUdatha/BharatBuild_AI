@@ -735,6 +735,7 @@ class WorkflowStep:
     retry_count: int = 3
     timeout: int = 120  # seconds
     stream_output: bool = False  # Whether to stream output in real-time
+    hidden: bool = False  # If True, step runs but doesn't show in UI progress
 
 
 @dataclass
@@ -753,6 +754,9 @@ class ExecutionContext:
     project_type: Optional[str] = None  # Commercial, Academic, Research, Prototype, etc.
     tech_stack: Optional[Dict[str, Any]] = None  # Detected tech stack from Planner
     workflow_steps: List[Dict[str, Any]] = None  # Workflow steps for frontend UI display
+    project_name: Optional[str] = None  # Human-readable project name from Planner
+    project_description: Optional[str] = None  # Project description from Planner
+    features: Optional[List[str]] = None  # Project features from Planner
 
     def __post_init__(self):
         if self.files_created is None:
@@ -927,36 +931,38 @@ class WorkflowEngine:
         """Load default workflow patterns"""
 
         # Bolt.new standard workflow with run → fix → run loop
+        # Simplified step names for students - shows only essential progress
         self._workflows["bolt_standard"] = [
             WorkflowStep(
                 agent_type=AgentType.PLANNER,
-                name="Create Plan",
-                description="Analyze request and create implementation plan",
+                name="Planning Project",
+                description="Analyzing your request and designing the project structure",
                 timeout=120,
                 retry_count=2
             ),
             WorkflowStep(
                 agent_type=AgentType.WRITER,
-                name="Generate Code",
-                description="Write code based on plan",
+                name="Writing Code",
+                description="Creating all project files and code",
                 timeout=300,
                 retry_count=2,
                 stream_output=True
             ),
             WorkflowStep(
                 agent_type=AgentType.VERIFIER,
-                name="Verify Files",
-                description="Check if all files are complete and correct",
+                name="Checking Files",
+                description="Verifying all files are complete",
                 timeout=120,
                 retry_count=1,
-                stream_output=False
+                stream_output=False,
+                hidden=True  # Hide from UI - internal step
             ),
             # Runner: Run npm install / npm run build to check for compilation errors
             # ALWAYS runs if files are created (fixed condition to check file paths properly)
             WorkflowStep(
                 agent_type=AgentType.RUNNER,
-                name="Build & Check Errors",
-                description="Install dependencies and check for compilation errors",
+                name="Building Project",
+                description="Installing dependencies and building your project",
                 timeout=180,
                 retry_count=1,
                 stream_output=True,
@@ -970,31 +976,30 @@ class WorkflowEngine:
             # Fixer: Fix any errors found during build
             WorkflowStep(
                 agent_type=AgentType.FIXER,
-                name="Fix Errors",
-                description="Fix any compilation or syntax errors",
+                name="Fixing Issues",
+                description="Automatically fixing any errors found",
                 timeout=300,
                 retry_count=2,
                 stream_output=True,
                 condition=lambda ctx: len(ctx.errors) > 0
             ),
-            # Re-run after fixes to verify they work
+            # Re-run after fixes to verify they work - Hidden from UI
             WorkflowStep(
                 agent_type=AgentType.RUNNER,
-                name="Verify Fixes",
-                description="Re-run build to verify errors are fixed",
+                name="Verifying Build",
+                description="Confirming all issues are resolved",
                 timeout=180,
                 retry_count=1,
                 stream_output=True,
+                hidden=True,  # Hide from UI - internal verification
                 condition=lambda ctx: len(ctx.files_modified) > 0 and any(f.get("operation") == "fix" for f in ctx.files_modified)
             ),
             # Documenter: Generate documentation (SRS, UML, Reports, etc.)
-            # NOW runs for ALL projects (not just Academic)
-            # For Academic projects: Full docs (SRS, UML, Reports, PPT, Viva)
-            # For Commercial projects: Basic docs (SRS, Architecture, API docs)
+            # For students: Full docs (Project Report, SRS, PPT, Viva Q&A)
             WorkflowStep(
                 agent_type=AgentType.DOCUMENTER,
-                name="Generate Documentation",
-                description="Create SRS, UML diagrams, Reports, PPT for project documentation",
+                name="Creating Documents",
+                description="Generating Project Report, SRS, Presentation, and Viva Q&A",
                 timeout=300,
                 retry_count=2,
                 stream_output=True,
@@ -1051,6 +1056,18 @@ class WorkflowEngine:
                 timeout=180,
                 retry_count=2,
                 stream_output=True
+            ),
+            # DOCUMENTER: Generate academic docs for ALL users
+            # This is a student-focused platform, so always generate docs
+            WorkflowStep(
+                agent_type=AgentType.DOCUMENTER,
+                name="Creating Documents",
+                description="Create Project Report, SRS, PPT, Viva Q&A",
+                timeout=300,
+                retry_count=2,
+                stream_output=True,
+                # Run for ALL projects that created files
+                condition=lambda ctx: len(ctx.files_created) > 0
             ),
         ]
 
@@ -1250,6 +1267,7 @@ class DynamicOrchestrator:
                     "complexity": "simple",
                     "max_files": max_files,
                     "recommended_stack": stacks.get('flutter_simple', "Flutter + Dart") if "flutter" in request_lower else stacks.get('react_native_simple', "React Native + TypeScript"),
+                    "include_frontend": True,  # Mobile apps are "frontend"
                     "include_backend": False,
                     "include_docker": False,
                     "hint": f"Simple mobile app. Generate {max_files} files max. Include screens, widgets, models."
@@ -1261,6 +1279,7 @@ class DynamicOrchestrator:
                     "complexity": "complex",
                     "max_files": max_files,
                     "recommended_stack": stacks.get('flutter_complex', "Flutter + Dart + Provider/Bloc") if "flutter" in request_lower else stacks.get('react_native_complex', "React Native + TypeScript + Redux"),
+                    "include_frontend": True,  # Mobile apps are "frontend"
                     "include_backend": "backend" in request_lower or "api" in request_lower,
                     "include_docker": False,
                     "hint": f"Full mobile app. Generate up to {max_files} files. Include screens, widgets, models, services, state management."
@@ -1268,7 +1287,16 @@ class DynamicOrchestrator:
 
         # ============== JAVA/SPRING BOOT ==============
         if is_java:
-            spring_limits = tech_limits.get('spring_boot', {'simple': 20, 'complex': 50})
+            spring_limits = tech_limits.get('spring_boot', {'simple': 20, 'complex': 50, 'fullstack': 60})
+
+            # Check if user explicitly wants "backend only" (no frontend)
+            # NOTE: "backend use spring boot" means "use spring boot FOR backend", not "only backend"
+            backend_only_keywords = ["backend only", "api only", "rest api only", "no frontend", "only backend", "just backend", "backend api only"]
+            is_backend_only = any(kw in request_lower for kw in backend_only_keywords)
+
+            # Check if user wants fullstack (app, application, platform, ecommerce, etc.)
+            fullstack_keywords = ["app", "application", "platform", "website", "fullstack", "full-stack", "full stack", "with frontend", "with react", "with angular", "with vue"]
+            wants_fullstack = any(kw in request_lower for kw in fullstack_keywords) and not is_backend_only
 
             if any(kw in request_lower for kw in simple_keywords):
                 logger.info(f"[ComplexityDetection] Detected SIMPLE Spring Boot project")
@@ -1278,19 +1306,34 @@ class DynamicOrchestrator:
                     "max_files": max_files,
                     "recommended_stack": stacks.get('spring_boot_simple', "Spring Boot + Java + Maven + PostgreSQL"),
                     "include_backend": True,
+                    "include_frontend": False,
                     "include_docker": False,
                     "hint": f"Simple Spring Boot API. Generate {max_files} files max. Include controllers, services, repositories, models."
                 }
+            elif wants_fullstack:
+                # Fullstack: Spring Boot backend + React/Vue frontend
+                logger.info(f"[ComplexityDetection] Detected FULLSTACK Spring Boot + React project")
+                max_files = spring_limits.get('fullstack', 60)
+                return {
+                    "complexity": "complex",
+                    "max_files": max_files,
+                    "recommended_stack": stacks.get('spring_boot_fullstack', "Spring Boot + Java + Maven + PostgreSQL + React + Vite + TypeScript"),
+                    "include_backend": True,
+                    "include_frontend": True,
+                    "include_docker": True,
+                    "hint": f"Full-stack application with Spring Boot backend and React frontend. Generate up to {max_files} files. Structure: backend/ folder with Spring Boot (controllers, services, repositories, models, DTOs, configs, security) AND frontend/ folder with React (components, pages, hooks, services, styles). Include docker-compose.yml for both services."
+                }
             else:
-                logger.info(f"[ComplexityDetection] Detected FULL Spring Boot project")
+                logger.info(f"[ComplexityDetection] Detected FULL Spring Boot backend-only project")
                 max_files = spring_limits.get('complex', 50)
                 return {
                     "complexity": "complex",
                     "max_files": max_files,
                     "recommended_stack": stacks.get('spring_boot_complex', "Spring Boot + Java + Maven + PostgreSQL + Spring Security"),
                     "include_backend": True,
+                    "include_frontend": False,
                     "include_docker": True,
-                    "hint": f"Full Spring Boot application. Generate up to {max_files} files. Include controllers, services, repositories, models, DTOs, configs, security."
+                    "hint": f"Full Spring Boot backend application. Generate up to {max_files} files. Include controllers, services, repositories, models, DTOs, configs, security."
                 }
 
         # ============== DJANGO ==============
@@ -1304,6 +1347,7 @@ class DynamicOrchestrator:
                     "complexity": "simple",
                     "max_files": max_files,
                     "recommended_stack": stacks.get('django_simple', "Django + Python + PostgreSQL"),
+                    "include_frontend": True,  # Django includes templates (frontend)
                     "include_backend": True,
                     "include_docker": False,
                     "hint": f"Simple Django app. Generate {max_files} files max. Include models, views, urls, templates."
@@ -1315,6 +1359,7 @@ class DynamicOrchestrator:
                     "complexity": "complex",
                     "max_files": max_files,
                     "recommended_stack": stacks.get('django_complex', "Django + DRF + PostgreSQL + Celery"),
+                    "include_frontend": True,  # Django includes templates (frontend)
                     "include_backend": True,
                     "include_docker": True,
                     "hint": f"Full Django application. Generate up to {max_files} files. Include models, views, serializers, urls, templates, admin, celery tasks."
@@ -1329,6 +1374,7 @@ class DynamicOrchestrator:
                 "complexity": "intermediate",
                 "max_files": max_files,
                 "recommended_stack": stacks.get('ai_ml', "Python + TensorFlow/PyTorch + Streamlit + Jupyter"),
+                "include_frontend": True,  # Includes Streamlit/Gradio UI
                 "include_backend": False,
                 "include_docker": False,
                 "hint": f"AI/ML project. Generate {max_files} files max. Include model, preprocessing, training, inference, notebooks, Streamlit/Gradio interface."
@@ -1343,6 +1389,7 @@ class DynamicOrchestrator:
                 "complexity": "minimal",
                 "max_files": max_files,
                 "recommended_stack": stacks.get('minimal', "HTML + CSS + JavaScript OR React + Vite"),
+                "include_frontend": True,
                 "include_backend": False,
                 "include_docker": False,
                 "hint": f"Generate {max_files} files MAX. Frontend only. NO backend, NO Docker."
@@ -1356,6 +1403,7 @@ class DynamicOrchestrator:
                 "complexity": "simple",
                 "max_files": max_files,
                 "recommended_stack": stacks.get('simple', "React + Vite + TypeScript + Tailwind"),
+                "include_frontend": True,
                 "include_backend": False,
                 "include_docker": False,
                 "hint": f"Generate {max_files} files MAX. Frontend only unless backend explicitly requested."
@@ -1369,9 +1417,10 @@ class DynamicOrchestrator:
                 "complexity": "complex",
                 "max_files": max_files,
                 "recommended_stack": stacks.get('complex', "Next.js + FastAPI + PostgreSQL"),
+                "include_frontend": True,
                 "include_backend": True,
                 "include_docker": True,
-                "hint": f"Full-stack project. Generate up to {max_files} files. Include frontend, backend, database models, and Docker setup."
+                "hint": f"Full-stack project. Generate up to {max_files} files. Structure: frontend/ folder with React/Next.js AND backend/ folder with FastAPI/Node.js. Include database models and Docker setup."
             }
 
         # Check if "e-commerce" without "platform" or "full"
@@ -1383,6 +1432,7 @@ class DynamicOrchestrator:
                     "complexity": "simple",
                     "max_files": max_files,
                     "recommended_stack": stacks.get('simple', "React + Vite + TypeScript + Tailwind"),
+                    "include_frontend": True,
                     "include_backend": False,
                     "include_docker": False,
                     "hint": f"E-commerce landing page. Generate {max_files} files max. Frontend only with mock data."
@@ -1396,9 +1446,10 @@ class DynamicOrchestrator:
             "complexity": "intermediate",
             "max_files": max_files,
             "recommended_stack": stacks.get('intermediate_with_backend', "React + FastAPI + PostgreSQL") if needs_backend else stacks.get('intermediate', "React + Vite + TypeScript"),
+            "include_frontend": True,
             "include_backend": needs_backend,
             "include_docker": needs_backend,
-            "hint": f"Generate {max_files} files max. {'Include backend and database.' if needs_backend else 'Frontend focused.'}"
+            "hint": f"Generate {max_files} files max. {'Structure: frontend/ and backend/ folders. Include backend and database.' if needs_backend else 'Frontend focused.'}"
         }
 
     def _parse_xml_plan(self, plan_text: str) -> Dict[str, Any]:
@@ -1955,19 +2006,20 @@ class DynamicOrchestrator:
         context.total_steps = len(workflow)
 
         # Store workflow steps as tasks for frontend UI display
-        # This allows the UI to show ALL workflow steps upfront (not just the ones that execute)
+        # Filter out hidden steps - only show user-facing steps to keep UI clean
+        visible_steps = [(idx, step) for idx, step in enumerate(workflow) if not getattr(step, 'hidden', False)]
         context.workflow_steps = [
             {
-                "number": idx + 1,
+                "number": visible_idx + 1,  # Renumber visible steps 1, 2, 3...
                 "title": step.name,
                 "name": step.name,
                 "description": step.description,
                 "agent_type": step.agent_type,
                 "has_condition": step.condition is not None
             }
-            for idx, step in enumerate(workflow)
+            for visible_idx, (_, step) in enumerate(visible_steps)
         ]
-        logger.info(f"[Workflow] Prepared {len(context.workflow_steps)} workflow steps for frontend UI")
+        logger.info(f"[Workflow] Prepared {len(context.workflow_steps)} visible workflow steps for frontend UI (hidden {len(workflow) - len(visible_steps)} internal steps)")
 
         yield OrchestratorEvent(
             type=EventType.STATUS,
@@ -2041,8 +2093,20 @@ class DynamicOrchestrator:
         logger.info(f"[WORKFLOW_STARTED] Sent initial plan_created event with {len(context.workflow_steps)} workflow tasks")
 
         try:
+            # Import cancellation check from API layer
+            from app.api.v1.endpoints.orchestrator import is_project_cancelled
+
             # Execute each step in workflow
             for step_index, step in enumerate(workflow, 1):
+                # Check for cancellation before each step
+                if is_project_cancelled(project_id):
+                    logger.info(f"[Workflow] Project {project_id} cancelled, stopping at step {step_index}")
+                    yield OrchestratorEvent(
+                        type=EventType.STATUS,
+                        data={"message": "Generation cancelled by user"}
+                    )
+                    return  # Exit workflow
+
                 context.current_step = step_index
 
                 # Check step condition (if any)
@@ -2168,17 +2232,32 @@ class DynamicOrchestrator:
                     ]
 
                     # Update project record
+                    # Build update values - always include status and progress
+                    update_values = {
+                        'status': ProjectStatus.COMPLETED,
+                        's3_path': self._unified_storage.get_s3_prefix(str(user_id), project_id) if user_id else None,
+                        's3_zip_key': s3_zip_key,
+                        'plan_json': context.plan if hasattr(context, 'plan') else None,
+                        'file_index': file_index,
+                        'progress': 100
+                    }
+                    
+                    # Update project metadata from context (extracted from planner)
+                    if hasattr(context, 'project_name') and context.project_name:
+                        update_values['title'] = context.project_name
+                    if hasattr(context, 'project_description') and context.project_description:
+                        update_values['description'] = context.project_description
+                    if hasattr(context, 'project_type') and context.project_type:
+                        update_values['domain'] = context.project_type
+                    if hasattr(context, 'tech_stack') and context.tech_stack:
+                        update_values['tech_stack'] = context.tech_stack
+                    if hasattr(context, 'features') and context.features:
+                        update_values['requirements'] = context.features
+                    
                     await db.execute(
                         update(Project)
                         .where(Project.id == project_id)
-                        .values(
-                            status=ProjectStatus.COMPLETED,
-                            s3_path=self._unified_storage.get_s3_prefix(str(user_id), project_id) if user_id else None,
-                            s3_zip_key=s3_zip_key,
-                            plan_json=context.plan if hasattr(context, 'plan') else None,
-                            file_index=file_index,
-                            progress=100
-                        )
+                        .values(**update_values)
                     )
                     await db.commit()
                     logger.info(f"[Layer3-PostgreSQL] Updated project metadata for {project_id}")
@@ -2408,15 +2487,17 @@ class DynamicOrchestrator:
         logger.info(f"[Planner] Complexity: {complexity_info['complexity']}, Max files: {complexity_info['max_files']}")
 
         # Build complexity-aware prompt
+        include_frontend = complexity_info.get('include_frontend', True)  # Default to True for backward compatibility
         complexity_hint = f"""
-⚠️ COMPLEXITY DETECTION RESULT:
+COMPLEXITY DETECTION RESULT:
 - Detected Complexity: {complexity_info['complexity'].upper()}
 - Maximum Files Allowed: {complexity_info['max_files']}
 - Recommended Stack: {complexity_info['recommended_stack']}
+- Include Frontend: {'YES - Generate frontend/ folder with React/Vue/Angular' if include_frontend else 'NO - Backend only, no frontend files'}
 - Include Backend: {'YES' if complexity_info['include_backend'] else 'NO'}
 - Include Docker: {'YES' if complexity_info['include_docker'] else 'NO'}
 
-🚨 CRITICAL INSTRUCTION: {complexity_info['hint']}
+CRITICAL INSTRUCTION: {complexity_info['hint']}
 """
 
         # Build color theme instruction if user specified colors
@@ -2563,11 +2644,21 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
         project_name = parsed_data.get('project_name')
         project_description = parsed_data.get('project_description')
         complexity = parsed_data.get('complexity')
+        features = context.plan.get('features', []) if context.plan else []
 
         if project_name:
             logger.info(f"[OK] Claude suggested project name: {project_name}")
+            context.project_name = project_name  # Save to context for DOCUMENTER
         else:
-            project_name = None  # Will use frontend's extracted name as fallback
+            # Fallback: extract from user request only if Claude didn't suggest one
+            project_name = self._extract_project_name_from_request(context.user_request)
+            logger.info(f"[FALLBACK] Extracted project name from request: {project_name}")
+            context.project_name = project_name
+        
+        # Save project metadata to context for downstream use (DOCUMENTER, etc.)
+        if project_description:
+            context.project_description = project_description
+        context.features = features
 
         # NEW: Handle file-based plan format
         if use_file_mode:
@@ -4729,6 +4820,47 @@ Stream code in chunks for real-time display.
 
 💡 **Pro Tip:** Read the generated code to understand patterns - modify and experiment to learn faster."""
 
+
+    def _extract_project_name_from_request(self, user_request: str) -> str:
+        """
+        Extract a human-readable project name from the user's request.
+        Examples:
+          'create an ecommerce application' -> 'Ecommerce Application'
+          'build a task management app' -> 'Task Management App'
+          'make a weather dashboard' -> 'Weather Dashboard'
+        """
+        import re
+        
+        # Common patterns for extracting project type
+        patterns = [
+            r'(?:create|build|make|develop|generate)\s+(?:an?\s+)?(.+?)\s*(?:app(?:lication)?|system|platform|website|dashboard|portal|project)?$',
+            r'(?:create|build|make|develop|generate)\s+(?:an?\s+)?(.+?)$',
+            r'^(.+?)\s*(?:app(?:lication)?|system|platform|website|dashboard|portal|project)$',
+        ]
+        
+        request_lower = user_request.lower().strip()
+        
+        for pattern in patterns:
+            match = re.search(pattern, request_lower, re.IGNORECASE)
+            if match:
+                project_name = match.group(1).strip()
+                # Title case and clean up
+                project_name = ' '.join(word.capitalize() for word in project_name.split())
+                # Remove common filler words
+                project_name = re.sub(r'^(?:A|An|The)\s+', '', project_name)
+                if len(project_name) > 3:  # Reasonable length
+                    return project_name
+        
+        # Fallback: Extract key words from request
+        words = re.findall(r'[a-zA-Z]{3,}', user_request)
+        # Filter out common verbs
+        stop_words = {'create', 'build', 'make', 'develop', 'generate', 'with', 'using', 'the', 'and', 'for'}
+        key_words = [w for w in words if w.lower() not in stop_words][:3]
+        if key_words:
+            return ' '.join(word.capitalize() for word in key_words) + ' Project'
+        
+        return 'My Project'
+
     async def _execute_documenter(
         self,
         config: AgentConfig,
@@ -4737,15 +4869,28 @@ Stream code in chunks for real-time display.
         """
         Execute documenter agent - Generate documentation for ALL projects
 
-        For Academic projects: Full docs using ChunkedDocumentAgent (Word, PDF, PPT)
+        For Academic projects (student/faculty users): Full docs using ChunkedDocumentAgent (Word, PDF, PPT)
         For Other projects: Basic docs (README, API docs if applicable)
         """
         import asyncio
 
-        # Determine documentation type based on project
-        is_academic = context.project_type == "Academic"
+        # Determine documentation type based on project OR user role
+        # PRIORITY 1: Check user_role from metadata (student/faculty = academic)
+        user_role = context.metadata.get("user_role", "").lower() if context.metadata else ""
+        is_student_or_faculty = user_role in ["student", "faculty"]
 
-        logger.info(f"[Documenter] Generating documentation for project type: {context.project_type}, is_academic={is_academic}")
+        # PRIORITY 2: Check project_type
+        is_academic_project = context.project_type == "Academic"
+
+        # Student/Faculty users ALWAYS get academic documentation
+        is_academic = is_student_or_faculty or is_academic_project
+
+        # Update context.project_type if user is student/faculty (for downstream use)
+        if is_student_or_faculty and not is_academic_project:
+            context.project_type = "Academic"
+            logger.info(f"[Documenter] Set project_type to Academic based on user_role: {user_role}")
+
+        logger.info(f"[Documenter] Generating documentation - user_role={user_role}, project_type={context.project_type}, is_academic={is_academic}")
 
         if is_academic:
             # Use ChunkedDocumentAgent for academic projects (Word, PDF, PPT)
@@ -5137,17 +5282,21 @@ htmlcov
         )
 
         # Build project data for content generation
+        # Use context.project_name if available (from Planner), fallback to extracting from user_request
+        actual_project_name = context.project_name or self._extract_project_name_from_request(context.user_request)
+        
         project_data = {
-            "project_name": context.project_id,
-            "description": context.user_request,
+            "project_name": actual_project_name,
+            "description": context.project_description or context.user_request,
             "plan": context.plan.get("raw", "") if context.plan else "",
             "files": context.files_created,
-            "tech_stack": context.tech_stack or []
+            "tech_stack": context.tech_stack or [],
+            "features": context.features or []
         }
 
         # Default college info (can be customized later via API)
         college_info = CollegeInfo(
-            project_title=context.project_id.replace("-", " ").title()
+            project_title=actual_project_name
         )
 
         doc_count = 0

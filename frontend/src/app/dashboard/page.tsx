@@ -1,147 +1,229 @@
 'use client'
 
-import { useState } from 'react'
-import { TokenBalanceCard } from '@/components/dashboard/TokenBalanceCard'
-import { CreateProjectForm } from '@/components/projects/CreateProjectForm'
-import { ProjectExecutionView } from '@/components/projects/ProjectExecutionView'
-import { TokenAnalytics } from '@/components/analytics/TokenAnalytics'
-import { TokenPurchase } from '@/components/tokens/TokenPurchase'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import {
-  LayoutDashboard,
-  FolderPlus,
-  BarChart3,
-  ShoppingCart,
-  Coins
+  GraduationCap,
+  FolderKanban,
+  CheckCircle2,
+  FileText,
+  Coins,
+  Loader2,
+  RefreshCw
 } from 'lucide-react'
+import { apiClient } from '@/lib/api-client'
+import { StatsCard } from '@/components/dashboard/StatsCard'
+import { DashboardProjectCard } from '@/components/dashboard/DashboardProjectCard'
+import { DocumentsPanel } from '@/components/dashboard/DocumentsPanel'
+import { QuickActionsBar } from '@/components/dashboard/QuickActionsBar'
 
-export default function DashboardPage() {
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
+interface Project {
+  id: string
+  title: string
+  description?: string
+  status: 'draft' | 'in_progress' | 'processing' | 'completed' | 'failed'
+  progress?: number
+  created_at: string
+  documents_count?: number
+}
 
-  const handleProjectCreated = (project: any) => {
-    setActiveProjectId(project.id)
+interface DashboardStats {
+  total_projects: number
+  completed_projects: number
+  total_documents: number
+  tokens_used: number
+}
+
+export default function StudentDashboard() {
+  const router = useRouter()
+  const [projects, setProjects] = useState<Project[]>([])
+  const [stats, setStats] = useState<DashboardStats>({
+    total_projects: 0,
+    completed_projects: 0,
+    total_documents: 0,
+    tokens_used: 0
+  })
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [tokenBalance, setTokenBalance] = useState<number>(0)
+
+  useEffect(() => {
+    fetchDashboardData()
+  }, [])
+
+  const fetchDashboardData = async () => {
+    setIsLoading(true)
+    try {
+      // Fetch projects
+      const projectsResponse = await apiClient.get<{
+        items: Project[]
+        total: number
+      }>('/projects/list?limit=6&sort_by=created_at&sort_order=desc')
+
+      const projectsList = projectsResponse.items || []
+      setProjects(projectsList)
+
+      // Calculate stats from projects
+      const completedCount = projectsList.filter(p => p.status === 'completed').length
+      const docsCount = projectsList.reduce((sum, p) => sum + (p.documents_count || 0), 0)
+
+      setStats({
+        total_projects: projectsResponse.total || projectsList.length,
+        completed_projects: completedCount,
+        total_documents: docsCount,
+        tokens_used: 0
+      })
+
+      // Fetch token balance
+      try {
+        const userResponse = await apiClient.get<{ token_balance: number }>('/users/me')
+        setTokenBalance(userResponse.token_balance || 0)
+      } catch {
+        // Ignore token fetch errors
+      }
+    } catch (error) {
+      console.error('Failed to fetch dashboard data:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleSelectForDocuments = (project: Project) => {
+    setSelectedProject(selectedProject?.id === project.id ? null : project)
+  }
+
+  const handleCreateProject = () => {
+    router.push('/bolt')
+  }
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+          <p className="text-gray-400">Loading dashboard...</p>
+        </div>
+      </div>
+    )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-[#0a0a0f]">
       {/* Header */}
-      <div className="border-b bg-white">
-        <div className="container mx-auto px-4 py-6">
-          <h1 className="text-3xl font-bold">BharatBuild AI Dashboard</h1>
-          <p className="text-muted-foreground mt-1">
-            AI-powered project generation platform
-          </p>
+      <header className="border-b border-[#222] bg-[#0a0a0f]/80 backdrop-blur-sm sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-500">
+                <GraduationCap className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-white">Student Dashboard</h1>
+                <p className="text-sm text-gray-400">Manage your projects and documents</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <button
+                onClick={fetchDashboardData}
+                className="p-2 rounded-lg hover:bg-[#222] text-gray-400 hover:text-white transition-colors"
+                title="Refresh"
+              >
+                <RefreshCw className="h-5 w-5" />
+              </button>
+              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#1a1a1a] border border-[#333]">
+                <Coins className="h-4 w-4 text-yellow-500" />
+                <span className="font-semibold text-white">{tokenBalance.toLocaleString()}</span>
+                <span className="text-gray-400 text-sm">tokens</span>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
+      </header>
 
-      {/* Main Content */}
-      <div className="container mx-auto px-4 py-8">
-        <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5 lg:w-auto">
-            <TabsTrigger value="overview" className="flex items-center gap-2">
-              <LayoutDashboard className="h-4 w-4" />
-              <span className="hidden sm:inline">Overview</span>
-            </TabsTrigger>
-            <TabsTrigger value="create" className="flex items-center gap-2">
-              <FolderPlus className="h-4 w-4" />
-              <span className="hidden sm:inline">Create</span>
-            </TabsTrigger>
-            <TabsTrigger value="analytics" className="flex items-center gap-2">
-              <BarChart3 className="h-4 w-4" />
-              <span className="hidden sm:inline">Analytics</span>
-            </TabsTrigger>
-            <TabsTrigger value="tokens" className="flex items-center gap-2">
-              <Coins className="h-4 w-4" />
-              <span className="hidden sm:inline">Tokens</span>
-            </TabsTrigger>
-            <TabsTrigger value="purchase" className="flex items-center gap-2">
-              <ShoppingCart className="h-4 w-4" />
-              <span className="hidden sm:inline">Purchase</span>
-            </TabsTrigger>
-          </TabsList>
+      <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
+        {/* Stats Cards */}
+        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatsCard
+            title="Total Projects"
+            value={stats.total_projects}
+            icon={FolderKanban}
+            color="blue"
+          />
+          <StatsCard
+            title="Completed"
+            value={stats.completed_projects}
+            icon={CheckCircle2}
+            color="green"
+          />
+          <StatsCard
+            title="Documents"
+            value={stats.total_documents}
+            icon={FileText}
+            color="purple"
+          />
+          <StatsCard
+            title="Tokens Used"
+            value={stats.tokens_used}
+            icon={Coins}
+            color="orange"
+          />
+        </section>
 
-          {/* Overview Tab */}
-          <TabsContent value="overview" className="space-y-6">
-            <TokenBalanceCard />
+        {/* Quick Actions */}
+        <section>
+          <h2 className="text-lg font-semibold text-white mb-4">Quick Actions</h2>
+          <QuickActionsBar onCreateProject={handleCreateProject} />
+        </section>
 
-            {activeProjectId ? (
-              <ProjectExecutionView projectId={activeProjectId} />
+        {/* Projects and Documents Grid */}
+        <section className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          {/* Projects Section */}
+          <div className="lg:col-span-3 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-white">Recent Projects</h2>
+              <button
+                onClick={() => router.push('/projects')}
+                className="text-sm text-blue-400 hover:text-blue-300 transition-colors"
+              >
+                View all
+              </button>
+            </div>
+
+            {projects.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 bg-[#1a1a1a] rounded-xl border border-[#333]">
+                <FolderKanban className="h-12 w-12 text-gray-600 mb-4" />
+                <p className="text-gray-400 mb-4">No projects yet</p>
+                <button
+                  onClick={handleCreateProject}
+                  className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition-colors"
+                >
+                  Create your first project
+                </button>
+              </div>
             ) : (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Welcome to BharatBuild AI</CardTitle>
-                  <CardDescription>
-                    Get started by creating your first project
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="p-4 border rounded-lg">
-                      <h3 className="font-semibold mb-2">Student Mode</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Generate complete academic projects with SRS, code, reports, and presentations
-                      </p>
-                    </div>
-                    <div className="p-4 border rounded-lg">
-                      <h3 className="font-semibold mb-2">Developer Mode</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Build production-ready applications with AI-generated code
-                      </p>
-                    </div>
-                    <div className="p-4 border rounded-lg">
-                      <h3 className="font-semibold mb-2">Founder Mode</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Create product requirements and business plans for your startup
-                      </p>
-                    </div>
-                    <div className="p-4 border rounded-lg">
-                      <h3 className="font-semibold mb-2">College Mode</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Manage faculty and batches with automated systems
-                      </p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {projects.map((project) => (
+                  <DashboardProjectCard
+                    key={project.id}
+                    project={project}
+                    onSelectForDocuments={handleSelectForDocuments}
+                    isSelected={selectedProject?.id === project.id}
+                  />
+                ))}
+              </div>
             )}
-          </TabsContent>
+          </div>
 
-          {/* Create Project Tab */}
-          <TabsContent value="create">
-            <CreateProjectForm onProjectCreated={handleProjectCreated} />
-          </TabsContent>
-
-          {/* Analytics Tab */}
-          <TabsContent value="analytics">
-            <TokenAnalytics />
-          </TabsContent>
-
-          {/* Tokens Tab */}
-          <TabsContent value="tokens" className="space-y-6">
-            <TokenBalanceCard />
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Token Usage History</CardTitle>
-                <CardDescription>
-                  Recent token transactions and activity
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground">
-                  View your complete transaction history in the Analytics tab
-                </p>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* Purchase Tab */}
-          <TabsContent value="purchase">
-            <TokenPurchase />
-          </TabsContent>
-        </Tabs>
-      </div>
+          {/* Documents Panel */}
+          <div className="lg:col-span-2">
+            <h2 className="text-lg font-semibold text-white mb-4">Project Documents</h2>
+            <DocumentsPanel
+              selectedProject={selectedProject}
+              onClose={() => setSelectedProject(null)}
+            />
+          </div>
+        </section>
+      </main>
     </div>
   )
 }

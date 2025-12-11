@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Copy, Check, Sparkles, RotateCcw, ThumbsUp, ThumbsDown, User } from 'lucide-react'
+import { Copy, Check, Brain, RotateCcw, ThumbsUp, ThumbsDown } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
@@ -38,53 +38,36 @@ export function ChatMessage({
     return null
   }
 
-  // User Message - Right aligned bubble
+  // User Message - Right aligned block, but text flows left-to-right
   if (role === 'user') {
     return (
-      <div className="px-4 py-3">
-        <div className="max-w-3xl mx-auto flex justify-end">
-          <div className="flex items-start gap-3 max-w-[85%]">
-            {/* Message Bubble */}
-            <div className="bg-gradient-to-br from-violet-600 to-purple-700 rounded-2xl rounded-tr-sm px-4 py-3 shadow-lg shadow-violet-500/20">
-              <p className="text-[15px] leading-relaxed text-white whitespace-pre-wrap">
-                {content}
-              </p>
-            </div>
-            {/* User Avatar */}
-            <div className="flex-shrink-0 w-8 h-8 rounded-full bg-white/10 flex items-center justify-center">
-              <User className="w-4 h-4 text-white/70" />
-            </div>
-          </div>
-        </div>
+      <div className="py-2 flex justify-end">
+        <p className="text-[15px] leading-relaxed text-white/90 whitespace-pre-wrap text-left max-w-[85%]">
+          {content}
+        </p>
       </div>
     )
   }
 
   // Assistant Message - Left aligned with rich formatting
   return (
-    <div className="group px-4 py-4">
-      <div className="max-w-3xl mx-auto">
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-3">
-          {/* AI Avatar */}
-          <div className="flex-shrink-0 w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-lg shadow-violet-500/25">
-            <Sparkles className="w-4.5 h-4.5 text-white" />
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-white">BharatBuild AI</span>
-            {isStreaming && (
-              <span className="flex items-center gap-1 text-xs text-violet-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
-                <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse delay-75" />
-                <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse delay-150" />
-              </span>
-            )}
-          </div>
+    <div className="group pr-2 py-2">
+      <div className="flex items-start gap-1.5">
+        {/* AI Brain Avatar */}
+        <div className="flex-shrink-0 w-5 h-5 rounded bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
+          <Brain className="w-2.5 h-2.5 text-white" />
         </div>
 
         {/* Message Content */}
-        <div className="pl-12">
-          <div className="bg-[#12121a] rounded-2xl rounded-tl-sm px-5 py-4 border border-white/5">
+        <div className="flex-1">
+          {isStreaming && (
+            <span className="flex items-center gap-1 text-xs text-violet-400 mb-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+              <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse delay-75" />
+              <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse delay-150" />
+            </span>
+          )}
+          <div>
             <MarkdownContent content={content} isStreaming={isStreaming} />
           </div>
 

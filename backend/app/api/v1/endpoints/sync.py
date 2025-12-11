@@ -161,15 +161,25 @@ async def write_multiple_to_sandbox(
 @router.get("/sandbox/{project_id}/files")
 async def get_sandbox_files(
     project_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get all files from sandbox (Layer 1) with content.
-    Returns hierarchical tree structure.
+    Returns hierarchical tree structure with project metadata.
     """
     try:
         # Get user_id for user-scoped paths (Bolt.new structure)
         user_id = str(current_user.id)
+        
+        # Fetch project metadata from database
+        project_title = None
+        project_description = None
+        result = await db.execute(select(Project).where(Project.id == project_id))
+        project = result.scalar_one_or_none()
+        if project:
+            project_title = project.title
+            project_description = project.description
 
         files = await unified_storage.list_sandbox_files(project_id, user_id)
 
@@ -177,6 +187,8 @@ async def get_sandbox_files(
             return {
                 "success": True,
                 "project_id": project_id,
+                "project_title": project_title,
+                "project_description": project_description,
                 "tree": [],
                 "layer": "sandbox",
                 "message": "No files in sandbox"
@@ -201,6 +213,8 @@ async def get_sandbox_files(
         return {
             "success": True,
             "project_id": project_id,
+            "project_title": project_title,
+            "project_description": project_description,
             "tree": tree_with_content,
             "layer": "sandbox",
             "total": len(unified_storage._flatten_tree(files))

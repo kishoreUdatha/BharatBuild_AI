@@ -44,6 +44,8 @@ YOUR JOB:
 
 OUTPUT FORMAT (MANDATORY):
 <plan>
+  <project_name>A professional, descriptive name for this project (e.g., "E-Commerce Platform", "Task Management System", "AI Phishing Detection Tool")</project_name>
+  <project_description>A brief 1-2 sentence description of what the project does</project_description>
   <project_type>...</project_type>
   <tech_stack>...</tech_stack>
   <project_structure>...</project_structure>
@@ -367,7 +369,7 @@ project-name/
 └── README.md
 ```
 
-SPRING BOOT (Java Backend):
+SPRING BOOT (Java Backend Only - API/Microservice):
 ```
 project-name/
 ├── src/
@@ -395,6 +397,61 @@ project-name/
 │   └── test/
 ├── pom.xml (or build.gradle)
 ├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+SPRING BOOT + REACT (Full-Stack Application):
+```
+project-name/
+├── backend/
+│   ├── src/
+│   │   ├── main/
+│   │   │   ├── java/com/company/project/
+│   │   │   │   ├── config/
+│   │   │   │   │   ├── SecurityConfig.java
+│   │   │   │   │   ├── WebConfig.java
+│   │   │   │   │   └── CorsConfig.java
+│   │   │   │   ├── controller/
+│   │   │   │   │   └── UserController.java
+│   │   │   │   ├── service/
+│   │   │   │   │   ├── UserService.java
+│   │   │   │   │   └── impl/
+│   │   │   │   ├── repository/
+│   │   │   │   │   └── UserRepository.java
+│   │   │   │   ├── model/
+│   │   │   │   │   ├── entity/
+│   │   │   │   │   └── dto/
+│   │   │   │   ├── exception/
+│   │   │   │   │   └── GlobalExceptionHandler.java
+│   │   │   │   └── Application.java
+│   │   │   └── resources/
+│   │   │       ├── application.yml
+│   │   │       └── application-dev.yml
+│   │   └── test/
+│   ├── pom.xml
+│   └── Dockerfile
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── ui/
+│   │   │   └── features/
+│   │   ├── pages/
+│   │   ├── hooks/
+│   │   ├── lib/
+│   │   │   └── api.ts
+│   │   ├── store/
+│   │   ├── types/
+│   │   ├── App.tsx
+│   │   ├── main.tsx
+│   │   └── index.css
+│   ├── public/
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── tailwind.config.js
+│   ├── tsconfig.json
+│   └── Dockerfile
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -1547,20 +1604,27 @@ Be thorough, specific, and ensure all tasks are actionable by automation agents.
 
         # Determine which essential files to check
         essentials = []
-        if "react" in tech_stack and "next" not in tech_stack:
+        
+        # Check for monorepo structure FIRST (affects path detection)
+        is_monorepo = "frontend/" in structure or "backend/" in structure
+        
+        # IMPROVED: Detect React/Vite from multiple signals
+        has_react = any(x in tech_stack for x in ["react", "vite", "tsx", "typescript"]) or "frontend/" in structure
+        has_next = "next" in tech_stack
+        
+        # Add React/Vite essentials if frontend detected
+        if has_react and not has_next:
             essentials.extend(essential_files["react"])
-        elif "next" in tech_stack:
+        elif has_next:
             essentials.extend(essential_files["next"])
 
-        if "fastapi" in tech_stack:
+        # Backend detection
+        if "fastapi" in tech_stack or "fastapi" in structure.lower():
             essentials.extend(essential_files["fastapi"])
         elif "django" in tech_stack:
             essentials.extend(essential_files["django"])
-        elif "spring" in tech_stack:
+        elif "spring" in tech_stack or "pom.xml" in structure.lower() or "spring-boot" in structure.lower():
             essentials.extend(essential_files["spring"])
-
-        # Check for monorepo structure
-        is_monorepo = "frontend/" in structure or "backend/" in structure
 
         # Get existing file paths
         existing_paths = {f["path"] for f in files}

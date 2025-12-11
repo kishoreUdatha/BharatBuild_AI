@@ -448,6 +448,8 @@ class Settings(BaseSettings):
     # Storage Paths (configurable via env)
     # ==========================================
     USER_PROJECTS_PATH: str  # External path for generated projects (required)
+    DOCUMENTS_PATH: str = "C:/tmp/documents"  # Separate path for documents (reports, SRS, PPT)
+    DIAGRAMS_PATH: str = "C:/tmp/diagrams"  # Separate path for UML diagrams
 
     # ==========================================
     # Paths (computed, not from env)
@@ -466,12 +468,16 @@ class Settings(BaseSettings):
         self._temp_dir = self._base_dir / "temp"
         self._generated_dir = self._base_dir / "generated"
         self._user_projects_dir = Path(self.USER_PROJECTS_PATH)
+        self._documents_dir = Path(self.DOCUMENTS_PATH)
+        self._diagrams_dir = Path(self.DIAGRAMS_PATH)
 
         # Create directories if they don't exist
         self._upload_dir.mkdir(exist_ok=True, parents=True)
         self._temp_dir.mkdir(exist_ok=True, parents=True)
         self._generated_dir.mkdir(exist_ok=True, parents=True)
         self._user_projects_dir.mkdir(exist_ok=True, parents=True)
+        self._documents_dir.mkdir(exist_ok=True, parents=True)
+        self._diagrams_dir.mkdir(exist_ok=True, parents=True)
         Path(self.LOG_FILE).parent.mkdir(exist_ok=True, parents=True)
 
     @property
@@ -494,11 +500,25 @@ class Settings(BaseSettings):
     def USER_PROJECTS_DIR(self) -> Path:
         return self._user_projects_dir
 
+    @property
+    def DOCUMENTS_DIR(self) -> Path:
+        return self._documents_dir
+
+    @property
+    def DIAGRAMS_DIR(self) -> Path:
+        return self._diagrams_dir
+
     def get_project_docs_dir(self, project_id: str) -> Path:
-        """Get the docs directory for a specific project"""
-        docs_dir = self._user_projects_dir / project_id / "docs"
+        """Get the docs directory for a specific project - stored OUTSIDE sandbox"""
+        docs_dir = self._documents_dir / project_id
         docs_dir.mkdir(parents=True, exist_ok=True)
         return docs_dir
+
+    def get_project_diagrams_dir(self, project_id: str) -> Path:
+        """Get the diagrams directory for a specific project - stored OUTSIDE sandbox"""
+        diagrams_dir = self._diagrams_dir / project_id
+        diagrams_dir.mkdir(parents=True, exist_ok=True)
+        return diagrams_dir
 
     # ==========================================
     # Helper Methods for Token Configuration

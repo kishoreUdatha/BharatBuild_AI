@@ -139,11 +139,8 @@ export function useProjectSwitch() {
   const [isSwitching, setIsSwitching] = useState(false)
   const [lastSwitchResult, setLastSwitchResult] = useState<SwitchResult | null>(null)
 
-  // Get store actions
-  const projectStore = useProjectStore()
-  const terminalStore = useTerminalStore()
-  const errorStore = useErrorStore()
-  const chatStore = useChatStore()
+  // NOTE: We use getState() inside the callback to always get fresh state
+  // Using the hook here would give us a stale snapshot during async operations
 
   /**
    * Switch to a different project with FULL ISOLATION
@@ -169,7 +166,8 @@ export function useProjectSwitch() {
       projectDescription
     } = options
 
-    const oldProjectId = projectStore.currentProject?.id
+    // Use getState() to get fresh state - hooks give stale snapshots in async code
+    const oldProjectId = useProjectStore.getState().currentProject?.id
 
     console.log(`[ProjectSwitch] Starting switch from "${oldProjectId}" to "${newProjectId}"`)
     setIsSwitching(true)
@@ -180,25 +178,25 @@ export function useProjectSwitch() {
       // ============================================================
 
       // 1a. Clear project state (file tree, tabs, selected file)
-      projectStore.resetProject()
+      useProjectStore.getState().resetProject()
       console.log('[ProjectSwitch] ✓ Cleared project state')
 
       // 1b. Clear terminal logs and end session
       if (clearTerminal) {
-        terminalStore.clearLogs()
-        terminalStore.endSession()
+        useTerminalStore.getState().clearLogs()
+        useTerminalStore.getState().endSession()
         console.log('[ProjectSwitch] ✓ Cleared terminal')
       }
 
       // 1c. Clear collected errors
       if (clearErrors) {
-        errorStore.clearErrors()
+        useErrorStore.getState().clearErrors()
         console.log('[ProjectSwitch] ✓ Cleared errors')
       }
 
       // 1d. Clear chat messages (optional - user might want to keep history)
       if (clearChat) {
-        chatStore.clearMessages()
+        useChatStore.getState().clearMessages()
         console.log('[ProjectSwitch] ✓ Cleared chat')
       }
 
@@ -270,6 +268,15 @@ export function useProjectSwitch() {
           const projectTitle = data.project_title || projectName || `Project ${newProjectId}`
           const projectDesc = data.project_description || projectDescription
 
+          console.log(`[ProjectSwitch] RAW API response:`, JSON.stringify({
+            success: data.success,
+            hasFileTree: !!data.file_tree,
+            hasTree: !!data.tree,
+            fileTreeLength: data.file_tree?.length,
+            treeLength: data.tree?.length,
+            firstItem: data.file_tree?.[0] || data.tree?.[0]
+          }, null, 2))
+
           console.log(`[ProjectSwitch] Processing file data:`, {
             success: data.success,
             fileTreeLength: fileTreeData.length,
@@ -299,6 +306,11 @@ export function useProjectSwitch() {
 
             const fileTree = convertTree(fileTreeData)
 
+            console.log(`[ProjectSwitch] Converted file tree:`, {
+              rootItemsCount: fileTree.length,
+              totalFiles,
+              rootItems: fileTree.map(f => ({ path: f.path, type: f.type, childrenCount: f.children?.length || 0 }))
+            })
             console.log(`[ProjectSwitch] Loaded file tree: ${fileTree.length} root items, ${totalFiles} total files`)
             console.log(`[ProjectSwitch] Project: "${projectTitle}" (${data.messages_count || 0} messages)`)
 
@@ -320,14 +332,15 @@ export function useProjectSwitch() {
               firstFile: newProject.files[0] ? { path: newProject.files[0].path, type: newProject.files[0].type } : null
             })
 
-            projectStore.setCurrentProject(newProject)
+            useProjectStore.getState().setCurrentProject(newProject)
 
             // Verify the store was updated
-            const verifyProject = projectStore.currentProject
+            const verifyProject = useProjectStore.getState().currentProject
             console.log(`[ProjectSwitch] Verified store project:`, {
               id: verifyProject?.id,
               name: verifyProject?.name,
-              filesCount: verifyProject?.files?.length || 0
+              filesCount: verifyProject?.files?.length || 0,
+              firstFile: verifyProject?.files?.[0]?.path || 'NO FILES'
             })
 
             result = {
@@ -341,7 +354,7 @@ export function useProjectSwitch() {
             console.log(`[ProjectSwitch] ✓ Loaded ${result.fileCount} files from ${result.layer}`)
           } else {
             // No files found - create empty project
-            projectStore.setCurrentProject({
+            useProjectStore.getState().setCurrentProject({
               id: newProjectId,
               name: projectTitle,
               description: projectDesc,
@@ -365,7 +378,7 @@ export function useProjectSwitch() {
           console.warn('[ProjectSwitch] Failed to load project metadata:', err)
 
           // Fallback: create empty project
-          projectStore.setCurrentProject({
+          useProjectStore.getState().setCurrentProject({
             id: newProjectId,
             name: projectName || `Project ${newProjectId}`,
             description: projectDescription,
@@ -386,7 +399,7 @@ export function useProjectSwitch() {
         }
       } else {
         // loadFiles = false - just create empty project
-        projectStore.setCurrentProject({
+        useProjectStore.getState().setCurrentProject({
           id: newProjectId,
           name: projectName || `Project ${newProjectId}`,
           description: projectDescription,
@@ -524,7 +537,7 @@ export function useProjectSwitch() {
 
             // Add messages to chat store
             console.log(`[ProjectSwitch] Setting ${chatMessages.length} messages to chatStore`)
-            chatStore.setMessages(chatMessages)
+            useChatStore.getState().setMessages(chatMessages)
             result.messageCount = chatMessages.length
 
             console.log(`[ProjectSwitch] ✓ Loaded ${chatMessages.length} chat messages`)
@@ -559,7 +572,7 @@ export function useProjectSwitch() {
     } finally {
       setIsSwitching(false)
     }
-  }, [projectStore, terminalStore, errorStore, chatStore])
+  }, [])  // No dependencies - we use getState() for fresh state access
 
   /**
    * Create a new empty project (like clicking "New Project" in Bolt.new)
@@ -579,12 +592,12 @@ export function useProjectSwitch() {
 
     // Update project name if provided
     if (name && result.success) {
-      projectStore.updateProject({ name })
+      useProjectStore.getState().updateProject({ name })
     }
 
     console.log(`[ProjectSwitch] Created new project: ${projectId}`)
     return result
-  }, [switchProject, projectStore])
+  }, [switchProject])
 
   return {
     // State

@@ -21,9 +21,11 @@ from enum import Enum
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel
 
-from app.services.fix_executor import FixExecutor
+from app.services.simple_fixer import simple_fixer
 from app.services.log_bus import LogBus, get_log_bus
 from app.services.auto_fixer import get_auto_fixer
+from app.core.config import settings
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -269,21 +271,35 @@ async def report_errors(project_id: str, request: ErrorReportRequest):
             await notify_fix_started(project_id, primary_error.message[:100])
 
             # Trigger the fix (runs in background)
-            # Include Bolt.new-style fixer context
+            # Convert errors to dict format for SimpleFixer
+            errors_for_fixer = [
+                {
+                    "source": str(e.source.value) if hasattr(e.source, 'value') else str(e.source),
+                    "type": e.type,
+                    "message": e.message,
+                    "file": e.file,
+                    "line": e.line,
+                    "column": e.column,
+                    "stack": e.stack,
+                    "severity": str(e.severity.value) if hasattr(e.severity, 'value') else str(e.severity)
+                }
+                for e in request.errors
+            ]
+
             async def run_fix_with_logging():
                 try:
-                    logger.info(f"[ErrorHandler:{project_id}] 🔧 Starting background fix task...")
+                    logger.info(f"[ErrorHandler:{project_id}] Starting SimpleFixer background task...")
                     await execute_fix_with_notification(
                         project_id=project_id,
-                        error_message=error_context,
-                        stack_trace=stack_trace,
+                        errors=errors_for_fixer,
+                        context=error_context,
                         command=request.command,
                         file_tree=request.file_tree,
                         recently_modified=request.recently_modified
                     )
-                    logger.info(f"[ErrorHandler:{project_id}] ✅ Background fix task completed")
+                    logger.info(f"[ErrorHandler:{project_id}] SimpleFixer background task completed")
                 except Exception as e:
-                    logger.error(f"[ErrorHandler:{project_id}] ❌ Background fix task FAILED: {e}")
+                    logger.error(f"[ErrorHandler:{project_id}] SimpleFixer background task FAILED: {e}")
                     import traceback
                     logger.error(traceback.format_exc())
 
@@ -308,50 +324,61 @@ async def report_errors(project_id: str, request: ErrorReportRequest):
 
 async def execute_fix_with_notification(
     project_id: str,
-    error_message: str,
-    stack_trace: str,
+    errors: List[Dict],
+    context: str = "",
     command: Optional[str] = None,
     file_tree: Optional[List[str]] = None,
     recently_modified: Optional[List[RecentlyModifiedEntry]] = None
 ):
-    """Execute fix and send WebSocket notifications"""
+    """Execute fix using SimpleFixer and send WebSocket notifications"""
     try:
-        # Get fix executor
-        fix_executor = FixExecutor(project_id)
+        # Find project path
+        project_path = Path(settings.USER_PROJECTS_PATH) / project_id
 
-        # Build context with Bolt.new-style fixer data
-        context = {
-            "command": command,
-            "file_tree": file_tree,
-            "recently_modified": [
-                {"path": f.path, "action": f.action, "timestamp": f.timestamp}
-                for f in (recently_modified or [])
-            ] if recently_modified else []
-        }
+        if not project_path.exists():
+            # Try sandbox path
+            sandbox_base = Path(settings.SANDBOX_PATH) if hasattr(settings, 'SANDBOX_PATH') else Path("C:/tmp/sandbox/workspace")
+            for user_dir in sandbox_base.iterdir():
+                if user_dir.is_dir():
+                    potential_path = user_dir / project_id
+                    if potential_path.exists():
+                        project_path = potential_path
+                        break
 
-        # Execute the fix with enhanced context
-        result = await fix_executor.execute_fix(
-            error_message=error_message,
-            stack_trace=stack_trace,
+        logger.info(f"[ErrorHandler:{project_id}] Using SimpleFixer (Bolt.new style)")
+        logger.info(f"[ErrorHandler:{project_id}] Project path: {project_path}")
+
+        # Convert recently_modified to dict format
+        recently_mod_dicts = [
+            {"path": f.path, "action": f.action, "timestamp": f.timestamp}
+            for f in (recently_modified or [])
+        ] if recently_modified else None
+
+        # Use SimpleFixer for ALL errors
+        result = await simple_fixer.fix_from_frontend(
+            project_id=project_id,
+            project_path=project_path,
+            errors=errors,
+            context=context,
             command=command,
-            context=context
+            file_tree=file_tree,
+            recently_modified=recently_mod_dicts
         )
 
-        if result.get("success"):
-            patches_applied = result.get("patches_applied", 0)
-            files_modified = result.get("files_modified", [])
-
-            logger.info(f"[ErrorHandler:{project_id}] Fix completed: {patches_applied} patches")
-
-            await notify_fix_completed(project_id, patches_applied, files_modified)
+        if result.success and result.files_modified:
+            logger.info(f"[ErrorHandler:{project_id}] SimpleFixer completed: {len(result.files_modified)} files")
+            await notify_fix_completed(project_id, result.patches_applied, result.files_modified)
+        elif result.success:
+            logger.info(f"[ErrorHandler:{project_id}] SimpleFixer: {result.message}")
+            # No fix needed - don't notify as failed
         else:
-            error = result.get("error", "Unknown error")
-            logger.warning(f"[ErrorHandler:{project_id}] Fix failed: {error}")
-
-            await notify_fix_failed(project_id, error)
+            logger.warning(f"[ErrorHandler:{project_id}] SimpleFixer failed: {result.message}")
+            await notify_fix_failed(project_id, result.message)
 
     except Exception as e:
         logger.error(f"[ErrorHandler:{project_id}] Fix execution error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         await notify_fix_failed(project_id, str(e))
 
 
@@ -481,4 +508,125 @@ async def reset_error_state(project_id: str):
         "success": True,
         "project_id": project_id,
         "message": "Error state reset successfully"
+    }
+
+
+# ==================== COST OPTIMIZATION: User Confirmation Endpoints ====================
+
+@router.get("/pending-fix/{project_id}")
+async def get_pending_fix(project_id: str):
+    """
+    Get pending fix details for user confirmation.
+
+    Returns fix details including:
+    - Error summary
+    - Complexity classification (simple/moderate/complex)
+    - Estimated API cost
+    - Command that triggered the error
+    """
+    pending = simple_fixer.get_pending_fix(project_id)
+    if not pending:
+        return {
+            "has_pending_fix": False,
+            "project_id": project_id
+        }
+
+    return {
+        "has_pending_fix": True,
+        "project_id": project_id,
+        **pending
+    }
+
+
+@router.post("/approve-fix/{project_id}")
+async def approve_fix(project_id: str):
+    """
+    Approve and execute a pending fix.
+
+    User clicked "Fix" button after seeing the estimated cost.
+    Executes the fix and returns results.
+    """
+    # Find project path
+    project_path = Path(settings.USER_PROJECTS_PATH) / project_id
+
+    if not project_path.exists():
+        sandbox_base = Path(settings.SANDBOX_PATH) if hasattr(settings, 'SANDBOX_PATH') else Path("C:/tmp/sandbox/workspace")
+        for user_dir in sandbox_base.iterdir():
+            if user_dir.is_dir():
+                potential_path = user_dir / project_id
+                if potential_path.exists():
+                    project_path = potential_path
+                    break
+
+    logger.info(f"[ErrorHandler:{project_id}] User approved fix, executing...")
+
+    # Notify WebSocket clients
+    await notify_fix_started(project_id, "User approved fix")
+
+    try:
+        result = await simple_fixer.approve_and_execute_fix(project_id, project_path)
+
+        if result.success:
+            await notify_fix_completed(project_id, result.patches_applied, result.files_modified)
+        else:
+            await notify_fix_failed(project_id, result.message)
+
+        return {
+            "success": result.success,
+            "project_id": project_id,
+            "files_modified": result.files_modified,
+            "patches_applied": result.patches_applied,
+            "message": result.message
+        }
+
+    except Exception as e:
+        logger.error(f"[ErrorHandler:{project_id}] Approved fix failed: {e}")
+        await notify_fix_failed(project_id, str(e))
+        return {
+            "success": False,
+            "project_id": project_id,
+            "message": str(e)
+        }
+
+
+@router.post("/cancel-fix/{project_id}")
+async def cancel_fix(project_id: str):
+    """
+    Cancel a pending fix.
+
+    User decided not to proceed with the fix (to save API costs).
+    """
+    cancelled = simple_fixer.cancel_pending_fix(project_id)
+
+    return {
+        "success": cancelled,
+        "project_id": project_id,
+        "message": "Fix cancelled" if cancelled else "No pending fix found"
+    }
+
+
+@router.post("/set-auto-fix-mode")
+async def set_auto_fix_mode(enabled: bool):
+    """
+    Toggle auto-fix mode.
+
+    - enabled=True: Fix errors immediately (current behavior)
+    - enabled=False: Queue fixes for user confirmation (Bolt.new style - saves costs)
+    """
+    simple_fixer.auto_fix_enabled = enabled
+    logger.info(f"[ErrorHandler] Auto-fix mode set to: {enabled}")
+
+    return {
+        "success": True,
+        "auto_fix_enabled": enabled,
+        "message": f"Auto-fix {'enabled' if enabled else 'disabled (fixes will require confirmation)'}"
+    }
+
+
+@router.get("/auto-fix-mode")
+async def get_auto_fix_mode():
+    """Get current auto-fix mode setting"""
+    return {
+        "auto_fix_enabled": simple_fixer.auto_fix_enabled,
+        "message": "Auto-fix is " + ("enabled" if simple_fixer.auto_fix_enabled else "disabled (requires confirmation)")
     }

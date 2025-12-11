@@ -110,7 +110,22 @@ export const useProjectStore = create<ProjectState>()(
   recentlyModifiedFiles: [],
 
   setCurrentProject: (project) => {
+    console.log('[ProjectStore] setCurrentProject called:', {
+      id: project.id,
+      name: project.name,
+      filesCount: project.files?.length || 0,
+      firstFile: project.files?.[0]?.path
+    })
     set({ currentProject: project })
+
+    // Verify the state was updated
+    setTimeout(() => {
+      const state = useProjectStore.getState()
+      console.log('[ProjectStore] After setCurrentProject - verified state:', {
+        id: state.currentProject?.id,
+        filesCount: state.currentProject?.files?.length || 0
+      })
+    }, 0)
   },
 
   updateProject: (updates) => {
