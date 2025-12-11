@@ -394,12 +394,12 @@ async def list_project_documents(
     for doc in db_documents:
         documents.append({
             "id": str(doc.id),
-            "name": doc.title,
-            "type": doc.document_type.value if doc.document_type else "unknown",
-            "status": doc.status,
+            "name": doc.file_name or doc.title,
+            "type": doc.doc_type.value if doc.doc_type else "unknown",
+            "status": "completed",  # Documents in DB are completed
             "size_bytes": doc.file_size or 0,
             "created_at": doc.created_at.isoformat() if doc.created_at else None,
-            "download_url": f"/api/v1/documents/download/{project_id}/{doc.document_type.value if doc.document_type else 'unknown'}",
+            "download_url": f"/documents/download/{project_id}/{doc.doc_type.value if doc.doc_type else 'unknown'}",
             "source": "database"
         })
 
