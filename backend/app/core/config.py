@@ -508,15 +508,27 @@ class Settings(BaseSettings):
     def DIAGRAMS_DIR(self) -> Path:
         return self._diagrams_dir
 
-    def get_project_docs_dir(self, project_id: str) -> Path:
-        """Get the docs directory for a specific project - stored OUTSIDE sandbox"""
-        docs_dir = self._documents_dir / project_id
+    def get_project_docs_dir(self, project_id: str, user_id: str = None) -> Path:
+        """
+        Get the docs directory for a specific project - stored OUTSIDE sandbox.
+        Now supports user isolation: /documents/<user_id>/<project_id>/
+        """
+        if user_id:
+            docs_dir = self._documents_dir / user_id / project_id
+        else:
+            docs_dir = self._documents_dir / project_id
         docs_dir.mkdir(parents=True, exist_ok=True)
         return docs_dir
 
-    def get_project_diagrams_dir(self, project_id: str) -> Path:
-        """Get the diagrams directory for a specific project - stored OUTSIDE sandbox"""
-        diagrams_dir = self._diagrams_dir / project_id
+    def get_project_diagrams_dir(self, project_id: str, user_id: str = None) -> Path:
+        """
+        Get the diagrams directory for a specific project - stored OUTSIDE sandbox.
+        Now supports user isolation: /diagrams/<user_id>/<project_id>/
+        """
+        if user_id:
+            diagrams_dir = self._diagrams_dir / user_id / project_id
+        else:
+            diagrams_dir = self._diagrams_dir / project_id
         diagrams_dir.mkdir(parents=True, exist_ok=True)
         return diagrams_dir
 

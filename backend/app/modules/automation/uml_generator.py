@@ -81,10 +81,10 @@ class UMLGenerator:
                 self.font_bold = self.font
                 self.font_small = self.font
 
-    def get_output_dir(self, project_id: str = None) -> 'Path':
-        """Get output directory - project-specific if project_id provided"""
+    def get_output_dir(self, project_id: str = None, user_id: str = None) -> 'Path':
+        """Get output directory - user and project-specific for proper isolation"""
         if project_id:
-            return settings.get_project_diagrams_dir(project_id)
+            return settings.get_project_diagrams_dir(project_id, user_id)
         return self.default_output_dir
 
     def generate_use_case_diagram(
@@ -93,7 +93,8 @@ class UMLGenerator:
         actors: List[str],
         use_cases: List[str],
         relationships: List[Dict] = None,
-        project_id: str = None
+        project_id: str = None,
+        user_id: str = None
     ) -> str:
         """
         Generate Use Case Diagram
@@ -179,7 +180,7 @@ class UMLGenerator:
 
         # Save
         filename = f"use_case_diagram_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        output_dir = self.get_output_dir(project_id)
+        output_dir = self.get_output_dir(project_id, user_id)
         filepath = output_dir / filename
         img.save(str(filepath))
 
@@ -217,7 +218,8 @@ class UMLGenerator:
     def generate_class_diagram(
         self,
         classes: List[Dict],
-        project_id: str = None
+        project_id: str = None,
+        user_id: str = None
     ) -> str:
         """
         Generate Class Diagram
@@ -285,7 +287,7 @@ class UMLGenerator:
         )
 
         filename = f"class_diagram_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        output_dir = self.get_output_dir(project_id)
+        output_dir = self.get_output_dir(project_id, user_id)
         filepath = output_dir / filename
         img.save(str(filepath))
 
@@ -368,7 +370,8 @@ class UMLGenerator:
         self,
         participants: List[str],
         messages: List[Dict],
-        project_id: str = None
+        project_id: str = None,
+        user_id: str = None
     ) -> str:
         """
         Generate Sequence Diagram
@@ -451,7 +454,7 @@ class UMLGenerator:
         )
 
         filename = f"sequence_diagram_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        output_dir = self.get_output_dir(project_id)
+        output_dir = self.get_output_dir(project_id, user_id)
         filepath = output_dir / filename
         img.save(str(filepath))
 
@@ -477,7 +480,8 @@ class UMLGenerator:
         self,
         activities: List[str],
         decisions: List[Dict] = None,
-        project_id: str = None
+        project_id: str = None,
+        user_id: str = None
     ) -> str:
         """
         Generate Activity Diagram
@@ -561,7 +565,7 @@ class UMLGenerator:
         )
 
         filename = f"activity_diagram_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        output_dir = self.get_output_dir(project_id)
+        output_dir = self.get_output_dir(project_id, user_id)
         filepath = output_dir / filename
         img.save(str(filepath))
 
@@ -570,7 +574,8 @@ class UMLGenerator:
     def generate_er_diagram(
         self,
         entities: List[Dict],
-        project_id: str = None
+        project_id: str = None,
+        user_id: str = None
     ) -> str:
         """
         Generate ER Diagram
@@ -665,7 +670,7 @@ class UMLGenerator:
         )
 
         filename = f"er_diagram_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        output_dir = self.get_output_dir(project_id)
+        output_dir = self.get_output_dir(project_id, user_id)
         filepath = output_dir / filename
         img.save(str(filepath))
 
@@ -678,7 +683,8 @@ class UMLGenerator:
         data_stores: List[str],
         external_entities: List[str],
         data_flows: List[Dict],
-        project_id: str = None
+        project_id: str = None,
+        user_id: str = None
     ) -> str:
         """
         Generate Data Flow Diagram
@@ -770,13 +776,13 @@ class UMLGenerator:
         )
 
         filename = f"dfd_level{level}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        output_dir = self.get_output_dir(project_id)
+        output_dir = self.get_output_dir(project_id, user_id)
         filepath = output_dir / filename
         img.save(str(filepath))
 
         return str(filepath)
 
-    def generate_system_architecture_diagram(self, project_data: Dict, project_id: str = None) -> str:
+    def generate_system_architecture_diagram(self, project_data: Dict, project_id: str = None, user_id: str = None) -> str:
         """
         Generate System Architecture Diagram
 
@@ -907,7 +913,7 @@ class UMLGenerator:
         draw.text((950, 370), "• Rate Limiting", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
 
         filename = f"system_architecture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        output_dir = self.get_output_dir(project_id)
+        output_dir = self.get_output_dir(project_id, user_id)
         filepath = output_dir / filename
         img.save(str(filepath))
 
@@ -918,7 +924,7 @@ class UMLGenerator:
         # Return a path to indicate diagram should be generated
         return f"[{diagram_type} - Placeholder]"
 
-    def generate_all_diagrams(self, project_data: Dict, project_id: str = None) -> Dict[str, str]:
+    def generate_all_diagrams(self, project_data: Dict, project_id: str = None, user_id: str = None) -> Dict[str, str]:
         """
         Generate all UML diagrams for a project - FULLY DYNAMIC
 
@@ -944,24 +950,25 @@ class UMLGenerator:
             project_name=project_name,
             actors=actors,
             use_cases=use_cases,
-            project_id=project_id
+            project_id=project_id,
+            user_id=user_id
         )
 
         # 2. Class Diagram - DYNAMIC based on tables and code
         classes = self._extract_classes_from_project(project_data)
-        diagrams['class'] = self.generate_class_diagram(classes, project_id=project_id)
+        diagrams['class'] = self.generate_class_diagram(classes, project_id=project_id, user_id=user_id)
 
         # 3. Sequence Diagram - DYNAMIC based on API endpoints
         participants, messages = self._extract_sequence_from_project(project_data)
-        diagrams['sequence'] = self.generate_sequence_diagram(participants, messages, project_id=project_id)
+        diagrams['sequence'] = self.generate_sequence_diagram(participants, messages, project_id=project_id, user_id=user_id)
 
         # 4. Activity Diagram - DYNAMIC based on features/workflow
         activities = self._extract_activities_from_project(project_data)
-        diagrams['activity'] = self.generate_activity_diagram(activities, project_id=project_id)
+        diagrams['activity'] = self.generate_activity_diagram(activities, project_id=project_id, user_id=user_id)
 
         # 5. ER Diagram - DYNAMIC based on database tables
         entities = self._extract_entities_from_project(project_data)
-        diagrams['er'] = self.generate_er_diagram(entities, project_id=project_id)
+        diagrams['er'] = self.generate_er_diagram(entities, project_id=project_id, user_id=user_id)
 
         # 6. DFD Level 0 - DYNAMIC based on project structure
         external_entities, data_stores, data_flows = self._extract_dfd_from_project(project_data)
@@ -969,6 +976,7 @@ class UMLGenerator:
             level=0,
             processes=[project_name],
             project_id=project_id,
+            user_id=user_id,
             data_stores=data_stores,
             external_entities=external_entities,
             data_flows=data_flows
