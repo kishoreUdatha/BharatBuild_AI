@@ -58,7 +58,8 @@ class PPTGeneratorV2:
         self,
         sections: List[Dict],
         project_data: Dict,
-        project_id: str = None
+        project_id: str = None,
+        user_id: str = None
     ) -> str:
         """
         Create complete PowerPoint presentation.
@@ -67,10 +68,15 @@ class PPTGeneratorV2:
             sections: List of slide sections
             project_data: Project metadata
             project_id: Project ID for saving to project's docs folder
+            user_id: User ID for isolation
 
         Returns:
             Path to generated presentation
         """
+        # Store user_id for diagram generation
+        self.user_id = user_id
+        self.project_id = project_id
+
         try:
             # Create presentation
             self.prs = Presentation()
@@ -81,9 +87,9 @@ class PPTGeneratorV2:
             for section in sections:
                 await self._add_section_slides(section, project_data)
 
-            # Determine output directory - prefer project docs folder
+            # Determine output directory - prefer project docs folder with user isolation
             if project_id:
-                output_dir = settings.get_project_docs_dir(project_id)
+                output_dir = settings.get_project_docs_dir(project_id, user_id)
             else:
                 output_dir = settings.GENERATED_DIR / "presentations"
             output_dir.mkdir(parents=True, exist_ok=True)

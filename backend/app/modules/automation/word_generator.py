@@ -58,7 +58,8 @@ class WordDocumentGenerator:
         sections: List[Dict],
         project_data: Dict,
         document_type: str,
-        project_id: str = None
+        project_id: str = None,
+        user_id: str = None
     ) -> str:
         """
         Create complete Word document from sections.
@@ -68,10 +69,15 @@ class WordDocumentGenerator:
             project_data: Project metadata
             document_type: Type of document (project_report, srs, etc.)
             project_id: Project ID for saving to project's docs folder
+            user_id: User ID for isolation
 
         Returns:
             Path to generated document
         """
+        # Store user_id for diagram generation
+        self.user_id = user_id
+        self.project_id = project_id
+
         try:
             # Create document
             self.document = Document()
@@ -92,9 +98,9 @@ class WordDocumentGenerator:
             # Add table of contents (placeholder - Word will update)
             self._update_toc_fields()
 
-            # Determine output directory - prefer project docs folder
+            # Determine output directory - prefer project docs folder with user isolation
             if project_id:
-                output_dir = settings.get_project_docs_dir(project_id)
+                output_dir = settings.get_project_docs_dir(project_id, user_id)
             else:
                 output_dir = settings.GENERATED_DIR / "documents"
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -1473,7 +1479,9 @@ The section includes relevant technical details, design decisions, and implement
                 return pre_generated[diagram_type]
 
             project_name = project_data.get('project_name', 'System')
-            project_id = project_data.get('project_id')  # For user isolation
+            # Use stored project_id and user_id for isolation
+            project_id = getattr(self, 'project_id', None) or project_data.get('project_id')
+            user_id = getattr(self, 'user_id', None) or project_data.get('user_id')
             features = project_data.get('features', [])
             database_tables = project_data.get('database_tables', [])
 
@@ -1487,13 +1495,14 @@ The section includes relevant technical details, design decisions, and implement
                     project_name=project_name,
                     actors=actors,
                     use_cases=use_cases,
-                    project_id=project_id
+                    project_id=project_id,
+                    user_id=user_id
                 )
 
             elif diagram_type == "class":
                 # Generate class diagram
                 classes = self._extract_classes(project_data)
-                return uml_generator.generate_class_diagram(classes, project_id=project_id)
+                return uml_generator.generate_class_diagram(classes, project_id=project_id, user_id=user_id)
 
             elif diagram_type == "sequence":
                 # Generate sequence diagram
@@ -1506,7 +1515,7 @@ The section includes relevant technical details, design decisions, and implement
                     {'from': 'API', 'to': 'Frontend', 'message': 'Response', 'type': 'return'},
                     {'from': 'Frontend', 'to': 'User', 'message': 'Display', 'type': 'return'},
                 ]
-                return uml_generator.generate_sequence_diagram(participants, messages, project_id=project_id)
+                return uml_generator.generate_sequence_diagram(participants, messages, project_id=project_id, user_id=user_id)
 
             elif diagram_type == "activity":
                 # Generate activity diagram
@@ -1518,12 +1527,12 @@ The section includes relevant technical details, design decisions, and implement
                     'Update Database',
                     'Return Response'
                 ]
-                return uml_generator.generate_activity_diagram(activities, project_id=project_id)
+                return uml_generator.generate_activity_diagram(activities, project_id=project_id, user_id=user_id)
 
             elif diagram_type == "er":
                 # Generate ER diagram
                 entities = self._extract_entities(project_data)
-                return uml_generator.generate_er_diagram(entities, project_id=project_id)
+                return uml_generator.generate_er_diagram(entities, project_id=project_id, user_id=user_id)
 
             elif diagram_type == "dfd_0":
                 # Generate DFD Level 0
@@ -1537,12 +1546,13 @@ The section includes relevant technical details, design decisions, and implement
                         {'from': project_name, 'to': 'User', 'data': 'Response'},
                         {'from': project_name, 'to': 'Database', 'data': 'Query'},
                     ],
-                    project_id=project_id
+                    project_id=project_id,
+                    user_id=user_id
                 )
 
             elif diagram_type == "system_architecture":
                 # Generate System Architecture Diagram
-                return uml_generator.generate_system_architecture_diagram(project_data, project_id=project_id)
+                return uml_generator.generate_system_architecture_diagram(project_data, project_id=project_id, user_id=user_id)
 
             return None
 

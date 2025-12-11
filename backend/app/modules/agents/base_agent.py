@@ -14,6 +14,7 @@ class AgentContext:
     """
     user_request: str
     project_id: str
+    user_id: Optional[str] = None  # User ID for isolation (diagrams, documents, etc.)
     metadata: Optional[Dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self):

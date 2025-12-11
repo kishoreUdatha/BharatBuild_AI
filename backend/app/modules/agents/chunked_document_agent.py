@@ -1037,7 +1037,11 @@ JSON FORMAT (output exactly this structure):
             # Phase 3: Generate UML Diagrams
             yield {"type": "phase", "phase": "diagrams", "message": "Generating UML diagrams..."}
 
-            diagrams = await self._generate_all_diagrams(project_data)
+            # Get project_id and user_id from context for isolation
+            project_id = context.project_id if context else None
+            user_id = context.user_id if context else None
+
+            diagrams = await self._generate_all_diagrams(project_data, project_id=project_id, user_id=user_id)
 
             yield {
                 "type": "diagrams_complete",
@@ -1051,17 +1055,15 @@ JSON FORMAT (output exactly this structure):
             # Phase 4: Assemble document
             yield {"type": "phase", "phase": "assembly", "message": "Assembling final document..."}
 
-            # Get project_id from context for saving to project docs folder
-            project_id = context.project_id if context else None
-
             if document_type == DocumentType.PPT:
-                final_doc = await self._assemble_ppt(generated_sections, project_data, project_id)
+                final_doc = await self._assemble_ppt(generated_sections, project_data, project_id, user_id)
             else:
                 final_doc = await self._assemble_word_document(
                     generated_sections,
                     project_data,
                     document_type,
-                    project_id
+                    project_id,
+                    user_id
                 )
 
             yield {
@@ -1409,7 +1411,8 @@ Place: {ci.college_name}
         sections: List[Dict],
         project_data: Dict,
         document_type: DocumentType,
-        project_id: str = None
+        project_id: str = None,
+        user_id: str = None
     ) -> Dict:
         """Assemble sections into Word document using python-docx"""
 
@@ -1421,7 +1424,8 @@ Place: {ci.college_name}
             sections=sections,
             project_data=project_data,
             document_type=document_type.value,
-            project_id=project_id
+            project_id=project_id,
+            user_id=user_id
         )
 
         return {
@@ -1434,7 +1438,8 @@ Place: {ci.college_name}
         self,
         sections: List[Dict],
         project_data: Dict,
-        project_id: str = None
+        project_id: str = None,
+        user_id: str = None
     ) -> Dict:
         """Assemble sections into PowerPoint"""
 
@@ -1445,7 +1450,8 @@ Place: {ci.college_name}
         file_path = await generator.create_presentation(
             sections=sections,
             project_data=project_data,
-            project_id=project_id
+            project_id=project_id,
+            user_id=user_id
         )
 
         return {
@@ -1759,9 +1765,14 @@ Place: {ci.college_name}
             "content": f"[Content generation failed for {section['title']}. Please regenerate this section.]"
         }
 
-    async def _generate_all_diagrams(self, project_data: Dict) -> Dict[str, str]:
+    async def _generate_all_diagrams(self, project_data: Dict, project_id: str = None, user_id: str = None) -> Dict[str, str]:
         """
         Generate all UML diagrams for the document.
+
+        Args:
+            project_data: Project data for diagram generation
+            project_id: Project ID for isolation
+            user_id: User ID for isolation
 
         Returns:
             Dict mapping diagram type to file path
@@ -1773,7 +1784,7 @@ Place: {ci.college_name}
             features = project_data.get('features', [])
             database_tables = project_data.get('database_tables', [])
 
-            logger.info(f"[ChunkedDoc] Generating UML diagrams for {project_name}")
+            logger.info(f"[ChunkedDoc] Generating UML diagrams for {project_name} (project_id={project_id}, user_id={user_id})")
 
             # 1. Use Case Diagram
             try:
@@ -1785,7 +1796,9 @@ Place: {ci.college_name}
                 diagrams['use_case'] = uml_generator.generate_use_case_diagram(
                     project_name=project_name,
                     actors=actors,
-                    use_cases=use_cases
+                    use_cases=use_cases,
+                    project_id=project_id,
+                    user_id=user_id
                 )
                 logger.info("[ChunkedDoc] Generated Use Case Diagram")
             except Exception as e:
@@ -1794,7 +1807,7 @@ Place: {ci.college_name}
             # 2. Class Diagram
             try:
                 classes = self._extract_classes_for_diagram(project_data)
-                diagrams['class'] = uml_generator.generate_class_diagram(classes)
+                diagrams['class'] = uml_generator.generate_class_diagram(classes, project_id=project_id, user_id=user_id)
                 logger.info("[ChunkedDoc] Generated Class Diagram")
             except Exception as e:
                 logger.error(f"[ChunkedDoc] Class Diagram error: {e}")
@@ -1810,7 +1823,7 @@ Place: {ci.college_name}
                     {'from': 'API', 'to': 'Frontend', 'message': 'Response', 'type': 'return'},
                     {'from': 'Frontend', 'to': 'User', 'message': 'Display', 'type': 'return'},
                 ]
-                diagrams['sequence'] = uml_generator.generate_sequence_diagram(participants, messages)
+                diagrams['sequence'] = uml_generator.generate_sequence_diagram(participants, messages, project_id=project_id, user_id=user_id)
                 logger.info("[ChunkedDoc] Generated Sequence Diagram")
             except Exception as e:
                 logger.error(f"[ChunkedDoc] Sequence Diagram error: {e}")
@@ -1825,7 +1838,7 @@ Place: {ci.college_name}
                     'Update Database',
                     'Return Response'
                 ]
-                diagrams['activity'] = uml_generator.generate_activity_diagram(activities)
+                diagrams['activity'] = uml_generator.generate_activity_diagram(activities, project_id=project_id, user_id=user_id)
                 logger.info("[ChunkedDoc] Generated Activity Diagram")
             except Exception as e:
                 logger.error(f"[ChunkedDoc] Activity Diagram error: {e}")
@@ -1833,7 +1846,7 @@ Place: {ci.college_name}
             # 5. ER Diagram
             try:
                 entities = self._extract_entities_for_diagram(project_data)
-                diagrams['er'] = uml_generator.generate_er_diagram(entities)
+                diagrams['er'] = uml_generator.generate_er_diagram(entities, project_id=project_id, user_id=user_id)
                 logger.info("[ChunkedDoc] Generated ER Diagram")
             except Exception as e:
                 logger.error(f"[ChunkedDoc] ER Diagram error: {e}")
@@ -1849,7 +1862,9 @@ Place: {ci.college_name}
                         {'from': 'User', 'to': project_name, 'data': 'Request'},
                         {'from': project_name, 'to': 'User', 'data': 'Response'},
                         {'from': project_name, 'to': 'Database', 'data': 'Query'},
-                    ]
+                    ],
+                    project_id=project_id,
+                    user_id=user_id
                 )
                 logger.info("[ChunkedDoc] Generated DFD Level 0")
             except Exception as e:
