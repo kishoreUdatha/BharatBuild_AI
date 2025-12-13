@@ -57,8 +57,9 @@ variable "app_name" {
 }
 
 variable "domain_name" {
-  description = "Domain name for the application"
+  description = "Domain name for the application (optional - leave empty to use ALB URL)"
   type        = string
+  default     = ""
 }
 
 variable "db_password" {
@@ -326,25 +327,26 @@ resource "aws_db_parameter_group" "main" {
   name   = "${var.app_name}-pg-params"
 
   parameter {
-    name  = "log_connections"
-    value = "1"
+    name         = "log_connections"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 
   parameter {
-    name  = "max_connections"
-    value = "500"
+    name         = "max_connections"
+    value        = "500"
+    apply_method = "pending-reboot"
   }
 
-  parameter {
-    name  = "shared_buffers"
-    value = "{DBInstanceClassMemory/4096}"
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
 resource "aws_db_instance" "main" {
   identifier     = "${var.app_name}-db"
   engine         = "postgres"
-  engine_version = "15.4"
+  engine_version = "15"
 
   # Instance specs for 100K users
   instance_class        = "db.t3.large"  # 2 vCPU, 8GB RAM
@@ -382,22 +384,23 @@ resource "aws_db_instance" "main" {
   }
 }
 
-# Read Replica for scaling reads
-resource "aws_db_instance" "replica" {
-  identifier     = "${var.app_name}-db-replica"
-  instance_class = "db.t3.medium"
-
-  replicate_source_db = aws_db_instance.main.identifier
-
-  vpc_security_group_ids = [aws_security_group.rds.id]
-  parameter_group_name   = aws_db_parameter_group.main.name
-
-  performance_insights_enabled = true
-
-  tags = {
-    Name = "${var.app_name}-replica-db"
-  }
-}
+# Read Replica - TEMPORARILY DISABLED (DB not in available state)
+# resource "aws_db_instance" "replica" {
+#   identifier     = "${var.app_name}-db-replica"
+#   instance_class = "db.t3.medium"
+#
+#   replicate_source_db = aws_db_instance.main.identifier
+#
+#   vpc_security_group_ids = [aws_security_group.rds.id]
+#   parameter_group_name   = aws_db_parameter_group.main.name
+#
+#   performance_insights_enabled = true
+#   skip_final_snapshot          = true
+#
+#   tags = {
+#     Name = "${var.app_name}-replica-db"
+#   }
+# }
 
 # =============================================================================
 # ElastiCache Redis
@@ -718,9 +721,9 @@ output "rds_endpoint" {
   value = aws_db_instance.main.endpoint
 }
 
-output "rds_replica_endpoint" {
-  value = aws_db_instance.replica.endpoint
-}
+# output "rds_replica_endpoint" {
+#   value = aws_db_instance.replica.endpoint
+# }
 
 output "redis_endpoint" {
   value = aws_elasticache_replication_group.main.primary_endpoint_address

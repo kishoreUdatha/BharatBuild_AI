@@ -13,21 +13,24 @@ All errors are processed through the auto-fixer system automatically.
 """
 
 import asyncio
-import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, status
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.simple_fixer import simple_fixer
+from app.core.database import get_db
+from app.modules.auth.dependencies import get_current_user_optional
+from app.modules.auth.usage_limits import get_user_limits
+from app.models import User
 from app.services.log_bus import LogBus, get_log_bus
 from app.services.auto_fixer import get_auto_fixer
 from app.core.config import settings
+from app.core.logging_config import logger
 from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -101,35 +104,37 @@ ws_connections: Dict[str, List[WebSocket]] = {}
 
 
 @router.post("/report/{project_id}", response_model=ErrorReportResponse)
-async def report_errors(project_id: str, request: ErrorReportRequest):
+async def report_errors(
+    project_id: str,
+    request: ErrorReportRequest,
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db)
+):
     """
     UNIFIED ERROR ENDPOINT - Single entry point for all errors
 
     This endpoint:
     1. Receives errors from all sources (browser, build, Docker, network)
     2. Logs them to the LogBus for tracking
-    3. Triggers the auto-fixer automatically
+    3. Triggers the auto-fixer automatically (if user has bug_fixing feature)
     4. Returns fix status
 
-    Usage:
-    ```
-    POST /api/v1/errors/report/{project_id}
-    {
-        "errors": [
-            {
-                "source": "build",
-                "type": "compile_error",
-                "message": "Module not found: Cannot find module 'react'",
-                "file": "src/App.tsx",
-                "line": 1,
-                "severity": "error"
-            }
-        ],
-        "context": "Full terminal output for context...",
-        "command": "npm run dev"
-    }
-    ```
+    NOTE: Bug fixing requires Premium plan. Free users can see errors but cannot auto-fix.
     """
+    # Check if user has bug_fixing feature enabled
+    can_auto_fix = True
+    if current_user:
+        try:
+            limits = await get_user_limits(current_user, db)
+            feature_flags = limits.feature_flags or {}
+            can_auto_fix = feature_flags.get("bug_fixing", False) or feature_flags.get("all", False)
+        except Exception as e:
+            logger.warning(f"[ErrorHandler:{project_id}] Could not check feature flags: {e}")
+            can_auto_fix = False
+    else:
+        # No user = anonymous, block auto-fix
+        can_auto_fix = False
+
     if not request.errors:
         return ErrorReportResponse(
             success=True,
@@ -246,11 +251,23 @@ async def report_errors(project_id: str, request: ErrorReportRequest):
             if not primary_error:
                 primary_error = error
 
-    # Trigger auto-fix if we have fixable errors
+    # Trigger auto-fix if we have fixable errors AND user has permission
     fix_triggered = False
     fix_status = None
 
     if has_fixable_error and primary_error:
+        # Check if user can auto-fix
+        if not can_auto_fix:
+            logger.info(f"[ErrorHandler:{project_id}] Bug fixing blocked - upgrade required")
+            return ErrorReportResponse(
+                success=True,
+                project_id=project_id,
+                errors_received=len(request.errors),
+                fix_triggered=False,
+                fix_status="upgrade_required",
+                message="Bug fixing requires Premium plan. Upgrade to automatically fix errors."
+            )
+
         try:
             # Get the auto-fixer
             auto_fixer = get_auto_fixer(project_id)
@@ -286,6 +303,9 @@ async def report_errors(project_id: str, request: ErrorReportRequest):
                 for e in request.errors
             ]
 
+            # Get user_id for token tracking
+            fix_user_id = str(current_user.id) if current_user else None
+
             async def run_fix_with_logging():
                 try:
                     logger.info(f"[ErrorHandler:{project_id}] Starting SimpleFixer background task...")
@@ -295,7 +315,8 @@ async def report_errors(project_id: str, request: ErrorReportRequest):
                         context=error_context,
                         command=request.command,
                         file_tree=request.file_tree,
-                        recently_modified=request.recently_modified
+                        recently_modified=request.recently_modified,
+                        user_id=fix_user_id
                     )
                     logger.info(f"[ErrorHandler:{project_id}] SimpleFixer background task completed")
                 except Exception as e:
@@ -328,7 +349,8 @@ async def execute_fix_with_notification(
     context: str = "",
     command: Optional[str] = None,
     file_tree: Optional[List[str]] = None,
-    recently_modified: Optional[List[RecentlyModifiedEntry]] = None
+    recently_modified: Optional[List[RecentlyModifiedEntry]] = None,
+    user_id: Optional[str] = None
 ):
     """Execute fix using SimpleFixer and send WebSocket notifications"""
     try:
@@ -354,6 +376,9 @@ async def execute_fix_with_notification(
             for f in (recently_modified or [])
         ] if recently_modified else None
 
+        # Reset token tracking before fix
+        simple_fixer.reset_token_tracking()
+
         # Use SimpleFixer for ALL errors
         result = await simple_fixer.fix_from_frontend(
             project_id=project_id,
@@ -365,8 +390,74 @@ async def execute_fix_with_notification(
             recently_modified=recently_mod_dicts
         )
 
+        # Save token transaction after fix
+        token_usage = simple_fixer.get_token_usage()
+        if token_usage.get("total_tokens", 0) > 0 and user_id:
+            try:
+                from app.services.token_tracker import token_tracker
+                from app.models.usage import AgentType, OperationType
+
+                await token_tracker.log_transaction_simple(
+                    user_id=user_id,
+                    project_id=project_id,
+                    agent_type=AgentType.FIXER,
+                    operation=OperationType.AUTO_FIX,
+                    model=token_usage.get("model", "haiku"),
+                    input_tokens=token_usage.get("input_tokens", 0),
+                    output_tokens=token_usage.get("output_tokens", 0),
+                    metadata={
+                        "call_count": token_usage.get("call_count", 0),
+                        "source": "simple_fixer",
+                        "files_modified": result.files_modified if result.success else []
+                    }
+                )
+                logger.info(f"[ErrorHandler:{project_id}] Token usage saved: {token_usage.get('total_tokens', 0)} tokens")
+            except Exception as token_err:
+                logger.warning(f"[ErrorHandler:{project_id}] Failed to save token usage: {token_err}")
+
         if result.success and result.files_modified:
             logger.info(f"[ErrorHandler:{project_id}] SimpleFixer completed: {len(result.files_modified)} files")
+
+            # Sync modified files to database and S3
+            try:
+                from app.services.unified_storage import UnifiedStorageService
+                unified_storage = UnifiedStorageService()
+
+                for file_path in result.files_modified:
+                    try:
+                        full_path = project_path / file_path
+                        if full_path.exists():
+                            content = full_path.read_text(encoding='utf-8', errors='ignore')
+
+                            # Save to database (Layer 3)
+                            db_saved = await unified_storage.save_to_database(project_id, file_path, content)
+                            if db_saved:
+                                logger.info(f"[ErrorHandler:{project_id}] Synced to DB: {file_path}")
+                            else:
+                                logger.warning(f"[ErrorHandler:{project_id}] DB sync failed: {file_path}")
+
+                            # Save to S3 (Layer 2) if user_id is available
+                            if user_id:
+                                try:
+                                    s3_result = await unified_storage.upload_to_s3(
+                                        user_id=user_id,
+                                        project_id=project_id,
+                                        file_path=file_path,
+                                        content=content
+                                    )
+                                    if s3_result.get('success'):
+                                        logger.info(f"[ErrorHandler:{project_id}] Synced to S3: {file_path}")
+                                except Exception as s3_err:
+                                    logger.warning(f"[ErrorHandler:{project_id}] S3 sync failed for {file_path}: {s3_err}")
+
+                    except Exception as sync_err:
+                        logger.warning(f"[ErrorHandler:{project_id}] Failed to sync {file_path}: {sync_err}")
+
+                logger.info(f"[ErrorHandler:{project_id}] Synced {len(result.files_modified)} fixed files to DB and S3")
+
+            except Exception as storage_err:
+                logger.warning(f"[ErrorHandler:{project_id}] Storage sync error: {storage_err}")
+
             await notify_fix_completed(project_id, result.patches_applied, result.files_modified)
         elif result.success:
             logger.info(f"[ErrorHandler:{project_id}] SimpleFixer: {result.message}")
@@ -539,7 +630,10 @@ async def get_pending_fix(project_id: str):
 
 
 @router.post("/approve-fix/{project_id}")
-async def approve_fix(project_id: str):
+async def approve_fix(
+    project_id: str,
+    current_user: Optional[User] = Depends(get_current_user_optional)
+):
     """
     Approve and execute a pending fix.
 
@@ -558,15 +652,83 @@ async def approve_fix(project_id: str):
                     project_path = potential_path
                     break
 
+    user_id = str(current_user.id) if current_user else None
     logger.info(f"[ErrorHandler:{project_id}] User approved fix, executing...")
 
     # Notify WebSocket clients
     await notify_fix_started(project_id, "User approved fix")
 
     try:
+        # Reset token tracking before fix
+        simple_fixer.reset_token_tracking()
+
         result = await simple_fixer.approve_and_execute_fix(project_id, project_path)
 
-        if result.success:
+        if result.success and result.files_modified:
+            # Sync modified files to database and S3
+            try:
+                from app.services.unified_storage import UnifiedStorageService
+                unified_storage = UnifiedStorageService()
+
+                for file_path in result.files_modified:
+                    try:
+                        full_path = project_path / file_path
+                        if full_path.exists():
+                            content = full_path.read_text(encoding='utf-8', errors='ignore')
+
+                            # Save to database (Layer 3)
+                            db_saved = await unified_storage.save_to_database(project_id, file_path, content)
+                            if db_saved:
+                                logger.info(f"[ErrorHandler:{project_id}] Synced to DB: {file_path}")
+
+                            # Save to S3 (Layer 2) if user_id is available
+                            if user_id:
+                                try:
+                                    s3_result = await unified_storage.upload_to_s3(
+                                        user_id=user_id,
+                                        project_id=project_id,
+                                        file_path=file_path,
+                                        content=content
+                                    )
+                                    if s3_result.get('success'):
+                                        logger.info(f"[ErrorHandler:{project_id}] Synced to S3: {file_path}")
+                                except Exception as s3_err:
+                                    logger.warning(f"[ErrorHandler:{project_id}] S3 sync failed for {file_path}: {s3_err}")
+
+                    except Exception as sync_err:
+                        logger.warning(f"[ErrorHandler:{project_id}] Failed to sync {file_path}: {sync_err}")
+
+                logger.info(f"[ErrorHandler:{project_id}] Synced {len(result.files_modified)} fixed files to DB and S3")
+            except Exception as storage_err:
+                logger.warning(f"[ErrorHandler:{project_id}] Storage sync error: {storage_err}")
+
+            # Save token transaction
+            token_usage = simple_fixer.get_token_usage()
+            if token_usage.get("total_tokens", 0) > 0 and user_id:
+                try:
+                    from app.services.token_tracker import token_tracker
+                    from app.models.usage import AgentType, OperationType
+
+                    await token_tracker.log_transaction_simple(
+                        user_id=user_id,
+                        project_id=project_id,
+                        agent_type=AgentType.FIXER,
+                        operation=OperationType.AUTO_FIX,
+                        model=token_usage.get("model", "haiku"),
+                        input_tokens=token_usage.get("input_tokens", 0),
+                        output_tokens=token_usage.get("output_tokens", 0),
+                        metadata={
+                            "call_count": token_usage.get("call_count", 0),
+                            "source": "simple_fixer_approved",
+                            "files_modified": result.files_modified
+                        }
+                    )
+                    logger.info(f"[ErrorHandler:{project_id}] Token usage saved: {token_usage.get('total_tokens', 0)} tokens")
+                except Exception as token_err:
+                    logger.warning(f"[ErrorHandler:{project_id}] Failed to save token usage: {token_err}")
+
+            await notify_fix_completed(project_id, result.patches_applied, result.files_modified)
+        elif result.success:
             await notify_fix_completed(project_id, result.patches_applied, result.files_modified)
         else:
             await notify_fix_failed(project_id, result.message)

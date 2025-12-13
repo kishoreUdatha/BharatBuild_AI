@@ -31,7 +31,8 @@ class TokenData(BaseModel):
 class UserResponse(BaseModel):
     id: UUID
     email: str
-    full_name: Optional[str]
+    username: Optional[str] = None
+    full_name: Optional[str] = None
     role: str
     is_active: bool
     is_verified: bool
@@ -45,6 +46,13 @@ class UserResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    user: UserResponse
 
 
 # ============================================

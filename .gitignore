@@ -94,3 +94,12 @@ AUX
 com[1-9]
 lpt[1-9]
 ~$*
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform.lock.hcl
+errored.tfstate
+

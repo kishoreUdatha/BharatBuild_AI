@@ -38,6 +38,26 @@ class BaseAgent(ABC):
         self.capabilities = capabilities
         self.model = model
         self.claude = claude_client
+        # Token tracking
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self._call_count = 0
+
+    def reset_token_tracking(self):
+        """Reset token tracking counters"""
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self._call_count = 0
+
+    def get_token_usage(self) -> Dict[str, Any]:
+        """Get accumulated token usage"""
+        return {
+            "input_tokens": self._total_input_tokens,
+            "output_tokens": self._total_output_tokens,
+            "total_tokens": self._total_input_tokens + self._total_output_tokens,
+            "call_count": self._call_count,
+            "model": self.model
+        }
 
     @abstractmethod
     async def process(self, context: AgentContext) -> Dict[str, Any]:
@@ -148,6 +168,13 @@ class BaseAgent(ABC):
                 max_tokens=max_tokens,
                 temperature=temperature
             )
+
+            # Track token usage
+            self._total_input_tokens += response.get("input_tokens", 0)
+            self._total_output_tokens += response.get("output_tokens", 0)
+            self._call_count += 1
+            logger.debug(f"[{self.name}] Token usage: +{response.get('input_tokens', 0)} in, +{response.get('output_tokens', 0)} out (call #{self._call_count})")
+
             return response.get("content", "")
         except Exception as e:
             logger.error(f"[{self.name}] Claude API error: {e}", exc_info=True)

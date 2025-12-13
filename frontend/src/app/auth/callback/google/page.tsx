@@ -61,9 +61,9 @@ function GoogleCallbackContent() {
         // Redirect after short delay to show success
         setTimeout(() => {
           if (response.is_new_user) {
-            router.push('/dashboard?welcome=true')
+            router.push('/bolt?welcome=true')
           } else {
-            router.push('/dashboard')
+            router.push('/bolt')
           }
         }, 1500)
 

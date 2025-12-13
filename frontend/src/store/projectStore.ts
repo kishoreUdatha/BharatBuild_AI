@@ -106,6 +106,10 @@ export const useProjectStore = create<ProjectState>()(
   sessionId: null,
   downloadUrl: null,
 
+  // Live preview server state
+  serverUrl: null,
+  isServerRunning: false,
+
   // Recently modified files (for Bolt.new-style fixer context)
   recentlyModifiedFiles: [],
 
@@ -535,10 +539,20 @@ export const useProjectStore = create<ProjectState>()(
 
               const files = convertTree(data.tree)
 
+              // Check if project title is a placeholder
+              const isPlaceholderTitle = (title: string | null | undefined): boolean => {
+                if (!title) return true
+                return /^Project\s+(?:[a-f0-9-]{8,}|project-\d+)/i.test(title)
+              }
+
+              const projectTitle = (data.project?.title && !isPlaceholderTitle(data.project.title))
+                ? data.project.title
+                : `Project ${newProjectId.slice(-8)}`
+
               set({
                 currentProject: {
                   id: newProjectId,
-                  name: data.project?.title || `Project ${newProjectId}`,
+                  name: projectTitle,
                   description: data.project?.description,
                   files: files,
                   createdAt: new Date(),
@@ -556,11 +570,11 @@ export const useProjectStore = create<ProjectState>()(
       }
     }
 
-    // Fallback: Create empty project
+    // Fallback: Create empty project with short ID display
     set({
       currentProject: {
         id: newProjectId,
-        name: `Project ${newProjectId}`,
+        name: `Project ${newProjectId.slice(-8)}`,
         files: [],
         createdAt: new Date(),
         updatedAt: new Date(),

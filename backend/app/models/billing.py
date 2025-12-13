@@ -9,11 +9,12 @@ from app.core.types import GUID, generate_uuid
 
 
 class PlanType(str, enum.Enum):
-    """Plan types"""
-    FREE = "free"
-    BASIC = "basic"
-    PRO = "pro"
-    ENTERPRISE = "enterprise"
+    """Plan types - Student-focused tiers"""
+    FREE = "free"              # Trial/Demo
+    STUDENT = "student"        # Students - Basic features
+    BASIC = "basic"            # Hobbyists - More features
+    PRO = "pro"                # Professionals - Full features
+    ENTERPRISE = "enterprise"  # Organizations - Unlimited
 
 
 class SubscriptionStatus(str, enum.Enum):
@@ -33,7 +34,7 @@ class TransactionStatus(str, enum.Enum):
 
 
 class Plan(Base):
-    """Subscription plan model"""
+    """Subscription plan model with comprehensive feature flags"""
     __tablename__ = "plans"
 
     id = Column(GUID, primary_key=True, default=generate_uuid)
@@ -49,13 +50,36 @@ class Plan(Base):
     currency = Column(String(10), default="INR")
     billing_period = Column(String(20), default="monthly")  # monthly, yearly
 
-    # Limits
+    # ========== Core Limits ==========
     token_limit = Column(Integer, nullable=True)  # null = unlimited
     project_limit = Column(Integer, nullable=True)
     api_calls_limit = Column(Integer, nullable=True)
 
-    # Features
-    features = Column(JSON, default=list)
+    # ========== Code Generation Limits ==========
+    code_generations_per_day = Column(Integer, nullable=True)  # null = unlimited
+    max_files_per_project = Column(Integer, nullable=True)
+    max_lines_per_generation = Column(Integer, nullable=True)
+
+    # ========== Bug Fixing Limits ==========
+    auto_fixes_per_day = Column(Integer, nullable=True)  # null = unlimited
+    auto_fixes_per_month = Column(Integer, nullable=True)
+
+    # ========== Document Generation Limits ==========
+    documents_per_month = Column(Integer, nullable=True)  # null = unlimited
+    document_types_allowed = Column(JSON, default=list)  # ["report", "srs", "sds", "ppt", "viva"]
+
+    # ========== Execution Limits ==========
+    concurrent_executions = Column(Integer, default=1)
+    execution_timeout_minutes = Column(Integer, default=10)
+    sandbox_hours_per_day = Column(Integer, nullable=True)  # null = unlimited
+
+    # ========== Feature Flags ==========
+    features = Column(JSON, default=list)  # List of feature strings
+    feature_flags = Column(JSON, default=dict)  # Detailed feature configuration
+
+    # ========== Model Access ==========
+    allowed_models = Column(JSON, default=list)  # ["haiku", "sonnet", "opus"]
+    priority_queue = Column(Boolean, default=False)  # Skip queue for generations
 
     # Status
     is_active = Column(Boolean, default=True)

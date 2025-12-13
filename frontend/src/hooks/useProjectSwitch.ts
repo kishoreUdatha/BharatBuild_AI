@@ -265,7 +265,18 @@ export function useProjectSwitch() {
           // /sync/files returns: { success, project_id, tree, total, layer, project_title? }
           const fileTreeData = data.file_tree || data.tree || []
           const totalFiles = data.total_files || data.total || 0
-          const projectTitle = data.project_title || projectName || `Project ${newProjectId}`
+
+          // Check if project_title is a placeholder (e.g., "Project abc123-uuid...")
+          // If so, prefer the projectName option or generate a better default
+          const isPlaceholderTitle = (title: string | null | undefined): boolean => {
+            if (!title) return true
+            // Match "Project " followed by UUID-like pattern or "project-" prefix
+            return /^Project\s+(?:[a-f0-9-]{8,}|project-\d+)/i.test(title)
+          }
+
+          const projectTitle = (data.project_title && !isPlaceholderTitle(data.project_title))
+            ? data.project_title
+            : (projectName || `Project ${newProjectId.slice(-8)}`)
           const projectDesc = data.project_description || projectDescription
 
           console.log(`[ProjectSwitch] RAW API response:`, JSON.stringify({
@@ -377,10 +388,10 @@ export function useProjectSwitch() {
         } catch (err: any) {
           console.warn('[ProjectSwitch] Failed to load project metadata:', err)
 
-          // Fallback: create empty project
+          // Fallback: create empty project with short ID display
           useProjectStore.getState().setCurrentProject({
             id: newProjectId,
-            name: projectName || `Project ${newProjectId}`,
+            name: projectName || `Project ${newProjectId.slice(-8)}`,
             description: projectDescription,
             files: [],
             createdAt: new Date(),
@@ -398,10 +409,10 @@ export function useProjectSwitch() {
           }
         }
       } else {
-        // loadFiles = false - just create empty project
+        // loadFiles = false - just create empty project with short ID display
         useProjectStore.getState().setCurrentProject({
           id: newProjectId,
-          name: projectName || `Project ${newProjectId}`,
+          name: projectName || `Project ${newProjectId.slice(-8)}`,
           description: projectDescription,
           files: [],
           createdAt: new Date(),
@@ -533,7 +544,7 @@ export function useProjectSwitch() {
                   }
                 }
               })
-              .filter((msg): msg is NonNullable<typeof msg> => msg !== null)  // Filter out skipped messages
+              .filter((msg: unknown): msg is NonNullable<typeof msg> => msg !== null)  // Filter out skipped messages
 
             // Add messages to chat store
             console.log(`[ProjectSwitch] Setting ${chatMessages.length} messages to chatStore`)

@@ -9,7 +9,10 @@ import {
   Loader2,
   FolderOpen,
   PackageOpen,
-  AlertCircle
+  AlertCircle,
+  File,
+  FileCode,
+  Image as ImageIcon
 } from 'lucide-react'
 import { apiClient } from '@/lib/api-client'
 
@@ -34,14 +37,29 @@ interface DocumentsPanelProps {
   onClose?: () => void
 }
 
-const documentIcons: Record<string, any> = {
-  project_report: FileText,
-  srs: FileSpreadsheet,
-  sds: FileSpreadsheet,
-  ppt: Presentation,
-  viva_qa: FileText,
-  documents: FileText,
-  presentations: Presentation
+const getDocumentIcon = (type: string, name: string) => {
+  const ext = name.split('.').pop()?.toLowerCase()
+
+  if (ext === 'pptx' || ext === 'ppt' || type === 'ppt' || type === 'presentations') {
+    return { icon: Presentation, color: 'text-orange-600', bg: 'bg-orange-50' }
+  }
+  if (ext === 'docx' || ext === 'doc' || type === 'project_report' || type === 'srs' || type === 'documents') {
+    return { icon: FileText, color: 'text-blue-600', bg: 'bg-blue-50' }
+  }
+  if (ext === 'xlsx' || ext === 'xls' || ext === 'csv') {
+    return { icon: FileSpreadsheet, color: 'text-green-600', bg: 'bg-green-50' }
+  }
+  if (ext === 'pdf') {
+    return { icon: File, color: 'text-red-600', bg: 'bg-red-50' }
+  }
+  if (ext === 'png' || ext === 'jpg' || ext === 'jpeg' || ext === 'svg') {
+    return { icon: ImageIcon, color: 'text-purple-600', bg: 'bg-purple-50' }
+  }
+  if (type === 'viva_qa') {
+    return { icon: FileCode, color: 'text-cyan-600', bg: 'bg-cyan-50' }
+  }
+
+  return { icon: FileText, color: 'text-gray-600', bg: 'bg-gray-100' }
 }
 
 const formatBytes = (bytes: number) => {
@@ -52,10 +70,24 @@ const formatBytes = (bytes: number) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
 }
 
+const formatDocType = (type: string) => {
+  switch (type) {
+    case 'project_report': return 'Report'
+    case 'srs': return 'SRS'
+    case 'sds': return 'Design'
+    case 'ppt': return 'PPT'
+    case 'viva_qa': return 'Q&A'
+    case 'documents': return 'Doc'
+    case 'presentations': return 'PPT'
+    default: return type
+  }
+}
+
 export function DocumentsPanel({ selectedProject, onClose }: DocumentsPanelProps) {
   const [documents, setDocuments] = useState<Document[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
+  const [downloadingId, setDownloadingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -91,13 +123,10 @@ export function DocumentsPanel({ selectedProject, onClose }: DocumentsPanelProps
     setIsDownloading(true)
     try {
       const token = localStorage.getItem('access_token')
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/documents/download-all/${selectedProject.id}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        }
+        `${apiBase}/api/v1/documents/download-all/${selectedProject.id}`,
+        { headers: { Authorization: `Bearer ${token}` } }
       )
 
       if (!response.ok) {
@@ -123,13 +152,14 @@ export function DocumentsPanel({ selectedProject, onClose }: DocumentsPanelProps
 
   const handleDownloadSingle = async (doc: Document) => {
     const token = localStorage.getItem('access_token')
-    const url = `${process.env.NEXT_PUBLIC_API_URL}/api/v1${doc.download_url}`
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+    const url = `${apiBase}/api/v1${doc.download_url}`
+
+    setDownloadingId(doc.id)
 
     try {
       const response = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
+        headers: { Authorization: `Bearer ${token}` }
       })
 
       if (!response.ok) throw new Error('Download failed')
@@ -145,111 +175,110 @@ export function DocumentsPanel({ selectedProject, onClose }: DocumentsPanelProps
       document.body.removeChild(a)
     } catch (err: any) {
       setError(err.message || 'Download failed')
+    } finally {
+      setDownloadingId(null)
     }
   }
 
   if (!selectedProject) {
     return (
-      <div className="h-full flex flex-col items-center justify-center text-gray-500 p-6">
-        <FolderOpen className="h-12 w-12 mb-4 opacity-50" />
-        <p className="text-center">Select a project to view its documents</p>
+      <div className="p-8 flex flex-col items-center justify-center text-center">
+        <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
+          <FolderOpen className="w-6 h-6 text-gray-400" />
+        </div>
+        <p className="text-gray-500 text-sm">Select a project to view documents</p>
       </div>
     )
   }
 
   return (
-    <div className="h-full flex flex-col bg-[#1a1a1a] rounded-xl border border-[#333]">
-      {/* Header */}
-      <div className="p-4 border-b border-[#333]">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold text-white">Documents</h3>
-          {documents.length > 0 && (
-            <span className="text-xs text-gray-400 bg-[#333] px-2 py-0.5 rounded">
-              {documents.length} files
-            </span>
-          )}
+    <div>
+      {isLoading ? (
+        <div className="p-8 flex flex-col items-center justify-center">
+          <Loader2 className="w-6 h-6 text-indigo-600 animate-spin mb-2" />
+          <p className="text-gray-500 text-sm">Loading documents...</p>
         </div>
-        <p className="text-sm text-gray-400 truncate">{selectedProject.title}</p>
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+      ) : error ? (
+        <div className="p-8 flex flex-col items-center justify-center">
+          <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center mb-3">
+            <AlertCircle className="w-5 h-5 text-red-500" />
           </div>
-        ) : error ? (
-          <div className="flex flex-col items-center justify-center py-8 text-red-400">
-            <AlertCircle className="h-8 w-8 mb-2" />
-            <p className="text-sm text-center">{error}</p>
-            <button
-              onClick={fetchDocuments}
-              className="mt-3 text-sm text-blue-400 hover:underline"
-            >
-              Retry
-            </button>
+          <p className="text-red-600 text-sm mb-2">{error}</p>
+          <button
+            onClick={fetchDocuments}
+            className="text-sm text-indigo-600 hover:text-indigo-700 font-medium"
+          >
+            Try again
+          </button>
+        </div>
+      ) : documents.length === 0 ? (
+        <div className="p-8 flex flex-col items-center justify-center text-center">
+          <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
+            <PackageOpen className="w-6 h-6 text-gray-400" />
           </div>
-        ) : documents.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-gray-500">
-            <PackageOpen className="h-10 w-10 mb-3 opacity-50" />
-            <p className="text-sm">No documents generated yet</p>
-            <p className="text-xs mt-1 text-gray-600">
-              Documents are generated for student projects
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-2">
+          <p className="text-gray-600 text-sm font-medium mb-1">No documents</p>
+          <p className="text-gray-400 text-xs">Documents will appear after generation</p>
+        </div>
+      ) : (
+        <>
+          <div className="divide-y divide-gray-100">
             {documents.map((doc, index) => {
-              const Icon = documentIcons[doc.type] || FileText
+              const { icon: Icon, color, bg } = getDocumentIcon(doc.type, doc.name)
+              const isDownloadingThis = downloadingId === doc.id
+
               return (
                 <div
                   key={doc.id || index}
-                  className="flex items-center justify-between p-3 rounded-lg bg-[#252525] hover:bg-[#2a2a2a] transition-colors group"
+                  className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors group"
                 >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="p-2 rounded-lg bg-blue-500/20">
-                      <Icon className="h-4 w-4 text-blue-400" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-white truncate">{doc.name}</p>
-                      <p className="text-xs text-gray-500">{formatBytes(doc.size_bytes)}</p>
+                  <div className={`w-9 h-9 rounded-lg ${bg} flex items-center justify-center flex-shrink-0`}>
+                    <Icon className={`w-4 h-4 ${color}`} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900 truncate">{doc.name}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-xs text-gray-400">{formatBytes(doc.size_bytes)}</span>
+                      <span className="text-gray-300">·</span>
+                      <span className="text-xs text-gray-400">{formatDocType(doc.type)}</span>
                     </div>
                   </div>
                   <button
                     onClick={() => handleDownloadSingle(doc)}
-                    className="p-2 rounded-lg hover:bg-[#333] text-gray-400 hover:text-white opacity-0 group-hover:opacity-100 transition-all"
+                    disabled={isDownloadingThis}
+                    className="p-2 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 opacity-0 group-hover:opacity-100 transition-all disabled:opacity-50"
                     title="Download"
                   >
-                    <Download className="h-4 w-4" />
+                    {isDownloadingThis ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4" />
+                    )}
                   </button>
                 </div>
               )
             })}
           </div>
-        )}
-      </div>
 
-      {/* Download All Button */}
-      {documents.length > 0 && (
-        <div className="p-4 border-t border-[#333]">
-          <button
-            onClick={handleDownloadAll}
-            disabled={isDownloading}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isDownloading ? (
-              <>
-                <Loader2 className="h-5 w-5 animate-spin" />
-                Downloading...
-              </>
-            ) : (
-              <>
-                <Download className="h-5 w-5" />
-                Download All as ZIP
-              </>
-            )}
-          </button>
-        </div>
+          <div className="p-4 border-t border-gray-100">
+            <button
+              onClick={handleDownloadAll}
+              disabled={isDownloading}
+              className="w-full flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 rounded-lg text-white text-sm font-medium transition-colors"
+            >
+              {isDownloading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Preparing...
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4" />
+                  Download All ({documents.length})
+                </>
+              )}
+            </button>
+          </div>
+        </>
       )}
     </div>
   )

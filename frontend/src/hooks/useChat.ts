@@ -520,7 +520,11 @@ I'll keep trying to help!`)
       const workflow = classification.suggestedWorkflow === 'bolt_instant' ? 'bolt_instant' : 'bolt_standard'
 
       // 8. Build metadata with auto-collected context for FIX intent
-      let workflowMetadata: Record<string, any> = {}
+      // IMPORTANT: Always include project_name in metadata so backend creates project with correct title
+      const freshProjectStore = useProjectStore.getState()
+      let workflowMetadata: Record<string, any> = {
+        project_name: freshProjectStore.currentProject?.name || extractProjectName(content)
+      }
 
       if (classification.intent === 'FIX') {
         // AUTO-FIX: Automatically collect ALL context (Bolt.new style)
@@ -572,7 +576,7 @@ I'll keep trying to help!`)
       }
 
       // Get the CURRENT project ID (may have been reset in GENERATE case above)
-      const freshProjectStore = useProjectStore.getState()
+      // Note: freshProjectStore was already declared above for metadata
       const projectId = freshProjectStore.currentProject?.id || 'default-project'
 
       console.log(`[useChat] Starting orchestrator workflow (${workflow} - ${classification.intent} intent) for project: ${projectId}`)
@@ -1049,6 +1053,25 @@ I'll keep trying to help!`)
                   projectStore.openTab(newFile)
                 }
               }
+              break
+
+            case 'upgrade_required':
+              // FREE plan limit reached - show upgrade prompt
+              console.log('[upgrade_required] FREE plan limit reached:', event.data)
+              const upgradeData = event.data || {}
+
+              // Update the message with upgrade info
+              updateMessage(aiMessageId, {
+                content: `🔒 **FREE Plan Limit Reached**\n\nYou've generated ${upgradeData.files_generated || 3} preview files.\n\n${upgradeData.upgrade_message || 'Upgrade to Premium to generate the complete project with all files, bug fixing, and documentation.'}\n\n[👉 Upgrade to Premium](/pricing)`,
+                isComplete: true
+              })
+
+              // Show alert and redirect to pricing
+              setTimeout(() => {
+                if (confirm('FREE plan limit reached! Would you like to upgrade to Premium for the complete project?')) {
+                  window.open('/pricing', '_blank')
+                }
+              }, 500)
               break
 
             case 'commands':

@@ -5,8 +5,9 @@ When a user opens an old project and the sandbox has been cleaned up,
 this service can restore the workspace in two ways:
 
 1. RESTORE from Database/S3 (Fast)
-   - Read files from ProjectFile table (content_inline for small files)
-   - Download large files from S3
+   - Read file metadata from ProjectFile table
+   - Download content from S3 (all content stored in S3)
+   - Fallback to inline content for legacy data
    - Write to sandbox
 
 2. REGENERATE from Plan (Like Bolt.new)
@@ -161,16 +162,16 @@ class WorkspaceRestoreService:
                 # Create parent directories
                 file_path.parent.mkdir(parents=True, exist_ok=True)
 
-                # Get content
-                if file.is_inline and file.content_inline:
-                    # Small file - content stored in database
-                    content = file.content_inline
-                elif file.s3_key:
-                    # Large file - download from S3
+                # Get content - prioritize S3, fallback to inline for legacy data
+                if file.s3_key:
+                    # Download from S3
                     content = await self._download_from_s3(file.s3_key)
                     if content is None:
                         errors.append(f"Failed to download {file.path} from S3")
                         continue
+                elif file.content_inline:
+                    # Legacy fallback for old inline content
+                    content = file.content_inline
                 else:
                     errors.append(f"No content available for {file.path}")
                     continue

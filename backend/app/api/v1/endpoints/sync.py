@@ -25,6 +25,7 @@ from app.models.user import User
 from app.models.project import Project, ProjectStatus, ProjectMode
 from app.models.project_file import ProjectFile
 from app.services.unified_storage import unified_storage
+from app.services.storage_service import storage_service
 
 
 router = APIRouter(prefix="/sync", tags=["File Sync (3-Layer)"])
@@ -300,9 +301,10 @@ async def save_to_s3(
                 project.s3_path = result.get('s3_prefix')
                 project.s3_zip_key = result.get('zip_s3_key')
                 project.file_index = result.get('file_index')
-                project.status = ProjectStatus.COMPLETED
+                # Mark as PARTIAL_COMPLETED (code done, documents pending)
+                project.status = ProjectStatus.PARTIAL_COMPLETED
                 await db.commit()
-                logger.info(f"[Layer 3] Updated project metadata: {project_id}")
+                logger.info(f"[Layer 3] Updated project metadata: {project_id} (PARTIAL_COMPLETED)")
         except ValueError:
             # Not a valid UUID, skip database update
             pass
@@ -502,27 +504,46 @@ async def get_project_files(
             if project_files:
                 logger.info(f"[Layer 4] Loading {len(project_files)} files from database: {project_id}")
 
+                # Pre-fetch content from S3 for all files (needed for sandbox restore and tree response)
+                file_contents = {}
+                for pf in project_files:
+                    if not pf.is_folder:
+                        # Get content - prioritize S3, fallback to inline for legacy data
+                        content = None
+                        if pf.s3_key:
+                            try:
+                                content_bytes = await storage_service.download_file(pf.s3_key)
+                                content = content_bytes.decode('utf-8') if content_bytes else ""
+                            except Exception as e:
+                                logger.warning(f"Failed to fetch {pf.path} from S3: {e}")
+                                content = pf.content_inline or ""
+                        elif pf.content_inline:
+                            content = pf.content_inline
+                        file_contents[pf.path] = content or ""
+
                 # IMPORTANT: Restore files to sandbox so they can be executed!
                 # This ensures /execution/run can find the files
                 try:
                     await unified_storage.create_sandbox(project_id, user_id)
                     files_restored = 0
                     for pf in project_files:
-                        if pf.content_inline and not pf.is_folder:
-                            success = await unified_storage.write_to_sandbox(
-                                project_id=project_id,
-                                file_path=pf.path,
-                                content=pf.content_inline,
-                                user_id=user_id
-                            )
-                            if success:
-                                files_restored += 1
+                        if not pf.is_folder and pf.path in file_contents:
+                            content = file_contents[pf.path]
+                            if content:
+                                success = await unified_storage.write_to_sandbox(
+                                    project_id=project_id,
+                                    file_path=pf.path,
+                                    content=content,
+                                    user_id=user_id
+                                )
+                                if success:
+                                    files_restored += 1
                     logger.info(f"[Layer 4] Restored {files_restored} files to sandbox for execution")
                 except Exception as restore_error:
                     logger.warning(f"[Layer 4] Failed to restore to sandbox: {restore_error}")
 
                 # Build hierarchical tree from flat file list
-                def build_tree(files):
+                def build_tree(files, contents_dict):
                     """Convert flat file list to hierarchical tree"""
                     root = []
                     # Track folders by path to avoid duplicates
@@ -536,7 +557,7 @@ async def get_project_files(
                             continue
 
                         file_path = pf.path
-                        content = pf.content_inline or ""
+                        content = contents_dict.get(file_path, "")
 
                         # Detect language from extension
                         ext = file_path.rsplit(".", 1)[-1] if "." in file_path else ""
@@ -605,7 +626,7 @@ async def get_project_files(
 
                     return root
 
-                tree = build_tree(project_files)
+                tree = build_tree(project_files, file_contents)
 
                 return {
                     "success": True,
