@@ -16,14 +16,12 @@ This is how Bolt.new handles previews.
 
 import asyncio
 import httpx
-import logging
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse, HTMLResponse
 
 from app.modules.execution import get_container_manager
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 router = APIRouter(prefix="/preview", tags=["Preview Proxy"])
 

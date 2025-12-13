@@ -155,6 +155,37 @@ class SimpleFixer:
         self.model_sonnet = "claude-sonnet-4-20250514"  # For complex errors
         # Auto-fix mode: True = immediate fix, False = queue for confirmation (Bolt.new style)
         self.auto_fix_enabled = True  # Can be toggled via API
+        # Token tracking
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self._call_count = 0
+        self._last_model_used = "haiku"
+
+    def reset_token_tracking(self):
+        """Reset token tracking counters"""
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self._call_count = 0
+        self._last_model_used = "haiku"
+
+    def get_token_usage(self) -> Dict[str, Any]:
+        """Get accumulated token usage"""
+        return {
+            "input_tokens": self._total_input_tokens,
+            "output_tokens": self._total_output_tokens,
+            "total_tokens": self._total_input_tokens + self._total_output_tokens,
+            "call_count": self._call_count,
+            "model": self._last_model_used
+        }
+
+    def _track_tokens(self, response, model: str):
+        """Track tokens from API response"""
+        if hasattr(response, 'usage'):
+            self._total_input_tokens += response.usage.input_tokens
+            self._total_output_tokens += response.usage.output_tokens
+            self._call_count += 1
+            self._last_model_used = "haiku" if "haiku" in model.lower() else "sonnet"
+            logger.debug(f"[SimpleFixer] Token usage: +{response.usage.input_tokens} in, +{response.usage.output_tokens} out (call #{self._call_count})")
 
     def _classify_error_complexity(self, errors: List[Dict[str, Any]], context: str) -> ErrorComplexity:
         """
@@ -477,6 +508,7 @@ Please analyze and fix these errors. If the output shows success or warnings onl
                 tools=self._get_tools(),
                 messages=[{"role": "user", "content": user_message}]
             )
+            self._track_tokens(response, model)
 
             # Check if no fix needed
             if response.stop_reason == "end_turn":
@@ -535,6 +567,7 @@ Please analyze and fix these errors. If the output shows success or warnings onl
                         {"role": "user", "content": tool_results}
                     ]
                 )
+                self._track_tokens(response, model)
 
             logger.info(f"[SimpleFixer:{project_id}] Fixed {len(files_modified)} files in {iterations} iterations")
             return SimpleFixResult(
@@ -845,6 +878,7 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                 tools=self._get_tools(),
                 messages=[{"role": "user", "content": user_message}]
             )
+            self._track_tokens(response, model)
 
             # Check if no fix needed
             if response.stop_reason == "end_turn":
@@ -903,6 +937,7 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                         {"role": "user", "content": tool_results}
                     ]
                 )
+                self._track_tokens(response, model)
 
             return SimpleFixResult(
                 success=len(files_modified) > 0,

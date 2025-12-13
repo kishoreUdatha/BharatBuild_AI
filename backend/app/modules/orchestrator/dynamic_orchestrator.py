@@ -758,6 +758,13 @@ class ExecutionContext:
     project_description: Optional[str] = None  # Project description from Planner
     features: Optional[List[str]] = None  # Project features from Planner
 
+    # Token usage tracking
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    token_usage_by_model: Dict[str, Dict[str, int]] = None  # {"haiku": {"input": 0, "output": 0}}
+    token_usage_by_agent: Dict[str, Dict[str, int]] = None  # {"planner": {"input": 0, "output": 0}}
+    pending_token_transactions: List[Dict[str, Any]] = None  # Transactions to save at end
+
     def __post_init__(self):
         if self.files_created is None:
             self.files_created = []
@@ -771,6 +778,61 @@ class ExecutionContext:
             self.metadata = {}
         if self.workflow_steps is None:
             self.workflow_steps = []
+        if self.token_usage_by_model is None:
+            self.token_usage_by_model = {}
+        if self.token_usage_by_agent is None:
+            self.token_usage_by_agent = {}
+        if self.pending_token_transactions is None:
+            self.pending_token_transactions = []
+
+    def track_tokens(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        model: str,
+        agent_type: str = "other",
+        operation: str = "other",
+        file_path: str = None
+    ):
+        """
+        Track token usage from a Claude API call.
+
+        Args:
+            input_tokens: Number of input tokens
+            output_tokens: Number of output tokens
+            model: Model used (haiku, sonnet, opus)
+            agent_type: Agent type (planner, writer, fixer, etc.)
+            operation: Operation type (plan_project, generate_file, etc.)
+            file_path: File path for file operations
+        """
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
+
+        # Track by model
+        if model not in self.token_usage_by_model:
+            self.token_usage_by_model[model] = {"input": 0, "output": 0}
+        self.token_usage_by_model[model]["input"] += input_tokens
+        self.token_usage_by_model[model]["output"] += output_tokens
+
+        # Track by agent
+        if agent_type not in self.token_usage_by_agent:
+            self.token_usage_by_agent[agent_type] = {"input": 0, "output": 0}
+        self.token_usage_by_agent[agent_type]["input"] += input_tokens
+        self.token_usage_by_agent[agent_type]["output"] += output_tokens
+
+        # Store transaction for saving later
+        self.pending_token_transactions.append({
+            "agent_type": agent_type,
+            "operation": operation,
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "file_path": file_path
+        })
+
+    @property
+    def total_tokens(self) -> int:
+        return self.total_input_tokens + self.total_output_tokens
 
 
 class AgentRegistry:
@@ -2232,9 +2294,10 @@ class DynamicOrchestrator:
                     ]
 
                     # Update project record
-                    # Build update values - always include status and progress
+                    # Build update values - mark as PARTIAL_COMPLETED (code done, documents pending)
+                    # Project becomes COMPLETED only after documents are generated
                     update_values = {
-                        'status': ProjectStatus.COMPLETED,
+                        'status': ProjectStatus.PARTIAL_COMPLETED,
                         's3_path': self._unified_storage.get_s3_prefix(str(user_id), project_id) if user_id else None,
                         's3_zip_key': s3_zip_key,
                         'plan_json': context.plan if hasattr(context, 'plan') else None,
@@ -2264,6 +2327,65 @@ class DynamicOrchestrator:
             except Exception as db_err:
                 logger.warning(f"[Layer3-PostgreSQL] Failed to update project: {db_err}")
 
+            # Save token usage to database
+            if user_id and context.total_tokens > 0:
+                try:
+                    from app.modules.auth.usage_limits import deduct_tokens
+                    from app.models.user import User
+                    from app.core.database import async_session
+                    from sqlalchemy import select
+
+                    async with async_session() as token_db:
+                        # Get user
+                        user_result = await token_db.execute(
+                            select(User).where(User.id == user_id)
+                        )
+                        user = user_result.scalar_one_or_none()
+
+                        if user:
+                            # Deduct tokens for each model used
+                            for model_name, usage in context.token_usage_by_model.items():
+                                model_total = usage["input"] + usage["output"]
+                                await deduct_tokens(user, token_db, model_total, model_name)
+                                logger.info(f"[TokenTracker] Saved {model_total} tokens for model {model_name}")
+
+                            logger.info(f"[TokenTracker] Total tokens saved: {context.total_tokens} (input: {context.total_input_tokens}, output: {context.total_output_tokens})")
+
+                            # Save detailed token transactions
+                            if context.pending_token_transactions:
+                                from app.services.token_tracker import token_tracker
+                                from app.models.usage import AgentType, OperationType
+
+                                for tx in context.pending_token_transactions:
+                                    try:
+                                        # Map string agent_type to enum
+                                        agent_type_str = tx.get("agent_type", "other")
+                                        agent_type = AgentType(agent_type_str) if agent_type_str in [e.value for e in AgentType] else AgentType.OTHER
+
+                                        # Map string operation to enum
+                                        operation_str = tx.get("operation", "other")
+                                        operation = OperationType(operation_str) if operation_str in [e.value for e in OperationType] else OperationType.OTHER
+
+                                        await token_tracker.log_transaction(
+                                            db=token_db,
+                                            user_id=str(user_id),
+                                            project_id=str(project_id),
+                                            agent_type=agent_type,
+                                            operation=operation,
+                                            model=tx.get("model", "haiku"),
+                                            input_tokens=tx.get("input_tokens", 0),
+                                            output_tokens=tx.get("output_tokens", 0),
+                                            file_path=tx.get("file_path"),
+                                            metadata=tx.get("metadata")
+                                        )
+                                    except Exception as tx_err:
+                                        logger.warning(f"[TokenTracker] Failed to save transaction: {tx_err}")
+
+                                logger.info(f"[TokenTracker] Saved {len(context.pending_token_transactions)} detailed token transactions")
+
+                except Exception as token_err:
+                    logger.warning(f"[TokenTracker] Failed to save token usage: {token_err}")
+
             # Workflow complete - include session_id for ZIP download
             yield OrchestratorEvent(
                 type=EventType.COMPLETE,
@@ -2275,7 +2397,13 @@ class DynamicOrchestrator:
                     "errors": len(context.errors),
                     "session_id": session_id,  # For ZIP download
                     "download_url": f"/api/v1/download/session/{session_id}" if session_id else None,
-                    "s3_zip_key": s3_zip_key  # S3 download key
+                    "s3_zip_key": s3_zip_key,  # S3 download key
+                    "token_usage": {
+                        "total": context.total_tokens,
+                        "input": context.total_input_tokens,
+                        "output": context.total_output_tokens,
+                        "by_model": context.token_usage_by_model
+                    }
                 }
             )
 
@@ -2547,6 +2675,21 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
             max_tokens=config.max_tokens,
             temperature=config.temperature
         ):
+            # Check for token usage marker at end of stream
+            if chunk.startswith("__TOKEN_USAGE__:"):
+                parts = chunk.split(":")
+                if len(parts) >= 4:
+                    input_tokens = int(parts[1])
+                    output_tokens = int(parts[2])
+                    model_used = parts[3]
+                    context.track_tokens(
+                        input_tokens, output_tokens, model_used,
+                        agent_type="planner",
+                        operation="plan_project"
+                    )
+                    logger.info(f"[Planner] Token usage tracked: {input_tokens}+{output_tokens}={input_tokens+output_tokens} ({model_used})")
+                continue  # Don't process marker as content
+
             # Feed chunk to Bolt XML parser (incremental parsing with lxml)
             xml_parser.feed(chunk)
 
@@ -2951,6 +3094,22 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
             max_tokens=config.max_tokens,
             temperature=config.temperature
         ):
+            # Check for token usage marker at end of stream
+            if chunk.startswith("__TOKEN_USAGE__:"):
+                parts = chunk.split(":")
+                if len(parts) >= 4:
+                    input_tokens = int(parts[1])
+                    output_tokens = int(parts[2])
+                    model_used = parts[3]
+                    context.track_tokens(
+                        input_tokens, output_tokens, model_used,
+                        agent_type="writer",
+                        operation="generate_file",
+                        file_path=file_path
+                    )
+                    logger.info(f"[Writer] Token usage tracked: {input_tokens}+{output_tokens}={input_tokens+output_tokens} ({model_used})")
+                continue  # Don't process marker as content
+
             # Feed chunk to buffer and extract complete files
             complete_files = streaming_buffer.feed_chunk(chunk)
 
@@ -3078,6 +3237,21 @@ Stream code in chunks for real-time display.
             max_tokens=config.max_tokens,
             temperature=config.temperature
         ):
+            # Check for token usage marker at end of stream
+            if chunk.startswith("__TOKEN_USAGE__:"):
+                parts = chunk.split(":")
+                if len(parts) >= 4:
+                    input_tokens = int(parts[1])
+                    output_tokens = int(parts[2])
+                    model_used = parts[3]
+                    context.track_tokens(
+                        input_tokens, output_tokens, model_used,
+                        agent_type="writer",
+                        operation="generate_batch"
+                    )
+                    logger.info(f"[Writer] Token usage tracked: {input_tokens}+{output_tokens}={input_tokens+output_tokens} ({model_used})")
+                continue  # Don't process marker as content
+
             # EXACT Bolt.new technique:
             # buffer += chunk
             # while "</file>" in buffer: extract, parse, save
@@ -3325,6 +3499,21 @@ Stream code in chunks for real-time display.
                 max_tokens=8192,
                 temperature=0.3
             ):
+                # Check for token usage marker at end of stream
+                if chunk.startswith("__TOKEN_USAGE__:"):
+                    parts = chunk.split(":")
+                    if len(parts) >= 4:
+                        input_tokens = int(parts[1])
+                        output_tokens = int(parts[2])
+                        model_used = parts[3]
+                        context.track_tokens(
+                            input_tokens, output_tokens, model_used,
+                            agent_type="verifier",
+                            operation="regenerate_file"
+                        )
+                        logger.info(f"[Verifier] Token usage tracked: {input_tokens}+{output_tokens}={input_tokens+output_tokens} ({model_used})")
+                    continue  # Don't process marker as content
+
                 complete_files = streaming_buffer.feed_chunk(chunk)
 
                 for file_data in complete_files:
@@ -3427,6 +3616,7 @@ Stream code in chunks for real-time display.
 
         # Initialize fixer
         fixer = FixerAgent(model=config.model)
+        fixer.reset_token_tracking()  # Reset token tracking for this fix session
         file_manager = FileManager()
 
         # Process each error
@@ -3614,6 +3804,18 @@ Stream code in chunks for real-time display.
                         data={"command": instruction}
                     )
 
+        # Track fixer token usage
+        fixer_tokens = fixer.get_token_usage()
+        if fixer_tokens.get("total_tokens", 0) > 0:
+            context.track_tokens(
+                fixer_tokens.get("input_tokens", 0),
+                fixer_tokens.get("output_tokens", 0),
+                fixer_tokens.get("model", "haiku"),
+                agent_type="fixer",
+                operation="fix_error"
+            )
+            logger.info(f"[Fixer] Token usage tracked: {fixer_tokens.get('total_tokens', 0)} tokens ({fixer_tokens.get('call_count', 0)} calls)")
+
         # Clear errors after fixing
         fixed_count = len(context.errors)
         context.errors = []
@@ -3714,6 +3916,7 @@ Stream code in chunks for real-time display.
 
         # Initialize fixer agent
         fixer = FixerAgent(model=config.model)
+        fixer.reset_token_tracking()  # Reset token tracking for this fix session
         file_manager = FileManager()
 
         # Build file context from collected files
@@ -3804,6 +4007,18 @@ Stream code in chunks for real-time display.
                     "files_fixed": [f["path"] for f in context.files_modified]
                 }
             )
+
+            # Track fixer token usage
+            fixer_tokens = fixer.get_token_usage()
+            if fixer_tokens.get("total_tokens", 0) > 0:
+                context.track_tokens(
+                    fixer_tokens.get("input_tokens", 0),
+                    fixer_tokens.get("output_tokens", 0),
+                    fixer_tokens.get("model", "haiku"),
+                    agent_type="fixer",
+                    operation="auto_fix"
+                )
+                logger.info(f"[AUTO-FIX] Token usage tracked: {fixer_tokens.get('total_tokens', 0)} tokens ({fixer_tokens.get('call_count', 0)} calls)")
 
             # Emit server restart/reload event if files were modified
             if context.files_modified:

@@ -31,12 +31,10 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from dataclasses import dataclass, field
 from uuid import UUID
-import logging
 
 from app.services.storage_service import storage_service
 from app.core.config import settings
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 # Configuration - Use Windows-compatible path on Windows
 # NOTE: Must match SANDBOX_PATH in config.py for consistency
@@ -626,11 +624,11 @@ class UnifiedStorageService:
         language: Optional[str] = None
     ) -> bool:
         """
-        Save file to PostgreSQL database (Layer 3).
+        Save file metadata to PostgreSQL database, content to S3 (Layer 3).
 
         This enables project recovery after sandbox cleanup.
-        - Small files (<10KB): Stored inline in PostgreSQL
-        - Large files: Stored in S3, reference kept in DB
+        - Content: Always stored in S3
+        - Metadata: Stored in PostgreSQL (path, name, size, hash, s3_key)
 
         Args:
             project_id: Project UUID string
@@ -667,10 +665,7 @@ class UnifiedStorageService:
             if not language:
                 language = self._detect_language(file_name)
 
-            # Determine storage method (inline if < 10KB)
-            inline_threshold = getattr(settings, 'FILE_INLINE_THRESHOLD', 10240)
-            is_inline = size_bytes < inline_threshold
-
+            # Always store content in S3, only metadata in database
             async with AsyncSessionLocal() as session:
                 # Check if file already exists
                 result = await session.execute(
@@ -680,19 +675,15 @@ class UnifiedStorageService:
                 )
                 existing_file = result.scalar_one_or_none()
 
-                if is_inline:
-                    # Store inline in PostgreSQL
-                    s3_key = None
-                    content_inline = content
-                else:
-                    # Store in S3
-                    upload_result = await storage_service.upload_file(
-                        project_id,
-                        file_path,
-                        content_bytes
-                    )
-                    s3_key = upload_result.get('s3_key')
-                    content_inline = None
+                # Always upload to S3
+                upload_result = await storage_service.upload_file(
+                    project_id,
+                    file_path,
+                    content_bytes
+                )
+                s3_key = upload_result.get('s3_key')
+                content_inline = None  # Never store content inline
+                is_inline = False  # Always use S3
 
                 if existing_file:
                     # Update existing file
@@ -732,7 +723,7 @@ class UnifiedStorageService:
                     await self._ensure_parent_folders_db(session, project_uuid, file_path)
 
                 await session.commit()
-                logger.debug(f"[Layer3-DB] Saved: {project_id}/{file_path} ({'inline' if is_inline else 'S3'}, {size_bytes}b)")
+                logger.debug(f"[Layer3-DB] Saved: {project_id}/{file_path} (S3, {size_bytes}b)")
                 return True
 
         except Exception as e:
@@ -803,12 +794,14 @@ class UnifiedStorageService:
                 if not file_record:
                     return None
 
-                # Get content based on storage location
-                if file_record.is_inline and file_record.content_inline:
-                    return file_record.content_inline
-                elif file_record.s3_key:
+                # All content is stored in S3
+                if file_record.s3_key:
                     content_bytes = await storage_service.download_file(file_record.s3_key)
                     return content_bytes.decode('utf-8') if content_bytes else None
+
+                # Fallback for legacy inline content (migration support)
+                if file_record.content_inline:
+                    return file_record.content_inline
 
                 return None
 
@@ -859,11 +852,13 @@ class UnifiedStorageService:
                 for file_record in files:
                     content = None
 
-                    if file_record.is_inline and file_record.content_inline:
-                        content = file_record.content_inline
-                    elif file_record.s3_key:
+                    # All content is stored in S3
+                    if file_record.s3_key:
                         content_bytes = await storage_service.download_file(file_record.s3_key)
                         content = content_bytes.decode('utf-8') if content_bytes else None
+                    # Fallback for legacy inline content (migration support)
+                    elif file_record.content_inline:
+                        content = file_record.content_inline
 
                     if content:
                         await self.write_to_sandbox(project_id, file_record.path, content, user_id)

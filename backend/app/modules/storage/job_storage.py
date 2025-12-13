@@ -32,7 +32,6 @@ import shutil
 import zipfile
 import json
 import asyncio
-import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
@@ -41,7 +40,7 @@ import uuid
 import aiofiles
 import aiofiles.os
 
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 # Configuration
 JOBS_BASE_PATH = os.getenv("JOBS_BASE_PATH", "/tmp/jobs")

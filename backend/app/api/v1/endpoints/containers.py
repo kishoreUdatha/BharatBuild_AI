@@ -16,7 +16,6 @@ Frontend calls these endpoints to:
 
 import asyncio
 import json
-import logging
 from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Query, Request, Depends
 from fastapi.responses import StreamingResponse
@@ -31,9 +30,9 @@ from app.modules.execution import (
 )
 from app.core.security import decode_token
 from app.core.database import get_db
+from app.core.logging_config import logger
 from app.services.workspace_restore import workspace_restore
-
-logger = logging.getLogger(__name__)
+from app.modules.auth.feature_flags import require_code_execution
 
 router = APIRouter(prefix="/containers", tags=["Container Execution"])
 
@@ -131,7 +130,8 @@ async def create_container(
     project_id: str,
     request: CreateContainerRequest,
     user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_code_execution)
 ):
     """
     Create an isolated container for a project.
@@ -252,6 +252,7 @@ async def create_container(
 async def execute_command(
     project_id: str,
     request: ExecuteCommandRequest,
+    _: None = Depends(require_code_execution)
 ):
     """
     Execute a command inside project container with streaming output.

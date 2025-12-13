@@ -872,13 +872,14 @@ async def get_file_content(
         file_record = file_result.scalar_one_or_none()
 
         if file_record:
-            # Get content from inline storage or S3
+            # Get content - prioritize S3, fallback to inline for legacy data
             content = ""
-            if file_record.is_inline and file_record.content_inline:
-                content = file_record.content_inline
-            elif file_record.s3_key:
+            if file_record.s3_key:
                 # Fetch from S3
                 content = await unified_storage.download_from_s3(file_record.s3_key) or ""
+            elif file_record.content_inline:
+                # Legacy fallback for old inline content
+                content = file_record.content_inline
 
             logger.info(f"[Bolt] Lazy load: {path} ({len(content)} bytes)")
 

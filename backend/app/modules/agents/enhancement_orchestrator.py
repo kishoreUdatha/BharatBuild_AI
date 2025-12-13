@@ -11,6 +11,7 @@ Workflow:
 from typing import Dict, Any, List
 from app.modules.agents.enhancer_agent import EnhancerAgent
 from app.utils.claude_client import ClaudeClient
+from app.core.config import settings
 import asyncio
 import os
 from pathlib import Path
@@ -157,7 +158,7 @@ class EnhancementOrchestrator:
         # Call Claude to generate code
         response = await self.claude_client.generate(
             prompt=prompt,
-            model="claude-3-5-sonnet-20241022",
+            model=settings.CLAUDE_SONNET_MODEL,
             max_tokens=4000,
             temperature=0.7
         )
@@ -228,7 +229,7 @@ Output the COMPLETE modified file (not just changes).
         # Call Claude
         response = await self.claude_client.generate(
             prompt=prompt,
-            model="claude-3-5-sonnet-20241022",
+            model=settings.CLAUDE_SONNET_MODEL,
             max_tokens=4000
         )
 
@@ -282,7 +283,7 @@ Generate COMPLETE test file.
 
         response = await self.claude_client.generate(
             prompt=prompt,
-            model="claude-3-5-sonnet-20241022",
+            model=settings.CLAUDE_SONNET_MODEL,
             max_tokens=3000
         )
 

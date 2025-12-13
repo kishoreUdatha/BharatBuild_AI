@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from typing import List, Optional
 from pydantic import BaseModel
 
@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.models.user import User
 from app.models.project import Project, ProjectStatus
 from app.models.workspace import Workspace
+from app.models.document import Document
 from app.schemas.project import (
     ProjectCreate,
     ProjectUpdate,
@@ -15,6 +16,7 @@ from app.schemas.project import (
     ProjectListResponse
 )
 from app.modules.auth.dependencies import get_current_user, get_user_project, get_user_project_with_db
+from app.modules.auth.usage_limits import check_project_limit, check_project_generation_allowed, UsageLimitCheck
 from app.services.project_service import ProjectService
 from app.core.logging_config import logger
 
@@ -80,14 +82,23 @@ async def create_project(
     project_data: ProjectCreate,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    limit_check: UsageLimitCheck = Depends(check_project_generation_allowed)
 ):
     """
     Create new project.
 
     Projects are automatically assigned to the user's default workspace.
     Storage structure: workspaces/{user_id}/{project_id}/
+
+    Note: This endpoint enforces project limits based on user's subscription plan.
+    - Free: 0 projects (demo only)
+    - Premium: 2 projects
     """
+    # limit_check dependency ensures:
+    # 1. User's plan has project_generation feature enabled
+    # 2. User hasn't exceeded their project limit
+    logger.info(f"Project limit check passed: {limit_check.message}")
 
     # Get or create default workspace for user
     workspace = await get_or_create_default_workspace(current_user.id, db)
@@ -157,6 +168,170 @@ async def list_projects(
         "total": total,
         "page": page,
         "page_size": page_size
+    }
+
+
+@router.get("/search")
+async def search_projects(
+    q: str = Query(..., min_length=1, description="Search query"),
+    status_filter: Optional[str] = Query(None, description="Filter by status"),
+    tech_stack: Optional[str] = Query(None, description="Filter by tech stack"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Search user's projects by title, description, or tech stack.
+
+    Search is case-insensitive and matches partial text.
+
+    Parameters:
+    - q: Search query (required, searches in title and description)
+    - status_filter: Filter by project status (draft, generating, ready, error)
+    - tech_stack: Filter by tech stack (e.g., "react", "python")
+    - page: Page number (default: 1)
+    - page_size: Results per page (default: 10, max: 50)
+    """
+    user_id_str = str(current_user.id)
+    search_term = f"%{q.lower()}%"
+
+    logger.info(f"[Projects] Search for '{q}' by user {current_user.email}")
+
+    # Base query with user filter and search
+    base_conditions = [
+        Project.user_id == user_id_str,
+        or_(
+            func.lower(Project.title).like(search_term),
+            func.lower(Project.description).like(search_term),
+            func.lower(func.coalesce(Project.tech_stack, '')).like(search_term)
+        )
+    ]
+
+    # Add status filter if provided
+    if status_filter:
+        try:
+            status_enum = ProjectStatus(status_filter.lower())
+            base_conditions.append(Project.status == status_enum)
+        except ValueError:
+            pass  # Invalid status, ignore filter
+
+    # Add tech stack filter if provided
+    if tech_stack:
+        tech_filter = f"%{tech_stack.lower()}%"
+        base_conditions.append(func.lower(func.coalesce(Project.tech_stack, '')).like(tech_filter))
+
+    # Count total matching
+    count_query = select(func.count(Project.id)).where(*base_conditions)
+    total = await db.scalar(count_query)
+
+    # Get matching projects
+    offset = (page - 1) * page_size
+    query = (
+        select(Project)
+        .where(*base_conditions)
+        .order_by(Project.updated_at.desc())
+        .limit(page_size)
+        .offset(offset)
+    )
+
+    result = await db.execute(query)
+    projects = result.scalars().all()
+
+    logger.info(f"[Projects] Search found {total} results for '{q}'")
+
+    return {
+        "query": q,
+        "projects": [
+            {
+                "id": str(p.id),
+                "title": p.title,
+                "description": p.description,
+                "status": p.status.value if p.status else "draft",
+                "tech_stack": p.tech_stack,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+                "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+            }
+            for p in projects
+        ],
+        "total": total or 0,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size if total else 0
+    }
+
+
+@router.get("/list")
+async def list_projects_with_documents(
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    sort_by: str = Query("created_at"),
+    sort_order: str = Query("desc"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    List user's projects with document counts.
+    Used by dashboard to show projects with their document stats.
+    """
+    user_id_str = str(current_user.id)
+    logger.info(f"[Projects] Listing projects with documents for user: {current_user.email}")
+
+    # Count total projects
+    count_query = select(func.count(Project.id)).where(Project.user_id == user_id_str)
+    total = await db.scalar(count_query)
+
+    # Get projects with sorting
+    order_column = getattr(Project, sort_by, Project.created_at)
+    if sort_order.lower() == "desc":
+        order_column = order_column.desc()
+    else:
+        order_column = order_column.asc()
+
+    query = (
+        select(Project)
+        .where(Project.user_id == user_id_str)
+        .order_by(order_column)
+        .limit(limit)
+        .offset(offset)
+    )
+
+    result = await db.execute(query)
+    projects = result.scalars().all()
+
+    # Get document counts for each project
+    items = []
+    for project in projects:
+        # Count documents for this project
+        doc_count_result = await db.execute(
+            select(func.count(Document.id)).where(Document.project_id == project.id)
+        )
+        doc_count = doc_count_result.scalar() or 0
+
+        # Also check file system for documents (legacy)
+        from app.core.config import settings
+        project_docs_dir = settings.get_project_docs_dir(str(project.id))
+        fs_doc_count = 0
+        if project_docs_dir.exists():
+            fs_doc_count = len([f for f in project_docs_dir.iterdir()
+                               if f.is_file() and f.suffix in ['.docx', '.pptx', '.pdf']])
+
+        items.append({
+            "id": str(project.id),
+            "title": project.title,
+            "description": project.description,
+            "status": project.status.value if project.status else "draft",
+            "progress": project.progress,
+            "created_at": project.created_at.isoformat() if project.created_at else None,
+            "updated_at": project.updated_at.isoformat() if project.updated_at else None,
+            "documents_count": doc_count + fs_doc_count
+        })
+
+    return {
+        "items": items,
+        "total": total or 0,
+        "limit": limit,
+        "offset": offset
     }
 
 
@@ -262,10 +437,9 @@ async def get_project_metadata(
 
             file_path = pf.path
 
-            # Calculate hash from content (for change detection)
-            content_hash = None
-            if pf.content_inline:
-                content_hash = hashlib.md5(pf.content_inline.encode()).hexdigest()[:12]
+            # Use stored content hash (for change detection)
+            # Short hash for file tree (first 12 chars of SHA-256)
+            content_hash = pf.content_hash[:12] if pf.content_hash else None
 
             # Detect language from extension
             ext = file_path.rsplit(".", 1)[-1] if "." in file_path else ""

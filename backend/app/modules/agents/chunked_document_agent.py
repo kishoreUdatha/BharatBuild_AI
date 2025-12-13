@@ -932,6 +932,9 @@ JSON FORMAT (output exactly this structure):
         Yields progress events and final document.
         """
         try:
+            # Reset token tracking for this document generation
+            self.reset_token_tracking()
+
             # For SRS/PPT documents, use domain-specific template based on project data
             if document_type == DocumentType.SRS:
                 structure = _get_srs_structure(project_data)
@@ -1066,12 +1069,16 @@ JSON FORMAT (output exactly this structure):
                     user_id
                 )
 
+            # Get token usage for this document generation
+            token_usage = self.get_token_usage()
+
             yield {
                 "type": "complete",
                 "document_type": document_type.value,
                 "file_path": final_doc["path"],
                 "pages": final_doc.get("pages", 0),
-                "sections_generated": len(generated_sections)
+                "sections_generated": len(generated_sections),
+                "token_usage": token_usage
             }
 
         except Exception as e:

@@ -91,8 +91,8 @@ export default function RegisterPage() {
       localStorage.setItem('access_token', loginResponse.access_token)
       localStorage.setItem('refresh_token', loginResponse.refresh_token)
 
-      // Redirect to dashboard
-      router.push('/dashboard')
+      // Redirect to bolt
+      router.push('/bolt')
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Registration failed. Please try again.')
     } finally {

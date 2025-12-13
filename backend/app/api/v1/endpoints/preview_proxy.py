@@ -23,7 +23,6 @@ Architecture:
 
 import asyncio
 import httpx
-import logging
 import re
 from typing import Optional
 from fastapi import APIRouter, Request, Response, HTTPException
@@ -31,8 +30,7 @@ from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
 from app.modules.execution import get_container_manager
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 router = APIRouter(prefix="/preview", tags=["Preview Proxy"])
 

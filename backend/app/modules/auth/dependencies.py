@@ -7,6 +7,7 @@ import uuid
 
 from app.core.database import get_db
 from app.core.security import decode_token
+from app.core.logging_config import logger, set_user_id, set_project_id
 from app.models.user import User, UserRole
 from app.models.project import Project
 
@@ -57,6 +58,7 @@ async def get_current_user(
     payload = decode_token(token)
 
     if payload.get("type") != "access":
+        logger.warning("Invalid token type in get_current_user", extra={"event_type": "auth_validation_failed"})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token type"
@@ -64,6 +66,7 @@ async def get_current_user(
 
     user_id = payload.get("sub")
     if not user_id:
+        logger.warning("Missing user_id in token payload", extra={"event_type": "auth_validation_failed"})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token payload"
@@ -73,6 +76,7 @@ async def get_current_user(
     try:
         uuid.UUID(user_id)  # Just validate, don't convert
     except ValueError:
+        logger.warning(f"Invalid user_id format: {user_id}", extra={"event_type": "auth_validation_failed"})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid user ID format"
@@ -85,16 +89,21 @@ async def get_current_user(
     user = result.scalar_one_or_none()
 
     if not user:
+        logger.warning(f"User not found for id: {user_id}", extra={"event_type": "auth_validation_failed"})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found"
         )
 
     if not user.is_active:
+        logger.warning(f"Inactive user attempted access: {user.email}", extra={"event_type": "auth_validation_failed"})
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive"
         )
+
+    # Set user context for downstream logging
+    set_user_id(str(user.id))
 
     return user
 
@@ -151,6 +160,57 @@ def get_optional_current_user(
     return payload.get("sub")
 
 
+async def get_current_user_from_token(
+    token: str,
+    db: AsyncSession
+) -> User:
+    """
+    Get current user from a raw token string.
+    Useful for WebSocket authentication where you can't use Depends.
+    """
+    payload = decode_token(token)
+
+    if payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token type"
+        )
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload"
+        )
+
+    try:
+        uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid user ID format"
+        )
+
+    result = await db.execute(
+        select(User).where(User.id == user_id)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found"
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is inactive"
+        )
+
+    return user
+
+
 # ==================== Project Ownership Dependencies ====================
 
 async def get_user_project(
@@ -179,10 +239,17 @@ async def get_user_project(
     project = result.scalar_one_or_none()
 
     if not project:
+        logger.warning(
+            f"Project not found or access denied: {project_id_str}",
+            extra={"event_type": "project_access_denied", "project_id": project_id_str}
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found"
         )
+
+    # Set project context for downstream logging
+    set_project_id(project_id_str)
 
     return project
 

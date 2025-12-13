@@ -19,7 +19,6 @@ Directory Structure in S3:
 
 import os
 import json
-import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -27,8 +26,7 @@ from uuid import UUID
 
 from app.services.storage_service import storage_service
 from app.core.config import settings
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 # S3 prefix for documents
 S3_DOCUMENTS_PREFIX = "documents"
@@ -62,10 +60,12 @@ class DocumentStorageService:
         content_type: str = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Upload a document file from local path to S3.
+        Upload a document file from local path to S3 with USER ISOLATION.
+
+        S3 Structure: documents/{user_id}/{project_id}/{doc_type}/{file_name}
 
         Args:
-            user_id: User UUID
+            user_id: User UUID (REQUIRED for isolation)
             project_id: Project UUID
             file_path: Local file path
             doc_type: Type of document (word, ppt, diagrams)
@@ -75,6 +75,10 @@ class DocumentStorageService:
             Dict with s3_key, file_url, size_bytes or None on failure
         """
         try:
+            if not user_id:
+                logger.error("[DocStorage] user_id is required for document upload")
+                return None
+
             local_path = Path(file_path)
             if not local_path.exists():
                 logger.error(f"[DocStorage] File not found: {file_path}")
@@ -90,24 +94,20 @@ class DocumentStorageService:
             with open(local_path, 'rb') as f:
                 content = f.read()
 
-            # Generate S3 key
-            s3_key = f"{self.get_s3_document_prefix(user_id, project_id, doc_type)}/{file_name}"
+            # Generate S3 key WITH USER ISOLATION
+            # Structure: documents/{user_id}/{project_id}/{doc_type}/{file_name}
+            s3_key = f"{self.s3_prefix}/{user_id}/{project_id}/{doc_type}/{file_name}"
 
-            # Upload to S3
-            result = await storage_service.upload_file(
-                project_id=project_id,
-                file_path=f"{doc_type}/{file_name}",
-                content=content,
-                content_type=content_type
-            )
+            # Upload directly to S3 with custom key (not using storage_service.upload_file)
+            await self._upload_to_s3_direct(s3_key, content, content_type)
 
             # Get presigned URL for access
-            file_url = await storage_service.get_presigned_url(result.get('s3_key', s3_key))
+            file_url = await storage_service.get_presigned_url(s3_key)
 
-            logger.info(f"[DocStorage] Uploaded to S3: {s3_key} ({len(content)} bytes)")
+            logger.info(f"[DocStorage] Uploaded to S3 with user isolation: {s3_key} ({len(content)} bytes)")
 
             return {
-                's3_key': result.get('s3_key', s3_key),
+                's3_key': s3_key,
                 'file_url': file_url,
                 'size_bytes': len(content),
                 'file_name': file_name,
@@ -117,6 +117,44 @@ class DocumentStorageService:
         except Exception as e:
             logger.error(f"[DocStorage] Failed to upload to S3: {e}", exc_info=True)
             return None
+
+    async def _upload_to_s3_direct(self, s3_key: str, content: bytes, content_type: str):
+        """
+        Upload directly to S3 with custom key (bypasses storage_service key generation).
+        This ensures user isolation in the S3 path.
+        """
+        import boto3
+        from botocore.config import Config
+        from app.core.config import settings
+
+        if settings.USE_MINIO:
+            client = boto3.client(
+                's3',
+                endpoint_url=f"http://{settings.MINIO_ENDPOINT}",
+                aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+                aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+                config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}),
+                region_name=settings.AWS_REGION
+            )
+        else:
+            if settings.AWS_ACCESS_KEY_ID and settings.AWS_SECRET_ACCESS_KEY:
+                client = boto3.client(
+                    's3',
+                    aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+                    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+                    region_name=settings.AWS_REGION
+                )
+            else:
+                client = boto3.client('s3', region_name=settings.AWS_REGION)
+
+        bucket = settings.effective_bucket_name
+        client.put_object(
+            Bucket=bucket,
+            Key=s3_key,
+            Body=content,
+            ContentType=content_type
+        )
+        logger.info(f"[DocStorage] Direct S3 upload: {bucket}/{s3_key}")
 
     async def save_document_to_db(
         self,

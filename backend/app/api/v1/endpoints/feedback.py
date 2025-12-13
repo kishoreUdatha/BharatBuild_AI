@@ -5,12 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from datetime import datetime
-import logging
 
 from app.modules.auth.dependencies import get_optional_current_user
 from app.models.user import User
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 

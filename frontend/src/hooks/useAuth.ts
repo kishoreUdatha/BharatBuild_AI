@@ -7,6 +7,8 @@ interface User {
   id: string
   email: string
   name?: string
+  role?: string
+  is_superuser?: boolean
 }
 
 interface UseAuthReturn {
@@ -56,10 +58,17 @@ export function useAuth(): UseAuthReturn {
         // Decode JWT payload (base64)
         const payload = token.split('.')[1]
         const decoded = JSON.parse(atob(payload))
+
+        // Also check localStorage for full user info (stored during login)
+        const storedUser = localStorage.getItem('user')
+        const userInfo = storedUser ? JSON.parse(storedUser) : null
+
         setUser({
           id: decoded.sub,
           email: decoded.email || '',
-          name: decoded.name
+          name: decoded.name || userInfo?.full_name,
+          role: decoded.role || userInfo?.role,
+          is_superuser: userInfo?.is_superuser || false
         })
         setIsAuthenticated(true)
       } catch (error) {

@@ -29,7 +29,8 @@ class Workspace(Base):
     )
 
     id = Column(GUID, primary_key=True, default=generate_uuid)
-    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Note: index defined explicitly in __table_args__ as 'ix_workspaces_user_id', no need for index=True here
+    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
 
     # Workspace info
     name = Column(String(255), nullable=False, default="My Workspace")

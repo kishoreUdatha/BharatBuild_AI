@@ -1,8 +1,9 @@
-from anthropic import AsyncAnthropic, Anthropic, APIStatusError, APIError
+from anthropic import AsyncAnthropic, Anthropic, APIStatusError, APIError, APIConnectionError, APITimeoutError
 from typing import Optional, Dict, List, Any, AsyncGenerator
 import asyncio
 import json
 import random
+import httpx
 from app.core.config import settings
 from app.core.logging_config import logger
 
@@ -10,6 +11,8 @@ from app.core.logging_config import logger
 MAX_RETRIES = 3
 BASE_DELAY = 2.0  # seconds
 MAX_DELAY = 30.0  # seconds
+REQUEST_TIMEOUT = 120.0  # seconds (2 minutes for large generations)
+CONNECT_TIMEOUT = 30.0  # seconds
 RETRYABLE_ERRORS = ['overloaded_error', 'rate_limit_error', 'server_error']
 
 
@@ -25,6 +28,14 @@ class ClaudeClient:
             client_kwargs["base_url"] = settings.ANTHROPIC_BASE_URL.strip()
             logger.info(f"Using custom Claude API base URL: {settings.ANTHROPIC_BASE_URL}")
 
+        # Configure timeouts for production reliability
+        client_kwargs["timeout"] = httpx.Timeout(
+            connect=CONNECT_TIMEOUT,
+            read=REQUEST_TIMEOUT,
+            write=REQUEST_TIMEOUT,
+            pool=REQUEST_TIMEOUT
+        )
+
         if settings.USE_MOCK_CLAUDE:
             logger.info("Mock Claude API mode enabled")
 
@@ -33,9 +44,22 @@ class ClaudeClient:
         self.haiku_model = settings.CLAUDE_HAIKU_MODEL
         self.sonnet_model = settings.CLAUDE_SONNET_MODEL
 
+        logger.info(f"Claude client initialized: timeout={REQUEST_TIMEOUT}s, models=[{self.haiku_model}, {self.sonnet_model}]")
+
     def _is_retryable_error(self, error: Exception) -> bool:
-        """Check if an error is retryable (overload, rate limit, etc.)"""
+        """Check if an error is retryable (overload, rate limit, network issues, etc.)"""
         error_str = str(error).lower()
+
+        # Network/connection errors are always retryable
+        if isinstance(error, (APIConnectionError, APITimeoutError)):
+            logger.warning(f"Network error detected (retryable): {type(error).__name__}")
+            return True
+
+        # httpx network errors
+        if isinstance(error, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):
+            logger.warning(f"HTTPX network error detected (retryable): {type(error).__name__}")
+            return True
+
         if isinstance(error, (APIStatusError, APIError)):
             # Check error type from API response
             if hasattr(error, 'body') and isinstance(error.body, dict):
@@ -44,8 +68,11 @@ class ClaudeClient:
             # Check status code for server errors
             if hasattr(error, 'status_code'):
                 return error.status_code in [429, 500, 502, 503, 529]
-        # Fallback: check error message
-        return any(err in error_str for err in ['overload', 'rate_limit', '529', '503', 'capacity'])
+
+        # Fallback: check error message for network-related issues
+        network_errors = ['overload', 'rate_limit', '529', '503', 'capacity',
+                         'connection', 'timeout', 'network', 'dns', 'socket']
+        return any(err in error_str for err in network_errors)
 
     def _calculate_retry_delay(self, attempt: int) -> float:
         """Calculate delay with exponential backoff and jitter"""
@@ -133,12 +160,30 @@ class ClaudeClient:
 
             except Exception as e:
                 last_error = e
+                error_type = type(e).__name__
                 if self._is_retryable_error(e) and attempt < MAX_RETRIES:
                     delay = self._calculate_retry_delay(attempt)
-                    logger.warning(f"Claude API overloaded (attempt {attempt + 1}/{MAX_RETRIES + 1}), retrying in {delay:.1f}s...")
+                    logger.warning(
+                        f"Claude API error [{error_type}] (attempt {attempt + 1}/{MAX_RETRIES + 1}), retrying in {delay:.1f}s...",
+                        extra={
+                            "event_type": "claude_api_retry",
+                            "error_type": error_type,
+                            "attempt": attempt + 1,
+                            "max_retries": MAX_RETRIES + 1,
+                            "retry_delay": delay
+                        }
+                    )
                     await asyncio.sleep(delay)
                 else:
-                    logger.error(f"Claude API error: {e}")
+                    logger.error(
+                        f"Claude API error (non-retryable or max retries exceeded): {error_type}: {e}",
+                        extra={
+                            "event_type": "claude_api_error",
+                            "error_type": error_type,
+                            "error_message": str(e),
+                            "attempt": attempt + 1
+                        }
+                    )
                     raise
 
         # Should not reach here, but just in case
@@ -214,17 +259,39 @@ class ClaudeClient:
                 # Log streaming response summary
                 total_tokens = final_message.usage.input_tokens + final_message.usage.output_tokens
                 logger.info(f"Claude Streaming response: id={final_message.id}, tokens={total_tokens}, stop={final_message.stop_reason}")
+
+                # Yield special token usage marker at end of stream
+                # Format: __TOKEN_USAGE__:input:output:model
+                yield f"__TOKEN_USAGE__:{final_message.usage.input_tokens}:{final_message.usage.output_tokens}:{model_name}"
                 return  # Success, exit the retry loop
 
             except Exception as e:
                 last_error = e
+                error_type = type(e).__name__
                 # Only retry if we haven't started yielding yet (can't recover mid-stream)
                 if not has_yielded and self._is_retryable_error(e) and attempt < MAX_RETRIES:
                     delay = self._calculate_retry_delay(attempt)
-                    logger.warning(f"Claude Streaming API overloaded (attempt {attempt + 1}/{MAX_RETRIES + 1}), retrying in {delay:.1f}s...")
+                    logger.warning(
+                        f"Claude Streaming API error [{error_type}] (attempt {attempt + 1}/{MAX_RETRIES + 1}), retrying in {delay:.1f}s...",
+                        extra={
+                            "event_type": "claude_stream_retry",
+                            "error_type": error_type,
+                            "attempt": attempt + 1,
+                            "retry_delay": delay
+                        }
+                    )
                     await asyncio.sleep(delay)
                 else:
-                    logger.error(f"Claude streaming API error: {e}")
+                    logger.error(
+                        f"Claude Streaming API error (non-retryable): {error_type}: {e}",
+                        extra={
+                            "event_type": "claude_stream_error",
+                            "error_type": error_type,
+                            "error_message": str(e),
+                            "has_yielded": has_yielded,
+                            "attempt": attempt + 1
+                        }
+                    )
                     raise
 
         # Should not reach here, but just in case

@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     ANTHROPIC_BASE_URL: str = ""  # Empty means use default Anthropic URL
     USE_MOCK_CLAUDE: bool = False
     CLAUDE_HAIKU_MODEL: str = "claude-3-5-haiku-20241022"
-    CLAUDE_SONNET_MODEL: str = "claude-3-5-sonnet-20241022"
+    CLAUDE_SONNET_MODEL: str = "claude-sonnet-4-20250514"
     CLAUDE_MAX_TOKENS: int = 4096
     CLAUDE_TEMPERATURE: float = 0.7
     USE_PLAIN_TEXT_RESPONSES: bool = True
@@ -123,9 +123,15 @@ class Settings(BaseSettings):
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""
     AWS_REGION: str = "us-east-1"
-    S3_BUCKET_NAME: str = "bharatbuild-projects"
+    S3_BUCKET_NAME: str = ""  # Primary bucket name
+    S3_BUCKET: str = ""  # Alias for S3_BUCKET_NAME (used in ECS task definition)
     MINIO_ENDPOINT: str = "localhost:9000"
     STORAGE_URL_EXPIRY: int = 3600  # 1 hour
+
+    @property
+    def effective_bucket_name(self) -> str:
+        """Get the effective S3 bucket name (supports both S3_BUCKET and S3_BUCKET_NAME)"""
+        return self.S3_BUCKET or self.S3_BUCKET_NAME or "bharatbuild-projects"
 
     # ==========================================
     # Authentication
@@ -231,6 +237,7 @@ class Settings(BaseSettings):
     TOKEN_PACKAGE_STARTER: str = "50000,9900,Starter Pack"
     TOKEN_PACKAGE_PRO: str = "200000,34900,Pro Pack"
     TOKEN_PACKAGE_UNLIMITED: str = "1000000,149900,Unlimited Pack"
+    TOKEN_PACKAGE_COMPLETE: str = "500000,449900,Complete Project Package"  # ₹4,499 one-time
 
     # Monthly Plans
     MONTHLY_PLAN_FREE: str = "10000,0,Free Tier"
@@ -540,7 +547,8 @@ class Settings(BaseSettings):
         return {
             "starter": parse_token_package(self.TOKEN_PACKAGE_STARTER),
             "pro": parse_token_package(self.TOKEN_PACKAGE_PRO),
-            "unlimited": parse_token_package(self.TOKEN_PACKAGE_UNLIMITED)
+            "unlimited": parse_token_package(self.TOKEN_PACKAGE_UNLIMITED),
+            "complete": parse_token_package(self.TOKEN_PACKAGE_COMPLETE)
         }
 
     def get_monthly_plans(self) -> Dict[str, Dict[str, Any]]:

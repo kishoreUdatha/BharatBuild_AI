@@ -13,49 +13,45 @@ resource "aws_lb" "main" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = aws_subnet.public[*].id
 
-  enable_deletion_protection = true
+  enable_deletion_protection = false  # Set to true in production with domain
 
   tags = {
     Name = "${var.app_name}-alb"
   }
 }
 
-# HTTPS Listener
-resource "aws_lb_listener" "https" {
-  load_balancer_arn = aws_lb.main.arn
-  port              = "443"
-  protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = aws_acm_certificate.main.arn
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.frontend.arn
-  }
-
-  depends_on = [aws_acm_certificate_validation.main]
-}
-
-# HTTP to HTTPS redirect
+# HTTP Listener (for now, without domain/SSL)
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.main.arn
   port              = "80"
   protocol          = "HTTP"
 
   default_action {
-    type = "redirect"
-
-    redirect {
-      port        = "443"
-      protocol    = "HTTPS"
-      status_code = "HTTP_301"
-    }
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.frontend.arn
   }
 }
 
-# Backend API listener rule
-resource "aws_lb_listener_rule" "backend" {
-  listener_arn = aws_lb_listener.https.arn
+# HTTPS Listener (only when domain is configured)
+resource "aws_lb_listener" "https" {
+  count             = var.domain_name != "" ? 1 : 0
+  load_balancer_arn = aws_lb.main.arn
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = aws_acm_certificate.main[0].arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.frontend.arn
+  }
+
+  depends_on = [aws_acm_certificate_validation.main[0]]
+}
+
+# Backend API listener rule (HTTP)
+resource "aws_lb_listener_rule" "backend_http" {
+  listener_arn = aws_lb_listener.http.arn
   priority     = 100
 
   action {
@@ -65,7 +61,25 @@ resource "aws_lb_listener_rule" "backend" {
 
   condition {
     path_pattern {
-      values = ["/api/*", "/ws/*"]
+      values = ["/api/*", "/ws/*", "/docs", "/redoc", "/openapi.json"]
+    }
+  }
+}
+
+# Backend API listener rule (HTTPS - only when domain configured)
+resource "aws_lb_listener_rule" "backend_https" {
+  count        = var.domain_name != "" ? 1 : 0
+  listener_arn = aws_lb_listener.https[0].arn
+  priority     = 100
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.backend.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/api/*", "/ws/*", "/docs", "/redoc", "/openapi.json"]
     }
   }
 }
@@ -114,10 +128,11 @@ resource "aws_lb_target_group" "frontend" {
 }
 
 # =============================================================================
-# ACM Certificate
+# ACM Certificate (only when domain is configured)
 # =============================================================================
 
 resource "aws_acm_certificate" "main" {
+  count                     = var.domain_name != "" ? 1 : 0
   domain_name               = var.domain_name
   subject_alternative_names = ["*.${var.domain_name}"]
   validation_method         = "DNS"
@@ -128,38 +143,41 @@ resource "aws_acm_certificate" "main" {
 }
 
 resource "aws_acm_certificate_validation" "main" {
-  certificate_arn         = aws_acm_certificate.main.arn
+  count                   = var.domain_name != "" ? 1 : 0
+  certificate_arn         = aws_acm_certificate.main[0].arn
   validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
 }
 
 # =============================================================================
-# Route 53
+# Route 53 (only when domain is configured)
 # =============================================================================
 
 data "aws_route53_zone" "main" {
+  count        = var.domain_name != "" ? 1 : 0
   name         = var.domain_name
   private_zone = false
 }
 
 resource "aws_route53_record" "cert_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.main.domain_validation_options : dvo.domain_name => {
+  for_each = var.domain_name != "" ? {
+    for dvo in aws_acm_certificate.main[0].domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
       record = dvo.resource_record_value
       type   = dvo.resource_record_type
     }
-  }
+  } : {}
 
   allow_overwrite = true
   name            = each.value.name
   records         = [each.value.record]
   ttl             = 60
   type            = each.value.type
-  zone_id         = data.aws_route53_zone.main.zone_id
+  zone_id         = data.aws_route53_zone.main[0].zone_id
 }
 
 resource "aws_route53_record" "app" {
-  zone_id = data.aws_route53_zone.main.zone_id
+  count   = var.domain_name != "" ? 1 : 0
+  zone_id = data.aws_route53_zone.main[0].zone_id
   name    = var.domain_name
   type    = "A"
 
@@ -171,7 +189,8 @@ resource "aws_route53_record" "app" {
 }
 
 resource "aws_route53_record" "app_www" {
-  zone_id = data.aws_route53_zone.main.zone_id
+  count   = var.domain_name != "" ? 1 : 0
+  zone_id = data.aws_route53_zone.main[0].zone_id
   name    = "www.${var.domain_name}"
   type    = "A"
 
@@ -191,13 +210,13 @@ resource "aws_ecs_task_definition" "backend" {
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = 1024  # 1 vCPU
-  memory                   = 2048  # 2 GB
+  memory                   = 3072  # 3 GB (optimized - Docker offloaded to EC2)
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.ecs_task.arn
 
   container_definitions = jsonencode([{
     name      = "backend"
-    image     = "${aws_ecr_repository.backend.repository_url}:latest"
+    image     = "${aws_ecr_repository.backend.repository_url}:v24"
     essential = true
 
     portMappings = [{
@@ -208,14 +227,25 @@ resource "aws_ecs_task_definition" "backend" {
 
     environment = [
       { name = "ENVIRONMENT", value = "production" },
-      { name = "DEBUG", value = "false" },
+      { name = "DEBUG", value = "true" },
       { name = "WORKERS", value = "4" },
-      { name = "DATABASE_URL", value = "postgresql://bharatbuild_admin:${var.db_password}@${aws_db_instance.main.endpoint}/bharatbuild" },
-      { name = "DATABASE_READ_URL", value = "postgresql://bharatbuild_admin:${var.db_password}@${aws_db_instance.replica.endpoint}/bharatbuild" },
-      { name = "REDIS_URL", value = "rediss://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0" },
+      { name = "DATABASE_URL", value = "postgresql+asyncpg://bharatbuild_admin:${var.db_password}@${aws_db_instance.main.endpoint}/bharatbuild" },
+      { name = "REDIS_URL", value = "redis://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0" },
       { name = "S3_BUCKET", value = aws_s3_bucket.storage.id },
       { name = "AWS_REGION", value = var.aws_region },
-      { name = "CORS_ORIGINS", value = "https://${var.domain_name},https://www.${var.domain_name}" },
+      { name = "CORS_ORIGINS", value = var.domain_name != "" ? "https://${var.domain_name},https://www.${var.domain_name}" : "http://${aws_lb.main.dns_name}" },
+      { name = "STORAGE_MODE", value = "s3" },
+      { name = "USE_MINIO", value = "false" },
+      # Celery Configuration
+      { name = "CELERY_BROKER_URL", value = "redis://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0" },
+      { name = "CELERY_RESULT_BACKEND", value = "redis://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/1" },
+      # User Projects Path (S3 mode uses this as prefix)
+      { name = "USER_PROJECTS_PATH", value = "/tmp/projects" },
+      # Sandbox Server Configuration (EC2 Docker host)
+      { name = "SANDBOX_DOCKER_HOST", value = var.sandbox_use_spot ? (length(aws_spot_instance_request.sandbox) > 0 ? "tcp://${aws_spot_instance_request.sandbox[0].private_ip}:2375" : "") : (length(aws_instance.sandbox) > 0 ? "tcp://${aws_instance.sandbox[0].private_ip}:2375" : "") },
+      { name = "SANDBOX_PREVIEW_BASE_URL", value = var.domain_name != "" ? "https://${var.domain_name}/sandbox" : "http://${aws_lb.main.dns_name}/sandbox" },
+      # RESET_DB - Set to true to drop and recreate all tables (one-time use)
+      { name = "RESET_DB", value = "true" },
     ]
 
     secrets = [
@@ -273,8 +303,8 @@ resource "aws_ecs_task_definition" "frontend" {
 
     environment = [
       { name = "NODE_ENV", value = "production" },
-      { name = "NEXT_PUBLIC_API_URL", value = "https://${var.domain_name}/api/v1" },
-      { name = "NEXT_PUBLIC_WS_URL", value = "wss://${var.domain_name}/ws" },
+      { name = "NEXT_PUBLIC_API_URL", value = var.domain_name != "" ? "https://${var.domain_name}/api/v1" : "http://${aws_lb.main.dns_name}/api/v1" },
+      { name = "NEXT_PUBLIC_WS_URL", value = var.domain_name != "" ? "wss://${var.domain_name}/ws" : "ws://${aws_lb.main.dns_name}/ws" },
     ]
 
     logConfiguration = {
@@ -348,7 +378,7 @@ resource "aws_ecs_service" "backend" {
   name            = "${var.app_name}-backend"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.backend.arn
-  desired_count   = 5  # For 100K users
+  desired_count   = 2  # Start small, auto-scale as needed
 
   launch_type = "FARGATE"
 
@@ -369,23 +399,21 @@ resource "aws_ecs_service" "backend" {
     rollback = true
   }
 
-  deployment_configuration {
-    maximum_percent         = 200
-    minimum_healthy_percent = 100
-  }
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 100
 
   lifecycle {
     ignore_changes = [desired_count]
   }
 
-  depends_on = [aws_lb_listener.https]
+  depends_on = [aws_lb_listener.http]
 }
 
 resource "aws_ecs_service" "frontend" {
   name            = "${var.app_name}-frontend"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.frontend.arn
-  desired_count   = 3
+  desired_count   = 1  # Start small, auto-scale as needed
 
   launch_type = "FARGATE"
 
@@ -410,14 +438,14 @@ resource "aws_ecs_service" "frontend" {
     ignore_changes = [desired_count]
   }
 
-  depends_on = [aws_lb_listener.https]
+  depends_on = [aws_lb_listener.http]
 }
 
 resource "aws_ecs_service" "celery" {
   name            = "${var.app_name}-celery"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.celery.arn
-  desired_count   = 3
+  desired_count   = 1  # Start small, auto-scale as needed
 
   launch_type = "FARGATE"
 
@@ -438,8 +466,8 @@ resource "aws_ecs_service" "celery" {
 
 # Backend Auto Scaling
 resource "aws_appautoscaling_target" "backend" {
-  max_capacity       = 20
-  min_capacity       = 5
+  max_capacity       = 10
+  min_capacity       = 2
   resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.backend.name}"
   scalable_dimension = "ecs:service:DesiredCount"
   service_namespace  = "ecs"
@@ -481,8 +509,8 @@ resource "aws_appautoscaling_policy" "backend_memory" {
 
 # Frontend Auto Scaling
 resource "aws_appautoscaling_target" "frontend" {
-  max_capacity       = 10
-  min_capacity       = 3
+  max_capacity       = 5
+  min_capacity       = 1
   resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.frontend.name}"
   scalable_dimension = "ecs:service:DesiredCount"
   service_namespace  = "ecs"
@@ -505,8 +533,8 @@ resource "aws_appautoscaling_policy" "frontend_cpu" {
 
 # Celery Auto Scaling
 resource "aws_appautoscaling_target" "celery" {
-  max_capacity       = 10
-  min_capacity       = 3
+  max_capacity       = 5
+  min_capacity       = 1
   resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.celery.name}"
   scalable_dimension = "ecs:service:DesiredCount"
   service_namespace  = "ecs"
@@ -610,9 +638,16 @@ resource "aws_sns_topic" "alerts" {
 # =============================================================================
 
 output "alb_dns_name" {
-  value = aws_lb.main.dns_name
+  description = "ALB DNS name - use this to access your app without a domain"
+  value       = aws_lb.main.dns_name
 }
 
 output "app_url" {
-  value = "https://${var.domain_name}"
+  description = "Application URL"
+  value       = var.domain_name != "" ? "https://${var.domain_name}" : "http://${aws_lb.main.dns_name}"
+}
+
+output "api_url" {
+  description = "API URL"
+  value       = var.domain_name != "" ? "https://${var.domain_name}/api/v1" : "http://${aws_lb.main.dns_name}/api/v1"
 }

@@ -24,12 +24,7 @@ export default function Home() {
     'Create a microservices architecture with Docker and Kubernetes'
   ]
 
-  // Redirect authenticated users to main app page
-  useEffect(() => {
-    if (!isLoading && isAuthenticated) {
-      router.replace('/bolt')
-    }
-  }, [isAuthenticated, isLoading, router])
+  // Don't auto-redirect - let users view landing page even if logged in
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -339,7 +334,7 @@ export default function Home() {
               <ul className="space-y-2 text-[hsl(var(--bolt-text-secondary))] text-sm">
                 <li><Link href="/import" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Import Project</Link></li>
                 <li><Link href="/adventure" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Adventure Mode</Link></li>
-                <li><Link href="/dashboard" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Dashboard</Link></li>
+                <li><Link href="/bolt" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Build</Link></li>
               </ul>
             </div>
 

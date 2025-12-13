@@ -17,11 +17,19 @@ class ProjectMode(str, enum.Enum):
 
 
 class ProjectStatus(str, enum.Enum):
-    """Project status"""
+    """
+    Project status with two-stage completion:
+
+    Flow: DRAFT → IN_PROGRESS → PROCESSING → PARTIAL_COMPLETED → COMPLETED
+
+    - PARTIAL_COMPLETED: Code generation done, documents pending
+    - COMPLETED: Code + all documents generated (counts against project limit)
+    """
     DRAFT = "draft"
     IN_PROGRESS = "in_progress"
     PROCESSING = "processing"
-    COMPLETED = "completed"
+    PARTIAL_COMPLETED = "partial_completed"  # Code done, documents pending
+    COMPLETED = "completed"  # Code + Documents done (counts against limit)
     FAILED = "failed"
     CANCELLED = "cancelled"
 
@@ -40,8 +48,10 @@ class Project(Base):
     )
 
     id = Column(GUID, primary_key=True, default=generate_uuid)
-    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    workspace_id = Column(GUID, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
+    # Note: index defined explicitly in __table_args__ as 'ix_projects_user_id', no need for index=True here
+    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    # Note: index defined explicitly in __table_args__ as 'ix_projects_workspace_id', no need for index=True here
+    workspace_id = Column(GUID, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True)
 
     title = Column(String(500), nullable=False)
     description = Column(Text, nullable=True)

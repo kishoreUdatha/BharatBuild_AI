@@ -17,6 +17,7 @@ from app.models.sandbox import SandboxInstance, SandboxLog, TerminalSession, Liv
 from app.models.snapshot import Snapshot
 from app.models.project_file import ProjectFile
 from app.core.logging_config import logger
+from app.services.storage_service import storage_service
 
 
 def to_str(value: Union[UUID, str, None]) -> Optional[str]:
@@ -464,11 +465,20 @@ class ProjectRetrievalService:
         if not file:
             return None
 
-        # In production, this would fetch from S3
-        # For now, we return the content if stored in DB or fetch from local storage
+        # Get content - prioritize S3, fallback to inline for legacy data
+        content = None
+        if file.s3_key:
+            try:
+                content_bytes = await storage_service.download_file(file.s3_key)
+                content = content_bytes.decode('utf-8') if content_bytes else None
+            except Exception:
+                content = file.content_inline
+        elif file.content_inline:
+            content = file.content_inline
+
         return {
             "path": file.path,
-            "content": file.content_inline,  # May need S3 fetch if content is None
+            "content": content,
             "language": file.language,
             "size": file.size_bytes,
             "s3_key": file.s3_key,

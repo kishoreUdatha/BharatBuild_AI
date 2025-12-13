@@ -24,8 +24,9 @@ class StorageService:
 
     def __init__(self):
         self._client = None
-        self._bucket_name = settings.S3_BUCKET_NAME
+        self._bucket_name = settings.effective_bucket_name
         self._initialized = False
+        logger.info(f"StorageService initialized with bucket: {self._bucket_name}")
 
     def _get_client(self):
         """Lazy initialization of S3/MinIO client"""
@@ -45,12 +46,22 @@ class StorageService:
                 )
             else:
                 # AWS S3 configuration
-                self._client = boto3.client(
-                    's3',
-                    aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-                    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-                    region_name=settings.AWS_REGION
-                )
+                # In ECS/Fargate, use IAM role (no explicit credentials needed)
+                # For local dev, use explicit credentials if provided
+                if settings.AWS_ACCESS_KEY_ID and settings.AWS_SECRET_ACCESS_KEY:
+                    self._client = boto3.client(
+                        's3',
+                        aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+                        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+                        region_name=settings.AWS_REGION
+                    )
+                else:
+                    # Use IAM role credentials (automatic in ECS/EC2)
+                    self._client = boto3.client(
+                        's3',
+                        region_name=settings.AWS_REGION
+                    )
+                    logger.info("S3 client using IAM role credentials")
 
             # Ensure bucket exists
             self._ensure_bucket()

@@ -1,9 +1,11 @@
 # =============================================================================
 # CloudFront Distribution for Global CDN
+# Only created when domain_name is configured
 # =============================================================================
 
-# CloudFront Distribution
+# CloudFront Distribution (only when domain is configured)
 resource "aws_cloudfront_distribution" "main" {
+  count               = var.domain_name != "" ? 1 : 0
   enabled             = true
   is_ipv6_enabled     = true
   comment             = "BharatBuild CDN"
@@ -35,7 +37,7 @@ resource "aws_cloudfront_distribution" "main" {
     origin_id   = "S3-Static"
 
     s3_origin_config {
-      origin_access_identity = aws_cloudfront_origin_access_identity.main.cloudfront_access_identity_path
+      origin_access_identity = aws_cloudfront_origin_access_identity.main[0].cloudfront_access_identity_path
     }
   }
 
@@ -151,7 +153,7 @@ resource "aws_cloudfront_distribution" "main" {
 
   # SSL Certificate
   viewer_certificate {
-    acm_certificate_arn      = aws_acm_certificate.cloudfront.arn
+    acm_certificate_arn      = aws_acm_certificate.cloudfront[0].arn
     ssl_support_method       = "sni-only"
     minimum_protocol_version = "TLSv1.2_2021"
   }
@@ -162,21 +164,22 @@ resource "aws_cloudfront_distribution" "main" {
     }
   }
 
-  # WAF integration (optional, add WAF separately)
-  # web_acl_id = aws_wafv2_web_acl.main.arn
-
   tags = {
     Name = "${var.app_name}-cdn"
   }
+
+  depends_on = [aws_acm_certificate_validation.cloudfront]
 }
 
-# Origin Access Identity for S3
+# Origin Access Identity for S3 (only when domain is configured)
 resource "aws_cloudfront_origin_access_identity" "main" {
+  count   = var.domain_name != "" ? 1 : 0
   comment = "OAI for BharatBuild S3 bucket"
 }
 
-# S3 bucket policy for CloudFront
+# S3 bucket policy for CloudFront (only when domain is configured)
 resource "aws_s3_bucket_policy" "storage_cloudfront" {
+  count  = var.domain_name != "" ? 1 : 0
   bucket = aws_s3_bucket.storage.id
 
   policy = jsonencode({
@@ -186,7 +189,7 @@ resource "aws_s3_bucket_policy" "storage_cloudfront" {
         Sid       = "CloudFrontAccess"
         Effect    = "Allow"
         Principal = {
-          AWS = aws_cloudfront_origin_access_identity.main.iam_arn
+          AWS = aws_cloudfront_origin_access_identity.main[0].iam_arn
         }
         Action   = "s3:GetObject"
         Resource = "${aws_s3_bucket.storage.arn}/*"
@@ -195,13 +198,14 @@ resource "aws_s3_bucket_policy" "storage_cloudfront" {
   })
 }
 
-# CloudFront certificate (must be in us-east-1)
+# CloudFront certificate (must be in us-east-1, only when domain is configured)
 provider "aws" {
   alias  = "us_east_1"
   region = "us-east-1"
 }
 
 resource "aws_acm_certificate" "cloudfront" {
+  count                     = var.domain_name != "" ? 1 : 0
   provider                  = aws.us_east_1
   domain_name               = var.domain_name
   subject_alternative_names = ["*.${var.domain_name}"]
@@ -213,49 +217,52 @@ resource "aws_acm_certificate" "cloudfront" {
 }
 
 resource "aws_acm_certificate_validation" "cloudfront" {
+  count                   = var.domain_name != "" ? 1 : 0
   provider                = aws.us_east_1
-  certificate_arn         = aws_acm_certificate.cloudfront.arn
+  certificate_arn         = aws_acm_certificate.cloudfront[0].arn
   validation_record_fqdns = [for record in aws_route53_record.cloudfront_cert_validation : record.fqdn]
 }
 
 resource "aws_route53_record" "cloudfront_cert_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.cloudfront.domain_validation_options : dvo.domain_name => {
+  for_each = var.domain_name != "" ? {
+    for dvo in aws_acm_certificate.cloudfront[0].domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
       record = dvo.resource_record_value
       type   = dvo.resource_record_type
     }
-  }
+  } : {}
 
   allow_overwrite = true
   name            = each.value.name
   records         = [each.value.record]
   ttl             = 60
   type            = each.value.type
-  zone_id         = data.aws_route53_zone.main.zone_id
+  zone_id         = data.aws_route53_zone.main[0].zone_id
 }
 
-# Update Route53 to point to CloudFront
+# Update Route53 to point to CloudFront (only when domain is configured)
 resource "aws_route53_record" "cloudfront" {
-  zone_id = data.aws_route53_zone.main.zone_id
+  count   = var.domain_name != "" ? 1 : 0
+  zone_id = data.aws_route53_zone.main[0].zone_id
   name    = var.domain_name
   type    = "A"
 
   alias {
-    name                   = aws_cloudfront_distribution.main.domain_name
-    zone_id                = aws_cloudfront_distribution.main.hosted_zone_id
+    name                   = aws_cloudfront_distribution.main[0].domain_name
+    zone_id                = aws_cloudfront_distribution.main[0].hosted_zone_id
     evaluate_target_health = false
   }
 }
 
 resource "aws_route53_record" "cloudfront_www" {
-  zone_id = data.aws_route53_zone.main.zone_id
+  count   = var.domain_name != "" ? 1 : 0
+  zone_id = data.aws_route53_zone.main[0].zone_id
   name    = "www.${var.domain_name}"
   type    = "A"
 
   alias {
-    name                   = aws_cloudfront_distribution.main.domain_name
-    zone_id                = aws_cloudfront_distribution.main.hosted_zone_id
+    name                   = aws_cloudfront_distribution.main[0].domain_name
+    zone_id                = aws_cloudfront_distribution.main[0].hosted_zone_id
     evaluate_target_health = false
   }
 }
@@ -265,9 +272,11 @@ resource "aws_route53_record" "cloudfront_www" {
 # =============================================================================
 
 output "cloudfront_domain_name" {
-  value = aws_cloudfront_distribution.main.domain_name
+  description = "CloudFront distribution domain name (only available when domain is configured)"
+  value       = var.domain_name != "" ? aws_cloudfront_distribution.main[0].domain_name : "N/A - No domain configured"
 }
 
 output "cloudfront_distribution_id" {
-  value = aws_cloudfront_distribution.main.id
+  description = "CloudFront distribution ID (only available when domain is configured)"
+  value       = var.domain_name != "" ? aws_cloudfront_distribution.main[0].id : "N/A - No domain configured"
 }

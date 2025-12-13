@@ -24,6 +24,7 @@ from app.core.logging_config import logger
 from app.models.user import User
 from app.models.project import Project
 from app.modules.auth.dependencies import get_current_user, get_optional_user
+from app.modules.auth.feature_flags import require_feature
 from app.modules.orchestrator.dynamic_orchestrator import dynamic_orchestrator, ExecutionContext, OrchestratorEvent
 from app.modules.automation.file_manager import FileManager
 from app.modules.agents.production_fixer_agent import production_fixer_agent
@@ -864,7 +865,8 @@ async def get_project_status(
 async def export_project(
     project_id: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_feature("download_files"))
 ):
     """Export entire project as ZIP file"""
     # Verify project ownership (skip if no auth in dev mode)

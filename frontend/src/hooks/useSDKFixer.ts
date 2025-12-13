@@ -95,7 +95,7 @@ export function useSDKFixer(options: UseSDKFixerOptions = {}): UseSDKFixerReturn
       // Log result to terminal
       if (result.success && result.error_fixed) {
         terminalStore.addLog({
-          type: 'success',
+          type: 'info',
           content: `✅ SDK Fixer: Fixed in ${result.attempts} attempt(s)`
         })
 
@@ -112,7 +112,7 @@ export function useSDKFixer(options: UseSDKFixerOptions = {}): UseSDKFixerReturn
         errorStore.clearErrors()
       } else {
         terminalStore.addLog({
-          type: 'warning',
+          type: 'info',
           content: `⚠️ SDK Fixer: Could not fix automatically - ${result.message}`
         })
       }

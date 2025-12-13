@@ -46,6 +46,7 @@ from app.modules.bolt.prompts import BOLT_SYSTEM_PROMPT
 from app.modules.bolt.context_builder import context_builder
 from app.services.unified_storage import UnifiedStorageService
 from app.services.enterprise_tracker import EnterpriseTracker
+from app.services.storage_service import storage_service
 
 
 router = APIRouter(prefix="/bolt", tags=["Bolt AI Editor"])
@@ -278,7 +279,15 @@ async def create_file(
                 file_name = os.path.basename(request.path)
                 parent_path = os.path.dirname(request.path) or None
 
-                # Create new file record
+                # Upload content to S3 (all content goes to S3, not inline)
+                upload_result = await storage_service.upload_file(
+                    str(project_uuid),
+                    request.path,
+                    content_bytes
+                )
+                s3_key = upload_result.get('s3_key')
+
+                # Create new file record (metadata only, content in S3)
                 new_file = ProjectFile(
                     project_id=project_uuid,
                     path=request.path,
@@ -286,8 +295,9 @@ async def create_file(
                     language=request.language,
                     content_hash=content_hash,
                     size_bytes=size_bytes,
-                    content_inline=request.content if size_bytes < 10240 else None,
-                    is_inline=size_bytes < 10240,
+                    s3_key=s3_key,
+                    content_inline=None,  # Never store content inline
+                    is_inline=False,  # Always use S3
                     is_folder=False,
                     parent_path=parent_path
                 )
@@ -366,6 +376,14 @@ async def update_file(
                     file_name = os.path.basename(request.path)
                     parent_path = os.path.dirname(request.path) or None
 
+                    # Upload content to S3
+                    upload_result = await storage_service.upload_file(
+                        str(project_uuid),
+                        request.path,
+                        content_bytes
+                    )
+                    s3_key = upload_result.get('s3_key')
+
                     new_file = ProjectFile(
                         project_id=project_uuid,
                         path=request.path,
@@ -373,8 +391,9 @@ async def update_file(
                         language="plaintext",
                         content_hash=content_hash,
                         size_bytes=size_bytes,
-                        content_inline=request.content if size_bytes < 10240 else None,
-                        is_inline=size_bytes < 10240,
+                        s3_key=s3_key,
+                        content_inline=None,  # Never store content inline
+                        is_inline=False,  # Always use S3
                         is_folder=False,
                         parent_path=parent_path
                     )
@@ -391,17 +410,40 @@ async def update_file(
                     )
                 else:
                     # Capture old content for version tracking
-                    old_content = existing_file.content_inline or ""
+                    old_content = ""
+                    if existing_file.s3_key:
+                        old_bytes = await storage_service.download_file(existing_file.s3_key)
+                        old_content = old_bytes.decode('utf-8') if old_bytes else ""
+                    elif existing_file.content_inline:
+                        old_content = existing_file.content_inline
 
-                    # Update existing file
+                    # Update existing file - upload new content to S3
                     content_bytes = request.content.encode('utf-8')
+                    old_s3_key = existing_file.s3_key
+
+                    # Upload new content to S3
+                    upload_result = await storage_service.upload_file(
+                        str(project_uuid),
+                        request.path,
+                        content_bytes
+                    )
+                    new_s3_key = upload_result.get('s3_key')
+
                     existing_file.content_hash = hashlib.sha256(content_bytes).hexdigest()
                     existing_file.size_bytes = len(content_bytes)
-                    existing_file.content_inline = request.content if len(content_bytes) < 10240 else None
-                    existing_file.is_inline = len(content_bytes) < 10240
+                    existing_file.s3_key = new_s3_key
+                    existing_file.content_inline = None  # Never store content inline
+                    existing_file.is_inline = False  # Always use S3
                     existing_file.updated_at = datetime.utcnow()
 
                     await db.commit()
+
+                    # Delete old S3 file if key changed
+                    if old_s3_key and old_s3_key != new_s3_key:
+                        try:
+                            await storage_service.delete_file(old_s3_key)
+                        except Exception:
+                            pass  # Ignore cleanup errors
 
                     # Track file edit in version history
                     await tracker.track_file_edited(
@@ -724,12 +766,19 @@ async def get_project_files(
         )
         files = files_result.scalars().all()
 
-        # Convert to schema
+        # Convert to schema - fetch content from S3 or fallback to inline
         file_schemas = []
         for f in files:
+            content = None
+            if f.s3_key:
+                content_bytes = await storage_service.download_file(f.s3_key)
+                content = content_bytes.decode('utf-8') if content_bytes else None
+            elif f.content_inline:
+                content = f.content_inline  # Legacy fallback
+
             file_schemas.append(ProjectFileSchema(
                 path=f.path,
-                content=f.content_inline if f.is_inline else None,
+                content=content,
                 language=f.language or "plaintext",
                 type="file"
             ))
@@ -821,18 +870,34 @@ async def bulk_sync_files(
             except Exception as e:
                 logger.warning(f"Failed to write {file_data.path} to sandbox: {e}")
 
-            # ========== LAYER 3: Write to Database (for persistence) ==========
+            # ========== LAYER 2: Upload to S3 ==========
+            upload_result = await storage_service.upload_file(
+                request.project_id,
+                file_data.path,
+                content_bytes
+            )
+            s3_key = upload_result.get('s3_key')
+
+            # ========== LAYER 3: Write to Database (metadata only) ==========
             if file_data.path in existing_files:
                 # Update existing file
                 existing_file = existing_files[file_data.path]
                 if existing_file.content_hash != content_hash:
+                    old_s3_key = existing_file.s3_key
                     existing_file.content_hash = content_hash
                     existing_file.size_bytes = size_bytes
-                    existing_file.content_inline = content if size_bytes < 10240 else None
-                    existing_file.is_inline = size_bytes < 10240
+                    existing_file.s3_key = s3_key
+                    existing_file.content_inline = None  # Never store content inline
+                    existing_file.is_inline = False  # Always use S3
                     existing_file.language = file_data.language
                     existing_file.updated_at = datetime.utcnow()
                     files_updated += 1
+                    # Clean up old S3 key if different
+                    if old_s3_key and old_s3_key != s3_key:
+                        try:
+                            await storage_service.delete_file(old_s3_key)
+                        except Exception:
+                            pass
             else:
                 # Create new file
                 file_name = os.path.basename(file_data.path)
@@ -845,8 +910,9 @@ async def bulk_sync_files(
                     language=file_data.language,
                     content_hash=content_hash,
                     size_bytes=size_bytes,
-                    content_inline=content if size_bytes < 10240 else None,
-                    is_inline=size_bytes < 10240,
+                    s3_key=s3_key,
+                    content_inline=None,  # Never store content inline
+                    is_inline=False,  # Always use S3
                     is_folder=False,
                     parent_path=parent_path
                 )
