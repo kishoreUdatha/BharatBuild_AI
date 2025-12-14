@@ -164,7 +164,7 @@ export default function PaperUploadPage() {
                 // Redirect to bolt with the generated prompt
                 if (data.project_id) {
                   localStorage.setItem('paper_prompt', data.prompt);
-                  router.push(`/bolt?paper_project=${data.project_id}`);
+                  router.push(`/build?paper_project=${data.project_id}`);
                 }
               } else if (data.type === 'error') {
                 setError(data.message);
@@ -195,7 +195,7 @@ export default function PaperUploadPage() {
             </div>
           </div>
           <button
-            onClick={() => router.push('/bolt')}
+            onClick={() => router.push('/build')}
             className="px-4 py-2 text-sm text-gray-300 hover:text-white transition-colors"
           >
             Back to Editor

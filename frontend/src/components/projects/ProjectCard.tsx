@@ -51,7 +51,7 @@ export function ProjectCard({ project, onDelete }: ProjectCardProps) {
   }
 
   const handleOpen = () => {
-    router.push(`/bolt?project=${project.id}`)
+    router.push(`/build?project=${project.id}`)
   }
 
   const handleDownload = async () => {

@@ -4,38 +4,71 @@
 
 @layer base {
   :root {
-    /* Bolt.new Dark Theme Colors - Default */
-    --background: 222 47% 11%;
-    --foreground: 213 31% 91%;
+    /* Light Theme Colors - Default */
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
 
-    --card: 224 37% 15%;
-    --card-foreground: 213 31% 91%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
 
-    --popover: 224 37% 15%;
-    --popover-foreground: 213 31% 91%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
 
     --primary: 210 100% 50%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 222 47% 18%;
-    --secondary-foreground: 213 31% 91%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
 
-    --muted: 222 47% 18%;
-    --muted-foreground: 215 20% 65%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
 
-    --accent: 217 91% 60%;
-    --accent-foreground: 0 0% 100%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 222 47% 11%;
 
-    --destructive: 0 63% 31%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
 
-    --border: 215 28% 17%;
-    --input: 215 28% 17%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
     --ring: 210 100% 50%;
 
     --radius: 0.5rem;
 
-    /* Bolt-specific colors */
+    /* Bolt-specific colors - Light */
+    --bolt-bg-primary: 0 0% 100%;
+    --bolt-bg-secondary: 210 40% 98%;
+    --bolt-bg-tertiary: 210 40% 96%;
+    --bolt-border: 214 32% 91%;
+    --bolt-text-primary: 222 47% 11%;
+    --bolt-text-secondary: 215 16% 47%;
+    --bolt-accent: 210 100% 50%;
+    --bolt-accent-hover: 210 100% 45%;
+  }
+
+  .dark {
+    /* Dark Theme Colors */
+    --background: 222 47% 11%;
+    --foreground: 213 31% 91%;
+    --card: 224 37% 15%;
+    --card-foreground: 213 31% 91%;
+    --popover: 224 37% 15%;
+    --popover-foreground: 213 31% 91%;
+    --primary: 210 100% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 222 47% 18%;
+    --secondary-foreground: 213 31% 91%;
+    --muted: 222 47% 18%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 217 91% 60%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 215 28% 17%;
+    --input: 215 28% 17%;
+    --ring: 210 100% 50%;
+
+    /* Bolt-specific colors - Dark */
     --bolt-bg-primary: 222 47% 11%;
     --bolt-bg-secondary: 222 47% 13%;
     --bolt-bg-tertiary: 222 47% 15%;
@@ -45,28 +78,6 @@
     --bolt-accent: 210 100% 50%;
     --bolt-accent-hover: 210 100% 45%;
   }
-
-  .dark {
-    --background: 222 47% 11%;
-    --foreground: 213 31% 91%;
-    --card: 224 37% 15%;
-    --card-foreground: 213 31% 91%;
-    --popover: 224 37% 15%;
-    --popover-foreground: 213 31% 91%;
-    --primary: 210 100% 50%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 222 47% 18%;
-    --secondary-foreground: 213 31% 91%;
-    --muted: 222 47% 18%;
-    --muted-foreground: 215 20% 65%;
-    --accent: 217 91% 60%;
-    --accent-foreground: 0 0% 100%;
-    --destructive: 0 63% 31%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 215 28% 17%;
-    --input: 215 28% 17%;
-    --ring: 210 100% 50%;
-  }
 }
 
 @layer base {
@@ -74,7 +85,14 @@
     border-color: hsl(var(--border));
   }
 
+  html {
+    height: 100%;
+  }
+
   body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',

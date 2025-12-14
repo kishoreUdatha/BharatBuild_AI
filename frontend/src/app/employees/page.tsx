@@ -178,7 +178,7 @@ export default function EmployeesPage() {
 
             <nav className="flex items-center gap-6">
               <button
-                onClick={() => router.push('/bolt')}
+                onClick={() => router.push('/build')}
                 className="text-gray-400 hover:text-white transition-colors text-sm"
               >
                 Workspace

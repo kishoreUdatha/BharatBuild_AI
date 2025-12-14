@@ -89,8 +89,8 @@ export default function LoginPage() {
       console.log('Login response:', response)
       console.log('User role:', userRole, 'Is admin:', isAdmin)
 
-      // Admin users always go to /admin, others follow stored redirect or default to /bolt
-      let finalRedirect = '/bolt'
+      // Admin users always go to /admin, others follow stored redirect or default to /build
+      let finalRedirect = '/build'
       if (isAdmin) {
         finalRedirect = '/admin'
       } else if (redirectUrl) {

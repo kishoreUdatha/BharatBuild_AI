@@ -32,6 +32,7 @@ yarn-error.log*
 .next/
 out/
 build/
+!frontend/src/app/build/
 
 # Environment
 .env

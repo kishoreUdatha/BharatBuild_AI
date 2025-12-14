@@ -380,7 +380,7 @@ export default function AdminProjectsPage() {
                 currentPage={page}
                 totalPages={totalPages}
                 pageSize={pageSize}
-                totalItems={total}
+                total={total}
                 onPageChange={setPage}
                 onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
               />

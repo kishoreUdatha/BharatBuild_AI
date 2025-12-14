@@ -609,7 +609,7 @@ export default function AdminUsersPage() {
                 currentPage={page}
                 totalPages={totalPages}
                 pageSize={pageSize}
-                totalItems={total}
+                total={total}
                 onPageChange={goToPage}
                 onPageSizeChange={changePageSize}
               />

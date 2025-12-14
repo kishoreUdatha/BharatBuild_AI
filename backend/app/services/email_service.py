@@ -283,7 +283,7 @@ class EmailService:
                     </div>
 
                     <p style="text-align: center;">
-                        <a href="{self.frontend_url}/bolt" class="button">Start Building</a>
+                        <a href="{self.frontend_url}/build" class="button">Start Building</a>
                     </p>
 
                     <p style="font-size: 14px; color: #6b7280;">
@@ -311,7 +311,7 @@ class EmailService:
         - Payment ID: {payment_id}
         - Date: {datetime.utcnow().strftime('%B %d, %Y')}
 
-        Start building at: {self.frontend_url}/bolt
+        Start building at: {self.frontend_url}/build
 
         - The BharatBuild AI Team
         """
@@ -367,7 +367,7 @@ class EmailService:
                     </div>
 
                     <p style="text-align: center;">
-                        <a href="{self.frontend_url}/bolt" class="button">Start Building Now</a>
+                        <a href="{self.frontend_url}/build" class="button">Start Building Now</a>
                     </p>
                 </div>
                 <div class="footer">
@@ -390,7 +390,7 @@ class EmailService:
         - AI-Powered Bug Fixing: Let AI detect and fix errors automatically
         - Complete Documentation: Generate SRS, SDS, Reports, PPT, and Viva Q&A
 
-        Start building now: {self.frontend_url}/bolt
+        Start building now: {self.frontend_url}/build
 
         - The BharatBuild AI Team
         """

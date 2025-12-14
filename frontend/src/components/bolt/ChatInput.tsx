@@ -68,20 +68,20 @@ export function ChatInput({
   const canSubmit = message.trim().length > 0 && !isLoading && !disabled
 
   return (
-    <div className="p-4 bg-gradient-to-t from-[#0a0a0f] via-[#0a0a0f] to-transparent">
+    <div className="p-4 bg-gradient-to-t from-[hsl(var(--bolt-bg-primary))] via-[hsl(var(--bolt-bg-primary))] to-transparent">
       <div className="max-w-3xl mx-auto">
         {/* Main Input Container */}
         <div
-          className={`relative flex items-end gap-2 bg-[#1a1a24] rounded-2xl border transition-all duration-200 ${
+          className={`relative flex items-end gap-2 bg-[hsl(var(--bolt-bg-tertiary))] rounded-2xl border transition-all duration-200 ${
             isFocused
               ? 'border-violet-500/50 shadow-lg shadow-violet-500/10'
-              : 'border-white/10 hover:border-white/20'
+              : 'border-[hsl(var(--bolt-border))] hover:border-[hsl(var(--bolt-text-secondary))]/30'
           }`}
         >
           {/* Left Icon */}
           <div className="flex-shrink-0 p-3 pb-3.5">
             <Sparkles className={`w-5 h-5 transition-colors ${
-              isFocused ? 'text-violet-400' : 'text-white/30'
+              isFocused ? 'text-violet-400' : 'text-[hsl(var(--bolt-text-secondary))]'
             }`} />
           </div>
 
@@ -96,7 +96,7 @@ export function ChatInput({
             placeholder={placeholder || "Describe what you want to build..."}
             disabled={isLoading || disabled}
             rows={1}
-            className="flex-1 bg-transparent text-white text-[15px] placeholder:text-white/40 resize-none focus:outline-none py-3.5 pr-2 max-h-[200px] scrollbar-thin disabled:opacity-50"
+            className="flex-1 bg-transparent text-[hsl(var(--bolt-text-primary))] text-[15px] placeholder:text-[hsl(var(--bolt-text-secondary))] resize-none focus:outline-none py-3.5 pr-2 max-h-[200px] scrollbar-thin disabled:opacity-50"
             style={{ minHeight: '24px' }}
           />
 
@@ -106,7 +106,7 @@ export function ChatInput({
             {/*
             <button
               type="button"
-              className="p-2 rounded-xl text-white/30 hover:text-white/60 hover:bg-white/5 transition-colors"
+              className="p-2 rounded-xl text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-secondary))] transition-colors"
               title="Attach file"
             >
               <Paperclip className="w-4 h-4" />
@@ -131,7 +131,7 @@ export function ChatInput({
                 className={`p-2.5 rounded-xl transition-all duration-200 ${
                   canSubmit
                     ? 'bg-violet-500 hover:bg-violet-600 text-white shadow-lg shadow-violet-500/25'
-                    : 'bg-white/5 text-white/20 cursor-not-allowed'
+                    : 'bg-[hsl(var(--bolt-bg-secondary))] text-[hsl(var(--bolt-text-secondary))]/50 cursor-not-allowed'
                 }`}
                 title="Send message"
               >
@@ -143,7 +143,7 @@ export function ChatInput({
 
         {/* Helper Text */}
         <div className="flex items-center justify-between mt-2 px-1">
-          <p className="text-xs text-white/30">
+          <p className="text-xs text-[hsl(var(--bolt-text-secondary))]">
             {isLoading ? (
               <span className="flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-violet-500 animate-pulse" />
@@ -151,7 +151,7 @@ export function ChatInput({
               </span>
             ) : (
               <span>
-                Press <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-white/50 font-mono text-[10px]">Enter</kbd> to send, <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-white/50 font-mono text-[10px]">Shift+Enter</kbd> for new line
+                Press <kbd className="px-1.5 py-0.5 rounded bg-[hsl(var(--bolt-bg-tertiary))] text-[hsl(var(--bolt-text-secondary))] font-mono text-[10px]">Enter</kbd> to send, <kbd className="px-1.5 py-0.5 rounded bg-[hsl(var(--bolt-bg-tertiary))] text-[hsl(var(--bolt-text-secondary))] font-mono text-[10px]">Shift+Enter</kbd> for new line
               </span>
             )}
           </p>
@@ -159,7 +159,7 @@ export function ChatInput({
           {/* Character count (optional) */}
           {message.length > 100 && (
             <span className={`text-xs ${
-              message.length > 4000 ? 'text-red-400' : 'text-white/30'
+              message.length > 4000 ? 'text-red-400' : 'text-[hsl(var(--bolt-text-secondary))]'
             }`}>
               {message.length} / 4000
             </span>

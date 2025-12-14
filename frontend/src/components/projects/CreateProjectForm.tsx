@@ -1,13 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { apiClient } from '@/lib/api-client'
-import { BookOpen, Code, Rocket, GraduationCap } from 'lucide-react'
+import { BookOpen, Code, Rocket, GraduationCap, AlertTriangle, Crown } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 
 interface CreateProjectFormProps {
   onProjectCreated?: (project: any) => void
@@ -48,7 +49,28 @@ const PROJECT_MODES = [
   },
 ]
 
+interface PlanStatus {
+  plan: {
+    name: string
+    type: string
+    is_free: boolean
+    is_premium: boolean
+  }
+  projects: {
+    created: number
+    limit: number | null
+    remaining: number | null
+    can_create: boolean
+  }
+  features: {
+    project_generation: boolean
+  }
+  needs_upgrade: boolean
+  upgrade_message: string | null
+}
+
 export function CreateProjectForm({ onProjectCreated }: CreateProjectFormProps) {
+  const router = useRouter()
   const [selectedMode, setSelectedMode] = useState<string>('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -57,6 +79,23 @@ export function CreateProjectForm({ onProjectCreated }: CreateProjectFormProps) 
   const [featureInput, setFeatureInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [planStatus, setPlanStatus] = useState<PlanStatus | null>(null)
+  const [checkingPlan, setCheckingPlan] = useState(true)
+
+  // Check subscription status on mount
+  useEffect(() => {
+    const checkPlanStatus = async () => {
+      try {
+        const status = await apiClient.getPlanStatus()
+        setPlanStatus(status)
+      } catch (err) {
+        console.error('Failed to check plan status:', err)
+      } finally {
+        setCheckingPlan(false)
+      }
+    }
+    checkPlanStatus()
+  }, [])
 
   const handleAddFeature = () => {
     if (featureInput.trim()) {
@@ -78,6 +117,18 @@ export function CreateProjectForm({ onProjectCreated }: CreateProjectFormProps) 
       return
     }
 
+    // Check if user can create projects
+    if (planStatus && !planStatus.projects.can_create) {
+      setError(planStatus.upgrade_message || 'You have reached your project limit. Please upgrade your plan.')
+      return
+    }
+
+    // Check if project generation feature is enabled
+    if (planStatus && !planStatus.features.project_generation) {
+      setError('Project generation is not available on your current plan. Please upgrade to Premium.')
+      return
+    }
+
     setLoading(true)
 
     try {
@@ -89,8 +140,18 @@ export function CreateProjectForm({ onProjectCreated }: CreateProjectFormProps) 
         features: features.length > 0 ? features : undefined,
       })
 
-      // Execute the project immediately
-      await apiClient.executeProject(project.id)
+      // Execute the project only if subscription allows
+      try {
+        await apiClient.executeProject(project.id)
+      } catch (execErr: any) {
+        // Handle execution-specific errors (like limit reached)
+        const errorDetail = execErr.response?.data?.detail
+        if (errorDetail?.error === 'project_limit_reached') {
+          setError(errorDetail.message || 'Project limit reached. Please upgrade your plan.')
+          return
+        }
+        throw execErr
+      }
 
       if (onProjectCreated) {
         onProjectCreated(project)
@@ -103,13 +164,22 @@ export function CreateProjectForm({ onProjectCreated }: CreateProjectFormProps) 
       setFeatures([])
       setSelectedMode('')
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to create project')
+      const errorDetail = err.response?.data?.detail
+      if (typeof errorDetail === 'object') {
+        setError(errorDetail.message || 'Failed to create project')
+      } else {
+        setError(errorDetail || 'Failed to create project')
+      }
     } finally {
       setLoading(false)
     }
   }
 
   const selectedModeInfo = PROJECT_MODES.find(m => m.id === selectedMode)
+
+  // Check if user can generate projects
+  const canGenerate = planStatus?.projects.can_create && planStatus?.features.project_generation
+  const needsUpgrade = planStatus?.needs_upgrade || !canGenerate
 
   return (
     <Card className="w-full">
@@ -120,6 +190,45 @@ export function CreateProjectForm({ onProjectCreated }: CreateProjectFormProps) 
         </CardDescription>
       </CardHeader>
       <CardContent>
+        {/* Upgrade Banner for FREE users */}
+        {planStatus && needsUpgrade && (
+          <div className="mb-6 p-4 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-lg">
+            <div className="flex items-start gap-3">
+              <div className="p-2 bg-amber-100 rounded-full">
+                <Crown className="h-5 w-5 text-amber-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-amber-900">
+                  {planStatus.plan.is_free ? 'Upgrade to Premium' : 'Project Limit Reached'}
+                </h3>
+                <p className="text-sm text-amber-700 mt-1">
+                  {planStatus.upgrade_message || 'Upgrade your plan to create and generate projects.'}
+                </p>
+                {planStatus.projects.limit !== null && (
+                  <p className="text-xs text-amber-600 mt-2">
+                    Projects: {planStatus.projects.created} / {planStatus.projects.limit} used
+                  </p>
+                )}
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="mt-3 bg-amber-600 hover:bg-amber-700"
+                  onClick={() => router.push('/pricing')}
+                >
+                  <Crown className="h-4 w-4 mr-2" />
+                  View Plans
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Loading state while checking plan */}
+        {checkingPlan && (
+          <div className="mb-4 p-3 bg-gray-50 rounded-lg text-center text-sm text-gray-500">
+            Checking your subscription...
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Mode Selection */}
           <div className="space-y-3">
@@ -259,10 +368,28 @@ export function CreateProjectForm({ onProjectCreated }: CreateProjectFormProps) 
             type="submit"
             className="w-full"
             size="lg"
-            disabled={loading || !selectedMode || !title}
+            disabled={loading || !selectedMode || !title || checkingPlan || !!(planStatus && !canGenerate)}
           >
-            {loading ? 'Creating Project...' : 'Create & Execute Project'}
+            {loading ? (
+              'Creating Project...'
+            ) : checkingPlan ? (
+              'Checking subscription...'
+            ) : planStatus && !canGenerate ? (
+              <>
+                <Crown className="h-4 w-4 mr-2" />
+                Upgrade to Create Projects
+              </>
+            ) : (
+              'Create & Execute Project'
+            )}
           </Button>
+
+          {/* Show project count for users with limits */}
+          {planStatus && planStatus.projects.limit !== null && canGenerate && (
+            <p className="text-center text-xs text-muted-foreground">
+              {planStatus.projects.remaining} project{planStatus.projects.remaining !== 1 ? 's' : ''} remaining on your {planStatus.plan.name} plan
+            </p>
+          )}
         </form>
       </CardContent>
     </Card>

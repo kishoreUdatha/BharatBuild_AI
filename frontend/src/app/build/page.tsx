@@ -22,7 +22,7 @@ interface FileNode {
   content?: string
 }
 
-export default function BoltPage() {
+export default function BuildPage() {
   const { messages, sendMessage, stopGeneration, isStreaming } = useChat()
   const { balance, setBalance } = useTokenBalance()
   const { currentProject, createNewProject } = useProject()
@@ -72,7 +72,7 @@ export default function BoltPage() {
     files?.forEach(file => {
       if (file.type === 'file' && file.content) {
         fileContents[file.path] = file.content
-        console.log('[BoltPage] Extracted file for preview:', file.path, '(', file.content.length, 'chars)')
+        console.log('[BuildPage] Extracted file for preview:', file.path, '(', file.content.length, 'chars)')
       }
       if (file.children) {
         extractFileContents(file.children)
@@ -80,9 +80,9 @@ export default function BoltPage() {
     })
   }
   if (hasProject && currentProject?.files && currentProject.files.length > 0) {
-    console.log('[BoltPage] Current project files count:', currentProject.files.length)
+    console.log('[BuildPage] Current project files count:', currentProject.files.length)
     extractFileContents(currentProject.files)
-    console.log('[BoltPage] Total files for preview:', Object.keys(fileContents).length)
+    console.log('[BuildPage] Total files for preview:', Object.keys(fileContents).length)
   }
 
   // Set mounted state on client side
@@ -92,7 +92,7 @@ export default function BoltPage() {
 
   // Debug: Log when currentProject changes
   useEffect(() => {
-    console.log('[BoltPage] currentProject changed:', {
+    console.log('[BuildPage] currentProject changed:', {
       id: currentProject?.id,
       name: currentProject?.name,
       filesCount: currentProject?.files?.length || 0,
@@ -100,7 +100,7 @@ export default function BoltPage() {
       firstFilePath: currentProject?.files?.[0]?.path || 'NO FILES'
     })
     if (currentProject?.files && currentProject.files.length > 0) {
-      console.log('[BoltPage] Files structure:', currentProject.files.map(f => ({
+      console.log('[BuildPage] Files structure:', currentProject.files.map(f => ({
         path: f.path,
         type: f.type,
         childrenCount: f.children?.length || 0
@@ -110,7 +110,7 @@ export default function BoltPage() {
 
   // Debug: Log the files array passed to BoltLayout
   useEffect(() => {
-    console.log('[BoltPage] files array for BoltLayout:', files.length, hasProject, projectFiles.length)
+    console.log('[BuildPage] files array for BoltLayout:', files.length, hasProject, projectFiles.length)
   }, [files, hasProject, projectFiles])
 
   // Check authentication on mount
@@ -120,7 +120,7 @@ export default function BoltPage() {
     // Check if user is authenticated
     if (!checkAuth()) {
       // Not authenticated - redirect to login
-      sessionStorage.setItem('redirectAfterLogin', '/bolt')
+      sessionStorage.setItem('redirectAfterLogin', '/build')
       router.push('/login')
       return
     }
@@ -136,7 +136,7 @@ export default function BoltPage() {
     const reloadProjectFiles = async () => {
       // If there's a current project that isn't synced and has no files, reload from backend
       if (currentProject && !currentProject.isSynced && currentProject.files.length === 0) {
-        console.log('[BoltPage] Verifying project exists in database:', currentProject.id)
+        console.log('[BuildPage] Verifying project exists in database:', currentProject.id)
 
         try {
           // FIRST: Verify project exists in database before loading files
@@ -148,12 +148,12 @@ export default function BoltPage() {
                 return false
               }
               // For other errors, assume project might exist
-              console.warn('[BoltPage] Error checking project existence:', err)
+              console.warn('[BuildPage] Error checking project existence:', err)
               return true
             })
 
           if (!projectExists) {
-            console.log('[BoltPage] Project not found in database, clearing stale localStorage data')
+            console.log('[BuildPage] Project not found in database, clearing stale localStorage data')
             // Clear the stale project from localStorage
             const { resetProject } = useProjectStore.getState()
             resetProject()
@@ -161,7 +161,7 @@ export default function BoltPage() {
             return
           }
 
-          console.log('[BoltPage] Project verified, reloading files from backend:', currentProject.id)
+          console.log('[BuildPage] Project verified, reloading files from backend:', currentProject.id)
           await switchProject(currentProject.id, {
             loadFiles: true,
             clearTerminal: false,
@@ -171,9 +171,9 @@ export default function BoltPage() {
             projectName: currentProject.name,
             projectDescription: currentProject.description
           })
-          console.log('[BoltPage] Project files reloaded successfully')
+          console.log('[BuildPage] Project files reloaded successfully')
         } catch (error) {
-          console.error('[BoltPage] Failed to reload project files:', error)
+          console.error('[BuildPage] Failed to reload project files:', error)
           // On error, clear the stale project to avoid showing phantom files
           const { resetProject } = useProjectStore.getState()
           resetProject()
@@ -258,7 +258,7 @@ export default function BoltPage() {
         }
         onGenerateProject={() => setIsGenerationModalOpen(true)}
         onServerStart={(url) => {
-          console.log('[BoltPage] onServerStart called with URL:', url)
+          console.log('[BuildPage] onServerStart called with URL:', url)
           setServerUrl(url)
           setIsServerRunning(true)
         }}
@@ -273,7 +273,7 @@ export default function BoltPage() {
         onClose={() => setIsGenerationModalOpen(false)}
         onServerStart={(url) => {
           // Auto-run started the server - update preview!
-          console.log('[BoltPage] Server started via auto-run:', url)
+          console.log('[BuildPage] Server started via auto-run:', url)
           setServerUrl(url)
           setIsServerRunning(true)
         }}
