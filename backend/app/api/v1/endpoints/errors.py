@@ -25,7 +25,7 @@ from app.services.simple_fixer import simple_fixer
 from app.core.database import get_db
 from app.modules.auth.dependencies import get_current_user_optional
 from app.modules.auth.usage_limits import get_user_limits
-from app.models import User
+from app.models.user import User
 from app.services.log_bus import LogBus, get_log_bus
 from app.services.auto_fixer import get_auto_fixer
 from app.core.config import settings
@@ -359,7 +359,7 @@ async def execute_fix_with_notification(
 
         if not project_path.exists():
             # Try sandbox path
-            sandbox_base = Path(settings.SANDBOX_PATH) if hasattr(settings, 'SANDBOX_PATH') else Path("C:/tmp/sandbox/workspace")
+            sandbox_base = Path(settings.SANDBOX_PATH) if hasattr(settings, 'SANDBOX_PATH') else Path("/tmp/sandbox/workspace")
             for user_dir in sandbox_base.iterdir():
                 if user_dir.is_dir():
                     potential_path = user_dir / project_id
