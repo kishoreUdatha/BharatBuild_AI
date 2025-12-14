@@ -94,35 +94,69 @@ class SimpleFixResult:
     pending_fix_id: Optional[str] = None  # NEW: ID to approve/reject fix
 
 
-# Simple system prompt - let AI be smart
-SIMPLE_FIXER_PROMPT = """You are an expert developer fixing build/runtime errors.
+# Simple system prompt - UNIVERSAL for ALL technologies
+SIMPLE_FIXER_PROMPT = """You are an expert polyglot developer fixing build/runtime errors across ALL programming languages and frameworks.
 
 You will receive:
-1. Error source (terminal, browser, build, react, network, docker, etc.)
+1. Error source (terminal, browser, build, compiler, runtime, docker, etc.)
 2. Error message and context
-3. Relevant project files
+3. Relevant project files (sometimes only ~50 lines around the error line for efficiency)
 
 Your job:
-1. Analyze the error
+1. Analyze the error in context of the specific technology
 2. Determine the root cause
 3. Fix it by creating or modifying files
 
-ERROR TYPES YOU HANDLE:
-- Terminal/Build: npm errors, compilation errors, missing modules
-- Browser: TypeError, ReferenceError, runtime JS errors
-- React: Component errors, hook errors, render failures
-- Vite/Webpack: HMR errors, plugin errors, build failures
-- Network: CORS errors, API failures (fix server-side config)
-- Docker: Container crashes, port conflicts
+SUPPORTED TECHNOLOGIES & COMMON ERRORS:
+
+PYTHON:
+- SyntaxError, IndentationError, NameError, ImportError, ModuleNotFoundError
+- TypeError, AttributeError, KeyError, ValueError
+- Django/Flask/FastAPI/Streamlit specific errors
+
+JAVASCRIPT / TYPESCRIPT:
+- SyntaxError, TypeError, ReferenceError
+- ESLint errors, TSC type errors (TS2304, TS2322, etc.)
+- React: Component errors, hook rules, render failures
+- Vite/Webpack: Build failures, HMR errors, plugin issues
+- Node.js: Module not found, require/import errors
+
+JAVA:
+- NullPointerException, ClassNotFoundException, NoSuchMethodError
+- Compilation errors: "cannot find symbol", "incompatible types"
+- Maven/Gradle build errors
+- Spring Boot configuration issues
+
+GO:
+- "undefined:", "declared but not used", "imported but not used"
+- "missing return", "cannot use", type conversion errors
+- Go module issues (go.mod, go.sum)
+
+RUST:
+- Borrow checker: "borrowed value", "use of moved value"
+- "mismatched types", "cannot find", lifetime errors
+- Cargo build errors
+
+C / C++:
+- Segmentation fault, undefined reference, undeclared identifier
+- Compilation errors, linker errors
+- CMake/Make build failures
 
 IMPORTANT RULES:
 - If the output shows SUCCESS (build success, server started, etc.) - respond with "NO_FIX_NEEDED"
 - Only fix ACTUAL errors, not warnings or info messages
 - Be precise - fix the exact issue, don't over-engineer
-- Create missing files if needed (like tsconfig.node.json)
-- Fix import errors, syntax errors, missing dependencies
+- Create missing files if needed (config files, missing modules)
+- Fix import/include errors, syntax errors, type errors
 - For CORS errors, update backend CORS configuration
-- For missing modules, check if import path is wrong
+- For missing dependencies, suggest installing OR fix the import path
+
+CRITICAL - PARTIAL FILE HANDLING:
+- When you see "[PARTIAL FILE - SHOWING LINES X-Y of Z total lines]", you are seeing ONLY A PORTION of the file
+- For partial files, you MUST use str_replace tool to fix the specific problematic lines
+- NEVER use create_file on partial files - this would delete the rest of the file!
+- The str_replace tool takes "old_str" (exact text to find) and "new_str" (replacement text)
+- Copy the exact problematic lines as old_str, then provide the fixed version as new_str
 
 When you identify a fix, use the tools to apply it."""
 
@@ -192,9 +226,9 @@ class SimpleFixer:
         COST OPTIMIZATION #2: Classify error complexity to choose appropriate model.
 
         SIMPLE (use Haiku - 12x cheaper):
-        - Single file mentioned
+        - Syntax errors (SyntaxError, unexpected token, etc.)
         - Missing import/module
-        - Syntax error with clear location
+        - Single file with clear line number
         - Typo in variable/function name
 
         MODERATE/COMPLEX (use Sonnet):
@@ -211,6 +245,10 @@ class SimpleFixer:
         has_file = bool(first_error.get("file"))
         has_line = bool(first_error.get("line"))
 
+        # Also check the raw context for error patterns (more reliable)
+        context_lower = context.lower() if context else ""
+        combined_text = f"{error_msg} {context_lower}"
+
         # Count files mentioned in errors
         files_mentioned = set()
         for err in errors:
@@ -218,28 +256,63 @@ class SimpleFixer:
                 files_mentioned.add(err.get("file"))
 
         # SIMPLE patterns (use Haiku - 12x cheaper!)
+        # These are errors that have clear, localized fixes - UNIVERSAL for ALL technologies
         simple_patterns = [
-            "cannot find module",
-            "module not found",
-            "import error",
-            "syntaxerror",
-            "unexpected token",
-            "missing semicolon",
-            "missing bracket",
-            "missing import",
-            "undefined variable",
-            "is not defined",
-            "typo",
-            "expected",
-            "enoent",
-            "no such file",
+            # === PYTHON ===
+            "syntaxerror", "syntax error", "indentationerror", "indentation error",
+            "modulenotfounderror", "importerror", "nameerror", "attributeerror",
+            "typeerror", "keyerror", "indexerror", "valueerror", "zerodivisionerror",
+            "filenotfounderror", "permissionerror", "unboundlocalerror",
+
+            # === JAVASCRIPT / TYPESCRIPT ===
+            "unexpected token", "unexpected eof", "unexpected end of input",
+            "missing semicolon", "missing bracket", "missing parenthesis",
+            "cannot find module", "module not found", "is not defined",
+            "is not a function", "cannot read property", "cannot read properties",
+            "undefined is not", "null is not", "referenceerror", "typeerror",
+            "cannot assign to", "property does not exist", "has no exported member",
+            "ts2304", "ts2322", "ts2339", "ts2345",  # Common TypeScript error codes
+            "eslint", "parsing error",
+
+            # === JAVA ===
+            "nullpointerexception", "classnotfoundexception", "nosuchmethoderror",
+            "arrayindexoutofboundsexception", "numberformatexception",
+            "illegalargumentexception", "illegalstateexception", "ioexception",
+            "cannot find symbol", "incompatible types", "method does not override",
+            "unreported exception", "variable might not have been initialized",
+            "class, interface, or enum expected", "reached end of file while parsing",
+
+            # === GO ===
+            "undefined:", "cannot use", "missing return", "not enough arguments",
+            "too many arguments", "declared but not used", "imported but not used",
+            "no new variables", "cannot convert", "invalid operation",
+            "missing function body", "expected declaration",
+
+            # === RUST ===
+            "cannot find", "expected", "mismatched types", "borrowed value",
+            "use of moved value", "lifetime", "trait bound", "no method named",
+            "unresolved import", "cannot borrow", "value used after move",
+            "missing lifetime", "type annotations needed",
+
+            # === C / C++ ===
+            "undeclared identifier", "undefined reference", "no matching function",
+            "invalid operands", "expected expression", "expected ';'",
+            "implicit declaration", "incompatible pointer", "segmentation fault",
+            "use of undeclared", "no member named",
+
+            # === GENERAL / CROSS-LANGUAGE ===
+            "unterminated string", "missing colon", "unexpected character",
+            "enoent", "no such file", "file not found", "permission denied",
+            "connection refused", "timeout", "out of memory",
+            "stack overflow", "recursion", "circular dependency",
         ]
 
-        # Check if error matches simple pattern AND has clear location
+        # Check if error matches simple pattern in either error message OR context
         for pattern in simple_patterns:
-            if pattern in error_msg:
-                if has_file and len(files_mentioned) <= 2:
-                    logger.info(f"[SimpleFixer] Classified as SIMPLE (pattern: {pattern}) - using Haiku")
+            if pattern in combined_text:
+                # For syntax errors, we can fix with just the relevant lines
+                if len(files_mentioned) <= 2:
+                    logger.info(f"[SimpleFixer] Classified as SIMPLE (pattern: '{pattern}') - using Haiku (12x cheaper)")
                     return ErrorComplexity.SIMPLE
 
         # Multiple errors or files = more complex
@@ -247,11 +320,33 @@ class SimpleFixer:
             logger.info(f"[SimpleFixer] Classified as COMPLEX (errors={len(errors)}, files={len(files_mentioned)})")
             return ErrorComplexity.COMPLEX
 
-        # Config file issues = moderate
-        config_keywords = ["config", "tsconfig", "package.json", "pom.xml", "requirements", "gradle", "cargo"]
+        # Config file issues = moderate (ALL technologies)
+        config_keywords = [
+            # General
+            "config", ".env", "dockerfile", "docker-compose",
+            # JavaScript/TypeScript
+            "tsconfig", "package.json", "webpack", "vite.config", "eslint", "babel",
+            # Python
+            "requirements", "pyproject.toml", "setup.py", "setup.cfg", "poetry.lock",
+            # Java
+            "pom.xml", "build.gradle", "settings.gradle", "application.properties", "application.yml",
+            # Go
+            "go.mod", "go.sum",
+            # Rust
+            "cargo.toml", "cargo.lock",
+            # C/C++
+            "cmake", "makefile", "meson.build",
+            # .NET
+            "csproj", "appsettings.json", "nuget",
+        ]
         if any(kw in error_msg for kw in config_keywords):
             logger.info(f"[SimpleFixer] Classified as MODERATE (config-related)")
             return ErrorComplexity.MODERATE
+
+        # Single file with line number = likely simple
+        if has_file and has_line and len(files_mentioned) == 1:
+            logger.info(f"[SimpleFixer] Classified as SIMPLE (single file with line number) - using Haiku")
+            return ErrorComplexity.SIMPLE
 
         # Default to moderate
         logger.info(f"[SimpleFixer] Classified as MODERATE (default)")
@@ -588,17 +683,41 @@ Please analyze and fix these errors. If the output shows success or warnings onl
                 patches_applied=0
             )
 
+    def _extract_relevant_lines(self, content: str, error_line: int, context_lines: int = 25) -> str:
+        """
+        Extract only relevant lines around the error.
+        Returns ~50 lines (25 before + error line + 25 after) with line numbers.
+
+        This reduces token usage by ~90% for large files!
+        """
+        lines = content.split('\n')
+        total_lines = len(lines)
+
+        # Calculate range
+        start = max(0, error_line - context_lines - 1)  # -1 because line numbers are 1-indexed
+        end = min(total_lines, error_line + context_lines)
+
+        # Build output with line numbers
+        result_lines = []
+        for i in range(start, end):
+            line_num = i + 1
+            marker = " >>> " if line_num == error_line else "     "
+            result_lines.append(f"{line_num:4d}{marker}| {lines[i]}")
+
+        return '\n'.join(result_lines)
+
     async def _gather_context_optimized(self, project_path: Path, output: str, errors: List[Dict[str, Any]]) -> Dict[str, str]:
         """
         COST OPTIMIZATION #3: Gather SMALLER context.
 
-        Only include:
-        1. Files explicitly mentioned in error messages
-        2. 3-5 KEY config files (not 100+)
+        TOKEN OPTIMIZATION:
+        - For files with errors: Send only ~50 lines around error (not full file!)
+        - For config files: Send full content (usually small)
+        - Result: ~90% token reduction for large files
         """
         files = {}
 
-        # KEY config files only (not the full 100+ list)
+        # KEY config files only (small files, send full content)
         key_configs = [
             "package.json",
             "tsconfig.json",
@@ -607,11 +726,6 @@ Please analyze and fix these errors. If the output shows success or warnings onl
             "pom.xml",
             "requirements.txt",
             "pyproject.toml",
-            # Fullstack variants
-            "frontend/package.json",
-            "frontend/tsconfig.json",
-            "backend/pom.xml",
-            "backend/requirements.txt",
         ]
 
         for rel_path in key_configs:
@@ -619,42 +733,202 @@ Please analyze and fix these errors. If the output shows success or warnings onl
             if full_path.exists():
                 try:
                     content = full_path.read_text(encoding='utf-8')
-                    if len(content) < 15000:  # Smaller limit
+                    if len(content) < 5000:  # Config files should be small
                         files[rel_path] = content
                 except:
                     pass
 
-        # Extract files mentioned in errors (most important!)
+        # Extract files mentioned in errors - ONLY RELEVANT LINES!
         for err in errors[:5]:
             file_path = err.get("file")
+            error_line = err.get("line")
+
             if file_path:
-                # Try to find the file
                 full_path = project_path / file_path
                 if full_path.exists():
                     try:
                         content = full_path.read_text(encoding='utf-8')
-                        if len(content) < 15000:
+
+                        # If we have a line number, extract only relevant lines
+                        if error_line and isinstance(error_line, int) and error_line > 0:
+                            # Send only ~50 lines around the error (huge token savings!)
+                            relevant_content = self._extract_relevant_lines(content, error_line, context_lines=25)
+                            files[file_path] = f"[Lines {max(1, error_line-25)}-{error_line+25} around error at line {error_line}]\n{relevant_content}"
+                            logger.info(f"[SimpleFixer] Extracted ~50 lines around line {error_line} from {file_path} (was {len(content)} chars)")
+                        elif len(content) < 5000:
+                            # Small file - send full content
                             files[file_path] = content
+                        else:
+                            # Large file without line number - send first/last portions
+                            files[file_path] = f"[File truncated - {len(content)} chars]\n{content[:2000]}\n...\n{content[-2000:]}"
+                            logger.info(f"[SimpleFixer] Truncated large file {file_path} (was {len(content)} chars)")
                     except:
                         pass
 
-        # Extract files mentioned in error output
-        path_pattern = r'[\w/\\.-]+\.(tsx?|jsx?|py|java|go|rs|json|xml)'
-        mentioned = re.findall(path_pattern, output)
+        # Parse line numbers from error output (e.g., "line 687", ":687:", "at line 687")
+        line_pattern = r'(?:line\s+(\d+)|:(\d+):|at\s+line\s+(\d+))'
+        line_matches = re.findall(line_pattern, output, re.IGNORECASE)
+        error_lines = [int(m[0] or m[1] or m[2]) for m in line_matches if any(m)]
 
-        for path_fragment in mentioned[:5]:  # Limit to 5 files
+        # Extract files from traceback paths (e.g., "/path/to/app.py", "File "app.py"")
+        # Pattern 1: Full paths in tracebacks
+        full_path_pattern = r'File\s+"([^"]+)"'
+        full_paths = re.findall(full_path_pattern, output)
+
+        # Pattern 2: Simple filenames with extensions (ALL technologies)
+        simple_pattern = r'\b([\w.-]+\.(?:tsx?|jsx?|py|java|go|rs|vue|svelte|c|cpp|cc|cxx|h|hpp|cs|rb|php|kt|scala|swift|m|mm|pl|pm|sh|bash|yaml|yml|json|xml|toml|sql|lua|r|R|jl|ex|exs|erl|hrl|hs|elm|clj|cljs|cljc|coffee|dart))\b'
+        simple_files = re.findall(simple_pattern, output)
+
+        # Combine and deduplicate
+        mentioned = []
+        for fp in full_paths:
+            # Extract just the filename from full path
+            fname = Path(fp).name
+            if fname not in mentioned:
+                mentioned.append(fname)
+        for sf in simple_files:
+            if sf not in mentioned:
+                mentioned.append(sf)
+
+        # If no files found, check for common entry files (ALL technologies)
+        # Trigger if we have error_lines OR if we detected any error keywords in output
+        has_error_keywords = any(kw in output.lower() for kw in ['syntaxerror', 'error:', 'exception', 'traceback', 'failed'])
+        if not mentioned and (error_lines or has_error_keywords):
+            common_entry_files = [
+                # Python
+                "app.py", "main.py", "run.py", "server.py", "index.py", "manage.py", "wsgi.py",
+                # JavaScript/TypeScript
+                "index.js", "app.js", "main.js", "server.js",
+                "index.ts", "app.ts", "main.ts", "server.ts",
+                "index.tsx", "App.tsx", "main.tsx",
+                "index.mjs", "index.cjs",
+                # Java
+                "Main.java", "App.java", "Application.java",
+                "src/main/java/Main.java", "src/main/java/App.java",
+                "src/main/java/Application.java",
+                # Go
+                "main.go", "app.go", "server.go",
+                "cmd/main.go", "cmd/server.go",
+                # Rust
+                "src/main.rs", "main.rs", "src/lib.rs",
+                # Vue/Svelte
+                "App.vue", "main.vue", "App.svelte", "main.svelte",
+                "src/App.vue", "src/main.vue", "src/App.svelte",
+                # C/C++
+                "main.c", "main.cpp", "main.cc", "app.c", "app.cpp",
+                "src/main.c", "src/main.cpp",
+                # C# / .NET
+                "Program.cs", "App.cs", "Main.cs",
+                # Ruby
+                "app.rb", "main.rb", "server.rb", "config.ru",
+                # PHP
+                "index.php", "app.php", "main.php",
+                # Kotlin
+                "Main.kt", "App.kt", "Application.kt",
+                # Swift
+                "main.swift", "App.swift",
+                # Dart/Flutter
+                "main.dart", "lib/main.dart",
+            ]
+            for cf in common_entry_files:
+                cf_path = project_path / cf
+                if cf_path.exists():
+                    mentioned.append(cf)
+                    logger.info(f"[SimpleFixer] No files in output, found entry file: {cf}")
+                    break
+
+            # Also check src/ directory for any source files (ALL technologies)
+            if not mentioned:
+                src_path = project_path / "src"
+                if src_path.exists():
+                    for ext in [
+                        "*.py", "*.ts", "*.tsx", "*.js", "*.jsx",  # Python, JS/TS
+                        "*.java", "*.kt", "*.scala",               # JVM languages
+                        "*.go",                                     # Go
+                        "*.rs",                                     # Rust
+                        "*.c", "*.cpp", "*.cc", "*.h", "*.hpp",    # C/C++
+                        "*.cs",                                     # C#
+                        "*.rb",                                     # Ruby
+                        "*.php",                                    # PHP
+                        "*.swift",                                  # Swift
+                        "*.dart",                                   # Dart
+                    ]:
+                        for src_file in src_path.glob(ext):
+                            mentioned.append(str(src_file.relative_to(project_path)))
+                            logger.info(f"[SimpleFixer] Found source file in src/: {src_file.name}")
+                            break
+                        if mentioned:
+                            break
+
+        logger.info(f"[SimpleFixer] Files to check: {mentioned[:5]}, error_lines: {error_lines[:3]}")
+
+        for path_fragment in mentioned[:3]:  # Limit to 3 files
+            if path_fragment in files:
+                continue  # Already added
+            # Try exact match first, then glob
+            exact_path = project_path / path_fragment
+            if exact_path.exists() and exact_path.is_file():
+                try:
+                    content = exact_path.read_text(encoding='utf-8')
+                    total_lines = len(content.split('\n'))
+
+                    # Use first error line found
+                    if error_lines and len(content) > 3000:
+                        relevant_content = self._extract_relevant_lines(content, error_lines[0], context_lines=25)
+                        files[path_fragment] = f"""[PARTIAL FILE - SHOWING LINES {max(1,error_lines[0]-25)}-{min(total_lines, error_lines[0]+25)} of {total_lines} total lines]
+[⚠️ USE str_replace TOOL ONLY - DO NOT use create_file as this is partial content]
+{relevant_content}
+[END PARTIAL FILE - File continues beyond this excerpt]"""
+                        logger.info(f"[SimpleFixer] Extracted ~50 lines around line {error_lines[0]} from {path_fragment}")
+                    elif len(content) < 5000:
+                        # Small file - send full content
+                        files[path_fragment] = content
+                        logger.info(f"[SimpleFixer] Sent full file {path_fragment} ({len(content)} chars)")
+                    else:
+                        # Large file without line number - send last portion (where syntax errors usually are)
+                        # Get last 100 lines where SyntaxError is likely
+                        lines = content.split('\n')
+                        last_100 = '\n'.join(lines[-100:]) if len(lines) > 100 else content
+                        files[path_fragment] = f"""[PARTIAL FILE - SHOWING LAST {min(100, len(lines))} LINES of {total_lines} total]
+[⚠️ USE str_replace TOOL ONLY - file is larger than shown]
+{last_100}
+[END PARTIAL FILE]"""
+                        logger.info(f"[SimpleFixer] Sent last 100 lines of {path_fragment} (no line number available)")
+                    continue
+                except:
+                    pass
+
+            # Fallback to glob search
             for p in project_path.rglob(f"*{path_fragment}"):
                 if p.is_file():
                     try:
-                        rel = p.relative_to(project_path)
+                        rel = str(p.relative_to(project_path))
                         content = p.read_text(encoding='utf-8')
-                        if len(content) < 15000:
-                            files[str(rel)] = content
+                        total_lines = len(content.split('\n'))
+
+                        # Use first error line found for this file
+                        if error_lines and len(content) > 5000:
+                            relevant_content = self._extract_relevant_lines(content, error_lines[0], context_lines=25)
+                            files[rel] = f"""[PARTIAL FILE - SHOWING LINES {max(1,error_lines[0]-25)}-{min(total_lines, error_lines[0]+25)} of {total_lines} total lines]
+[⚠️ USE str_replace TOOL ONLY - DO NOT use create_file as this is partial content]
+{relevant_content}
+[END PARTIAL FILE - File continues beyond this excerpt]"""
+                        elif len(content) < 5000:
+                            files[rel] = content
+                        else:
+                            # Large file without line number - send last portion
+                            lines = content.split('\n')
+                            last_100 = '\n'.join(lines[-100:]) if len(lines) > 100 else content
+                            files[rel] = f"""[PARTIAL FILE - SHOWING LAST {min(100, len(lines))} LINES of {total_lines} total]
+[⚠️ USE str_replace TOOL ONLY - file is larger than shown]
+{last_100}
+[END PARTIAL FILE]"""
                     except:
                         pass
                     break
 
-        logger.info(f"[SimpleFixer] Gathered {len(files)} context files (optimized)")
+        total_chars = sum(len(v) for v in files.values())
+        logger.info(f"[SimpleFixer] Gathered {len(files)} context files (~{total_chars} chars, optimized)")
         return files
 
     def _format_errors(self, errors: List[Dict[str, Any]]) -> str:
@@ -1187,6 +1461,23 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
             }
         ]
 
+    async def _sync_to_s3(self, project_id: str, file_path: str, content: str) -> None:
+        """Sync fixed file to S3 storage"""
+        try:
+            from app.services.unified_storage import unified_storage
+
+            # Upload to S3
+            s3_key = f"projects/{project_id}/{file_path}"
+            await unified_storage.upload_content(
+                content=content.encode('utf-8'),
+                key=s3_key,
+                content_type='text/plain'
+            )
+            logger.info(f"[SimpleFixer] Synced to S3: {s3_key}")
+        except Exception as e:
+            # Don't fail the fix if S3 sync fails - just log it
+            logger.warning(f"[SimpleFixer] Failed to sync to S3: {e}")
+
     async def _execute_tool(
         self,
         project_path: Path,
@@ -1197,6 +1488,12 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
         try:
             path = tool_input.get("path", "")
             full_path = project_path / path
+
+            # Extract project_id and user_id from path for S3 sync
+            # Path format: /tmp/sandbox/workspace/{user_id}/{project_id}/
+            path_parts = str(project_path).replace("\\", "/").split("/")
+            project_id = path_parts[-1] if path_parts else None
+            user_id = path_parts[-2] if len(path_parts) >= 2 else None
 
             if tool_name == "create_file":
                 content = tool_input.get("content", "")
@@ -1210,8 +1507,22 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                 # This fixes the issue where AI leaves first line blank
                 content = content.lstrip('\n\r')
 
+                # CRITICAL: Prevent overwriting existing files with partial content (truncation bug fix)
+                if full_path.exists():
+                    existing_content = full_path.read_text(encoding='utf-8')
+                    existing_lines = len(existing_content.split('\n'))
+                    new_lines = len(content.split('\n'))
+                    # If new content is much shorter than existing, reject to prevent truncation
+                    if existing_lines > 100 and new_lines < existing_lines * 0.7:
+                        logger.warning(f"[SimpleFixer] Rejected create_file that would truncate {path}: {existing_lines} -> {new_lines} lines")
+                        return f"Error: This would truncate {path} from {existing_lines} to {new_lines} lines. Use str_replace to modify specific parts instead."
+
+                # VALIDATION: Reject content with partial file markers
+                if "[PARTIAL FILE" in content or "[END PARTIAL FILE" in content:
+                    logger.warning(f"[SimpleFixer] Rejected create_file with partial file markers: {path}")
+                    return f"Error: Use str_replace for partial file content, not create_file."
+
                 # VALIDATION: Reject suspiciously short content (likely truncated)
-                # Config files can be short, but source files should have meaningful content
                 is_config = any(ext in path.lower() for ext in ['.json', '.yml', '.yaml', '.toml', '.xml', '.properties', '.env'])
                 min_length = 10 if is_config else 50
 
@@ -1222,9 +1533,15 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                 # Ensure file ends with single newline (standard convention)
                 content = content.rstrip() + '\n'
 
+                # LAYER 1: Write to sandbox
                 full_path.parent.mkdir(parents=True, exist_ok=True)
                 full_path.write_text(content, encoding='utf-8')
                 logger.info(f"[SimpleFixer] Created file: {path} ({len(content)} chars)")
+
+                # LAYER 2: Sync to S3
+                if project_id:
+                    await self._sync_to_s3(project_id, path, content)
+
                 return f"Created {path} ({len(content)} chars)"
 
             elif tool_name == "str_replace":
@@ -1236,8 +1553,15 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                 if old_str not in content:
                     return f"Error: String not found in {path}"
                 new_content = content.replace(old_str, new_str, 1)
+
+                # LAYER 1: Write to sandbox
                 full_path.write_text(new_content, encoding='utf-8')
                 logger.info(f"[SimpleFixer] Modified file: {path}")
+
+                # LAYER 2: Sync to S3
+                if project_id:
+                    await self._sync_to_s3(project_id, path, new_content)
+
                 return f"Replaced in {path}"
 
             elif tool_name == "view_file":

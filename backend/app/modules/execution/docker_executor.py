@@ -1312,16 +1312,8 @@ class DockerExecutor:
                 pass
 
         if python_deps:
-            # AI/ML frameworks (check first - highest priority)
-            ml_indicators = ['tensorflow', 'torch', 'pytorch', 'keras', 'scikit-learn',
-                            'sklearn', 'transformers', 'huggingface', 'opencv', 'cv2',
-                            'numpy', 'pandas', 'matplotlib', 'seaborn', 'jupyter',
-                            'notebook', 'xgboost', 'lightgbm', 'catboost', 'spacy',
-                            'nltk', 'gensim', 'openai', 'langchain', 'llama']
-            if any(lib in python_deps for lib in ml_indicators):
-                return FrameworkType.PYTHON_ML
-
-            # Web frameworks
+            # Web frameworks - check FIRST (before ML detection)
+            # Streamlit apps often use pandas/numpy but should run as streamlit, not jupyter
             if "streamlit" in python_deps:
                 return FrameworkType.PYTHON_STREAMLIT
             elif "fastapi" in python_deps:
@@ -1330,8 +1322,18 @@ class DockerExecutor:
                 return FrameworkType.PYTHON_DJANGO
             elif "flask" in python_deps:
                 return FrameworkType.PYTHON_FLASK
-            else:
-                return FrameworkType.PYTHON_FLASK  # Default Python
+
+            # AI/ML frameworks (check AFTER web frameworks)
+            ml_indicators = ['tensorflow', 'torch', 'pytorch', 'keras', 'scikit-learn',
+                            'sklearn', 'transformers', 'huggingface', 'opencv', 'cv2',
+                            'numpy', 'pandas', 'matplotlib', 'seaborn', 'jupyter',
+                            'notebook', 'xgboost', 'lightgbm', 'catboost', 'spacy',
+                            'nltk', 'gensim', 'openai', 'langchain', 'llama']
+            if any(lib in python_deps for lib in ml_indicators):
+                return FrameworkType.PYTHON_ML
+
+            # Default Python fallback
+            return FrameworkType.PYTHON_FLASK
 
         # ===== JAVA - SPRING BOOT =====
         pom_path = project_path / "pom.xml"
@@ -3015,10 +3017,26 @@ class DockerExecutor:
                 if exit_code == 0:
                     yield f"  ✅ {cmd} completed\n"
                 else:
-                    yield f"  ⚠️ {cmd} had issues (continuing anyway)\n"
-                    # Try to fix any errors from the install
+                    yield f"  ⚠️ {cmd} had issues (attempting fix...)\n"
+                    # Use optimized SimpleFixer (Haiku + minimal context) instead of expensive ProductionFixerAgent
                     if stderr:
-                        await autofixer.fix_error(stderr[:1000])
+                        try:
+                            # Parse error for SimpleFixer format
+                            errors = [{"message": stderr[:1000], "source": "dependency"}]
+                            result = await simple_fixer.fix(
+                                project_id=project_id,
+                                errors=errors,
+                                context=stderr,
+                                command=cmd,
+                                project_path=project_path
+                            )
+                            if result.success:
+                                yield f"  ✅ SimpleFixer fixed the issue\n"
+                            else:
+                                yield f"  ⚠️ Could not auto-fix (continuing anyway)\n"
+                        except Exception as fix_err:
+                            logger.warning(f"[DockerExecutor:{project_id}] SimpleFixer failed: {fix_err}")
+                            yield f"  ⚠️ Auto-fix failed (continuing anyway)\n"
 
         yield "✅ Pre-flight checks complete\n\n"
 

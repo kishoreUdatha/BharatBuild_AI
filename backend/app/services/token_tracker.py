@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging_config import logger
 from app.models.usage import (
-    TokenTransaction,
+    TokenUsageLog,
     TokenUsage,
     AgentType,
     OperationType
@@ -58,7 +58,7 @@ class TokenTracker:
         file_path: Optional[str] = None,
         error_message: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
-    ) -> Optional[TokenTransaction]:
+    ) -> Optional[TokenUsageLog]:
         """
         Log a detailed token transaction.
 
@@ -76,15 +76,15 @@ class TokenTracker:
             metadata: Additional metadata
 
         Returns:
-            Created TokenTransaction or None on error
+            Created TokenUsageLog or None on error
         """
         try:
             total_tokens = input_tokens + output_tokens
-            cost_paise = TokenTransaction.calculate_cost_paise(
+            cost_paise = TokenUsageLog.calculate_cost_paise(
                 input_tokens, output_tokens, model
             )
 
-            transaction = TokenTransaction(
+            transaction = TokenUsageLog(
                 user_id=user_id,
                 project_id=project_id,
                 agent_type=agent_type,
@@ -96,7 +96,7 @@ class TokenTracker:
                 cost_paise=cost_paise,
                 file_path=file_path,
                 error_message=error_message,
-                metadata=metadata
+                extra_data=metadata
             )
 
             db.add(transaction)
@@ -126,15 +126,15 @@ class TokenTracker:
         output_tokens: int,
         file_path: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
-    ) -> Optional[TokenTransaction]:
+    ) -> Optional[TokenUsageLog]:
         """
         Log transaction with automatic database session management.
         Use this when you don't have an existing db session.
         """
         try:
-            from app.core.database import async_session
+            from app.core.database import AsyncSessionLocal
 
-            async with async_session() as db:
+            async with AsyncSessionLocal() as db:
                 return await self.log_transaction(
                     db=db,
                     user_id=user_id,
@@ -145,7 +145,7 @@ class TokenTracker:
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     file_path=file_path,
-                    metadata=metadata
+                    metadata=metadata  # Will be mapped to extra_data in log_transaction
                 )
         except Exception as e:
             logger.error(f"[TokenTracker] Failed to log transaction (simple): {e}")
@@ -173,10 +173,10 @@ class TokenTracker:
             # Total tokens and cost
             total_result = await db.execute(
                 select(
-                    func.sum(TokenTransaction.total_tokens),
-                    func.sum(TokenTransaction.cost_paise),
-                    func.count(TokenTransaction.id)
-                ).where(TokenTransaction.project_id == project_id)
+                    func.sum(TokenUsageLog.total_tokens),
+                    func.sum(TokenUsageLog.cost_paise),
+                    func.count(TokenUsageLog.id)
+                ).where(TokenUsageLog.project_id == project_id)
             )
             total_row = total_result.one()
             total_tokens = total_row[0] or 0
@@ -186,22 +186,22 @@ class TokenTracker:
             # By agent type
             agent_result = await db.execute(
                 select(
-                    TokenTransaction.agent_type,
-                    func.sum(TokenTransaction.total_tokens)
+                    TokenUsageLog.agent_type,
+                    func.sum(TokenUsageLog.total_tokens)
                 )
-                .where(TokenTransaction.project_id == project_id)
-                .group_by(TokenTransaction.agent_type)
+                .where(TokenUsageLog.project_id == project_id)
+                .group_by(TokenUsageLog.agent_type)
             )
             by_agent = {row[0].value: row[1] for row in agent_result.all()}
 
             # By model
             model_result = await db.execute(
                 select(
-                    TokenTransaction.model,
-                    func.sum(TokenTransaction.total_tokens)
+                    TokenUsageLog.model,
+                    func.sum(TokenUsageLog.total_tokens)
                 )
-                .where(TokenTransaction.project_id == project_id)
-                .group_by(TokenTransaction.model)
+                .where(TokenUsageLog.project_id == project_id)
+                .group_by(TokenUsageLog.model)
             )
             by_model = {row[0]: row[1] for row in model_result.all()}
 
@@ -251,12 +251,12 @@ class TokenTracker:
             # Total tokens and cost
             total_result = await db.execute(
                 select(
-                    func.sum(TokenTransaction.total_tokens),
-                    func.sum(TokenTransaction.cost_paise)
+                    func.sum(TokenUsageLog.total_tokens),
+                    func.sum(TokenUsageLog.cost_paise)
                 ).where(
                     and_(
-                        TokenTransaction.user_id == user_id,
-                        TokenTransaction.created_at >= start_date
+                        TokenUsageLog.user_id == user_id,
+                        TokenUsageLog.created_at >= start_date
                     )
                 )
             )
@@ -267,16 +267,16 @@ class TokenTracker:
             # By project
             project_result = await db.execute(
                 select(
-                    TokenTransaction.project_id,
-                    func.sum(TokenTransaction.total_tokens)
+                    TokenUsageLog.project_id,
+                    func.sum(TokenUsageLog.total_tokens)
                 )
                 .where(
                     and_(
-                        TokenTransaction.user_id == user_id,
-                        TokenTransaction.created_at >= start_date
+                        TokenUsageLog.user_id == user_id,
+                        TokenUsageLog.created_at >= start_date
                     )
                 )
-                .group_by(TokenTransaction.project_id)
+                .group_by(TokenUsageLog.project_id)
             )
             by_project = {
                 str(row[0]) if row[0] else "unknown": row[1]
@@ -286,16 +286,16 @@ class TokenTracker:
             # By agent type
             agent_result = await db.execute(
                 select(
-                    TokenTransaction.agent_type,
-                    func.sum(TokenTransaction.total_tokens)
+                    TokenUsageLog.agent_type,
+                    func.sum(TokenUsageLog.total_tokens)
                 )
                 .where(
                     and_(
-                        TokenTransaction.user_id == user_id,
-                        TokenTransaction.created_at >= start_date
+                        TokenUsageLog.user_id == user_id,
+                        TokenUsageLog.created_at >= start_date
                     )
                 )
-                .group_by(TokenTransaction.agent_type)
+                .group_by(TokenUsageLog.agent_type)
             )
             by_agent = {row[0].value: row[1] for row in agent_result.all()}
 
@@ -330,9 +330,9 @@ class TokenTracker:
         """Get recent token transactions for a user."""
         try:
             result = await db.execute(
-                select(TokenTransaction)
-                .where(TokenTransaction.user_id == user_id)
-                .order_by(TokenTransaction.created_at.desc())
+                select(TokenUsageLog)
+                .where(TokenUsageLog.user_id == user_id)
+                .order_by(TokenUsageLog.created_at.desc())
                 .limit(limit)
             )
             transactions = result.scalars().all()
