@@ -52,7 +52,7 @@ router = APIRouter()
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("3/(1 minute)")
+@limiter.limit("3/minute")
 async def register(
     request: Request,
     user_data: UserRegister,
@@ -295,7 +295,7 @@ async def resend_verification_email(
 
 
 @router.post("/login", response_model=LoginResponse)
-@limiter.limit("5/(1 minute)")
+@limiter.limit("5/minute")
 async def login(
     request: Request,
     credentials: UserLogin,

@@ -667,10 +667,11 @@ class UnifiedStorageService:
 
             # Always store content in S3, only metadata in database
             async with AsyncSessionLocal() as session:
-                # Check if file already exists
+                # Check if file already exists - cast to string to handle UUID/VARCHAR mismatch
+                from sqlalchemy import cast, String as SQLString
                 result = await session.execute(
                     select(ProjectFile)
-                    .where(ProjectFile.project_id == project_uuid)
+                    .where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid)
                     .where(ProjectFile.path == file_path)
                 )
                 existing_file = result.scalar_one_or_none()
@@ -743,10 +744,11 @@ class UnifiedStorageService:
         for part in parts[:-1]:  # Exclude the file itself
             current_path = f"{current_path}/{part}" if current_path else part
 
-            # Check if folder exists
+            # Check if folder exists - cast to string to handle UUID/VARCHAR mismatch
+            from sqlalchemy import cast, String as SQLString
             result = await session.execute(
                 select(ProjectFile)
-                .where(ProjectFile.project_id == project_uuid)
+                .where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid)
                 .where(ProjectFile.path == current_path)
             )
             existing = result.scalar_one_or_none()
@@ -784,9 +786,11 @@ class UnifiedStorageService:
             project_uuid = str(UUID(project_id))
 
             async with AsyncSessionLocal() as session:
+                # Cast to string to handle UUID/VARCHAR mismatch
+                from sqlalchemy import cast, String as SQLString
                 result = await session.execute(
                     select(ProjectFile)
-                    .where(ProjectFile.project_id == project_uuid)
+                    .where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid)
                     .where(ProjectFile.path == file_path)
                 )
                 file_record = result.scalar_one_or_none()
@@ -832,10 +836,11 @@ class UnifiedStorageService:
             restored_files = []
 
             async with AsyncSessionLocal() as session:
-                # Get all files for project
+                # Get all files for project - cast to string to handle UUID/VARCHAR mismatch
+                from sqlalchemy import cast, String as SQLString
                 result = await session.execute(
                     select(ProjectFile)
-                    .where(ProjectFile.project_id == project_uuid)
+                    .where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid)
                     .where(ProjectFile.is_folder == False)
                     .order_by(ProjectFile.path)
                 )

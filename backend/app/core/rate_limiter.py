@@ -77,21 +77,21 @@ def get_rate_limit_tier(request: Request) -> str:
 
 # Rate limit configurations per tier
 RATE_LIMITS = {
-    'anonymous': f"{settings.RATE_LIMIT_PER_MINUTE}/(1 minute)",  # 60/minute default
-    'free': "60/(1 minute)",
-    'premium': "200/(1 minute)",
-    'admin': "1000/(1 minute)",
+    'anonymous': f"{settings.RATE_LIMIT_PER_MINUTE}/minute",  # 60/minute default
+    'free': "60/minute",
+    'premium': "200/minute",
+    'admin': "1000/minute",
 }
 
 # Special endpoint rate limits
 ENDPOINT_LIMITS = {
-    '/api/v1/auth/login': "5/(1 minute)",
-    '/api/v1/auth/register': "3/(1 minute)",
-    '/api/v1/auth/forgot-password': "3/(1 minute)",
-    '/api/v1/auth/resend-verification': "3/(1 minute)",
-    '/api/v1/orchestrator/execute': "10/(1 minute)",
-    '/api/v1/billing/subscribe': "5/(1 minute)",
-    '/api/v1/payments/create-order': "10/(1 minute)",
+    '/api/v1/auth/login': "5/minute",
+    '/api/v1/auth/register': "3/minute",
+    '/api/v1/auth/forgot-password': "3/minute",
+    '/api/v1/auth/resend-verification': "3/minute",
+    '/api/v1/orchestrator/execute': "10/minute",
+    '/api/v1/billing/subscribe': "5/minute",
+    '/api/v1/payments/create-order': "10/minute",
 }
 
 
@@ -122,7 +122,7 @@ def get_redis_storage():
 # Create limiter instance
 limiter = Limiter(
     key_func=get_user_identifier,
-    default_limits=[f"{settings.RATE_LIMIT_PER_MINUTE}/(1 minute)"],
+    default_limits=[f"{settings.RATE_LIMIT_PER_MINUTE}/minute"],
     storage_uri=get_redis_storage(),
     strategy="fixed-window",  # or "moving-window" for smoother limiting
 )
@@ -171,7 +171,7 @@ def rate_limit(limit: str):
 
     Usage:
         @router.post("/my-endpoint")
-        @rate_limit("5/(1 minute)")
+        @rate_limit("5/minute")
         async def my_endpoint():
             ...
     """
@@ -181,24 +181,24 @@ def rate_limit(limit: str):
 # Pre-configured rate limiters for common use cases
 def strict_rate_limit():
     """Very strict rate limit for sensitive operations (3/min)"""
-    return limiter.limit("3/(1 minute)", key_func=get_user_identifier)
+    return limiter.limit("3/minute", key_func=get_user_identifier)
 
 
 def auth_rate_limit():
     """Rate limit for auth endpoints (5/min)"""
-    return limiter.limit("5/(1 minute)", key_func=get_user_identifier)
+    return limiter.limit("5/minute", key_func=get_user_identifier)
 
 
 def ai_operation_rate_limit():
     """Rate limit for expensive AI operations (10/min)"""
-    return limiter.limit("10/(1 minute)", key_func=get_user_identifier)
+    return limiter.limit("10/minute", key_func=get_user_identifier)
 
 
 def standard_rate_limit():
     """Standard rate limit (60/min)"""
-    return limiter.limit("60/(1 minute)", key_func=get_user_identifier)
+    return limiter.limit("60/minute", key_func=get_user_identifier)
 
 
 def premium_rate_limit():
     """Higher rate limit for premium features (200/min)"""
-    return limiter.limit("200/(1 minute)", key_func=get_user_identifier)
+    return limiter.limit("200/minute", key_func=get_user_identifier)

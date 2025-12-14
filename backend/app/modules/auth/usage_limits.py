@@ -161,6 +161,54 @@ async def check_token_limit(user: User, db: AsyncSession, tokens_needed: int = 0
     )
 
 
+async def check_project_generation_allowed_impl(
+    user: User,
+    db: AsyncSession
+) -> UsageLimitCheck:
+    """
+    Check if user can generate a project.
+
+    Combined check for project generation:
+    1. Check if user's plan has project_generation feature enabled
+    2. Check if user hasn't exceeded their project limit
+    """
+    # Get user's plan limits
+    limits = await get_user_limits(user, db)
+    feature_flags = limits.feature_flags or {}
+
+    # Check if project_generation feature is enabled
+    if not feature_flags.get("project_generation", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "feature_not_available",
+                "message": "Project generation is not available on your plan",
+                "feature": "project_generation",
+                "current_plan": limits.plan_name,
+                "upgrade_to": "Premium"
+            }
+        )
+
+    # Check project limit
+    project_check = await check_project_limit(user, db)
+    if not project_check.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "project_limit_reached",
+                "message": project_check.reason,
+                "current_usage": project_check.current_usage,
+                "limit": project_check.limit
+            }
+        )
+
+    return project_check
+
+
+# Alias for backwards compatibility
+check_project_generation_allowed = check_project_generation_allowed_impl
+
+
 async def check_project_limit(user: User, db: AsyncSession) -> UsageLimitCheck:
     """
     Check if user can create more projects.

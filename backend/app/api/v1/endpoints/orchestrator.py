@@ -33,7 +33,7 @@ from app.core.logging_config import logger
 from app.models.project import Project, ProjectStatus, ProjectMode
 from app.models.user import User
 from app.modules.auth.dependencies import get_current_user
-from app.modules.auth.usage_limits import check_token_limit, deduct_tokens, log_api_usage, get_user_limits
+from app.modules.auth.usage_limits import check_token_limit, deduct_tokens, log_api_usage, get_user_limits, check_project_limit
 from app.services.sandbox_cleanup import touch_project
 from app.services.enterprise_tracker import EnterpriseTracker
 from uuid import UUID as UUID_type
@@ -362,9 +362,9 @@ async def event_generator(
                 # Save planned files to database for resume capability
                 try:
                     from app.models.project_file import ProjectFile, FileGenerationStatus
-                    from app.core.database import async_session_maker
+                    from app.core.database import AsyncSessionLocal
 
-                    async with async_session_maker() as db_session:
+                    async with AsyncSessionLocal() as db_session:
                         tasks = event.data.get('tasks', [])
                         order = 1
                         for task in tasks:
@@ -421,16 +421,18 @@ async def event_generator(
                             content=f"Generated file: {file_path}",
                             tokens_used=0
                         )
+                except Exception as track_err:
+                    logger.warning(f"[SSE] Failed to track agent response: {track_err}")
 
             # Update file status to COMPLETED when file is done
             if event_type == "file_complete":
                 try:
                     from app.models.project_file import ProjectFile, FileGenerationStatus
-                    from app.core.database import async_session_maker
+                    from app.core.database import AsyncSessionLocal
 
                     file_path = event.data.get("path") or event.data.get("file_path", "")
                     if file_path:
-                        async with async_session_maker() as db_session:
+                        async with AsyncSessionLocal() as db_session:
                             # Find and update the file status
                             result = await db_session.execute(
                                 select(ProjectFile).where(
@@ -570,6 +572,23 @@ async def execute_workflow(
         if current_user:
             user_limits = await get_user_limits(current_user, db)
             logger.info(f"[Execute Workflow] User {current_user.email} on {user_limits.plan_name} plan")
+
+            # Check if user's plan allows project generation
+            project_check = await check_project_limit(current_user, db)
+            if not project_check.allowed:
+                logger.warning(f"[Execute Workflow] Project limit reached for user {current_user.email}")
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "project_limit_reached",
+                        "message": project_check.reason or "You have reached your project limit. Please upgrade your plan.",
+                        "current_usage": project_check.current_usage,
+                        "limit": project_check.limit,
+                        "upgrade_url": "/billing/plans"
+                    }
+                )
+            logger.info(f"[Execute Workflow] Project limit check passed: {project_check.current_usage}/{project_check.limit} projects")
+
             # Get file limit for FREE users (3 files only)
             max_files_limit = user_limits.max_files_per_project
             if max_files_limit:

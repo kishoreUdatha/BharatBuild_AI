@@ -20,12 +20,58 @@ import asyncio
 from app.core.database import get_db
 from app.core.logging_config import logger
 from app.models.user import User
-from app.models.project import Project
+from app.models.project import Project, ProjectStatus
+from app.models.project_file import ProjectFile, FileGenerationStatus
+from app.models.document import Document, DocumentType as DBDocumentType
 from app.modules.auth.dependencies import get_current_user
 from app.services.checkpoint_service import checkpoint_service, CheckpointStatus
 
 
 router = APIRouter()
+
+
+# Document types to generate in order
+DOCUMENT_GENERATION_ORDER = [
+    ("report", DBDocumentType.REPORT, "Project Report"),
+    ("srs", DBDocumentType.SRS, "SRS Document"),
+    ("ppt", DBDocumentType.PPT, "Presentation"),
+    ("viva", DBDocumentType.VIVA_QA, "Viva Q&A"),
+]
+
+
+async def check_files_complete(db: AsyncSession, project_id: str) -> tuple[bool, int, int]:
+    """
+    Check if all planned files are generated.
+    Returns: (all_complete, completed_count, total_count)
+    """
+    result = await db.execute(
+        select(ProjectFile).where(
+            ProjectFile.project_id == project_id,
+            ProjectFile.is_folder == False
+        )
+    )
+    files = result.scalars().all()
+
+    if not files:
+        return False, 0, 0
+
+    completed = sum(1 for f in files if f.generation_status == FileGenerationStatus.COMPLETED)
+    return completed == len(files), completed, len(files)
+
+
+async def get_pending_documents(db: AsyncSession, project_id: str) -> list:
+    """Get list of documents that haven't been generated yet."""
+    result = await db.execute(
+        select(Document.doc_type).where(Document.project_id == project_id)
+    )
+    existing_types = {row[0] for row in result.all()}
+
+    pending = []
+    for doc_key, doc_type, doc_name in DOCUMENT_GENERATION_ORDER:
+        if doc_type not in existing_types:
+            pending.append({"key": doc_key, "type": doc_type, "name": doc_name})
+
+    return pending
 
 
 @router.get("/status/{project_id}")
@@ -85,85 +131,138 @@ async def resume_project(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Resume an interrupted project generation.
+    Smart Resume - Continues file generation OR starts document generation.
 
     This endpoint:
-    1. Verifies the project can be resumed
-    2. Loads the checkpoint state
-    3. Continues from the last successful step
+    1. Checks if all code files are generated
+    2. If files incomplete → resume file generation
+    3. If files complete → start document generation
     4. Streams progress via SSE
 
     Returns:
         SSE stream with generation progress
     """
-    # Verify ownership
-    checkpoint = await checkpoint_service.get_checkpoint(project_id)
+    user_id = str(current_user.id)
 
-    if not checkpoint:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No checkpoint found for this project"
-        )
+    # Check file generation status first
+    files_complete, completed_count, total_count = await check_files_complete(db, project_id)
 
-    if checkpoint.get("user_id") != str(current_user.id):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found"
-        )
+    # Get pending documents
+    pending_docs = await get_pending_documents(db, project_id)
 
-    if not await checkpoint_service.can_resume(project_id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Project cannot be resumed. Status: {checkpoint.get('status')}, Retries: {checkpoint.get('retry_count')}/{checkpoint.get('max_retries')}"
-        )
+    logger.info(f"[SmartResume] Project {project_id}: files={completed_count}/{total_count}, pending_docs={len(pending_docs)}")
 
-    # Get resume point
-    resume_info = await checkpoint_service.get_resume_point(project_id)
-
-    async def resume_generator():
-        """Generate SSE events for resumed workflow"""
+    async def smart_resume_generator():
+        """Smart generator that handles both file and document generation"""
         try:
-            # Mark as resumed
-            await checkpoint_service.mark_resumed(project_id)
+            # PHASE 1: Check and complete file generation if needed
+            if not files_complete and total_count > 0:
+                # Files still pending - resume file generation
+                checkpoint = await checkpoint_service.get_checkpoint(project_id)
 
-            # Send resume started event
-            yield f"data: {json.dumps({'type': 'resume_started', 'data': {'project_id': project_id, 'resume_from': resume_info.get('next_step'), 'completed_steps': resume_info.get('completed_steps'), 'remaining_files': len(resume_info.get('remaining_files', []))}})}\n\n"
+                if checkpoint and checkpoint.get("user_id") == user_id:
+                    resume_info = await checkpoint_service.get_resume_point(project_id)
+                    await checkpoint_service.mark_resumed(project_id)
 
-            # Import orchestrator
-            from app.modules.orchestrator.dynamic_orchestrator import dynamic_orchestrator
+                    yield f"data: {json.dumps({'type': 'resume_started', 'data': {'phase': 'files', 'project_id': project_id, 'completed': completed_count, 'total': total_count}})}\n\n"
 
-            # Resume the workflow
-            async for event in dynamic_orchestrator.resume_workflow(
-                project_id=project_id,
-                resume_info=resume_info,
-                checkpoint_service=checkpoint_service
-            ):
-                yield f"data: {json.dumps(event)}\n\n"
-                await asyncio.sleep(0.01)
+                    from app.modules.orchestrator.dynamic_orchestrator import dynamic_orchestrator
 
-            # Mark completed
-            await checkpoint_service.mark_completed(project_id)
+                    async for event in dynamic_orchestrator.resume_workflow(
+                        project_id=project_id,
+                        resume_info=resume_info,
+                        checkpoint_service=checkpoint_service
+                    ):
+                        yield f"data: {json.dumps(event)}\n\n"
+                        await asyncio.sleep(0.01)
 
-            yield f"data: {json.dumps({'type': 'resume_completed', 'data': {'project_id': project_id, 'message': 'Project generation completed successfully'}})}\n\n"
+                    await checkpoint_service.mark_completed(project_id)
+
+                    yield f"data: {json.dumps({'type': 'files_completed', 'data': {'project_id': project_id, 'message': 'All files generated'}})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'info', 'data': {'message': 'No checkpoint found, checking file status...'}})}\n\n"
+
+            # Re-check files after generation
+            files_complete_now, _, _ = await check_files_complete(db, project_id)
+
+            # PHASE 2: Generate documents if files are complete
+            if files_complete_now or files_complete:
+                # Update project status to PARTIAL_COMPLETED if not already
+                project_result = await db.execute(
+                    select(Project).where(Project.id == project_id)
+                )
+                project = project_result.scalar_one_or_none()
+
+                if project and project.status == ProjectStatus.PROCESSING:
+                    project.status = ProjectStatus.PARTIAL_COMPLETED
+                    await db.commit()
+                    logger.info(f"[SmartResume] Updated project {project_id} to PARTIAL_COMPLETED")
+
+                # Get fresh list of pending documents
+                pending_docs_now = await get_pending_documents(db, project_id)
+
+                if pending_docs_now:
+                    yield f"data: {json.dumps({'type': 'documents_starting', 'data': {'project_id': project_id, 'pending_count': len(pending_docs_now), 'documents': [d['name'] for d in pending_docs_now]}})}\n\n"
+
+                    # Import document generator
+                    from app.modules.agents.chunked_document_agent import chunked_document_agent, DocumentType
+
+                    # Map string keys to DocumentType enum
+                    doc_type_map = {
+                        "report": DocumentType.REPORT,
+                        "srs": DocumentType.SRS,
+                        "ppt": DocumentType.PPT,
+                        "viva": DocumentType.VIVA_QA,
+                    }
+
+                    for doc_info in pending_docs_now:
+                        doc_key = doc_info["key"]
+                        doc_name = doc_info["name"]
+
+                        yield f"data: {json.dumps({'type': 'document_start', 'data': {'document': doc_name, 'key': doc_key}})}\n\n"
+
+                        try:
+                            doc_type_enum = doc_type_map.get(doc_key)
+                            if doc_type_enum:
+                                async for event in chunked_document_agent.generate_document_streaming(
+                                    project_id=project_id,
+                                    doc_type=doc_type_enum,
+                                    db=db
+                                ):
+                                    yield f"data: {json.dumps(event)}\n\n"
+                                    await asyncio.sleep(0.01)
+
+                                yield f"data: {json.dumps({'type': 'document_complete', 'data': {'document': doc_name, 'key': doc_key}})}\n\n"
+                        except Exception as doc_err:
+                            logger.error(f"[SmartResume] Document generation error for {doc_key}: {doc_err}")
+                            yield f"data: {json.dumps({'type': 'document_error', 'data': {'document': doc_name, 'error': str(doc_err)}})}\n\n"
+
+                    # Check if all documents are now generated
+                    final_pending = await get_pending_documents(db, project_id)
+                    if not final_pending and project:
+                        project.status = ProjectStatus.COMPLETED
+                        from datetime import datetime
+                        project.completed_at = datetime.utcnow()
+                        await db.commit()
+                        logger.info(f"[SmartResume] Project {project_id} marked as COMPLETED")
+
+                    yield f"data: {json.dumps({'type': 'all_documents_completed', 'data': {'project_id': project_id}})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'info', 'data': {'message': 'All documents already generated'}})}\n\n"
+
+            yield f"data: {json.dumps({'type': 'resume_completed', 'data': {'project_id': project_id, 'message': 'Project fully completed'}})}\n\n"
 
         except asyncio.CancelledError:
             # Client disconnected
-            await checkpoint_service.mark_interrupted(project_id, "Client disconnected during resume")
-            logger.warning(f"[Resume] Client disconnected during resume of {project_id}")
+            logger.warning(f"[SmartResume] Client disconnected during resume of {project_id}")
             raise
 
         except Exception as e:
-            logger.error(f"[Resume] Error resuming project {project_id}: {e}", exc_info=True)
-            await checkpoint_service.update_step(
-                project_id,
-                checkpoint.get("current_step", "unknown"),
-                CheckpointStatus.FAILED,
-                error=str(e)
-            )
-            yield f"data: {json.dumps({'type': 'error', 'data': {'error': str(e), 'can_retry': await checkpoint_service.can_resume(project_id)}})}\n\n"
+            logger.error(f"[SmartResume] Error resuming project {project_id}: {e}", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'data': {'error': str(e)}})}\n\n"
 
     return StreamingResponse(
-        resume_generator(),
+        smart_resume_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

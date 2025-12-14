@@ -16,7 +16,7 @@ from app.schemas.project import (
     ProjectListResponse
 )
 from app.modules.auth.dependencies import get_current_user, get_user_project, get_user_project_with_db
-from app.modules.auth.usage_limits import check_project_limit, check_project_generation_allowed, UsageLimitCheck
+from app.modules.auth.usage_limits import check_project_limit, check_project_generation_allowed
 from app.services.project_service import ProjectService
 from app.core.logging_config import logger
 
@@ -82,8 +82,7 @@ async def create_project(
     project_data: ProjectCreate,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-    limit_check: UsageLimitCheck = Depends(check_project_generation_allowed)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Create new project.
@@ -95,9 +94,8 @@ async def create_project(
     - Free: 0 projects (demo only)
     - Premium: 2 projects
     """
-    # limit_check dependency ensures:
-    # 1. User's plan has project_generation feature enabled
-    # 2. User hasn't exceeded their project limit
+    # Check project generation limits
+    limit_check = await check_project_generation_allowed(current_user, db)
     logger.info(f"Project limit check passed: {limit_check.message}")
 
     # Get or create default workspace for user
@@ -404,11 +402,11 @@ async def get_project_metadata(
     from sqlalchemy import cast, String
     import hashlib
 
-    # Get project
+    # Get project - cast IDs to string for comparison (handles UUID/VARCHAR mismatch)
     result = await db.execute(
         select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id
+            cast(Project.id, String(36)) == str(project_id),
+            cast(Project.user_id, String(36)) == str(current_user.id)
         )
     )
     project = result.scalar_one_or_none()
@@ -799,6 +797,37 @@ async def delete_file(
         )
 
     return {"message": f"File deleted: {file_path}"}
+
+
+@router.post("/{project_id}/sanitize-files")
+async def sanitize_project_files(
+    project_db: tuple = Depends(get_user_project_with_db)
+):
+    """
+    Sanitize all files in a project by removing empty first lines.
+    """
+    project, db = project_db
+    service = ProjectService(db)
+    files = await service.get_project_files(project.id)
+
+    fixed_count = 0
+    for file_meta in files:
+        if file_meta.get('is_folder', False):
+            continue
+
+        file_path = file_meta['path']
+        content = await service.get_file_content(project.id, file_path)
+
+        if content:
+            original = content
+            sanitized = content.lstrip('\n').rstrip() + '\n'
+
+            if sanitized != original:
+                await service.save_file(project.id, file_path, sanitized)
+                fixed_count += 1
+                logger.info(f"Sanitized: {file_path}")
+
+    return {"success": True, "files_fixed": fixed_count}
 
 
 @router.get("/{project_id}/load")
@@ -1453,11 +1482,12 @@ async def get_project_messages(
     from uuid import UUID
 
     try:
-        # Verify project belongs to user
+        # Verify project belongs to user - cast IDs to string for comparison
+        from sqlalchemy import cast, String
         result = await db.execute(
             select(Project).where(
-                Project.id == project_id,
-                Project.user_id == current_user.id
+                cast(Project.id, String(36)) == str(project_id),
+                cast(Project.user_id, String(36)) == str(current_user.id)
             )
         )
         project = result.scalar_one_or_none()

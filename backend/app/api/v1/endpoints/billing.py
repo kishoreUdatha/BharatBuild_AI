@@ -1178,7 +1178,8 @@ async def upgrade_subscription(
 
 @router.get("/limits")
 async def get_usage_limits(
-    limits: dict = Depends(check_all_limits)
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get comprehensive usage limits status.
@@ -1194,9 +1195,13 @@ async def get_usage_limits(
     - Checking before starting expensive operations
     - Displaying upgrade prompts when near limits
     """
+    limits = await check_all_limits(current_user, db)
     return {
         "success": True,
-        **limits
+        "allowed": limits.allowed,
+        "reason": limits.reason,
+        "current_usage": limits.current_usage,
+        "limit": limits.limit
     }
 
 

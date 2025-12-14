@@ -112,10 +112,16 @@ export function useGenerationProgress(projectId: string | null) {
       if (response.ok) {
         const fileData = await response.json()
         const projectStore = useProjectStore.getState()
+        const ext = filePath.split('.').pop()?.toLowerCase() || ''
+        const langMap: Record<string, string> = {
+          'ts': 'typescript', 'tsx': 'typescript', 'js': 'javascript', 'jsx': 'javascript',
+          'py': 'python', 'css': 'css', 'html': 'html', 'json': 'json', 'md': 'markdown'
+        }
         projectStore.addFile({
           path: filePath,
           content: fileData.content || '',
-          type: 'file'
+          type: 'file',
+          language: langMap[ext] || ext || 'text'
         })
         console.log(`[Progress] Synced file from server: ${filePath}`)
       }
