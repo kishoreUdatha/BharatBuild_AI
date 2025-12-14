@@ -104,3 +104,7 @@ lpt[1-9]
 .terraform.lock.hcl
 errored.tfstate
 
+# Generated project files
+backend/checkpoints/
+backend/C:/
+
