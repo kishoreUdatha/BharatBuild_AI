@@ -417,7 +417,7 @@ class BoltStreamingBuffer:
 
                 files.append({
                     "path": path.strip(),
-                    "content": content
+                    "content": content.strip('\n')
                 })
                 logger.info(f"[Bolt Buffer] [OK] Extracted: {path}")
 
@@ -3162,7 +3162,8 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
                         partial_content = partial_buffer[content_start:] if content_start > 0 else ""
 
                         if partial_content.strip():
-                            salvaged_content = f"// WARNING: This file may be incomplete\n{partial_content}"
+                            cleaned_content = partial_content.strip('\n')
+                            salvaged_content = f"// WARNING: This file may be incomplete\n{cleaned_content}"
                             await self.save_file(
                                 project_id=context.project_id,
                                 file_path=partial_path,
@@ -3309,7 +3310,8 @@ Stream code in chunks for real-time display.
                         if partial_content.strip():
                             logger.info(f"[Streaming Buffer] Salvaging partial file: {partial_path}")
                             # Save partial file with warning comment
-                            salvaged_content = f"// WARNING: This file may be incomplete due to stream interruption\n{partial_content}"
+                            cleaned_content = partial_content.strip('\n')
+                            salvaged_content = f"// WARNING: This file may be incomplete due to stream interruption\n{cleaned_content}"
                             await self.file_manager.create_file(
                                 project_id=context.project_id,
                                 file_path=partial_path,

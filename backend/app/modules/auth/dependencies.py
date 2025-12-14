@@ -151,13 +151,52 @@ async def get_current_faculty(
 def get_optional_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> Optional[str]:
-    """Get current user (optional)"""
+    """Get current user ID (optional)"""
     if not credentials:
         return None
 
     token = credentials.credentials
     payload = decode_token(token)
     return payload.get("sub")
+
+
+async def get_current_user_optional(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: AsyncSession = Depends(get_db)
+) -> Optional[User]:
+    """Get current authenticated user (optional - returns None if not authenticated)"""
+    if not credentials:
+        return None
+
+    try:
+        token = credentials.credentials
+        payload = decode_token(token)
+
+        if payload.get("type") != "access":
+            return None
+
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+
+        # Validate user_id is a valid UUID format
+        try:
+            uuid.UUID(user_id)
+        except ValueError:
+            return None
+
+        # Get user from database
+        result = await db.execute(
+            select(User).where(User.id == user_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user or not user.is_active:
+            return None
+
+        return user
+    except Exception:
+        return None
 
 
 async def get_current_user_from_token(

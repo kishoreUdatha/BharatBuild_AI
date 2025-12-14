@@ -120,9 +120,9 @@ class TokenUsage(Base):
         return f"<TokenUsage {self.date}>"
 
 
-class TokenTransaction(Base):
+class TokenUsageLog(Base):
     """
-    Detailed token transaction log for granular tracking.
+    Detailed token usage log for granular API call tracking.
 
     Tracks every Claude API call with:
     - User and project context
@@ -136,16 +136,19 @@ class TokenTransaction(Base):
     - Agent-level cost analysis
     - Billing and invoicing
     - Optimization insights
+
+    Note: This is separate from TokenTransaction in token_balance.py
+    which tracks balance changes (purchases, refunds, etc.)
     """
-    __tablename__ = "token_transactions"
+    __tablename__ = "token_usage_logs"
 
     # Indexes for common queries
     __table_args__ = (
-        Index('ix_token_tx_user_id', 'user_id'),
-        Index('ix_token_tx_project_id', 'project_id'),
-        Index('ix_token_tx_created_at', 'created_at'),
-        Index('ix_token_tx_user_project', 'user_id', 'project_id'),
-        Index('ix_token_tx_user_date', 'user_id', 'created_at'),
+        Index('ix_token_usage_log_user_id', 'user_id'),
+        Index('ix_token_usage_log_project_id', 'project_id'),
+        Index('ix_token_usage_log_created_at', 'created_at'),
+        Index('ix_token_usage_log_user_project', 'user_id', 'project_id'),
+        Index('ix_token_usage_log_user_date', 'user_id', 'created_at'),
     )
 
     id = Column(GUID, primary_key=True, default=generate_uuid)
@@ -172,17 +175,17 @@ class TokenTransaction(Base):
     # Additional context
     file_path = Column(String(500), nullable=True)  # For file generation operations
     error_message = Column(Text, nullable=True)  # For error fixing operations
-    metadata = Column(JSON, nullable=True)  # Extra info (prompt length, response quality, etc.)
+    extra_data = Column(JSON, nullable=True)  # Extra info (prompt length, response quality, etc.)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
-    user = relationship("User", backref="token_transactions")
-    project = relationship("Project", backref="token_transactions")
+    user = relationship("User", backref="token_usage_logs")
+    project = relationship("Project", backref="token_usage_logs")
 
     def __repr__(self):
-        return f"<TokenTransaction {self.agent_type.value}:{self.operation.value} {self.total_tokens} tokens>"
+        return f"<TokenUsageLog {self.agent_type.value}:{self.operation.value} {self.total_tokens} tokens>"
 
     @classmethod
     def calculate_cost_paise(cls, input_tokens: int, output_tokens: int, model: str) -> int:

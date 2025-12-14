@@ -498,13 +498,30 @@ I'll keep trying to help!`)
         }
     }
 
-    // 5. Extract project name from prompt and update project (only for GENERATE intent)
+    // 5. Ensure project exists before streaming (CRITICAL for file tree to work)
+    // This handles the case where user has no existing project
+    if (!projectStore.currentProject) {
+      const newProjectId = `project-${Date.now()}`
+      const extractedName = extractProjectName(content) || 'New Project'
+      projectStore.setCurrentProject({
+        id: newProjectId,
+        name: extractedName,
+        files: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        isSynced: false
+      })
+      console.log(`[useChat] Created new project for generation: ${newProjectId} (${extractedName})`)
+    }
+
+    // 6. Extract project name from prompt and update project (only for GENERATE intent)
     if (classification.intent === 'GENERATE' &&
         projectStore.currentProject &&
         (projectStore.currentProject.name === 'My Project' ||
+         projectStore.currentProject.name === 'New Project' ||
          projectStore.currentProject.files.length === 0)) {
       const extractedName = extractProjectName(content)
-      if (extractedName && extractedName !== 'My Project') {
+      if (extractedName && extractedName !== 'My Project' && extractedName !== 'New Project') {
         updateProject({ name: extractedName })
         console.log('[useChat] Updated project name to:', extractedName)
       }
@@ -813,15 +830,40 @@ I'll keep trying to help!`)
               const contentData = event.data || event
               const contentPath = contentData.path || event.path
               const contentChunk = contentData.content || event.content
+              const contentStatus = contentData.status || event.status
               if (contentChunk && contentPath) {
                 // DON'T append to chat message - stream to Monaco editor instead!
                 const projectStore = useProjectStore.getState()
                 const currentFile = findFileInProject(projectStore.currentProject?.files || [], contentPath)
+                const language = getLanguageFromPath(contentPath)
 
                 if (currentFile) {
-                  // Append chunk to file content (this creates the "typing" effect in Monaco)
-                  const newContent = (currentFile.content || '') + contentChunk
-                  projectStore.updateFile(contentPath, newContent)
+                  // If status is "complete", replace content entirely (final file)
+                  // Otherwise, append chunk to file content (streaming "typing" effect)
+                  if (contentStatus === 'complete') {
+                    projectStore.updateFile(contentPath, contentChunk)
+                  } else {
+                    const newContent = (currentFile.content || '') + contentChunk
+                    projectStore.updateFile(contentPath, newContent)
+                  }
+                } else {
+                  // File doesn't exist yet - CREATE it with the content
+                  // This handles cases where file_start wasn't sent first
+                  console.log('[file_content] Creating new file:', contentPath)
+                  projectStore.addFile({
+                    path: contentPath,
+                    content: contentChunk,
+                    language,
+                    type: 'file'
+                  })
+
+                  // Auto-open newly created file in tab
+                  projectStore.openTab({
+                    path: contentPath,
+                    content: contentChunk,
+                    language,
+                    type: 'file'
+                  })
                 }
               }
               break
@@ -834,9 +876,10 @@ I'll keep trying to help!`)
               const opType = fileOp.operation || event.operation
               const opStatus = fileOp.operation_status || event.operation_status
               const opPath = fileOp.path || event.path || ''
-              const opContent = fileOp.file_content ?? event.file_content
+              // Backend may send content as file_content OR content
+              const opContent = fileOp.file_content ?? fileOp.content ?? event.file_content ?? event.content
 
-              console.log('[file_operation] Received:', { opType, opStatus, opPath, hasContent: opContent !== undefined })
+              console.log('[file_operation] Received:', { opType, opStatus, opPath, hasContent: opContent !== undefined, contentLength: typeof opContent === 'string' ? opContent.length : 0 })
 
               if (opType === 'create') {
                 if (opStatus === 'in_progress') {
@@ -846,11 +889,27 @@ I'll keep trying to help!`)
                     status: 'in-progress',
                     description: `Creating ${opPath}`
                   })
-                } else if (opStatus === 'complete' && opContent !== undefined) {
+
+                  // Also create empty file in store to show in file tree immediately
+                  const projectStoreForProgress = useProjectStore.getState()
+                  const langForProgress = getLanguageFromPath(opPath)
+                  const existingFileForProgress = findFileInProject(projectStoreForProgress.currentProject?.files || [], opPath)
+                  if (!existingFileForProgress) {
+                    console.log('[file_operation] Creating placeholder file for in-progress:', opPath)
+                    projectStoreForProgress.addFile({
+                      path: opPath,
+                      content: '', // Empty until content arrives
+                      language: langForProgress,
+                      type: 'file'
+                    })
+                  }
+                } else if (opStatus === 'complete') {
+                  // Accept both with content and without (empty files are valid)
+                  const fileContent = opContent ?? '' // Default to empty string if no content
                   // Mark file operation as complete
                   updateFileOperation(aiMessageId, opPath, {
                     status: 'complete',
-                    content: opContent
+                    content: fileContent
                   })
 
                   // Add file to project store with actual content from backend
@@ -862,18 +921,18 @@ I'll keep trying to help!`)
 
                   if (existingFile) {
                     // Update existing file with new content
-                    projectStore.updateFile(opPath, opContent)
-                    console.log('[file_operation] Updated existing file:', opPath)
+                    projectStore.updateFile(opPath, fileContent)
+                    console.log('[file_operation] Updated existing file:', opPath, 'length:', fileContent.length)
                   } else {
                     // Create new file with content from backend
                     const newFile = {
                       path: opPath,
-                      content: opContent,
+                      content: fileContent,
                       language,
                       type: 'file' as const
                     }
                     projectStore.addFile(newFile)
-                    console.log('[file_operation] Created new file:', opPath)
+                    console.log('[file_operation] Created new file:', opPath, 'length:', fileContent.length)
 
                     // Auto-open newly created file in tab
                     projectStore.openTab(newFile)
@@ -1015,7 +1074,9 @@ I'll keep trying to help!`)
               // NOTE: Backend sends data nested inside event.data
               const completeData = event.data || event
               const completePath = completeData.path || event.path
-              const completeContent = completeData.full_content || event.full_content
+              // Backend may send content as full_content, file_content, or content
+              const completeContent = completeData.full_content || completeData.file_content || completeData.content || event.full_content || event.file_content || event.content
+              console.log('[file_complete] Received:', { completePath, hasContent: !!completeContent, contentLength: completeContent?.length || 0 })
               if (completePath && completeContent) {
                 updateFileOperation(aiMessageId, completePath, {
                   status: 'complete',
@@ -1063,7 +1124,7 @@ I'll keep trying to help!`)
               // Update the message with upgrade info
               updateMessage(aiMessageId, {
                 content: `🔒 **FREE Plan Limit Reached**\n\nYou've generated ${upgradeData.files_generated || 3} preview files.\n\n${upgradeData.upgrade_message || 'Upgrade to Premium to generate the complete project with all files, bug fixing, and documentation.'}\n\n[👉 Upgrade to Premium](/pricing)`,
-                isComplete: true
+                status: 'complete'
               })
 
               // Show alert and redirect to pricing

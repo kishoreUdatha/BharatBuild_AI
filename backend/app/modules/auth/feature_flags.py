@@ -13,7 +13,8 @@ from sqlalchemy import select, and_
 from typing import Optional
 
 from app.core.database import get_db
-from app.models import User, SystemSetting
+from app.models.user import User
+from app.models.system_setting import SystemSetting
 from app.models.billing import Plan, Subscription, SubscriptionStatus
 from app.modules.auth.dependencies import get_current_user
 

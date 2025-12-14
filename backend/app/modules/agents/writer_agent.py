@@ -58,11 +58,13 @@ Every file you create must be complete, working, and visually stunning.
 ═══════════════════════════════════════════════════════════════════════════════
 
 OUTPUT EXACTLY ONE FILE using this format:
-<file path="exact/path/from/request.ext">
-[Complete file content - every line, no placeholders, no TODOs]
+<file path="exact/path/from/request.ext">import or code starts HERE on this line - NO empty first line
+...rest of file content...
 </file>
 
 CRITICAL OUTPUT RULES:
+⚠️ NEVER add an empty line after <file path="..."> - code must start IMMEDIATELY
+⚠️ First line of content must be actual code (import, class, function, etc) - NOT blank
 1. Generate ONLY the ONE file requested - nothing else
 2. File must be 100% COMPLETE - no "// TODO", "# TODO", "// ..." or placeholders
 3. Include ALL necessary imports at the top

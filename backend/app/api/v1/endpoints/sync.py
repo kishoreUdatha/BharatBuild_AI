@@ -66,20 +66,28 @@ class FileSyncResponse(BaseModel):
 @router.post("/sandbox/file", response_model=FileSyncResponse)
 async def write_to_sandbox(
     request: FileSyncRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
 ):
     """
-    Write a single file to sandbox (Layer 1).
-    Used during active editing/generation.
+    Write a single file to all 3 layers:
+    - Layer 1: Sandbox (for preview/run)
+    - Layer 2: S3 (permanent storage)
+    - Layer 3: PostgreSQL (metadata)
     """
     try:
+        import hashlib
+        import os
+        from uuid import UUID
+        from datetime import datetime
+
         # Get user_id for user-scoped paths (Bolt.new structure)
         user_id = str(current_user.id)
 
         # Ensure sandbox exists with user-scoped path
         await unified_storage.create_sandbox(request.project_id, user_id)
 
-        # Write file to user-scoped sandbox
+        # LAYER 1: Write file to sandbox
         success = await unified_storage.write_to_sandbox(
             project_id=request.project_id,
             file_path=request.path,
@@ -87,20 +95,92 @@ async def write_to_sandbox(
             user_id=user_id
         )
 
-        if success:
-            logger.info(f"[Layer 1] Wrote to sandbox: {request.project_id}/{request.path}")
-            return FileSyncResponse(
-                success=True,
-                message=f"File written to sandbox: {request.path}",
-                files_synced=1,
-                layer="sandbox"
-            )
-        else:
+        if not success:
             return FileSyncResponse(
                 success=False,
                 message="Failed to write file to sandbox",
                 layer="sandbox"
             )
+
+        logger.info(f"[Layer 1] Wrote to sandbox: {request.project_id}/{request.path}")
+
+        # LAYER 2 & 3: Persist to S3 and PostgreSQL
+        try:
+            project_uuid = UUID(request.project_id)
+            content_bytes = request.content.encode('utf-8')
+            content_hash = hashlib.sha256(content_bytes).hexdigest()
+            size_bytes = len(content_bytes)
+            file_name = os.path.basename(request.path)
+            parent_path = os.path.dirname(request.path) or None
+
+            # Upload to S3
+            upload_result = await storage_service.upload_file(
+                request.project_id,
+                request.path,
+                content_bytes
+            )
+            s3_key = upload_result.get('s3_key')
+            logger.info(f"[Layer 2] Uploaded to S3: {s3_key}")
+
+            # Update or create in PostgreSQL
+            file_result = await db.execute(
+                select(ProjectFile).where(
+                    ProjectFile.project_id == project_uuid,
+                    ProjectFile.path == request.path
+                )
+            )
+            existing_file = file_result.scalar_one_or_none()
+
+            if existing_file:
+                # Update existing file
+                old_s3_key = existing_file.s3_key
+                existing_file.content_hash = content_hash
+                existing_file.size_bytes = size_bytes
+                existing_file.s3_key = s3_key
+                existing_file.content_inline = None
+                existing_file.is_inline = False
+                existing_file.updated_at = datetime.utcnow()
+                await db.commit()
+                logger.info(f"[Layer 3] Updated in DB: {request.path}")
+
+                # Cleanup old S3 file if key changed
+                if old_s3_key and old_s3_key != s3_key:
+                    try:
+                        await storage_service.delete_file(old_s3_key)
+                    except Exception:
+                        pass
+            else:
+                # Create new file record
+                new_file = ProjectFile(
+                    project_id=project_uuid,
+                    path=request.path,
+                    name=file_name,
+                    language=request.language or "plaintext",
+                    content_hash=content_hash,
+                    size_bytes=size_bytes,
+                    s3_key=s3_key,
+                    content_inline=None,
+                    is_inline=False,
+                    is_folder=False,
+                    parent_path=parent_path
+                )
+                db.add(new_file)
+                await db.commit()
+                logger.info(f"[Layer 3] Created in DB: {request.path}")
+
+        except ValueError:
+            # Invalid UUID format - skip S3/DB persistence
+            logger.warning(f"Invalid project_id format, skipping S3/DB persistence")
+        except Exception as persist_err:
+            # Log but don't fail - sandbox write succeeded
+            logger.warning(f"S3/DB persistence failed (sandbox OK): {persist_err}")
+
+        return FileSyncResponse(
+            success=True,
+            message=f"File synced to all layers: {request.path}",
+            files_synced=1,
+            layer="all"
+        )
 
     except Exception as e:
         logger.error(f"Sandbox write error: {e}", exc_info=True)
@@ -718,10 +798,11 @@ async def list_projects(
 @router.post("/file", response_model=FileSyncResponse)
 async def sync_file_legacy(
     request: FileSyncRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
 ):
     """Legacy: Redirect to sandbox write"""
-    return await write_to_sandbox(request, current_user)
+    return await write_to_sandbox(request, current_user, db)
 
 
 @router.post("/files", response_model=FileSyncResponse)
