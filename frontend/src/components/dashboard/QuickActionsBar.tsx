@@ -21,7 +21,7 @@ export function QuickActionsBar({ onCreateProject }: QuickActionsBarProps) {
       icon: Plus,
       label: 'New Project',
       description: 'Create a new project',
-      onClick: () => onCreateProject ? onCreateProject() : router.push('/bolt'),
+      onClick: () => onCreateProject ? onCreateProject() : router.push('/build'),
       primary: true
     },
     {
@@ -34,7 +34,7 @@ export function QuickActionsBar({ onCreateProject }: QuickActionsBarProps) {
       icon: Sparkles,
       label: 'AI Workspace',
       description: 'Open AI-powered IDE',
-      onClick: () => router.push('/bolt')
+      onClick: () => router.push('/build')
     },
     {
       icon: Coins,

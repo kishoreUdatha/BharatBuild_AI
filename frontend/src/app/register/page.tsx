@@ -92,7 +92,7 @@ export default function RegisterPage() {
       localStorage.setItem('refresh_token', loginResponse.refresh_token)
 
       // Redirect to bolt
-      router.push('/bolt')
+      router.push('/build')
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Registration failed. Please try again.')
     } finally {

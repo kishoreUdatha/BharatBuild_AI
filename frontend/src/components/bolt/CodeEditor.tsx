@@ -1,14 +1,16 @@
 'use client'
 
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useState } from 'react'
 import Editor from '@monaco-editor/react'
 import { useProject } from '@/hooks/useProject'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { CodeTabs } from './CodeTabs'
-import { monacoTheme } from '@/utils/editorThemes'
+import { monacoThemeDark, monacoThemeLight } from '@/utils/editorThemes'
 import { Code2, Cloud, CloudOff, Loader2 } from 'lucide-react'
 
 export function CodeEditor() {
+  // Theme state
+  const [editorTheme, setEditorTheme] = useState<'bharatbuild-dark' | 'bharatbuild-light'>('bharatbuild-dark')
   // Direct store access (like your example)
   const {
     selectedFile: activeFile,
@@ -43,10 +45,38 @@ export function CodeEditor() {
     }
   }, [activeFile, updateFile, currentProject?.id, scheduleSync])
 
-  // Load custom theme
+  // Load custom themes
   const handleEditorWillMount = (monaco: any) => {
-    monaco.editor.defineTheme('bharatbuild', monacoTheme)
+    monaco.editor.defineTheme('bharatbuild-dark', monacoThemeDark)
+    monaco.editor.defineTheme('bharatbuild-light', monacoThemeLight)
   }
+
+  // Watch for theme changes on document
+  useEffect(() => {
+    const updateTheme = () => {
+      const isDark = document.documentElement.classList.contains('dark')
+      setEditorTheme(isDark ? 'bharatbuild-dark' : 'bharatbuild-light')
+    }
+
+    // Initial check
+    updateTheme()
+
+    // Watch for class changes on documentElement
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.attributeName === 'class') {
+          updateTheme()
+        }
+      })
+    })
+
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class']
+    })
+
+    return () => observer.disconnect()
+  }, [])
 
   // Auto-detect language from file extension
   const getLanguage = (fileName: string): string => {
@@ -196,7 +226,7 @@ export function CodeEditor() {
       <div className="flex-1 overflow-hidden">
         <Editor
           height="100%"
-          theme="bharatbuild"
+          theme={editorTheme}
           language={language}
           value={activeFile.content}
           beforeMount={handleEditorWillMount}

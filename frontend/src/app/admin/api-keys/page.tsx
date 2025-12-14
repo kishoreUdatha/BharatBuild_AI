@@ -278,7 +278,7 @@ export default function AdminApiKeysPage() {
                 currentPage={page}
                 totalPages={totalPages}
                 pageSize={pageSize}
-                totalItems={total}
+                total={total}
                 onPageChange={setPage}
                 onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
               />

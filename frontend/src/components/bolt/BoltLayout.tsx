@@ -31,12 +31,21 @@ import {
   Maximize2,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
   ListTodo,
   Home,
   Layers,
   Crown,
   RefreshCw,
   AlertCircle,
+  LogOut,
+  User,
+  HelpCircle,
+  CreditCard,
+  Sun,
+  Moon,
+  Monitor,
+  Check,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useTerminal } from '@/hooks/useTerminal'
@@ -44,6 +53,7 @@ import { Message, useChatStore } from '@/store/chatStore'
 import { useVersionControl } from '@/services/versionControl/historyManager'
 import { exportProjectAsZip } from '@/services/project/exportService'
 import { useProject } from '@/hooks/useProject'
+import { useAuth } from '@/hooks/useAuth'
 import { useProjectStore } from '@/store/projectStore'
 import { usePlanStatus } from '@/hooks/usePlanStatus'
 // import { useConnectionHealth } from '@/hooks/useConnectionHealth' // Disabled - was causing header blinking
@@ -88,7 +98,12 @@ export function BoltLayout({
   onGenerateProject,
 }: BoltLayoutProps) {
   const router = useRouter()
+  const { user, logout } = useAuth()
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
+  const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false)
+  const [theme, setTheme] = useState<'dark' | 'light' | 'system'>('dark')
+  const userMenuRef = useRef<HTMLDivElement>(null)
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null)
   const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview')
   const [isPlanViewVisible, setIsPlanViewVisible] = useState(true)
@@ -111,6 +126,49 @@ export function BoltLayout({
     checkMobile()
     window.addEventListener('resize', checkMobile)
     return () => window.removeEventListener('resize', checkMobile)
+  }, [])
+
+  // Close user menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+        setIsUserMenuOpen(false)
+        setIsThemeMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  // Handle theme change
+  const handleThemeChange = (newTheme: 'dark' | 'light' | 'system') => {
+    setTheme(newTheme)
+    // Apply theme to document
+    if (newTheme === 'system') {
+      const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      document.documentElement.classList.toggle('dark', systemTheme === 'dark')
+    } else {
+      document.documentElement.classList.toggle('dark', newTheme === 'dark')
+    }
+    localStorage.setItem('theme', newTheme)
+  }
+
+  // Initialize theme on mount
+  useEffect(() => {
+    const savedTheme = localStorage.getItem('theme') as 'dark' | 'light' | 'system' | null
+    if (savedTheme) {
+      setTheme(savedTheme)
+      if (savedTheme === 'system') {
+        const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        document.documentElement.classList.toggle('dark', systemTheme === 'dark')
+      } else {
+        document.documentElement.classList.toggle('dark', savedTheme === 'dark')
+      }
+    } else {
+      // Default to dark theme
+      document.documentElement.classList.add('dark')
+      localStorage.setItem('theme', 'dark')
+    }
   }, [])
 
   // Resizable panel states - thin like border lines
@@ -256,10 +314,17 @@ export function BoltLayout({
               // Handle file_complete events to update the UI
               if (event.type === 'file_complete' && event.data?.path) {
                 const projectStore = useProjectStore.getState()
+                const filePath = event.data.path
+                const ext = filePath.split('.').pop()?.toLowerCase() || ''
+                const langMap: Record<string, string> = {
+                  'ts': 'typescript', 'tsx': 'typescript', 'js': 'javascript', 'jsx': 'javascript',
+                  'py': 'python', 'css': 'css', 'html': 'html', 'json': 'json', 'md': 'markdown'
+                }
                 projectStore.addFile({
-                  path: event.data.path,
+                  path: filePath,
                   content: event.data.full_content || '',
-                  type: 'file'
+                  type: 'file',
+                  language: langMap[ext] || ext || 'text'
                 })
               }
 
@@ -536,7 +601,7 @@ export function BoltLayout({
   }, [files.length])
 
   return (
-    <div className="h-screen flex flex-col bg-[hsl(var(--bolt-bg-primary))]">
+    <div className="h-screen w-screen flex flex-col bg-[hsl(var(--bolt-bg-primary))] overflow-hidden">
       {/* Reconnection Banner */}
       <ReconnectionBanner
         projectId={currentProject?.id}
@@ -547,7 +612,7 @@ export function BoltLayout({
       />
 
       {/* Top Header - Responsive */}
-      <div className="flex items-center justify-between px-3 md:px-6 py-2 md:py-3 border-b border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))]">
+      <div className="flex items-center justify-between px-3 md:px-6 py-2 md:py-3 border-b border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))] flex-shrink-0 overflow-x-auto">
         <div className="flex items-center gap-2 md:gap-3">
           {/* Home Button */}
           <a
@@ -608,7 +673,7 @@ export function BoltLayout({
 
         <div className="flex items-center gap-2">
           {/* Code & Preview Buttons - Hidden on mobile (use mobile switcher instead) */}
-          <div className="hidden md:flex items-center gap-1 mr-4" style={{ marginRight: '480px' }}>
+          <div className="hidden md:flex items-center gap-1 mr-4">
             <button
               onClick={() => {
                 setActiveTab('code')
@@ -757,20 +822,142 @@ export function BoltLayout({
             )}
           </div>
 
-          {/* Token Balance - Hidden on mobile */}
-          <div className="hidden sm:flex items-center gap-2 px-3 md:px-4 py-1.5 rounded-lg bg-[hsl(var(--bolt-bg-tertiary))] border border-[hsl(var(--bolt-border))]">
-            <Sparkles className="w-4 h-4 text-[hsl(var(--bolt-accent))]" />
-            <span className="text-xs md:text-sm font-medium text-[hsl(var(--bolt-text-primary))]">
-              {tokenBalance.toLocaleString()}
-            </span>
-          </div>
+          {/* User Menu Dropdown */}
+          {user && (
+            <div className="relative" ref={userMenuRef}>
+              {/* User Avatar/Name - Click to open dropdown */}
+              <button
+                onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[hsl(var(--bolt-bg-tertiary))] border border-[hsl(var(--bolt-border))] hover:bg-[hsl(var(--bolt-bg-secondary))] transition-colors"
+              >
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-white text-xs font-bold">
+                  {(user.full_name || user.name || user.email || 'U').charAt(0).toUpperCase()}
+                </div>
+                <span className="hidden sm:block text-xs font-medium text-[hsl(var(--bolt-text-primary))] max-w-[100px] truncate">
+                  {user.full_name || user.name || user.email?.split('@')[0] || 'User'}
+                </span>
+                <ChevronDown className={`w-4 h-4 text-[hsl(var(--bolt-text-secondary))] transition-transform ${isUserMenuOpen ? 'rotate-180' : ''}`} />
+              </button>
 
-          {/* Settings */}
-          <button
-            className="flex items-center justify-center w-8 h-8 rounded-lg text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
+              {/* Dropdown Menu - Fixed position to avoid overflow clipping */}
+              {isUserMenuOpen && (
+                <div
+                  className="fixed w-48 rounded-xl bg-[#1a1a2e] border border-[#2a2a3e] shadow-2xl shadow-black/40 py-1"
+                  style={{
+                    top: (userMenuRef.current?.getBoundingClientRect().bottom || 0) + 8,
+                    right: window.innerWidth - (userMenuRef.current?.getBoundingClientRect().right || 0),
+                    zIndex: 9999
+                  }}
+                >
+                  {/* Menu Items */}
+                  <a
+                    href="/profile"
+                    className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
+                    onClick={() => setIsUserMenuOpen(false)}
+                  >
+                    <Settings className="w-4 h-4" />
+                    Settings
+                  </a>
+                  <a
+                    href="/help"
+                    className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
+                    onClick={() => setIsUserMenuOpen(false)}
+                  >
+                    <HelpCircle className="w-4 h-4" />
+                    Help
+                  </a>
+                  <a
+                    href="/pricing"
+                    className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
+                    onClick={() => setIsUserMenuOpen(false)}
+                  >
+                    <CreditCard className="w-4 h-4" />
+                    Subscription
+                  </a>
+
+                  {/* Theme with Submenu */}
+                  <div className="relative">
+                    <button
+                      onClick={() => setIsThemeMenuOpen(!isThemeMenuOpen)}
+                      className="flex items-center justify-between w-full px-4 py-2.5 text-sm text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        {theme === 'dark' ? <Moon className="w-4 h-4" /> : theme === 'light' ? <Sun className="w-4 h-4" /> : <Monitor className="w-4 h-4" />}
+                        Theme
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-500 capitalize">{theme}</span>
+                        <ChevronRight className="w-4 h-4 text-gray-500 rotate-180" />
+                      </div>
+                    </button>
+
+                    {/* Theme Submenu */}
+                    {isThemeMenuOpen && (
+                      <div
+                        className="absolute right-full top-0 mr-1 w-36 rounded-lg bg-[#1a1a2e] border border-[#2a2a3e] shadow-xl py-1"
+                      >
+                        <button
+                          onClick={() => {
+                            handleThemeChange('dark')
+                            setIsThemeMenuOpen(false)
+                          }}
+                          className={`flex items-center gap-3 w-full px-4 py-2 text-sm transition-colors ${
+                            theme === 'dark' ? 'text-blue-400 bg-blue-500/10' : 'text-gray-300 hover:text-white hover:bg-white/5'
+                          }`}
+                        >
+                          <Moon className="w-4 h-4" />
+                          Dark
+                          {theme === 'dark' && <Check className="w-4 h-4 ml-auto" />}
+                        </button>
+                        <button
+                          onClick={() => {
+                            handleThemeChange('light')
+                            setIsThemeMenuOpen(false)
+                          }}
+                          className={`flex items-center gap-3 w-full px-4 py-2 text-sm transition-colors ${
+                            theme === 'light' ? 'text-blue-400 bg-blue-500/10' : 'text-gray-300 hover:text-white hover:bg-white/5'
+                          }`}
+                        >
+                          <Sun className="w-4 h-4" />
+                          Light
+                          {theme === 'light' && <Check className="w-4 h-4 ml-auto" />}
+                        </button>
+                        <button
+                          onClick={() => {
+                            handleThemeChange('system')
+                            setIsThemeMenuOpen(false)
+                          }}
+                          className={`flex items-center gap-3 w-full px-4 py-2 text-sm transition-colors ${
+                            theme === 'system' ? 'text-blue-400 bg-blue-500/10' : 'text-gray-300 hover:text-white hover:bg-white/5'
+                          }`}
+                        >
+                          <Monitor className="w-4 h-4" />
+                          System
+                          {theme === 'system' && <Check className="w-4 h-4 ml-auto" />}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Divider */}
+                  <div className="my-1 border-t border-[#2a2a3e]" />
+
+                  {/* Sign Out */}
+                  <button
+                    onClick={() => {
+                      setIsUserMenuOpen(false)
+                      setIsThemeMenuOpen(false)
+                      logout()
+                    }}
+                    className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Sign out
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -786,14 +973,14 @@ export function BoltLayout({
           style={!isMobile ? { width: isSidebarOpen ? `${leftPanelWidth}%` : '100%' } : undefined}
         >
           {/* Messages */}
-          <div ref={messagesContainerRef} className="flex-1 overflow-y-auto scrollbar-thin bg-[#0a0a0f]">
+          <div ref={messagesContainerRef} className="flex-1 overflow-y-auto scrollbar-thin bg-[hsl(var(--bolt-bg-primary))]">
             {messages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center px-6">
                 <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center mb-4">
                   <Zap className="w-8 h-8 text-white" />
                 </div>
-                <h2 className="text-xl font-semibold text-white mb-2">Start a conversation</h2>
-                <p className="text-sm text-gray-400 max-w-xs">
+                <h2 className="text-xl font-semibold text-[hsl(var(--bolt-text-primary))] mb-2">Start a conversation</h2>
+                <p className="text-sm text-[hsl(var(--bolt-text-secondary))] max-w-xs">
                   Describe your project and AI will build it for you
                 </p>
               </div>
@@ -810,7 +997,7 @@ export function BoltLayout({
 
                 {/* Generation Progress Panel - Shows during code generation */}
                 {messages.some(m => m.type === 'assistant' && ((m.thinkingSteps?.length ?? 0) > 0 || (m.fileOperations?.length ?? 0) > 0)) && (
-                  <div className="bg-[#0d0d12]">
+                  <div className="bg-[hsl(var(--bolt-bg-secondary))]">
                     {/* Collapsible Header */}
                     <button
                       onClick={() => setIsPlanViewVisible(!isPlanViewVisible)}

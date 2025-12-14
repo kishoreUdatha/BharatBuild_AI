@@ -93,7 +93,7 @@ export default function StudentDashboard() {
   }
 
   const handleCreateProject = () => {
-    router.push('/bolt')
+    router.push('/build')
   }
 
   if (isLoading) {

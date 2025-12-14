@@ -29,7 +29,7 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     // Check if user is admin
     if (!isLoading && user && user.role !== 'admin' && !user.is_superuser) {
-      router.push('/bolt')
+      router.push('/build')
     }
   }, [isLoading, user, router])
 

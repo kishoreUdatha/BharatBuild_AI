@@ -50,7 +50,7 @@ export function DashboardProjectCard({ project, onSelectForDocuments, isSelected
   }
 
   const handleOpen = () => {
-    router.push(`/bolt?project=${project.id}`)
+    router.push(`/build?project=${project.id}`)
   }
 
   return (

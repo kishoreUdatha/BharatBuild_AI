@@ -51,7 +51,7 @@ export function CelebrationScreen() {
           features: selectedFeatures,
           personality: selectedPersonality,
         }))
-        router.push('/bolt')
+        router.push('/build')
         break
       case 'download':
         // Trigger download (would need API integration)
@@ -59,7 +59,7 @@ export function CelebrationScreen() {
         break
       case 'docs':
         // Navigate to docs view
-        router.push('/bolt')
+        router.push('/build')
         break
       case 'new':
         resetAdventure()

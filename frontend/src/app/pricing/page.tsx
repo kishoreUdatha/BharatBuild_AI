@@ -24,7 +24,7 @@ export default function PricingPage() {
       'premium',
       (result) => {
         setSuccessMessage(`Payment successful! You now have access to 1 complete project.`)
-        setTimeout(() => router.push('/bolt'), 2000)
+        setTimeout(() => router.push('/build'), 2000)
       },
       () => {}
     )
@@ -33,9 +33,9 @@ export default function PricingPage() {
   const handleFreeTrial = () => {
     const token = localStorage.getItem('access_token')
     if (!token) {
-      router.push('/login?redirect=/bolt')
+      router.push('/login?redirect=/build')
     } else {
-      router.push('/bolt')
+      router.push('/build')
     }
   }
 
@@ -69,10 +69,10 @@ export default function PricingPage() {
           </Link>
           <nav className="hidden md:flex items-center gap-8">
             <Link href="/" className="text-gray-400 hover:text-white transition-colors">Home</Link>
-            <Link href="/bolt" className="text-gray-400 hover:text-white transition-colors">Build</Link>
+            <Link href="/build" className="text-gray-400 hover:text-white transition-colors">Build</Link>
             <Link href="/pricing" className="text-white font-medium">Pricing</Link>
           </nav>
-          <Link href="/bolt">
+          <Link href="/build">
             <Button className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white shadow-lg shadow-blue-500/25">
               Start Building
             </Button>

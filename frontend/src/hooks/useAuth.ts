@@ -7,6 +7,7 @@ interface User {
   id: string
   email: string
   name?: string
+  full_name?: string
   role?: string
   is_superuser?: boolean
 }
@@ -112,9 +113,11 @@ export function useAuth(): UseAuthReturn {
   const logout = useCallback(() => {
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
+    localStorage.removeItem('user')
+    localStorage.removeItem('theme')
     setIsAuthenticated(false)
     setUser(null)
-    router.push('/login')
+    router.push('/')
   }, [router])
 
   // Check auth on mount

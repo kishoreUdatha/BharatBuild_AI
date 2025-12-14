@@ -42,7 +42,7 @@ export function ChatMessage({
   if (role === 'user') {
     return (
       <div className="py-2 flex justify-end">
-        <p className="text-[15px] leading-relaxed text-white/90 whitespace-pre-wrap text-left max-w-[85%]">
+        <p className="text-[15px] leading-relaxed text-[hsl(var(--bolt-text-primary))]/90 whitespace-pre-wrap text-left max-w-[85%]">
           {content}
         </p>
       </div>
@@ -76,7 +76,7 @@ export function ChatMessage({
             <div className="flex items-center gap-1 mt-3 opacity-0 group-hover:opacity-100 transition-opacity">
               <button
                 onClick={handleCopy}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white/50 hover:text-white/80 hover:bg-white/5 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
               >
                 {copied ? (
                   <>
@@ -94,7 +94,7 @@ export function ChatMessage({
               {onRegenerate && (
                 <button
                   onClick={onRegenerate}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white/50 hover:text-white/80 hover:bg-white/5 transition-colors"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                   <span>Regenerate</span>
@@ -107,7 +107,7 @@ export function ChatMessage({
                   className={`p-1.5 rounded-lg transition-colors ${
                     feedback === 'up'
                       ? 'text-green-400 bg-green-400/10'
-                      : 'text-white/50 hover:text-white/80 hover:bg-white/5'
+                      : 'text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))]'
                   }`}
                 >
                   <ThumbsUp className="w-3.5 h-3.5" />
@@ -117,7 +117,7 @@ export function ChatMessage({
                   className={`p-1.5 rounded-lg transition-colors ${
                     feedback === 'down'
                       ? 'text-red-400 bg-red-400/10'
-                      : 'text-white/50 hover:text-white/80 hover:bg-white/5'
+                      : 'text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))]'
                   }`}
                 >
                   <ThumbsDown className="w-3.5 h-3.5" />
@@ -136,29 +136,29 @@ export function ChatMessage({
  */
 function MarkdownContent({ content, isStreaming }: { content: string; isStreaming: boolean }) {
   return (
-    <div className="text-[15px] leading-relaxed text-white/85">
+    <div className="text-[15px] leading-relaxed text-[hsl(var(--bolt-text-primary))]/85">
       <ReactMarkdown
         components={{
           // Paragraphs - Good spacing
           p: ({ children }) => (
-            <p className="mb-4 last:mb-0 text-white/85">{children}</p>
+            <p className="mb-4 last:mb-0 text-[hsl(var(--bolt-text-primary))]/85">{children}</p>
           ),
 
           // Headings - Bold and distinct
           h1: ({ children }) => (
-            <h1 className="text-xl font-bold mb-4 mt-6 first:mt-0 text-white flex items-center gap-2">
+            <h1 className="text-xl font-bold mb-4 mt-6 first:mt-0 text-[hsl(var(--bolt-text-primary))] flex items-center gap-2">
               <span className="w-1 h-6 bg-gradient-to-b from-violet-500 to-purple-500 rounded-full" />
               {children}
             </h1>
           ),
           h2: ({ children }) => (
-            <h2 className="text-lg font-bold mb-3 mt-5 first:mt-0 text-white flex items-center gap-2">
+            <h2 className="text-lg font-bold mb-3 mt-5 first:mt-0 text-[hsl(var(--bolt-text-primary))] flex items-center gap-2">
               <span className="w-1 h-5 bg-gradient-to-b from-violet-500 to-purple-500 rounded-full" />
               {children}
             </h2>
           ),
           h3: ({ children }) => (
-            <h3 className="text-base font-semibold mb-2 mt-4 first:mt-0 text-white/95">{children}</h3>
+            <h3 className="text-base font-semibold mb-2 mt-4 first:mt-0 text-[hsl(var(--bolt-text-primary))]/95">{children}</h3>
           ),
 
           // Lists - Clean bullet points
@@ -169,7 +169,7 @@ function MarkdownContent({ content, isStreaming }: { content: string; isStreamin
             <ol className="mb-4 space-y-2 list-decimal list-inside last:mb-0">{children}</ol>
           ),
           li: ({ children }) => (
-            <li className="flex items-start gap-2 text-white/80">
+            <li className="flex items-start gap-2 text-[hsl(var(--bolt-text-primary))]/80">
               <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-violet-400 mt-2" />
               <span className="flex-1">{children}</span>
             </li>
@@ -182,7 +182,7 @@ function MarkdownContent({ content, isStreaming }: { content: string; isStreamin
 
             if (isInline) {
               return (
-                <code className="px-1.5 py-0.5 rounded-md bg-violet-500/20 text-violet-300 font-mono text-sm border border-violet-500/20">
+                <code className="px-1.5 py-0.5 rounded-md bg-violet-500/20 text-violet-400 dark:text-violet-300 font-mono text-sm border border-violet-500/20">
                   {children}
                 </code>
               )
@@ -194,7 +194,7 @@ function MarkdownContent({ content, isStreaming }: { content: string; isStreamin
                 <div className="absolute top-3 right-3 opacity-0 group-hover/code:opacity-100 transition-opacity">
                   <button
                     onClick={() => navigator.clipboard.writeText(String(children))}
-                    className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white/60 hover:text-white transition-colors"
+                    className="p-1.5 rounded-lg bg-[hsl(var(--bolt-bg-tertiary))] hover:bg-[hsl(var(--bolt-bg-secondary))] text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors"
                   >
                     <Copy className="w-3.5 h-3.5" />
                   </button>
@@ -203,7 +203,7 @@ function MarkdownContent({ content, isStreaming }: { content: string; isStreamin
                   style={oneDark}
                   language={match[1]}
                   PreTag="div"
-                  className="rounded-xl !bg-[#0d0d12] !mt-0 !mb-0 text-sm border border-white/5"
+                  className="rounded-xl !bg-[hsl(var(--bolt-bg-secondary))] !mt-0 !mb-0 text-sm border border-[hsl(var(--bolt-border))]"
                   {...props}
                 >
                   {String(children).replace(/\n$/, '')}
@@ -214,7 +214,7 @@ function MarkdownContent({ content, isStreaming }: { content: string; isStreamin
 
           // Blockquotes - Styled nicely
           blockquote: ({ children }) => (
-            <blockquote className="border-l-3 border-violet-500 pl-4 my-4 py-2 bg-violet-500/5 rounded-r-lg text-white/70 italic">
+            <blockquote className="border-l-3 border-violet-500 pl-4 my-4 py-2 bg-violet-500/5 rounded-r-lg text-[hsl(var(--bolt-text-secondary))] italic">
               {children}
             </blockquote>
           ),
@@ -225,7 +225,7 @@ function MarkdownContent({ content, isStreaming }: { content: string; isStreamin
               href={href}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-violet-400 hover:text-violet-300 underline underline-offset-2 decoration-violet-400/50 hover:decoration-violet-300"
+              className="text-violet-500 dark:text-violet-400 hover:text-violet-400 dark:hover:text-violet-300 underline underline-offset-2 decoration-violet-400/50 hover:decoration-violet-300"
             >
               {children}
             </a>
@@ -233,34 +233,34 @@ function MarkdownContent({ content, isStreaming }: { content: string; isStreamin
 
           // Strong/Bold
           strong: ({ children }) => (
-            <strong className="font-semibold text-white">{children}</strong>
+            <strong className="font-semibold text-[hsl(var(--bolt-text-primary))]">{children}</strong>
           ),
 
           // Emphasis/Italic
           em: ({ children }) => (
-            <em className="italic text-white/70">{children}</em>
+            <em className="italic text-[hsl(var(--bolt-text-secondary))]">{children}</em>
           ),
 
           // Horizontal rule
           hr: () => (
-            <hr className="my-6 border-white/10" />
+            <hr className="my-6 border-[hsl(var(--bolt-border))]" />
           ),
 
           // Tables
           table: ({ children }) => (
             <div className="overflow-x-auto my-4">
-              <table className="w-full border-collapse border border-white/10 rounded-lg overflow-hidden">
+              <table className="w-full border-collapse border border-[hsl(var(--bolt-border))] rounded-lg overflow-hidden">
                 {children}
               </table>
             </div>
           ),
           th: ({ children }) => (
-            <th className="px-4 py-2 bg-white/5 border border-white/10 text-left font-semibold text-white">
+            <th className="px-4 py-2 bg-[hsl(var(--bolt-bg-tertiary))] border border-[hsl(var(--bolt-border))] text-left font-semibold text-[hsl(var(--bolt-text-primary))]">
               {children}
             </th>
           ),
           td: ({ children }) => (
-            <td className="px-4 py-2 border border-white/10 text-white/80">
+            <td className="px-4 py-2 border border-[hsl(var(--bolt-border))] text-[hsl(var(--bolt-text-primary))]/80">
               {children}
             </td>
           ),
