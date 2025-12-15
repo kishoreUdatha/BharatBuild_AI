@@ -111,3 +111,6 @@ backend/C:/
 
 # Accidental path folders
 backend/C:/
+
+# Generated academic documents
+academic_documents/
