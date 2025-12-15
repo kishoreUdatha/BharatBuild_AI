@@ -116,6 +116,34 @@ export default function RegisterPage() {
       }
     }
 
+    // Validate Academic Details (Step 1) - Required for students
+    if (step === 1 && isStudent) {
+      if (!formData.rollNumber.trim()) {
+        setError('Roll Number is required')
+        return false
+      }
+      if (!formData.collegeName.trim()) {
+        setError('College Name is required')
+        return false
+      }
+      if (!formData.department.trim()) {
+        setError('Department is required')
+        return false
+      }
+      if (!formData.course) {
+        setError('Course is required')
+        return false
+      }
+    }
+
+    // Validate Guide Details (Step 2) - Required for students
+    if (step === 2 && isStudent) {
+      if (!formData.guideName.trim()) {
+        setError('Guide Name is required')
+        return false
+      }
+    }
+
     return true
   }
 
@@ -327,17 +355,19 @@ export default function RegisterPage() {
             <div className="flex items-center gap-2 text-sm text-indigo-600 font-medium mb-2">
               <GraduationCap className="h-4 w-4" />
               Academic Details
+              <span className="text-xs text-gray-500 font-normal ml-auto">* Required</span>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label htmlFor="rollNumber">Roll Number</Label>
+                <Label htmlFor="rollNumber">Roll Number <span className="text-red-500">*</span></Label>
                 <Input
                   id="rollNumber"
                   type="text"
                   placeholder="21CS101"
                   value={formData.rollNumber}
                   onChange={(e) => setFormData({ ...formData, rollNumber: e.target.value })}
+                  required
                 />
               </div>
               <div className="space-y-2">
@@ -353,7 +383,7 @@ export default function RegisterPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="collegeName">College Name</Label>
+              <Label htmlFor="collegeName">College Name <span className="text-red-500">*</span></Label>
               <div className="relative">
                 <Building2 className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -363,6 +393,7 @@ export default function RegisterPage() {
                   value={formData.collegeName}
                   onChange={(e) => setFormData({ ...formData, collegeName: e.target.value })}
                   className="pl-10"
+                  required
                 />
               </div>
             </div>
@@ -380,20 +411,22 @@ export default function RegisterPage() {
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label htmlFor="department">Department</Label>
+                <Label htmlFor="department">Department <span className="text-red-500">*</span></Label>
                 <Input
                   id="department"
                   type="text"
                   placeholder="Computer Science"
                   value={formData.department}
                   onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+                  required
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="course">Course</Label>
+                <Label htmlFor="course">Course <span className="text-red-500">*</span></Label>
                 <Select
                   value={formData.course}
                   onValueChange={(value) => setFormData({ ...formData, course: value })}
+                  required
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select" />
@@ -432,16 +465,18 @@ export default function RegisterPage() {
             <div className="flex items-center gap-2 text-sm text-indigo-600 font-medium mb-2">
               <Users className="h-4 w-4" />
               Guide / Mentor Details
+              <span className="text-xs text-gray-500 font-normal ml-auto">* Required</span>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="guideName">Guide Name</Label>
+              <Label htmlFor="guideName">Guide Name <span className="text-red-500">*</span></Label>
               <Input
                 id="guideName"
                 type="text"
                 placeholder="Dr. John Smith"
                 value={formData.guideName}
                 onChange={(e) => setFormData({ ...formData, guideName: e.target.value })}
+                required
               />
             </div>
 
