@@ -9,6 +9,7 @@ import { CodeEditor } from './CodeEditor'
 import { PlanView } from './PlanView'
 import { ProjectSelector } from './ProjectSelector'
 import { ProjectRunControls } from './ProjectRunControls'
+import { BuildDocumentsPanel } from './BuildDocumentsPanel'
 // WelcomeScreen and QuickActions removed - now showing clean empty state
 
 // Dynamically import XTerminal to avoid SSR issues
@@ -46,6 +47,7 @@ import {
   Moon,
   Monitor,
   Check,
+  FileText,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useTerminal } from '@/hooks/useTerminal'
@@ -105,7 +107,7 @@ export function BoltLayout({
   const [theme, setTheme] = useState<'dark' | 'light' | 'system'>('dark')
   const userMenuRef = useRef<HTMLDivElement>(null)
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null)
-  const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview')
+  const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'docs'>('preview')
   const [isPlanViewVisible, setIsPlanViewVisible] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -668,6 +670,19 @@ export function BoltLayout({
             >
               Preview
             </button>
+            <button
+              onClick={() => {
+                setMobilePanel('preview')
+                setActiveTab('docs')
+              }}
+              className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                activeTab === 'docs'
+                  ? 'bg-[hsl(var(--bolt-accent))] text-white'
+                  : 'text-[hsl(var(--bolt-text-secondary))]'
+              }`}
+            >
+              Docs
+            </button>
           </div>
         )}
 
@@ -700,6 +715,17 @@ export function BoltLayout({
             >
               <Eye className="w-4 h-4" />
               Preview
+            </button>
+            <button
+              onClick={() => setActiveTab('docs')}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                activeTab === 'docs'
+                  ? 'bg-[hsl(var(--bolt-accent))] text-white'
+                  : 'text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))]'
+              }`}
+            >
+              <FileText className="w-4 h-4" />
+              Docs
             </button>
           </div>
 
@@ -1156,6 +1182,12 @@ export function BoltLayout({
                   <div className="flex-1 h-full">
                     {livePreview || <div className="h-full w-full" />}
                   </div>
+                </div>
+              )}
+
+              {activeTab === 'docs' && (
+                <div className="flex-1 flex flex-col h-full">
+                  <BuildDocumentsPanel />
                 </div>
               )}
 
