@@ -237,7 +237,7 @@ class Settings(BaseSettings):
     TOKEN_PACKAGE_STARTER: str = "50000,9900,Starter Pack"
     TOKEN_PACKAGE_PRO: str = "200000,34900,Pro Pack"
     TOKEN_PACKAGE_UNLIMITED: str = "1000000,149900,Unlimited Pack"
-    TOKEN_PACKAGE_COMPLETE: str = "500000,449900,Complete Project Package"  # ₹4,499 one-time
+    TOKEN_PACKAGE_COMPLETE: str = "500000,449900,Premium"  # ₹4,499 one-time
 
     # Monthly Plans
     MONTHLY_PLAN_FREE: str = "10000,0,Free Tier"
