@@ -115,6 +115,9 @@ export function useAuth(): UseAuthReturn {
     localStorage.removeItem('refresh_token')
     localStorage.removeItem('user')
     localStorage.removeItem('theme')
+    // Clear project store to prevent showing previous user's projects
+    localStorage.removeItem('bharatbuild-project-storage')
+    localStorage.removeItem('bharatbuild-chat-storage')
     setIsAuthenticated(false)
     setUser(null)
     router.push('/')
