@@ -56,6 +56,31 @@ async def get_global_feature_flag(db: AsyncSession, feature_name: str) -> bool:
     return bool(setting.value)
 
 
+async def has_token_purchase(db: AsyncSession, user_id: str) -> bool:
+    """Check if user has a valid token purchase (Premium via payment)."""
+    from app.models.token_balance import TokenPurchase, TokenBalance
+
+    # Check token_purchases table
+    result = await db.execute(
+        select(TokenPurchase).where(and_(
+            TokenPurchase.user_id == user_id,
+            TokenPurchase.payment_status == "success",
+            TokenPurchase.is_expired == False
+        )).limit(1)
+    )
+    if result.scalar_one_or_none():
+        return True
+
+    # Fallback: Check premium_tokens in balance
+    balance_result = await db.execute(
+        select(TokenBalance).where(and_(
+            TokenBalance.user_id == user_id,
+            TokenBalance.premium_tokens > 0
+        ))
+    )
+    return balance_result.scalar_one_or_none() is not None
+
+
 async def get_user_plan(db: AsyncSession, user_id: str) -> Optional[Plan]:
     """Get user's active subscription plan."""
     result = await db.execute(
@@ -95,7 +120,17 @@ async def check_feature_access(
             "current_plan": None
         }
 
-    # 2. Check user's plan
+    # 2. Check if user has token purchase (Premium via payment)
+    # TokenPurchase grants ALL premium features
+    if await has_token_purchase(db, str(user.id)):
+        return {
+            "allowed": True,
+            "reason": None,
+            "upgrade_to": None,
+            "current_plan": "Premium"
+        }
+
+    # 3. Check user's subscription plan
     plan = await get_user_plan(db, str(user.id))
 
     if plan is None:
