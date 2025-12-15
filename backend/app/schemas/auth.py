@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field, field_serializer
+from pydantic import BaseModel, EmailStr, Field, field_serializer, model_validator
 from typing import Optional
 from datetime import datetime
 from uuid import UUID
@@ -23,6 +23,31 @@ class UserRegister(BaseModel):
     guide_name: Optional[str] = None
     guide_designation: Optional[str] = None
     hod_name: Optional[str] = None
+
+    @model_validator(mode='after')
+    def validate_student_fields(self):
+        """Validate required fields for student role"""
+        if self.role == 'student':
+            missing_fields = []
+
+            # Required academic fields for students
+            if not self.roll_number or not self.roll_number.strip():
+                missing_fields.append('Roll Number')
+            if not self.college_name or not self.college_name.strip():
+                missing_fields.append('College Name')
+            if not self.department or not self.department.strip():
+                missing_fields.append('Department')
+            if not self.course or not self.course.strip():
+                missing_fields.append('Course')
+
+            # Required guide field for students
+            if not self.guide_name or not self.guide_name.strip():
+                missing_fields.append('Guide Name')
+
+            if missing_fields:
+                raise ValueError(f"Required fields for students: {', '.join(missing_fields)}")
+
+        return self
 
 
 class UserLogin(BaseModel):
