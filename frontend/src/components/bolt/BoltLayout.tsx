@@ -172,7 +172,7 @@ export function BoltLayout({
   }, [])
 
   // Resizable panel states - thin like border lines
-  const [leftPanelWidth, setLeftPanelWidth] = useState(28) // percentage (balanced chat panel)
+  const [leftPanelWidth, setLeftPanelWidth] = useState(22) // percentage (narrower chat panel)
   const [fileExplorerWidth, setFileExplorerWidth] = useState(260) // pixels (wider for readable file names)
   const [isResizingMain, setIsResizingMain] = useState(false)
   const [isResizingExplorer, setIsResizingExplorer] = useState(false)
@@ -612,7 +612,7 @@ export function BoltLayout({
       />
 
       {/* Top Header - Responsive */}
-      <div className="flex items-center justify-between px-3 md:px-6 py-2 md:py-3 border-b border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))] flex-shrink-0 overflow-x-auto">
+      <div className="relative z-50 flex items-center justify-between px-3 md:px-6 py-2 md:py-3 border-b border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))] flex-shrink-0 overflow-visible">
         <div className="flex items-center gap-2 md:gap-3">
           {/* Home Button */}
           <a
@@ -673,7 +673,7 @@ export function BoltLayout({
 
         <div className="flex items-center gap-2">
           {/* Code & Preview Buttons - Hidden on mobile (use mobile switcher instead) */}
-          <div className="hidden md:flex items-center gap-1 mr-4">
+          <div className="hidden md:flex items-center gap-1 mr-32">
             <button
               onClick={() => {
                 setActiveTab('code')

@@ -83,6 +83,66 @@ FREE_LIMITS = UserLimits(
 
 async def get_user_limits(user: User, db: AsyncSession) -> UserLimits:
     """Get user's current plan limits"""
+    # First check if user has purchased tokens (token_purchases table)
+    # Users who purchased tokens get Premium access
+    from app.models.token_balance import TokenPurchase, TokenBalance
+
+    token_purchase_result = await db.execute(
+        select(TokenPurchase).where(
+            and_(
+                TokenPurchase.user_id == user.id,
+                TokenPurchase.payment_status == "success",
+                TokenPurchase.is_expired == False
+            )
+        ).limit(1)
+    )
+    has_token_purchase = token_purchase_result.scalar_one_or_none()
+
+    # Fallback: Check if user has premium_tokens in their balance
+    # This handles users who paid before TokenPurchase records were created
+    if not has_token_purchase:
+        balance_result = await db.execute(
+            select(TokenBalance).where(
+                and_(
+                    TokenBalance.user_id == user.id,
+                    TokenBalance.premium_tokens > 0
+                )
+            )
+        )
+        has_premium_balance = balance_result.scalar_one_or_none()
+        if has_premium_balance:
+            has_token_purchase = True  # Treat as having purchased
+
+    if has_token_purchase:
+        # User has purchased tokens - give them Premium access
+        return UserLimits(
+            plan_name="Premium (Token Purchase)",
+            plan_type=PlanType.PRO,
+            token_limit=None,  # Unlimited for purchased tokens
+            project_limit=10,  # Allow 10 projects per purchase
+            api_calls_limit=None,
+            code_generations_per_day=None,
+            auto_fixes_per_day=None,
+            documents_per_month=None,
+            concurrent_executions=5,
+            execution_timeout_minutes=30,
+            allowed_models=["haiku", "sonnet"],
+            feature_flags={
+                "project_generation": True,
+                "code_preview": True,
+                "bug_fixing": True,
+                "srs_document": True,
+                "sds_document": True,
+                "project_report": True,
+                "ppt_generation": True,
+                "viva_questions": True,
+                "plagiarism_check": True,
+                "code_execution": True,
+                "download_files": True
+            },
+            max_files_per_project=None  # Unlimited
+        )
+
     # Get active subscription
     result = await db.execute(
         select(Subscription).join(Plan).where(

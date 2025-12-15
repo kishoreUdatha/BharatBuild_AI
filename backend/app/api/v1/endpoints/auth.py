@@ -90,7 +90,19 @@ async def register(
         email=user_data.email,
         hashed_password=get_password_hash(user_data.password),
         full_name=user_data.full_name,
-        role=user_role
+        role=user_role,
+        # Student Academic Details
+        roll_number=user_data.roll_number,
+        college_name=user_data.college_name,
+        university_name=user_data.university_name,
+        department=user_data.department,
+        course=user_data.course,
+        year_semester=user_data.year_semester,
+        batch=user_data.batch,
+        # Guide/Mentor Details
+        guide_name=user_data.guide_name,
+        guide_designation=user_data.guide_designation,
+        hod_name=user_data.hod_name
     )
 
     db.add(user)

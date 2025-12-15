@@ -5038,6 +5038,46 @@ Stream code in chunks for real-time display.
 💡 **Pro Tip:** Read the generated code to understand patterns - modify and experiment to learn faster."""
 
 
+    async def _get_user_details(self, user_id: str) -> Dict[str, Any]:
+        """
+        Fetch user details from database for document generation.
+        Returns student academic details like college name, roll number, etc.
+        """
+        if not user_id:
+            return {}
+
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.user import User
+            from sqlalchemy import select
+
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(User).where(User.id == user_id)
+                )
+                user = result.scalar_one_or_none()
+
+                if not user:
+                    logger.warning(f"[Orchestrator] User not found for document generation: {user_id}")
+                    return {}
+
+                return {
+                    "full_name": user.full_name or "Student Name",
+                    "roll_number": user.roll_number or "ROLL001",
+                    "college_name": user.college_name or "College Name",
+                    "university_name": user.university_name or "Autonomous Institution",
+                    "department": user.department or "Department of Computer Science and Engineering",
+                    "course": user.course or "B.Tech",
+                    "year_semester": user.year_semester or "4th Year",
+                    "batch": user.batch or "2024-2025",
+                    "guide_name": user.guide_name or "Dr. Guide Name",
+                    "guide_designation": user.guide_designation or "Assistant Professor",
+                    "hod_name": user.hod_name or "Dr. HOD Name",
+                }
+        except Exception as e:
+            logger.error(f"[Orchestrator] Failed to fetch user details: {e}")
+            return {}
+
     def _extract_project_name_from_request(self, user_request: str) -> str:
         """
         Extract a human-readable project name from the user's request.
@@ -5077,6 +5117,119 @@ Stream code in chunks for real-time display.
             return ' '.join(word.capitalize() for word in key_words) + ' Project'
         
         return 'My Project'
+
+    def _extract_api_endpoints_from_files(self, files_created: List) -> List[Dict]:
+        """
+        Extract API endpoints from generated code files.
+        Looks for route decorators like @app.get, @router.post, etc.
+        """
+        import re
+        endpoints = []
+
+        # Patterns for different frameworks
+        patterns = [
+            # FastAPI/Flask patterns
+            r'@(?:app|router|api)\.(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']',
+            # Express.js patterns
+            r'(?:app|router)\.(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']',
+            # Spring Boot patterns
+            r'@(?:Get|Post|Put|Delete|Patch)Mapping\s*\(\s*(?:value\s*=\s*)?["\']([^"\']+)["\']',
+            # Django patterns
+            r'path\s*\(\s*["\']([^"\']+)["\']',
+        ]
+
+        for file_info in files_created:
+            if isinstance(file_info, dict):
+                file_path = file_info.get('path', '')
+                content = file_info.get('content', '')
+            elif isinstance(file_info, str):
+                file_path = file_info
+                content = ''
+            else:
+                continue
+
+            # Only check relevant files
+            if not any(ext in file_path for ext in ['.py', '.js', '.ts', '.java', '.go']):
+                continue
+
+            for pattern in patterns:
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                for match in matches:
+                    if len(match) == 2:
+                        method, path = match
+                        endpoints.append({
+                            "method": method.upper(),
+                            "path": path,
+                            "file": file_path
+                        })
+                    elif len(match) == 1:
+                        endpoints.append({
+                            "method": "GET",
+                            "path": match[0],
+                            "file": file_path
+                        })
+
+        return endpoints[:20]  # Limit to 20 endpoints
+
+    def _extract_database_tables_from_files(self, files_created: List) -> List[Dict]:
+        """
+        Extract database table/model definitions from generated code files.
+        Looks for model classes, table definitions, etc.
+        """
+        import re
+        tables = []
+
+        # Patterns for different ORMs/frameworks
+        patterns = [
+            # SQLAlchemy
+            (r'class\s+(\w+)\s*\([^)]*(?:Base|Model)[^)]*\)', 'sqlalchemy'),
+            # Django
+            (r'class\s+(\w+)\s*\(models\.Model\)', 'django'),
+            # Prisma
+            (r'model\s+(\w+)\s*\{', 'prisma'),
+            # TypeORM
+            (r'@Entity\s*\([^)]*\)\s*(?:export\s+)?class\s+(\w+)', 'typeorm'),
+            # Mongoose
+            (r'const\s+(\w+)Schema\s*=\s*new\s+(?:mongoose\.)?Schema', 'mongoose'),
+            # SQL CREATE TABLE
+            (r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\']?(\w+)[`"\']?', 'sql'),
+        ]
+
+        for file_info in files_created:
+            if isinstance(file_info, dict):
+                file_path = file_info.get('path', '')
+                content = file_info.get('content', '')
+            elif isinstance(file_info, str):
+                file_path = file_info
+                content = ''
+            else:
+                continue
+
+            # Only check relevant files
+            if not any(ext in file_path for ext in ['.py', '.js', '.ts', '.java', '.prisma', '.sql']):
+                continue
+
+            for pattern, orm_type in patterns:
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                for table_name in matches:
+                    # Skip common base classes
+                    if table_name.lower() in ['base', 'model', 'basemodel', 'entity']:
+                        continue
+                    tables.append({
+                        "name": table_name,
+                        "type": orm_type,
+                        "file": file_path
+                    })
+
+        # Remove duplicates
+        seen = set()
+        unique_tables = []
+        for table in tables:
+            if table['name'] not in seen:
+                seen.add(table['name'])
+                unique_tables.append(table)
+
+        return unique_tables[:15]  # Limit to 15 tables
 
     async def _execute_documenter(
         self,
@@ -5487,33 +5640,65 @@ htmlcov
         chunked_agent = ChunkedDocumentAgent()
 
         # Build agent context
+        # IMPORTANT: Include user_id for document storage to S3 and PostgreSQL
+        user_id = context.metadata.get("user_id") if context.metadata else None
         agent_context = AgentContext(
             user_request=context.user_request,
             project_id=context.project_id,
+            user_id=user_id,  # Required for saving documents to S3 and database
             metadata={
                 "plan": context.plan,
                 "files_created": context.files_created,
                 "tech_stack": context.tech_stack,
-                "project_type": context.project_type
+                "project_type": context.project_type,
+                "user_id": user_id  # Also pass in metadata for compatibility
             }
         )
 
         # Build project data for content generation
         # Use context.project_name if available (from Planner), fallback to extracting from user_request
         actual_project_name = context.project_name or self._extract_project_name_from_request(context.user_request)
-        
+
+        # Extract API endpoints from generated files (look for route definitions)
+        api_endpoints = getattr(context, 'api_endpoints', []) or []
+        if not api_endpoints and context.files_created:
+            api_endpoints = self._extract_api_endpoints_from_files(context.files_created)
+
+        # Extract database tables from generated files (look for model definitions)
+        database_tables = getattr(context, 'database_tables', []) or []
+        if not database_tables and context.files_created:
+            database_tables = self._extract_database_tables_from_files(context.files_created)
+
         project_data = {
             "project_name": actual_project_name,
+            "project_type": context.project_type or "web_application",
             "description": context.project_description or context.user_request,
             "plan": context.plan.get("raw", "") if context.plan else "",
             "files": context.files_created,
-            "tech_stack": context.tech_stack or [],
-            "features": context.features or []
+            "tech_stack": context.tech_stack or {},
+            "technologies": context.tech_stack or {},  # Alias for compatibility
+            "features": context.features or [],
+            "api_endpoints": api_endpoints,
+            "database_tables": database_tables,
+            "code_files": context.files_created or []
         }
 
-        # Default college info (can be customized later via API)
+        # Fetch user details for document generation
+        user_details = await self._get_user_details(user_id)
+
+        # Create college info from user's registration details
         college_info = CollegeInfo(
-            project_title=actual_project_name
+            project_title=actual_project_name,
+            college_name=user_details.get("college_name", "College Name"),
+            affiliated_to=user_details.get("university_name", "Autonomous Institution"),
+            department=user_details.get("department", "Department of Computer Science and Engineering"),
+            academic_year=user_details.get("batch", "2024-2025"),
+            guide_name=user_details.get("guide_name", "Dr. Guide Name"),
+            hod_name=user_details.get("hod_name", "Dr. HOD Name"),
+            students=[{
+                "name": user_details.get("full_name", "Student Name"),
+                "roll_number": user_details.get("roll_number", "ROLL001")
+            }]
         )
 
         doc_count = 0

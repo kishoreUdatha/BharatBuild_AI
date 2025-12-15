@@ -10,6 +10,20 @@ class UserRegister(BaseModel):
     full_name: Optional[str] = None
     role: str = "student"
 
+    # Student Academic Details
+    roll_number: Optional[str] = None
+    college_name: Optional[str] = None
+    university_name: Optional[str] = None
+    department: Optional[str] = None
+    course: Optional[str] = None
+    year_semester: Optional[str] = None
+    batch: Optional[str] = None
+
+    # Guide/Mentor Details
+    guide_name: Optional[str] = None
+    guide_designation: Optional[str] = None
+    hod_name: Optional[str] = None
+
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -39,6 +53,20 @@ class UserResponse(BaseModel):
     created_at: datetime
     avatar_url: Optional[str] = None
     oauth_provider: Optional[str] = None
+
+    # Student Academic Details
+    roll_number: Optional[str] = None
+    college_name: Optional[str] = None
+    university_name: Optional[str] = None
+    department: Optional[str] = None
+    course: Optional[str] = None
+    year_semester: Optional[str] = None
+    batch: Optional[str] = None
+
+    # Guide/Mentor Details
+    guide_name: Optional[str] = None
+    guide_designation: Optional[str] = None
+    hod_name: Optional[str] = None
 
     @field_serializer('id')
     def serialize_id(self, value: UUID) -> str:

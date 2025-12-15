@@ -43,7 +43,21 @@ class User(Base):
     organization = Column(String(255), nullable=True)
     bio = Column(Text, nullable=True)
 
-    # College fields (for students and faculty)
+    # Student Academic Details (for document generation)
+    roll_number = Column(String(50), nullable=True)  # e.g., 21CS101
+    college_name = Column(String(255), nullable=True)  # e.g., ABC Engineering College
+    university_name = Column(String(255), nullable=True)  # e.g., JNTU Hyderabad
+    department = Column(String(100), nullable=True)  # e.g., Computer Science and Engineering
+    course = Column(String(100), nullable=True)  # e.g., B.Tech, MCA, M.Tech
+    year_semester = Column(String(50), nullable=True)  # e.g., 4th Year / 8th Semester
+    batch = Column(String(20), nullable=True)  # e.g., 2021-2025
+
+    # Guide/Mentor Details
+    guide_name = Column(String(255), nullable=True)  # e.g., Dr. Smith
+    guide_designation = Column(String(100), nullable=True)  # e.g., Assistant Professor
+    hod_name = Column(String(255), nullable=True)  # e.g., Dr. Johnson
+
+    # College fields (for students and faculty) - legacy
     college_id = Column(GUID, nullable=True)
     batch_id = Column(GUID, nullable=True)
 

@@ -38,10 +38,10 @@ export default function BuildPage() {
   const [projectReloaded, setProjectReloaded] = useState(false)
 
   // Convert project files to FileNode format for BoltLayout
-  // Files already have full paths from projectStore, just extract the name for display
+  // Use the name property if available, otherwise extract from path
   const convertToFileNode = (file: NonNullable<typeof currentProject>['files'][0]): FileNode => {
     return {
-      name: file.path.split('/').pop() || file.path,  // Display name is last part of path
+      name: file.name || file.path.split('/').pop() || file.path,  // Use name if available, else extract from path
       path: file.path,  // Full path already stored
       type: file.type,
       children: file.children?.map(child => convertToFileNode(child)),

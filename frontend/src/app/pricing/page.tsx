@@ -21,7 +21,7 @@ export default function PricingPage() {
 
     setSuccessMessage(null)
     initiatePayment(
-      'premium',
+      'complete',
       (result) => {
         setSuccessMessage(`Payment successful! You now have access to 1 complete project.`)
         setTimeout(() => router.push('/build'), 2000)

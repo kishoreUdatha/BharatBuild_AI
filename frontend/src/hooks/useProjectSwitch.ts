@@ -44,6 +44,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/a
 // Type for ProjectFile (matches projectStore)
 interface ProjectFile {
   path: string
+  name?: string  // Display name (derived from path if not provided)
   content: string
   language: string
   type: 'file' | 'folder'
@@ -76,6 +77,7 @@ function buildFileTree(flatFiles: Array<{ path: string; content: string; languag
         // It's a file - add it to current level
         currentLevel.push({
           path: file.path,  // Full path for files
+          name: part,  // Display name is the file name
           content: file.content || '',
           language: file.language || 'plaintext',
           type: 'file'
@@ -86,6 +88,7 @@ function buildFileTree(flatFiles: Array<{ path: string; content: string; languag
         if (!folder) {
           folder = {
             path: currentPath,
+            name: part,  // Display name is the folder name
             content: '',
             language: '',
             type: 'folder',
@@ -302,6 +305,7 @@ export function useProjectSwitch() {
             const convertTree = (items: any[]): ProjectFile[] => {
               return items.map((item: any) => ({
                 path: item.path,
+                name: item.name || item.path.split('/').pop() || item.path,  // Extract name from path if not provided
                 // If using /sync/files (fallback), content is included
                 // If using /metadata, content is undefined (lazy load)
                 content: useMetadataEndpoint ? undefined : (item.content || ''),
