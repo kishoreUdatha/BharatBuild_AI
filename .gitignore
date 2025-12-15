@@ -108,3 +108,6 @@ errored.tfstate
 backend/checkpoints/
 backend/C:/
 
+
+# Accidental path folders
+backend/C:/
