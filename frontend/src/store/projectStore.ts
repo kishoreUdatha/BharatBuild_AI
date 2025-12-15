@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 
 export interface ProjectFile {
   path: string
+  name?: string  // Display name (derived from path if not provided)
   content?: string  // Optional - lazy loaded on click (Bolt.new style)
   language: string
   type: 'file' | 'folder'
@@ -187,6 +188,7 @@ export const useProjectStore = create<ProjectState>()(
           // Create new folder with FULL path
           const newFolder: ProjectFile = {
             path: fullFolderPath,
+            name: folderName,
             content: '',
             language: '',
             type: 'folder',
@@ -395,6 +397,7 @@ export const useProjectStore = create<ProjectState>()(
         .filter((item: any) => item != null && typeof item === 'object' && item.path)
         .map((item: any) => ({
           path: item.path || '',
+          name: item.name || item.path?.split('/').pop() || item.path || '',
           content: item.content ?? '',
           language: item.language || 'plaintext',
           type: item.type === 'folder' ? 'folder' : 'file',
@@ -530,6 +533,7 @@ export const useProjectStore = create<ProjectState>()(
                   .filter((item: any) => item != null && typeof item === 'object' && item.path)
                   .map((item: any) => ({
                     path: item.path || '',
+                    name: item.name || item.path?.split('/').pop() || item.path || '',
                     content: item.content ?? '',
                     language: item.language || 'plaintext',
                     type: item.type === 'folder' ? 'folder' : 'file',

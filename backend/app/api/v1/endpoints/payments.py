@@ -105,10 +105,13 @@ async def create_payment_order(
     # Get package details
     packages = settings.get_token_packages()
 
+    logger.info(f"[Payment] Received package: '{request.package}', available: {list(packages.keys())}")
+
     if request.package not in packages or not packages[request.package]:
+        logger.warning(f"[Payment] Invalid package '{request.package}'. Available: {list(packages.keys())}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid package. Choose: {', '.join(packages.keys())}"
+            detail=f"Invalid package '{request.package}'. Choose: {', '.join(packages.keys())}"
         )
 
     package = packages[request.package]
@@ -117,10 +120,12 @@ async def create_payment_order(
 
     try:
         # Create Razorpay order
+        # Receipt must be max 40 chars - use short format
+        receipt = f"bb_{str(current_user.id)[:8]}_{int(datetime.utcnow().timestamp())}"
         order_data = {
             "amount": amount,  # Amount in paise
             "currency": "INR",
-            "receipt": f"bharatbuild_{current_user.id}_{datetime.utcnow().timestamp()}",
+            "receipt": receipt,
             "notes": {
                 "user_id": str(current_user.id),
                 "user_email": current_user.email,
@@ -249,6 +254,22 @@ async def verify_payment(
                 is_premium=True
             )
 
+            # Create TokenPurchase record for plan status tracking
+            # This record is used by get_user_limits() to grant Premium access
+            token_purchase = TokenPurchase(
+                user_id=current_user.id,
+                package_name=package_name,
+                tokens_purchased=tokens_to_add,
+                amount_paid=transaction.amount,
+                currency="INR",
+                payment_id=request.razorpay_payment_id,
+                payment_status="success",
+                valid_from=datetime.utcnow(),
+                valid_until=None,  # Lifetime access
+                is_expired=False
+            )
+            db.add(token_purchase)
+
             await db.commit()
 
             logger.info(f"[Payment] Successfully credited {tokens_to_add} tokens to user {current_user.id}")
@@ -372,6 +393,7 @@ async def _handle_payment_captured(payload: dict, db: AsyncSession):
 
     # Credit tokens if not already credited
     tokens_to_add = transaction.extra_metadata.get("tokens", 0)
+    package_name = transaction.extra_metadata.get("package_name", "Token Pack")
     if tokens_to_add > 0:
         await token_manager.add_tokens(
             db=db,
@@ -381,6 +403,21 @@ async def _handle_payment_captured(payload: dict, db: AsyncSession):
             description=f"Webhook: {transaction.description}",
             is_premium=True
         )
+
+        # Create TokenPurchase record for plan status tracking
+        token_purchase = TokenPurchase(
+            user_id=transaction.user_id,
+            package_name=package_name,
+            tokens_purchased=tokens_to_add,
+            amount_paid=transaction.amount,
+            currency="INR",
+            payment_id=payment_id,
+            payment_status="success",
+            valid_from=datetime.utcnow(),
+            valid_until=None,
+            is_expired=False
+        )
+        db.add(token_purchase)
 
     await db.commit()
     logger.info(f"[Webhook] Processed payment.captured for order {order_id}")
