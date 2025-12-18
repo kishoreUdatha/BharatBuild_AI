@@ -1,0 +1,27 @@
+{
+  "total_requests": 175,
+  "successful_requests": 125,
+  "failed_requests": 50,
+  "error_rate": 28.57142857142857,
+  "requests_per_second": 5.411112173178543,
+  "avg_response_time": 13.821770804268974,
+  "p50_response_time": 3.094911575317383,
+  "p95_response_time": 190.63591957092285,
+  "p99_response_time": 200.43706893920898,
+  "max_response_time": 205.3234577178955,
+  "duration_seconds": 32.340856075286865,
+  "num_users": 3,
+  "mode": "mixed",
+  "status_codes": {
+    "200": 125,
+    "429": 50
+  },
+  "endpoints": {
+    "/health": 55,
+    "/documents/types": 55,
+    "/auth/login": 55,
+    "/auth/me": 5,
+    "/projects?page=1&page_size=10": 5
+  },
+  "pass": false
+}

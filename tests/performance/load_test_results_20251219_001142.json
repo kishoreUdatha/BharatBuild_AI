@@ -1,0 +1,28 @@
+{
+  "total_requests": 270,
+  "successful_requests": 113,
+  "failed_requests": 157,
+  "error_rate": 58.14814814814815,
+  "requests_per_second": 8.338466699676564,
+  "avg_response_time": 15.307885629159433,
+  "p50_response_time": 5.577206611633301,
+  "p95_response_time": 16.26443862915039,
+  "p99_response_time": 513.6866569519043,
+  "max_response_time": 728.1157970428467,
+  "duration_seconds": 32.380053758621216,
+  "num_users": 3,
+  "mode": "auth",
+  "status_codes": {
+    "200": 113,
+    "400": 108,
+    "429": 49
+  },
+  "endpoints": {
+    "/auth/login": 54,
+    "/auth/me": 54,
+    "/projects?page=1&page_size=10": 54,
+    "/users/plan-status": 54,
+    "/users/token-balance": 54
+  },
+  "pass": false
+}
