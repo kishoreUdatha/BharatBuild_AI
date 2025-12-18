@@ -1,0 +1,55 @@
+{
+  "timestamp": "2025-12-19T00:24:19.084434",
+  "base_url": "http://localhost:8000/api/v1",
+  "duration_seconds": 0.8703122138977051,
+  "summary": {
+    "total": 7,
+    "passed": 5,
+    "failed": 2,
+    "errors": 0
+  },
+  "tests": [
+    {
+      "name": "API Health Check",
+      "status": "PASS",
+      "duration_ms": 20.60556411743164,
+      "error": null
+    },
+    {
+      "name": "Document Types Endpoint",
+      "status": "FAIL",
+      "duration_ms": 9.693622589111328,
+      "error": ""
+    },
+    {
+      "name": "User Registration",
+      "status": "PASS",
+      "duration_ms": 299.58057403564453,
+      "error": null
+    },
+    {
+      "name": "Invalid Login Rejection",
+      "status": "PASS",
+      "duration_ms": 20.740032196044922,
+      "error": null
+    },
+    {
+      "name": "Unauthenticated Rejection",
+      "status": "PASS",
+      "duration_ms": 8.936643600463867,
+      "error": null
+    },
+    {
+      "name": "Authenticated Endpoints",
+      "status": "FAIL",
+      "duration_ms": 451.019287109375,
+      "error": "Get plan failed: {'detail': 'Invalid user ID'}"
+    },
+    {
+      "name": "Concurrent Requests",
+      "status": "PASS",
+      "duration_ms": 59.23128128051758,
+      "error": null
+    }
+  ]
+}
