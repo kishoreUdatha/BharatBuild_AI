@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 import threading
 
 from app.core.logging_config import logger
+from app.core.config import settings
 from app.services.log_bus import get_log_bus, LogBus
 
 
@@ -33,7 +34,7 @@ class AutoFixConfig:
     # Debounce time (wait for errors to accumulate)
     debounce_seconds: float = 2.0
     # Cooldown between auto-fix attempts (prevent infinite loops)
-    cooldown_seconds: float = 10.0
+    cooldown_seconds: float = float(settings.AUTOFIXER_COOLDOWN_SECONDS)
     # Max auto-fix attempts per error pattern
     max_attempts_per_error: int = 3
     # Error types that trigger auto-fix

@@ -61,7 +61,7 @@ async def register(
     """Register new user (rate limited: 3/min)"""
     client_ip = request.client.host if request.client else "unknown"
 
-    # Check if user exists
+    # Check if email already exists
     result = await db.execute(
         select(User).where(User.email == user_data.email)
     )
@@ -80,6 +80,26 @@ async def register(
             detail="Email already registered"
         )
 
+    # Check if phone number already exists (if provided)
+    if user_data.phone:
+        result = await db.execute(
+            select(User).where(User.phone == user_data.phone)
+        )
+        existing_phone_user = result.scalar_one_or_none()
+
+        if existing_phone_user:
+            logger.log_auth_event(
+                event="register",
+                success=False,
+                user_email=user_data.email,
+                reason="Phone number already registered",
+                client_ip=client_ip
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Phone number already registered"
+            )
+
     # Create user - convert role string to UserRole enum
     try:
         user_role = UserRole(user_data.role)
@@ -90,6 +110,7 @@ async def register(
         email=user_data.email,
         hashed_password=get_password_hash(user_data.password),
         full_name=user_data.full_name,
+        phone=user_data.phone,
         role=user_role,
         # Student Academic Details
         roll_number=user_data.roll_number,
@@ -382,12 +403,25 @@ async def login(
             email=user.email,
             username=user.username,
             full_name=user.full_name,
+            phone=user.phone,
             role=user.role.value,
             is_active=user.is_active,
             is_verified=user.is_verified,
             created_at=user.created_at,
             avatar_url=user.avatar_url,
-            oauth_provider=user.oauth_provider
+            oauth_provider=user.oauth_provider,
+            # Student Academic Details
+            roll_number=user.roll_number,
+            college_name=user.college_name,
+            university_name=user.university_name,
+            department=user.department,
+            course=user.course,
+            year_semester=user.year_semester,
+            batch=user.batch,
+            # Guide/Mentor Details
+            guide_name=user.guide_name,
+            guide_designation=user.guide_designation,
+            hod_name=user.hod_name
         )
     }
 

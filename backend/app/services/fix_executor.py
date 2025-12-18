@@ -27,13 +27,14 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from app.core.logging_config import logger
+from app.core.config import settings
 
 # ========== FIX RATE LIMITER ==========
 # Prevents infinite fix loops by enforcing cooldowns between fix attempts
 _fix_timestamps: Dict[str, List[float]] = {}  # project_id -> list of timestamps
-_FIX_COOLDOWN_SECONDS = 30  # Minimum seconds between fix attempts
+_FIX_COOLDOWN_SECONDS = settings.AUTOFIXER_FIX_COOLDOWN_SECONDS
 _MAX_FIXES_PER_WINDOW = 5  # Max fix attempts per window
-_FIX_WINDOW_SECONDS = 300  # 5 minute window for max attempts
+_FIX_WINDOW_SECONDS = settings.AUTOFIXER_FIX_WINDOW_SECONDS
 
 
 def _can_attempt_fix(project_id: str) -> tuple[bool, str]:

@@ -6,23 +6,34 @@ Handles all email sending functionality including:
 - Password reset emails
 - Purchase confirmations
 - Notifications
+- Bulk emails to students
 
-Uses SMTP configuration from settings.
+Supports both SMTP and SendGrid.
 """
 
 import aiosmtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 import secrets
+import asyncio
 
 from app.core.config import settings
 from app.core.logging_config import logger
 
+# Try to import SendGrid
+try:
+    from sendgrid import SendGridAPIClient
+    from sendgrid.helpers.mail import Mail, Email, To, Content, Personalization
+    SENDGRID_AVAILABLE = True
+except ImportError:
+    SENDGRID_AVAILABLE = False
+    logger.warning("[Email] SendGrid SDK not installed. Install with: pip install sendgrid")
+
 
 class EmailService:
-    """Async email service using SMTP"""
+    """Async email service using SMTP or SendGrid"""
 
     def __init__(self):
         self.smtp_host = settings.SMTP_HOST
@@ -32,10 +43,19 @@ class EmailService:
         self.from_email = settings.EMAIL_FROM
         self.from_name = settings.EMAIL_FROM_NAME
         self.frontend_url = settings.FRONTEND_URL
+        self.sendgrid_api_key = settings.SENDGRID_API_KEY
+        self.use_sendgrid = settings.USE_SENDGRID and SENDGRID_AVAILABLE and bool(self.sendgrid_api_key)
+
+        if self.use_sendgrid:
+            logger.info("[Email] Using SendGrid for email delivery")
+        else:
+            logger.info("[Email] Using SMTP for email delivery")
 
     @property
     def is_configured(self) -> bool:
         """Check if email service is properly configured"""
+        if self.use_sendgrid:
+            return bool(self.sendgrid_api_key)
         return bool(self.smtp_user and self.smtp_password)
 
     async def send_email(
@@ -51,9 +71,57 @@ class EmailService:
         Returns True if successful, False otherwise.
         """
         if not self.is_configured:
-            logger.warning("[Email] SMTP not configured, skipping email send")
+            logger.warning("[Email] Email service not configured, skipping email send")
             return False
 
+        if self.use_sendgrid:
+            return await self._send_via_sendgrid(to_email, subject, html_content, text_content)
+        else:
+            return await self._send_via_smtp(to_email, subject, html_content, text_content)
+
+    async def _send_via_sendgrid(
+        self,
+        to_email: str,
+        subject: str,
+        html_content: str,
+        text_content: Optional[str] = None
+    ) -> bool:
+        """Send email via SendGrid API"""
+        try:
+            message = Mail(
+                from_email=Email(self.from_email, self.from_name),
+                to_emails=To(to_email),
+                subject=subject,
+                html_content=Content("text/html", html_content)
+            )
+
+            if text_content:
+                message.add_content(Content("text/plain", text_content))
+
+            sg = SendGridAPIClient(self.sendgrid_api_key)
+            # Run synchronous SendGrid call in thread pool
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, sg.send, message)
+
+            if response.status_code in [200, 201, 202]:
+                logger.info(f"[Email/SendGrid] Successfully sent email to {to_email}: {subject}")
+                return True
+            else:
+                logger.error(f"[Email/SendGrid] Failed with status {response.status_code}: {response.body}")
+                return False
+
+        except Exception as e:
+            logger.error(f"[Email/SendGrid] Failed to send email to {to_email}: {e}")
+            return False
+
+    async def _send_via_smtp(
+        self,
+        to_email: str,
+        subject: str,
+        html_content: str,
+        text_content: Optional[str] = None
+    ) -> bool:
+        """Send email via SMTP"""
         try:
             # Create message
             message = MIMEMultipart("alternative")
@@ -78,12 +146,136 @@ class EmailService:
                 start_tls=True
             )
 
-            logger.info(f"[Email] Successfully sent email to {to_email}: {subject}")
+            logger.info(f"[Email/SMTP] Successfully sent email to {to_email}: {subject}")
             return True
 
         except Exception as e:
-            logger.error(f"[Email] Failed to send email to {to_email}: {e}")
+            logger.error(f"[Email/SMTP] Failed to send email to {to_email}: {e}")
             return False
+
+    async def send_bulk_email(
+        self,
+        recipients: List[Dict[str, str]],  # [{"email": "...", "name": "..."}]
+        subject: str,
+        html_content: str,
+        text_content: Optional[str] = None
+    ) -> Dict[str, any]:
+        """
+        Send bulk emails to multiple recipients.
+
+        Args:
+            recipients: List of dicts with 'email' and optional 'name' keys
+            subject: Email subject
+            html_content: HTML body (can use {{name}} placeholder)
+            text_content: Plain text body (optional)
+
+        Returns:
+            Dict with 'success_count', 'failed_count', 'failed_emails'
+        """
+        success_count = 0
+        failed_count = 0
+        failed_emails = []
+
+        for recipient in recipients:
+            email = recipient.get("email")
+            name = recipient.get("name", "Student")
+
+            if not email:
+                continue
+
+            # Replace placeholders
+            personalized_html = html_content.replace("{{name}}", name)
+            personalized_text = text_content.replace("{{name}}", name) if text_content else None
+
+            success = await self.send_email(email, subject, personalized_html, personalized_text)
+
+            if success:
+                success_count += 1
+            else:
+                failed_count += 1
+                failed_emails.append(email)
+
+            # Small delay to avoid rate limiting
+            await asyncio.sleep(0.1)
+
+        logger.info(f"[Email] Bulk send complete: {success_count} success, {failed_count} failed")
+
+        return {
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "failed_emails": failed_emails
+        }
+
+    async def send_to_students(
+        self,
+        students: List[Dict[str, str]],
+        subject: str,
+        message: str,
+        include_login_link: bool = True
+    ) -> Dict[str, any]:
+        """
+        Send notification email to students.
+
+        Args:
+            students: List of student dicts with 'email', 'name' keys
+            subject: Email subject
+            message: Main message content
+            include_login_link: Whether to include login button
+
+        Returns:
+            Result dict with success/failed counts
+        """
+        login_button = f'''
+            <p style="text-align: center;">
+                <a href="{self.frontend_url}/login" style="display: inline-block; background: #667eea; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600;">
+                    Login to BharatBuild AI
+                </a>
+            </p>
+        ''' if include_login_link else ''
+
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
+                .content {{ background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }}
+                .footer {{ text-align: center; margin-top: 30px; font-size: 12px; color: #6b7280; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>BharatBuild AI</h1>
+                </div>
+                <div class="content">
+                    <p>Hi {{{{name}}}},</p>
+                    <div style="margin: 20px 0;">
+                        {message}
+                    </div>
+                    {login_button}
+                </div>
+                <div class="footer">
+                    <p>&copy; {datetime.utcnow().year} BharatBuild AI. All rights reserved.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+        text_content = f"""
+        Hi {{{{name}}}},
+
+        {message}
+
+        {'Login at: ' + self.frontend_url + '/login' if include_login_link else ''}
+
+        - BharatBuild AI Team
+        """
+
+        return await self.send_bulk_email(students, subject, html_content, text_content)
 
     async def send_verification_email(
         self,

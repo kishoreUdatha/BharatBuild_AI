@@ -12,9 +12,11 @@ import {
   AlertCircle,
   File,
   FileCode,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Lock
 } from 'lucide-react'
 import { apiClient } from '@/lib/api-client'
+import { usePlanStatus } from '@/hooks/usePlanStatus'
 
 interface Document {
   id: string | null
@@ -90,6 +92,10 @@ export function DocumentsPanel({ selectedProject, onClose }: DocumentsPanelProps
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // Check if user has download feature (Premium only)
+  const { features, isPremium, isLoading: planLoading } = usePlanStatus()
+  const canDownload = isPremium || features?.download_files === true
+
   useEffect(() => {
     if (selectedProject) {
       fetchDocuments()
@@ -119,6 +125,12 @@ export function DocumentsPanel({ selectedProject, onClose }: DocumentsPanelProps
 
   const handleDownloadAll = async () => {
     if (!selectedProject) return
+
+    // Check if user can download (Premium feature)
+    if (!canDownload) {
+      console.warn('[DocumentsPanel] Download blocked - Premium feature required')
+      return
+    }
 
     setIsDownloading(true)
     try {
@@ -151,6 +163,12 @@ export function DocumentsPanel({ selectedProject, onClose }: DocumentsPanelProps
   }
 
   const handleDownloadSingle = async (doc: Document) => {
+    // Check if user can download (Premium feature)
+    if (!canDownload) {
+      console.warn('[DocumentsPanel] Download blocked - Premium feature required')
+      return
+    }
+
     const token = localStorage.getItem('access_token')
     const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
     const url = `${apiBase}/api/v1${doc.download_url}`
@@ -242,41 +260,61 @@ export function DocumentsPanel({ selectedProject, onClose }: DocumentsPanelProps
                       <span className="text-xs text-gray-400">{formatDocType(doc.type)}</span>
                     </div>
                   </div>
-                  <button
-                    onClick={() => handleDownloadSingle(doc)}
-                    disabled={isDownloadingThis}
-                    className="p-2 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 opacity-0 group-hover:opacity-100 transition-all disabled:opacity-50"
-                    title="Download"
-                  >
-                    {isDownloadingThis ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Download className="w-4 h-4" />
-                    )}
-                  </button>
+                  {canDownload ? (
+                    <button
+                      onClick={() => handleDownloadSingle(doc)}
+                      disabled={isDownloadingThis}
+                      className="p-2 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 opacity-0 group-hover:opacity-100 transition-all disabled:opacity-50"
+                      title="Download"
+                    >
+                      {isDownloadingThis ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Download className="w-4 h-4" />
+                      )}
+                    </button>
+                  ) : (
+                    <a
+                      href="/pricing"
+                      className="p-2 rounded-lg text-amber-500 hover:bg-amber-50 opacity-0 group-hover:opacity-100 transition-all"
+                      title="Upgrade to Premium to download"
+                    >
+                      <Lock className="w-4 h-4" />
+                    </a>
+                  )}
                 </div>
               )
             })}
           </div>
 
           <div className="p-4 border-t border-gray-100">
-            <button
-              onClick={handleDownloadAll}
-              disabled={isDownloading}
-              className="w-full flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 rounded-lg text-white text-sm font-medium transition-colors"
-            >
-              {isDownloading ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Preparing...
-                </>
-              ) : (
-                <>
-                  <Download className="w-4 h-4" />
-                  Download All ({documents.length})
-                </>
-              )}
-            </button>
+            {canDownload ? (
+              <button
+                onClick={handleDownloadAll}
+                disabled={isDownloading}
+                className="w-full flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 rounded-lg text-white text-sm font-medium transition-colors"
+              >
+                {isDownloading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Preparing...
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-4 h-4" />
+                    Download All ({documents.length})
+                  </>
+                )}
+              </button>
+            ) : (
+              <a
+                href="/pricing"
+                className="w-full flex items-center justify-center gap-2 py-2.5 bg-amber-500/20 border border-amber-400 hover:bg-amber-500/30 rounded-lg text-amber-600 text-sm font-medium transition-colors"
+              >
+                <Lock className="w-4 h-4" />
+                Download All (Premium)
+              </a>
+            )}
           </div>
         </>
       )}

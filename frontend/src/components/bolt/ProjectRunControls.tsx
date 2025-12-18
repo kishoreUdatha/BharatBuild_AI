@@ -9,10 +9,12 @@ import {
   Wrench,
   Zap,
   RotateCcw,
-  AlertTriangle
+  AlertTriangle,
+  Lock
 } from 'lucide-react'
 import { useProjectStore } from '@/store/projectStore'
 import { useErrorCollector } from '@/hooks/useErrorCollector'
+import { usePlanStatus } from '@/hooks/usePlanStatus'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
 // COST OPTIMIZATION: Reduced from 10 to 3 (with 3 inner iterations = max 9 API calls)
@@ -42,6 +44,10 @@ interface ProjectRunControlsProps {
 export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutput, autoFix = true, onStartSession, onEndSession }: ProjectRunControlsProps) {
   const { currentProject, loadFromBackend } = useProjectStore()
   const [status, setStatus] = useState<RunStatus>('idle')
+
+  // Check if user has code execution feature (Premium only)
+  const { features, isPremium, isLoading: planLoading } = usePlanStatus()
+  const canRunCode = isPremium || features?.code_execution === true
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [executionMode, setExecutionMode] = useState<ExecutionMode>('docker')
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
@@ -1344,7 +1350,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   }, [lastError, attemptAutoFix, onOutput])
   const isRunning = status === 'running'
   const isLoading = status === 'creating' || status === 'starting' || status === 'stopping' || status === 'fixing'
-  const canRun = !isLoading && !isRunning && currentProject
+  const canRun = !isLoading && !isRunning && currentProject && canRunCode
   const hasFixableError = status === 'error' && lastError && fixAttempts < MAX_AUTO_FIX_ATTEMPTS
 
   return (
@@ -1352,17 +1358,31 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
       {/* Run/Stop Buttons */}
       {!isRunning && !isLoading ? (
-        <button
-          onClick={handleRun}
-          disabled={!canRun}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md
-            bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:opacity-50
-            text-white text-sm font-medium transition-colors"
-          title="Run Project"
-        >
-          <Play className="w-3.5 h-3.5" />
-          <span>Run</span>
-        </button>
+        // Show locked button for non-premium users
+        !canRunCode && !planLoading ? (
+          <a
+            href="/pricing"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md
+              bg-amber-600/20 border border-amber-500/30 hover:bg-amber-600/30
+              text-amber-400 text-sm font-medium transition-colors"
+            title="Upgrade to Premium to run projects"
+          >
+            <Lock className="w-3.5 h-3.5" />
+            <span>Run (Premium)</span>
+          </a>
+        ) : (
+          <button
+            onClick={handleRun}
+            disabled={!canRun}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md
+              bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:opacity-50
+              text-white text-sm font-medium transition-colors"
+            title="Run Project"
+          >
+            <Play className="w-3.5 h-3.5" />
+            <span>Run</span>
+          </button>
+        )
       ) : isLoading ? (
         <button
           disabled

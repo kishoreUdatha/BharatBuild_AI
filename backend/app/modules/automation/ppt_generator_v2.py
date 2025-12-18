@@ -268,11 +268,11 @@ class PPTGeneratorV2:
             self._add_text_content(slide, content)
 
     def _add_structured_content(self, slide, content: Dict):
-        """Add structured content (subsections, bullets, etc.)"""
-        # Main content box
+        """Add structured content (subsections, bullets, etc.) with proper alignment"""
+        # Main content box - improved margins to prevent overflow
         content_box = slide.shapes.add_textbox(
-            Inches(0.5), Inches(1.5),
-            Inches(12.333), Inches(5.5)
+            Inches(0.75), Inches(1.6),
+            Inches(11.8), Inches(5.2)
         )
         content_frame = content_box.text_frame
         content_frame.word_wrap = True
@@ -281,55 +281,75 @@ class PPTGeneratorV2:
         text = content.get("content", "")
         subsections = content.get("subsections", [])
 
+        # Track total items to prevent overflow (max ~8-10 items per slide)
+        total_items = 0
+        MAX_ITEMS_PER_SLIDE = 8
+
         # Add main content
-        if text:
+        if text and total_items < MAX_ITEMS_PER_SLIDE:
             bullets = self._extract_bullets(text)
-            for bullet in bullets[:6]:  # Max 6 bullets
+            for bullet in bullets[:5]:  # Max 5 bullets for main content
+                if total_items >= MAX_ITEMS_PER_SLIDE:
+                    break
                 p = content_frame.add_paragraph()
                 p.text = f"• {bullet}"
-                p.font.size = Pt(20)
+                p.font.size = Pt(18)
                 p.font.color.rgb = self.TEXT_COLOR
-                p.space_before = Pt(12)
+                p.space_before = Pt(10)
+                p.space_after = Pt(4)
                 p.level = 0
+                total_items += 1
 
-        # Add subsection content
-        for subsection in subsections[:3]:  # Max 3 subsections
+        # Add subsection content - limit to 2 subsections max to prevent overflow
+        for subsection in subsections[:2]:
+            if total_items >= MAX_ITEMS_PER_SLIDE:
+                break
+
             sub_title = subsection.get("title", "")
             sub_content = subsection.get("content", "")
 
             if sub_title:
                 p = content_frame.add_paragraph()
                 p.text = sub_title
-                p.font.size = Pt(22)
+                p.font.size = Pt(20)
                 p.font.bold = True
                 p.font.color.rgb = self.SECONDARY_COLOR
-                p.space_before = Pt(18)
+                p.space_before = Pt(14)
+                p.space_after = Pt(4)
+                total_items += 1
 
-            if sub_content:
+            if sub_content and total_items < MAX_ITEMS_PER_SLIDE:
                 bullets = self._extract_bullets(sub_content)
-                for bullet in bullets[:4]:  # Max 4 bullets per subsection
+                for bullet in bullets[:3]:  # Max 3 bullets per subsection
+                    if total_items >= MAX_ITEMS_PER_SLIDE:
+                        break
                     p = content_frame.add_paragraph()
-                    p.text = f"  • {bullet}"
-                    p.font.size = Pt(18)
+                    p.text = f"    • {bullet}"
+                    p.font.size = Pt(16)
                     p.font.color.rgb = self.TEXT_COLOR
                     p.space_before = Pt(6)
+                    p.space_after = Pt(2)
+                    total_items += 1
 
     def _add_text_content(self, slide, text: str):
-        """Add text-only content"""
+        """Add text-only content with proper alignment"""
+        # Improved margins to prevent overflow (matching _add_structured_content)
         content_box = slide.shapes.add_textbox(
-            Inches(0.5), Inches(1.5),
-            Inches(12.333), Inches(5.5)
+            Inches(0.75), Inches(1.6),
+            Inches(11.8), Inches(5.2)
         )
         content_frame = content_box.text_frame
         content_frame.word_wrap = True
 
         bullets = self._extract_bullets(text)
+        # Limit to 6 bullets max to prevent overflow
         for bullet in bullets[:6]:
             p = content_frame.add_paragraph()
             p.text = f"• {bullet}"
-            p.font.size = Pt(20)
+            p.font.size = Pt(18)
             p.font.color.rgb = self.TEXT_COLOR
-            p.space_before = Pt(12)
+            p.space_before = Pt(10)
+            p.space_after = Pt(4)
 
     def _extract_bullets(self, text: str) -> List[str]:
         """Extract bullet points from text"""

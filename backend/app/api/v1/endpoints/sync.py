@@ -446,22 +446,26 @@ async def get_project_files(
 
     Response includes project_title for proper display in frontend.
     """
+    from app.core.database import AsyncSessionLocal
+
     try:
         user_id = str(current_user.id)
         actual_user_id = user_id  # Track actual user_id used
 
-        # Fetch project title from database upfront
+        # Fetch project title from database upfront - use fresh session to avoid transaction issues
+        # Note: projects.id is UUID type, compare directly without cast
         project_title = None
         project_description = None
         try:
-            db_result = await db.execute(
-                select(Project).where(Project.id == cast(project_id, String(36)))
-            )
-            project_record = db_result.scalar_one_or_none()
-            if project_record:
-                project_title = project_record.title
-                project_description = project_record.description
-                logger.debug(f"[get_project_files] Found project: {project_title}")
+            async with AsyncSessionLocal() as fresh_db:
+                db_result = await fresh_db.execute(
+                    select(Project).where(Project.id == project_id)
+                )
+                project_record = db_result.scalar_one_or_none()
+                if project_record:
+                    project_title = project_record.title
+                    project_description = project_record.description
+                    logger.debug(f"[get_project_files] Found project: {project_title}")
         except Exception as e:
             logger.warning(f"[get_project_files] Could not fetch project title: {e}")
 
@@ -526,60 +530,64 @@ async def get_project_files(
                             result["project_description"] = project_description
                         return result
 
-        # 2. Check PostgreSQL (Layer 3) for metadata
-        # Note: Project.id is String(36) not UUID, use cast() to prevent asyncpg UUID conversion
+        # 2. Check PostgreSQL (Layer 3) for metadata - use fresh session
+        # Note: projects.id is UUID type, compare directly without cast
         try:
-            db_result = await db.execute(
-                select(Project).where(Project.id == cast(project_id, String(36)))
-            )
-            project = db_result.scalar_one_or_none()
-
-            if project and project.s3_path and project.file_index:
-                logger.info(f"[Layer 2] Loading from S3 via metadata: {project_id}")
-
-                # Load from S3 using file_index
-                files = await unified_storage.load_project_for_editing(
-                    user_id=user_id,
-                    project_id=project_id,
-                    s3_prefix=project.s3_path,
-                    file_index=project.file_index
+            async with AsyncSessionLocal() as layer2_db:
+                db_result = await layer2_db.execute(
+                    select(Project).where(Project.id == project_id)
                 )
+                project = db_result.scalar_one_or_none()
 
-                # Convert to dict
-                tree = [f.to_dict() for f in files]
+                if project and project.s3_path and project.file_index:
+                    logger.info(f"[Layer 2] Loading from S3 via metadata: {project_id}")
 
-                # Add content (with user-scoped path)
-                async def add_content(items):
-                    for item in items:
-                        if item.get('type') == 'file':
-                            item['content'] = await unified_storage.read_from_sandbox(
-                                project_id, item['path'], user_id
-                            ) or ''
-                        if item.get('children'):
-                            await add_content(item['children'])
+                    # Load from S3 using file_index
+                    files = await unified_storage.load_project_for_editing(
+                        user_id=user_id,
+                        project_id=project_id,
+                        s3_prefix=project.s3_path,
+                        file_index=project.file_index
+                    )
 
-                await add_content(tree)
+                    # Convert to dict
+                    tree = [f.to_dict() for f in files]
 
-                return {
-                    "success": True,
-                    "project_id": project_id,
-                    "project_title": project_title,
-                    "project_description": project_description,
-                    "tree": tree,
-                    "layer": "s3",
-                    "total": len(project.file_index or [])
-                }
+                    # Add content (with user-scoped path)
+                    async def add_content(items):
+                        for item in items:
+                            if item.get('type') == 'file':
+                                item['content'] = await unified_storage.read_from_sandbox(
+                                    project_id, item['path'], user_id
+                                ) or ''
+                            if item.get('children'):
+                                await add_content(item['children'])
+
+                    await add_content(tree)
+
+                    return {
+                        "success": True,
+                        "project_id": project_id,
+                        "project_title": project_title,
+                        "project_description": project_description,
+                        "tree": tree,
+                        "layer": "s3",
+                        "total": len(project.file_index or [])
+                    }
         except ValueError:
             pass  # Not a valid UUID
+        except Exception as db_err:
+            logger.warning(f"[Layer 2] Database query failed: {db_err}")
 
-        # 3. Check ProjectFile table (Layer 4 - Database storage)
+        # 3. Check ProjectFile table (Layer 4 - Database storage) - use fresh session
         # This is where files are stored by the writer agent
-        # Use cast() to prevent asyncpg UUID conversion
+        # Note: project_files.project_id is UUID type, so compare directly (no cast needed)
         try:
-            db_result = await db.execute(
-                select(ProjectFile).where(ProjectFile.project_id == cast(project_id, String(36)))
-            )
-            project_files = db_result.scalars().all()
+            async with AsyncSessionLocal() as layer4_db:
+                db_result = await layer4_db.execute(
+                    select(ProjectFile).where(ProjectFile.project_id == project_id)
+                )
+                project_files = db_result.scalars().all()
 
             if project_files:
                 logger.info(f"[Layer 4] Loading {len(project_files)} files from database: {project_id}")

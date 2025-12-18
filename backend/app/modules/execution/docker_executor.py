@@ -27,6 +27,7 @@ from app.services.fullstack_integrator import FullstackIntegrator
 from app.services.smart_project_analyzer import smart_analyzer, Technology
 from app.modules.sdk_agents.sdk_fixer_agent import SDKFixerAgent
 from app.services.simple_fixer import simple_fixer
+from app.services.container_executor import container_executor, Technology as ContainerTech
 
 
 class FrameworkType(Enum):
@@ -2139,13 +2140,72 @@ class DockerExecutor:
         user_id: Optional[str] = None
     ) -> AsyncGenerator[str, None]:
         """
-        Run project directly on host (fallback when Docker unavailable).
-        Now with UNIVERSAL AUTO-FIX integration!
+        Run project in isolated container (using ContainerExecutor).
+        Falls back to direct host execution if container spawning fails.
 
-        Windows compatibility: Uses proper encoding and streams output in real-time.
+        Production-ready: Spawns technology-specific containers for each project.
         Auto-fixes ANY errors that occur during execution.
         """
-        yield "Running project directly (Docker unavailable)...\n"
+        # ===== TRY CONTAINER EXECUTOR FIRST (Production Mode) =====
+        # This spawns isolated containers with the right technology stack
+        try:
+            yield "🐳 Spawning isolated container for project...\n"
+
+            # Initialize container executor if needed
+            if not container_executor.docker_client:
+                await container_executor.initialize()
+
+            if container_executor.docker_client:
+                # Detect technology and spawn appropriate container
+                tech = container_executor.detect_technology(str(project_path))
+                yield f"  📦 Detected technology: {tech.value}\n"
+
+                success, message, port = await container_executor.create_container(
+                    project_id=project_id,
+                    user_id=user_id or "anonymous",
+                    project_path=str(project_path),
+                    technology=tech
+                )
+
+                if success and port:
+                    yield f"  ✅ Container started on port {port}\n"
+                    yield f"  🌐 Preview URL: http://localhost:{port}\n"
+
+                    # Store the port
+                    self._assigned_ports[project_id] = port
+
+                    # Stream container logs
+                    yield "  📜 Streaming container logs...\n\n"
+                    for _ in range(60):  # Monitor for up to 60 seconds
+                        await asyncio.sleep(2)
+                        logs = await container_executor.get_container_logs(project_id, tail=20)
+                        if logs:
+                            yield logs
+
+                        # Check if server is ready
+                        status = await container_executor.get_container_status(project_id)
+                        if status and status.get("status") == "running":
+                            yield f"\n✅ Server running at http://localhost:{port}\n"
+                            yield f"__PREVIEW_URL__:http://localhost:{port}\n"
+                            return
+
+                    yield f"\n⚠️ Container started but server may not be ready\n"
+                    yield f"__PREVIEW_URL__:http://localhost:{port}\n"
+                    return
+                else:
+                    yield f"  ⚠️ Container spawn failed: {message}\n"
+                    yield "  Falling back to direct execution...\n\n"
+            else:
+                yield "  ⚠️ Docker not available for containers\n"
+                yield "  Falling back to direct execution...\n\n"
+
+        except Exception as e:
+            logger.warning(f"[DockerExecutor:{project_id}] Container executor failed: {e}")
+            yield f"  ⚠️ Container executor error: {str(e)[:100]}\n"
+            yield "  Falling back to direct execution...\n\n"
+
+        # ===== FALLBACK: Direct execution on host =====
+        yield "Running project directly on host...\n"
 
         # Store user_id for auto-fix
         self._current_user_id = user_id
@@ -3021,14 +3081,12 @@ class DockerExecutor:
                     # Use optimized SimpleFixer (Haiku + minimal context) instead of expensive ProductionFixerAgent
                     if stderr:
                         try:
-                            # Parse error for SimpleFixer format
-                            errors = [{"message": stderr[:1000], "source": "dependency"}]
+                            # SimpleFixer expects: project_path, command, output, exit_code
                             result = await simple_fixer.fix(
-                                project_id=project_id,
-                                errors=errors,
-                                context=stderr,
+                                project_path=project_path,
                                 command=cmd,
-                                project_path=project_path
+                                output=stderr[:2000],
+                                exit_code=exit_code
                             )
                             if result.success:
                                 yield f"  ✅ SimpleFixer fixed the issue\n"
@@ -3091,23 +3149,12 @@ class DockerExecutor:
         else:
             yield f"Using existing Dockerfile (detected: {framework.value})\n"
 
-        # Check Docker availability
-        docker_available = await self._check_docker_available()
-
-        if docker_available:
-            yield "Docker available - running in container...\n"
-            try:
-                async for output in self.run_container(project_id, project_path, framework):
-                    yield output
-            except Exception as e:
-                yield f"Docker execution failed: {str(e)}\n"
-                yield "Falling back to direct execution...\n"
-                async for output in self.run_direct(project_id, project_path, framework, user_id=user_id):
-                    yield output
-        else:
-            yield "Docker not available - running directly on host...\n"
-            async for output in self.run_direct(project_id, project_path, framework, user_id=user_id):
-                yield output
+        # Use run_direct which has container_executor logic with pre-built images
+        # This spawns isolated containers using maven:3.9, node:20, python:3.11, etc.
+        # Much faster than building Docker images from project Dockerfiles
+        yield "🚀 Running with pre-built container images...\n"
+        async for output in self.run_direct(project_id, project_path, framework, user_id=user_id):
+            yield output
 
     async def stop_project(self, project_id: str) -> bool:
         """Stop a running project (container or direct process)"""

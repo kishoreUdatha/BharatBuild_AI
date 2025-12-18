@@ -28,6 +28,7 @@ import json
 import os
 
 from app.core.logging_config import logger
+from app.core.config import settings
 from app.services.log_rebuilder import log_rebuilder, DetectedError
 
 
@@ -77,7 +78,7 @@ class LogBus:
     # Log retention (keep last N entries per source)
     MAX_LOGS_PER_SOURCE = 50
     # Time-based retention (logs older than this are cleaned)
-    LOG_RETENTION_MINUTES = 30
+    LOG_RETENTION_MINUTES = settings.LOG_RETENTION_MINUTES
 
     def __init__(self, project_id: str):
         self.project_id = project_id

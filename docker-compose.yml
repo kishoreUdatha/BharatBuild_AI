@@ -62,7 +62,7 @@ services:
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.light
     container_name: bharatbuild_backend
     env_file:
       - .env
@@ -71,11 +71,19 @@ services:
     volumes:
       - backend_uploads:/app/uploads
       - user_projects:/app/user_projects
+      - sandbox_workspace:/tmp/sandbox/workspace
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker-in-Docker for dynamic container spawning
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
     networks:
       - bharatbuild_network
@@ -84,7 +92,7 @@ services:
   celery_worker:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.light
     container_name: bharatbuild_celery_worker
     environment:
       - DATABASE_URL=postgresql://bharatbuild:bharatbuild123@postgres:5432/bharatbuild_db
@@ -108,7 +116,7 @@ services:
   celery_beat:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.light
     container_name: bharatbuild_celery_beat
     environment:
       - DATABASE_URL=postgresql://bharatbuild:bharatbuild123@postgres:5432/bharatbuild_db
@@ -141,7 +149,14 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     networks:
       - bharatbuild_network
 
@@ -170,6 +185,7 @@ volumes:
   minio_data:
   backend_uploads:
   user_projects:
+  sandbox_workspace:
 
 networks:
   bharatbuild_network:

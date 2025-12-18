@@ -114,7 +114,8 @@ async def run_project(
     project_id: str,
     request: Optional[RunProjectRequest] = None,
     current_user: Optional[User] = Depends(get_optional_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_feature("code_execution"))
 ):
     """
     Run/execute a generated project in Docker container
@@ -372,6 +373,8 @@ async def fix_runtime_error(
             content = file_info.get("content")
 
             if file_path_str and content:
+                # Sanitize path: strip quotes and whitespace (defensive fix for quoted filenames)
+                file_path_str = file_path_str.strip().strip('"').strip("'")
                 # Ensure file path is within project
                 full_path = project_path / file_path_str
 

@@ -20,17 +20,17 @@ from app.modules.auth.dependencies import get_current_user
 
 
 # Default features for users without a plan (Free tier)
-# FREE users can only: generate project structure, preview code, run code
-# All other features require Premium plan upgrade
+# FREE users can only: preview project structure, run code
+# Project generation and all documents require Premium plan upgrade
 FREE_TIER_FEATURES = {
     "agentic_mode": False,
-    "document_generation": False,
+    "document_generation": False,  # BLOCKED - requires Premium
     "code_execution": True,  # Allow basic code execution for free
     "api_access": False,
     "priority_queue": False,
     # Plan-based features - blocked for free tier
-    "project_generation": True,  # Can generate project structure
-    "code_preview": True,  # Can preview code
+    "project_generation": False,  # BLOCKED - requires Premium (was True for preview)
+    "code_preview": True,  # Can preview code structure only
     "bug_fixing": False,  # BLOCKED - upgrade required
     "srs_document": False,  # BLOCKED - upgrade required
     "sds_document": False,  # BLOCKED - upgrade required

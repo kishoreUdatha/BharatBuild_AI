@@ -562,6 +562,17 @@ class SimpleFixer:
     ) -> SimpleFixResult:
         """Internal method to execute fix with cost optimizations"""
         try:
+            # =================================================================
+            # STEP 0: Try deterministic CSS fix FIRST (fast, free, no API call)
+            # =================================================================
+            error_text = context or ""
+            for err in errors:
+                error_text += " " + err.get("message", "")
+            deterministic_result = await self._try_deterministic_css_fix(project_path, error_text)
+            if deterministic_result:
+                logger.info(f"[SimpleFixer:{project_id}] Deterministic CSS fix applied - skipping AI")
+                return deterministic_result
+
             # COST OPTIMIZATION #2: Select model based on complexity
             model = self._select_model(complexity)
 
@@ -1101,6 +1112,110 @@ Please analyze and fix these errors. If the output shows success or warnings onl
 
         return False
 
+    async def _try_deterministic_css_fix(self, project_path: Path, output: str) -> Optional[SimpleFixResult]:
+        """
+        Try to fix Tailwind CSS errors deterministically (no AI call needed).
+
+        Handles errors like:
+        - "The `border-border` class does not exist"
+        - "The `bg-background` class does not exist"
+
+        Returns SimpleFixResult if fixed, None if not a CSS error or fix failed.
+        """
+        # Check if this is a Tailwind CSS class error
+        if "class does not exist" not in output.lower():
+            return None
+
+        # Extract the missing class name
+        class_pattern = r"The [`']([a-zA-Z0-9\-_]+)[`'] class does not exist"
+        match = re.search(class_pattern, output)
+        if not match:
+            return None
+
+        missing_class = match.group(1)
+        logger.info(f"[SimpleFixer] Detected missing Tailwind class: {missing_class}")
+
+        # Mapping of shadcn/ui classes to standard Tailwind
+        shadcn_to_tailwind = {
+            "border-border": "border-gray-200 dark:border-gray-700",
+            "bg-background": "bg-white dark:bg-gray-900",
+            "text-foreground": "text-gray-900 dark:text-white",
+            "bg-card": "bg-white dark:bg-gray-800",
+            "text-card-foreground": "text-gray-900 dark:text-gray-100",
+            "bg-popover": "bg-white dark:bg-gray-800",
+            "text-popover-foreground": "text-gray-900 dark:text-gray-100",
+            "bg-primary": "bg-blue-600",
+            "text-primary-foreground": "text-white",
+            "bg-secondary": "bg-gray-100 dark:bg-gray-700",
+            "text-secondary-foreground": "text-gray-900 dark:text-gray-100",
+            "bg-muted": "bg-gray-100 dark:bg-gray-800",
+            "text-muted-foreground": "text-gray-500 dark:text-gray-400",
+            "bg-accent": "bg-gray-100 dark:bg-gray-700",
+            "text-accent-foreground": "text-gray-900 dark:text-gray-100",
+            "bg-destructive": "bg-red-600",
+            "text-destructive-foreground": "text-white",
+            "ring-ring": "ring-blue-500",
+            "bg-input": "bg-white dark:bg-gray-800",
+        }
+
+        if missing_class not in shadcn_to_tailwind:
+            logger.info(f"[SimpleFixer] No mapping for class: {missing_class}")
+            return None
+
+        replacement = shadcn_to_tailwind[missing_class]
+
+        # Find and fix CSS files
+        css_file_paths = [
+            project_path / "src" / "index.css",
+            project_path / "src" / "globals.css",
+            project_path / "src" / "app" / "globals.css",
+            project_path / "src" / "styles" / "globals.css",
+            project_path / "src" / "App.css",
+            project_path / "app" / "globals.css",
+            project_path / "styles" / "globals.css",
+            project_path / "frontend" / "src" / "index.css",
+            project_path / "frontend" / "src" / "globals.css",
+        ]
+
+        files_modified = []
+
+        for css_path in css_file_paths:
+            if not css_path.exists():
+                continue
+
+            try:
+                content = css_path.read_text(encoding='utf-8')
+                original_content = content
+
+                # Replace @apply with the shadcn class
+                patterns = [
+                    (rf'@apply\s+{re.escape(missing_class)}\s*;', f'@apply {replacement};'),
+                    (rf'(@apply\s+[^;]*)\b{re.escape(missing_class)}\b([^;]*;)', rf'\1{replacement}\2'),
+                ]
+
+                for pattern, repl in patterns:
+                    content = re.sub(pattern, repl, content)
+
+                if content != original_content:
+                    css_path.write_text(content, encoding='utf-8')
+                    rel_path = str(css_path.relative_to(project_path))
+                    files_modified.append(rel_path)
+                    logger.info(f"[SimpleFixer] Fixed {missing_class} -> {replacement} in {rel_path}")
+
+            except Exception as e:
+                logger.warning(f"[SimpleFixer] Error fixing {css_path}: {e}")
+                continue
+
+        if files_modified:
+            return SimpleFixResult(
+                success=True,
+                files_modified=files_modified,
+                message=f"Replaced @apply {missing_class} with {replacement}",
+                patches_applied=len(files_modified)
+            )
+
+        return None
+
     async def fix(
         self,
         project_path: Path,
@@ -1112,12 +1227,20 @@ Please analyze and fix these errors. If the output shows success or warnings onl
         Fix an error using AI - COST OPTIMIZED.
 
         Simple flow:
-        1. Classify error complexity for model selection
-        2. Gather SMALLER context (only error-mentioned files + key configs)
-        3. Send to AI with selected model
-        4. Apply fixes with max 5 iterations
+        1. TRY DETERMINISTIC FIX FIRST (fast, free) - Tailwind CSS errors
+        2. Classify error complexity for model selection
+        3. Gather SMALLER context (only error-mentioned files + key configs)
+        4. Send to AI with selected model
+        5. Apply fixes with max 5 iterations
         """
         try:
+            # =================================================================
+            # STEP 0: Try deterministic fix FIRST (fast, free, no API call)
+            # =================================================================
+            deterministic_result = await self._try_deterministic_css_fix(project_path, output)
+            if deterministic_result:
+                logger.info(f"[SimpleFixer] Deterministic CSS fix applied - skipping AI")
+                return deterministic_result
             # COST OPTIMIZATION #2: Classify error for model selection
             errors = [{"message": output[-2000:], "source": "terminal"}]
             complexity = self._classify_error_complexity(errors, output)

@@ -28,6 +28,7 @@ from datetime import datetime
 from enum import Enum
 
 from app.core.logging_config import logger
+from app.core.config import settings
 from app.services.fix_executor import FixExecutor, execute_install_command
 from app.services.unified_storage import UnifiedStorageService as UnifiedStorageManager
 from app.modules.automation.context_engine import ContextEngine
@@ -197,9 +198,9 @@ class UniversalAutoFixer:
     7. Browser/runtime error handling via WebSocket
     """
 
-    MAX_FIX_ATTEMPTS = 10  # Maximum fix attempts before giving up
+    MAX_FIX_ATTEMPTS = settings.AUTOFIXER_MAX_ATTEMPTS  # Maximum fix attempts before giving up
     FIX_DELAY_SECONDS = 2  # Delay between fix attempts
-    INSTALL_TIMEOUT_SECONDS = 120  # Timeout for install commands
+    INSTALL_TIMEOUT_SECONDS = settings.AUTOFIXER_INSTALL_TIMEOUT  # Timeout for install commands
 
     def __init__(
         self,
@@ -401,6 +402,8 @@ class UniversalAutoFixer:
 
         These are typically shadcn/ui convention errors where CSS variables
         are used but the corresponding colors aren't defined in tailwind.config.js
+
+        STRATEGY: Replace shadcn/ui classes with standard Tailwind (more reliable)
         """
         logger.info(f"[UniversalAutoFixer:{self.project_id}] Fixing Tailwind configuration error...")
 
@@ -419,6 +422,45 @@ class UniversalAutoFixer:
 
         missing_class = match.group(1)
         logger.info(f"[UniversalAutoFixer:{self.project_id}] Missing Tailwind class: {missing_class}")
+
+        # =================================================================
+        # STRATEGY 1: Replace shadcn classes in CSS files with standard Tailwind
+        # This is more reliable than modifying tailwind.config.js
+        # =================================================================
+        shadcn_to_tailwind = {
+            "border-border": "border-gray-200 dark:border-gray-700",
+            "bg-background": "bg-white dark:bg-gray-900",
+            "text-foreground": "text-gray-900 dark:text-white",
+            "bg-card": "bg-white dark:bg-gray-800",
+            "text-card-foreground": "text-gray-900 dark:text-gray-100",
+            "bg-popover": "bg-white dark:bg-gray-800",
+            "text-popover-foreground": "text-gray-900 dark:text-gray-100",
+            "bg-primary": "bg-blue-600",
+            "text-primary-foreground": "text-white",
+            "bg-secondary": "bg-gray-100 dark:bg-gray-700",
+            "text-secondary-foreground": "text-gray-900 dark:text-gray-100",
+            "bg-muted": "bg-gray-100 dark:bg-gray-800",
+            "text-muted-foreground": "text-gray-500 dark:text-gray-400",
+            "bg-accent": "bg-gray-100 dark:bg-gray-700",
+            "text-accent-foreground": "text-gray-900 dark:text-gray-100",
+            "bg-destructive": "bg-red-600",
+            "text-destructive-foreground": "text-white",
+            "ring-ring": "ring-blue-500",
+            "bg-input": "bg-white dark:bg-gray-800",
+        }
+
+        # Try to fix CSS files first (more reliable approach)
+        if missing_class in shadcn_to_tailwind:
+            replacement = shadcn_to_tailwind[missing_class]
+            css_fixed = await self._fix_shadcn_in_css_files(missing_class, replacement)
+            if css_fixed:
+                logger.info(f"[UniversalAutoFixer:{self.project_id}] ✅ Replaced {missing_class} with {replacement} in CSS")
+                self.fixes_applied.append(f"Replaced @apply {missing_class} with {replacement}")
+                return True
+
+        # =================================================================
+        # STRATEGY 2 (Fallback): Modify tailwind.config.js
+        # =================================================================
 
         # Common shadcn/ui CSS variable mappings
         # These classes use CSS variables like var(--border), var(--background), etc.
@@ -522,6 +564,62 @@ class UniversalAutoFixer:
             f"The class '{missing_class}' is not defined. Please update {tailwind_config} "
             f"to define this class or fix the CSS that uses it."
         )
+
+    async def _fix_shadcn_in_css_files(self, shadcn_class: str, replacement: str) -> bool:
+        """
+        Replace shadcn/ui @apply classes with standard Tailwind in CSS files.
+
+        This is more reliable than modifying tailwind.config.js because:
+        1. Standard Tailwind classes always work
+        2. No CSS variables needed
+        3. Directly fixes the source of the problem
+        """
+        # Common CSS file locations
+        css_file_paths = [
+            self.project_path / "src" / "index.css",
+            self.project_path / "src" / "globals.css",
+            self.project_path / "src" / "app" / "globals.css",
+            self.project_path / "src" / "styles" / "globals.css",
+            self.project_path / "src" / "App.css",
+            self.project_path / "app" / "globals.css",
+            self.project_path / "styles" / "globals.css",
+            self.project_path / "frontend" / "src" / "index.css",
+            self.project_path / "frontend" / "src" / "globals.css",
+        ]
+
+        fixed_any = False
+
+        for css_path in css_file_paths:
+            if not css_path.exists():
+                continue
+
+            try:
+                content = css_path.read_text(encoding='utf-8')
+                original_content = content
+
+                # Pattern to match @apply with the shadcn class
+                # Handles: @apply border-border; and @apply ... border-border ...;
+                patterns = [
+                    # Standalone: @apply border-border;
+                    (rf'@apply\s+{re.escape(shadcn_class)}\s*;', f'@apply {replacement};'),
+                    # In a list: @apply ... border-border ...;
+                    (rf'(@apply\s+[^;]*)\b{re.escape(shadcn_class)}\b([^;]*;)', rf'\1{replacement}\2'),
+                ]
+
+                for pattern, repl in patterns:
+                    content = re.sub(pattern, repl, content)
+
+                # Check if anything changed
+                if content != original_content:
+                    css_path.write_text(content, encoding='utf-8')
+                    logger.info(f"[UniversalAutoFixer:{self.project_id}] Fixed {shadcn_class} in {css_path}")
+                    fixed_any = True
+
+            except Exception as e:
+                logger.warning(f"[UniversalAutoFixer:{self.project_id}] Error fixing {css_path}: {e}")
+                continue
+
+        return fixed_any
 
     async def detect_and_fix_missing_files(self, error_message: str) -> bool:
         """Detect and create missing files from import errors"""

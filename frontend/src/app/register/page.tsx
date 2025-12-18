@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { UserPlus, Mail, Lock, User, AlertCircle, Briefcase, GraduationCap, Building2, Users, ChevronRight, ChevronLeft, Check } from 'lucide-react'
+import { UserPlus, Mail, Lock, User, AlertCircle, Briefcase, GraduationCap, Building2, Users, ChevronRight, ChevronLeft, Check, Phone } from 'lucide-react'
 
 // Google Icon SVG
 const GoogleIcon = () => (
@@ -64,6 +64,7 @@ export default function RegisterPage() {
     password: '',
     confirmPassword: '',
     fullName: '',
+    phone: '',
     role: 'student',
     // Student Academic Details
     rollNumber: '',
@@ -173,6 +174,7 @@ export default function RegisterPage() {
         email: formData.email,
         password: formData.password,
         full_name: formData.fullName,
+        phone: formData.phone || undefined,
         role: formData.role,
         // Student Academic Details (only for students)
         roll_number: formData.role === 'student' ? formData.rollNumber : undefined,
@@ -297,19 +299,40 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="you@example.com"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="pl-10"
-                  required
-                />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="you@example.com"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    className="pl-10"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="phone">Phone (Optional)</Label>
+                <div className="relative">
+                  <Phone className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="phone"
+                    type="tel"
+                    placeholder="9876543210"
+                    value={formData.phone}
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/\D/g, '').slice(0, 10)
+                      setFormData({ ...formData, phone: value })
+                    }}
+                    className="pl-10"
+                    maxLength={10}
+                  />
+                </div>
               </div>
             </div>
 

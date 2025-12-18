@@ -6,21 +6,46 @@ version: '3.8'
 # ============================================
 
 services:
+  # Database Migration Service (runs once before backend)
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: bharatbuild_migrate
+    environment:
+      - ENVIRONMENT=production
+      - SKIP_DB_INIT=false
+    env_file:
+      - .env.production
+    command: >
+      sh -c "
+        echo 'Running database migrations...' &&
+        python scripts/init_db.py --migrate &&
+        echo 'Migrations completed!'
+      "
+    networks:
+      - bharatbuild_prod
+    restart: "no"
+
   # Backend API
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile.cpu
+      dockerfile: Dockerfile.prod
     container_name: bharatbuild_backend_prod
     environment:
       - ENVIRONMENT=production
       - DEBUG=False
+      - SKIP_DB_INIT=true
     env_file:
       - .env.production
     volumes:
       - backend_uploads_prod:/app/uploads
       - user_projects_prod:/app/user_projects
       - sandbox_workspace:/tmp/sandbox/workspace
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     command: >
       sh -c "
         python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4

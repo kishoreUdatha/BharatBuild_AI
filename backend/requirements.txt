@@ -109,7 +109,7 @@ librosa==0.10.1
 soundfile==0.12.1
 speechrecognition==3.10.1
 pydub==0.25.1
-whisper-openai==20231117
+openai-whisper==20231117
 
 # ============================================
 # MLOps & Experiment Tracking

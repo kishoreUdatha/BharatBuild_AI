@@ -1191,6 +1191,36 @@ PLANNING RULES:
 
 NOW, ANALYZE THE USER'S REQUEST AND CREATE A UNIQUE, CUSTOMIZED PLAN!
 
+═══════════════════════════════════════════════════════════════════════════════
+                    🔗 FULLSTACK INTEGRATION REQUIREMENTS
+═══════════════════════════════════════════════════════════════════════════════
+
+For fullstack projects, ALWAYS include these integration files in your plan:
+
+1. API SERVICE FILE (frontend/src/services/api.ts):
+   - Axios/fetch wrapper with base URL configuration
+   - Auth token interceptor
+   - Typed API methods for each endpoint
+
+2. ENVIRONMENT FILES:
+   - frontend/.env with VITE_API_URL=http://localhost:4000
+   - backend/.env with CORS_ORIGINS, DATABASE_URL, etc.
+
+3. ENSURE ALL UI COMPONENTS HAVE:
+   - Working onClick handlers (not empty {} or console.log)
+   - Forms that submit to real API endpoints
+   - Navigation links to actual routes
+   - State that fetches from real API (not hardcoded mock data)
+
+4. ENSURE BACKEND ENDPOINTS MATCH FRONTEND CALLS:
+   - If frontend calls GET /api/users → backend must have that route
+   - If frontend calls POST /api/auth/login → backend must have that route
+
+5. INCLUDE IN PLAN:
+   - API service file for frontend
+   - CORS configuration for backend
+   - Route definitions that match navigation links
+
 ⚠️ FINAL REMINDER - CRITICAL FOR COMPLETE PROJECT GENERATION:
 
 1. First, design <project_structure> based on the user's request

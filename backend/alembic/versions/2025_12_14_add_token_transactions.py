@@ -6,13 +6,12 @@ Create Date: 2025-12-14
 
 This migration adds:
 - token_transactions table: Detailed per-request token usage tracking
-- AgentType enum: planner, writer, fixer, verifier, document, etc.
-- OperationType enum: plan_project, generate_file, generate_srs, etc.
-- Indexes for efficient querying by user, project, and date
+- Matches the TokenTransaction model in app/models/token_balance.py
+- Uses String(36) for UUIDs for cross-database compatibility
 """
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
+from sqlalchemy import inspect
 
 
 # revision identifiers, used by Alembic.
@@ -22,66 +21,64 @@ branch_labels = None
 depends_on = None
 
 
+def table_exists(table_name: str) -> bool:
+    """Check if table already exists in the database"""
+    bind = op.get_bind()
+    inspector = inspect(bind)
+    return table_name in inspector.get_table_names()
+
+
 def upgrade() -> None:
-    # Create AgentType enum
-    agent_type_enum = sa.Enum(
-        'planner', 'writer', 'fixer', 'verifier', 'runner',
-        'document', 'enhancer', 'chat', 'other',
-        name='agenttype'
-    )
-    agent_type_enum.create(op.get_bind(), checkfirst=True)
+    # Skip if table already exists (created by SQLAlchemy create_all or previous run)
+    if table_exists('token_transactions'):
+        return
 
-    # Create OperationType enum
-    operation_type_enum = sa.Enum(
-        'plan_project', 'plan_structure',
-        'generate_file', 'generate_batch', 'regenerate_file',
-        'fix_error', 'fix_imports', 'auto_fix',
-        'verify_code', 'verify_imports',
-        'generate_srs', 'generate_report', 'generate_ppt', 'generate_viva', 'generate_uml',
-        'chat_message', 'chat_enhance',
-        'other',
-        name='operationtype'
-    )
-    operation_type_enum.create(op.get_bind(), checkfirst=True)
-
-    # Create token_transactions table
+    # Create token_transactions table matching TokenTransaction model
     op.create_table(
         'token_transactions',
-        sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column('user_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('users.id', ondelete='CASCADE'), nullable=False),
-        sa.Column('project_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('projects.id', ondelete='SET NULL'), nullable=True),
-        sa.Column('agent_type', sa.Enum('planner', 'writer', 'fixer', 'verifier', 'runner', 'document', 'enhancer', 'chat', 'other', name='agenttype'), nullable=False, server_default='other'),
-        sa.Column('operation', sa.Enum('plan_project', 'plan_structure', 'generate_file', 'generate_batch', 'regenerate_file', 'fix_error', 'fix_imports', 'auto_fix', 'verify_code', 'verify_imports', 'generate_srs', 'generate_report', 'generate_ppt', 'generate_viva', 'generate_uml', 'chat_message', 'chat_enhance', 'other', name='operationtype'), nullable=False, server_default='other'),
-        sa.Column('model', sa.String(50), nullable=False, server_default='haiku'),
-        sa.Column('input_tokens', sa.Integer(), nullable=False, server_default='0'),
-        sa.Column('output_tokens', sa.Integer(), nullable=False, server_default='0'),
-        sa.Column('total_tokens', sa.Integer(), nullable=False, server_default='0'),
-        sa.Column('cost_paise', sa.Integer(), nullable=False, server_default='0'),
-        sa.Column('file_path', sa.String(500), nullable=True),
-        sa.Column('error_message', sa.Text(), nullable=True),
-        sa.Column('metadata', postgresql.JSON(), nullable=True),
+        sa.Column('id', sa.String(36), primary_key=True),
+        sa.Column('user_id', sa.String(36), sa.ForeignKey('users.id', ondelete='CASCADE'), nullable=False),
+        sa.Column('project_id', sa.String(36), sa.ForeignKey('projects.id', ondelete='SET NULL'), nullable=True),
+
+        # Transaction type: usage, purchase, refund, bonus, monthly_reset
+        sa.Column('transaction_type', sa.String(50), nullable=False),
+
+        # Token balance tracking
+        sa.Column('tokens_before', sa.Integer(), nullable=False),
+        sa.Column('tokens_changed', sa.Integer(), nullable=False),
+        sa.Column('tokens_after', sa.Integer(), nullable=False),
+
+        # Details
+        sa.Column('description', sa.String(500), nullable=True),
+        sa.Column('agent_type', sa.String(50), nullable=True),
+        sa.Column('model_used', sa.String(100), nullable=True),
+
+        # Token breakdown
+        sa.Column('input_tokens', sa.Integer(), nullable=True, server_default='0'),
+        sa.Column('output_tokens', sa.Integer(), nullable=True, server_default='0'),
+        sa.Column('cache_read_tokens', sa.Integer(), nullable=True, server_default='0'),
+        sa.Column('cache_creation_tokens', sa.Integer(), nullable=True, server_default='0'),
+
+        # Cost estimates
+        sa.Column('estimated_cost_usd', sa.Integer(), nullable=True, server_default='0'),
+        sa.Column('estimated_cost_inr', sa.Integer(), nullable=True, server_default='0'),
+
+        # Metadata
+        sa.Column('extra_metadata', sa.JSON(), nullable=True),
+
+        # Timestamp
         sa.Column('created_at', sa.DateTime(), nullable=False, server_default=sa.func.now()),
     )
 
-    # Create indexes for efficient queries
-    op.create_index('ix_token_tx_user_id', 'token_transactions', ['user_id'])
-    op.create_index('ix_token_tx_project_id', 'token_transactions', ['project_id'])
-    op.create_index('ix_token_tx_created_at', 'token_transactions', ['created_at'])
-    op.create_index('ix_token_tx_user_project', 'token_transactions', ['user_id', 'project_id'])
-    op.create_index('ix_token_tx_user_date', 'token_transactions', ['user_id', 'created_at'])
+    # Create index for created_at (commonly queried)
+    op.create_index('ix_token_transactions_created_at', 'token_transactions', ['created_at'])
+    op.create_index('ix_token_transactions_user_id', 'token_transactions', ['user_id'])
 
 
 def downgrade() -> None:
-    # Drop indexes
-    op.drop_index('ix_token_tx_user_date', table_name='token_transactions')
-    op.drop_index('ix_token_tx_user_project', table_name='token_transactions')
-    op.drop_index('ix_token_tx_created_at', table_name='token_transactions')
-    op.drop_index('ix_token_tx_project_id', table_name='token_transactions')
-    op.drop_index('ix_token_tx_user_id', table_name='token_transactions')
+    # Drop indexes first
+    op.drop_index('ix_token_transactions_user_id', table_name='token_transactions')
+    op.drop_index('ix_token_transactions_created_at', table_name='token_transactions')
 
     # Drop table
     op.drop_table('token_transactions')
-
-    # Drop enums
-    sa.Enum(name='operationtype').drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name='agenttype').drop(op.get_bind(), checkfirst=True)

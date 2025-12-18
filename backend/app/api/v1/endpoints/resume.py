@@ -24,6 +24,7 @@ from app.models.project import Project, ProjectStatus
 from app.models.project_file import ProjectFile, FileGenerationStatus
 from app.models.document import Document, DocumentType as DBDocumentType
 from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.feature_flags import require_feature, check_feature_access
 from app.services.checkpoint_service import checkpoint_service, CheckpointStatus
 
 
@@ -139,6 +140,8 @@ async def resume_project(
     3. If files complete → start document generation
     4. Streams progress via SSE
 
+    Requires: Premium plan for document generation
+
     Returns:
         SSE stream with generation progress
     """
@@ -146,6 +149,21 @@ async def resume_project(
 
     # Check file generation status first
     files_complete, completed_count, total_count = await check_files_complete(db, project_id)
+
+    # If files are complete and we need to generate documents, check feature access
+    if files_complete:
+        doc_access = await check_feature_access(db, current_user, "document_generation")
+        if not doc_access["allowed"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "feature_not_available",
+                    "message": "Document generation requires Premium plan. Upgrade to generate SRS, reports, and presentations.",
+                    "feature": "document_generation",
+                    "current_plan": doc_access["current_plan"],
+                    "upgrade_to": "Premium"
+                }
+            )
 
     # Get pending documents
     pending_docs = await get_pending_documents(db, project_id)

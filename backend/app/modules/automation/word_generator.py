@@ -1019,6 +1019,11 @@ We further declare that:"""
         elif not isinstance(content, dict):
             content = {}
 
+        # Get project name for more contextual content
+        project_name = "the project"
+        if project_data:
+            project_name = project_data.get("project_name", "the project")
+
         # Chapter/Section heading
         if section_id.startswith("ch"):
             # Chapter heading
@@ -1031,14 +1036,20 @@ We further declare that:"""
         # Add main content
         main_content = content.get("content", "")
 
-        # If no main content but has error/fallback flag, generate placeholder
-        if not main_content and content.get("fallback"):
-            main_content = f"""This section covers {title}. The {title.lower()} provides essential information about the project implementation, covering key aspects of the system design and development process.
+        # If content is a dict (nested structure), extract the actual text
+        if isinstance(main_content, dict):
+            main_content = main_content.get("content", "") or main_content.get("text", "")
+
+        # If still no content and has error/fallback flag, generate project-specific placeholder
+        if not main_content and (content.get("fallback") or content.get("error")):
+            fallback_reason = content.get("fallback_reason", "")
+            logger.warning(f"[WordGenerator] Using fallback content for section {section_id}: {fallback_reason}")
+
+            main_content = f"""This section covers {title} for {project_name}. The {title.lower()} provides essential information about the project implementation, covering key aspects of the system design and development process.
 
 The content in this section is organized to give readers a comprehensive understanding of the technical aspects involved. Each subsection addresses specific components and their roles in the overall system architecture.
 
 Key points covered include the design decisions, implementation strategies, and best practices followed during development. The technical details are presented in a manner that facilitates understanding for both technical and non-technical stakeholders."""
-            logger.warning(f"[WordGenerator] Using fallback content for section: {section_id}")
 
         if main_content:
             self._add_formatted_text(main_content)

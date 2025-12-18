@@ -1224,7 +1224,8 @@ OUTPUT THE FIX NOW:
             matches = re.findall(pattern, response, re.DOTALL | re.IGNORECASE)
             for match in matches:
                 path, content = match
-                path = path.strip()
+                # Strip quotes and whitespace from path (same as patches)
+                path = path.strip().strip('"').strip("'")
                 content = content.strip()
 
                 # SAFETY VALIDATION for new files

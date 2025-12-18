@@ -1,7 +1,7 @@
 """Add file generation status tracking
 
 Revision ID: add_file_gen_status
-Revises: 2025_12_04_add_is_saved_column
+Revises: add_is_saved_column
 Create Date: 2025-12-14
 
 This migration adds:
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = 'add_file_gen_status'
-down_revision = '2025_12_04_add_is_saved_column'
+down_revision = 'add_is_saved_column'
 branch_labels = None
 depends_on = None
 

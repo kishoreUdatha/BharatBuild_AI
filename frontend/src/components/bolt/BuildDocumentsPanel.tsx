@@ -11,10 +11,12 @@ import {
   FolderOpen,
   Image as ImageIcon,
   File,
-  RefreshCw
+  RefreshCw,
+  Lock
 } from 'lucide-react'
 import { apiClient } from '@/lib/api-client'
 import { useProject } from '@/hooks/useProject'
+import { usePlanStatus } from '@/hooks/usePlanStatus'
 
 interface Document {
   id: string | null
@@ -84,6 +86,10 @@ export function BuildDocumentsPanel() {
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set(['REPORT', 'SRS', 'PPT', 'VIVA_QA']))
 
+  // Check if user has download feature (Premium only)
+  const { features, isPremium, isLoading: planLoading } = usePlanStatus()
+  const canDownload = isPremium || features?.download_files === true
+
   // Fetch projects on mount
   useEffect(() => {
     fetchProjects()
@@ -108,13 +114,15 @@ export function BuildDocumentsPanel() {
   const fetchProjects = async () => {
     setIsLoadingProjects(true)
     try {
+      console.log('[BuildDocumentsPanel] Fetching projects...')
       const response = await apiClient.get<{
         items: Project[]
         total: number
       }>('/projects/list?limit=50&sort_by=created_at&sort_order=desc')
+      console.log('[BuildDocumentsPanel] Projects response:', response)
       setProjects(response.items || [])
     } catch (error) {
-      console.error('Failed to fetch projects:', error)
+      console.error('[BuildDocumentsPanel] Failed to fetch projects:', error)
     } finally {
       setIsLoadingProjects(false)
     }
@@ -123,13 +131,15 @@ export function BuildDocumentsPanel() {
   const fetchDocuments = async (projectId: string) => {
     setIsLoadingDocs(true)
     try {
+      console.log('[BuildDocumentsPanel] Fetching documents for project:', projectId)
       const response = await apiClient.get<{
         items: Document[]
         total: number
       }>(`/documents/list/${projectId}`)
+      console.log('[BuildDocumentsPanel] Documents response:', response)
       setDocuments(response.items || [])
     } catch (error) {
-      console.error('Failed to fetch documents:', error)
+      console.error('[BuildDocumentsPanel] Failed to fetch documents:', error)
       setDocuments([])
     } finally {
       setIsLoadingDocs(false)
@@ -137,6 +147,12 @@ export function BuildDocumentsPanel() {
   }
 
   const handleDownload = async (doc: Document) => {
+    // Check if user can download (Premium feature)
+    if (!canDownload) {
+      console.warn('[BuildDocumentsPanel] Download blocked - Premium feature required')
+      return
+    }
+
     const token = localStorage.getItem('access_token')
     const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
 
@@ -316,18 +332,28 @@ export function BuildDocumentsPanel() {
                               {formatBytes(doc.size_bytes)}
                             </p>
                           </div>
-                          <button
-                            onClick={() => handleDownload(doc)}
-                            disabled={isDownloading}
-                            className="p-1.5 rounded-lg text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-accent))] hover:bg-[hsl(var(--bolt-accent))]/10 opacity-0 group-hover:opacity-100 transition-all disabled:opacity-50"
-                            title="Download"
-                          >
-                            {isDownloading ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : (
-                              <Download className="w-3.5 h-3.5" />
-                            )}
-                          </button>
+                          {canDownload ? (
+                            <button
+                              onClick={() => handleDownload(doc)}
+                              disabled={isDownloading}
+                              className="p-1.5 rounded-lg text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-accent))] hover:bg-[hsl(var(--bolt-accent))]/10 opacity-0 group-hover:opacity-100 transition-all disabled:opacity-50"
+                              title="Download"
+                            >
+                              {isDownloading ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Download className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          ) : (
+                            <a
+                              href="/pricing"
+                              className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-500/10 opacity-0 group-hover:opacity-100 transition-all"
+                              title="Upgrade to Premium to download"
+                            >
+                              <Lock className="w-3.5 h-3.5" />
+                            </a>
+                          )}
                         </div>
                       )
                     })}
@@ -342,38 +368,48 @@ export function BuildDocumentsPanel() {
       {/* Download All Button */}
       {documents.length > 0 && (
         <div className="p-3 border-t border-[hsl(var(--bolt-border))]">
-          <button
-            onClick={async () => {
-              if (!selectedProjectId) return
-              const token = localStorage.getItem('access_token')
-              const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+          {canDownload ? (
+            <button
+              onClick={async () => {
+                if (!selectedProjectId) return
+                const token = localStorage.getItem('access_token')
+                const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
 
-              try {
-                const response = await fetch(
-                  `${apiBase}/documents/download-all/${selectedProjectId}`,
-                  { headers: { Authorization: `Bearer ${token}` } }
-                )
+                try {
+                  const response = await fetch(
+                    `${apiBase}/documents/download-all/${selectedProjectId}`,
+                    { headers: { Authorization: `Bearer ${token}` } }
+                  )
 
-                if (!response.ok) throw new Error('Download failed')
+                  if (!response.ok) throw new Error('Download failed')
 
-                const blob = await response.blob()
-                const url = window.URL.createObjectURL(blob)
-                const a = document.createElement('a')
-                a.href = url
-                a.download = `${selectedProject?.title.replace(/\s+/g, '_') || 'project'}_documents.zip`
-                document.body.appendChild(a)
-                a.click()
-                window.URL.revokeObjectURL(url)
-                document.body.removeChild(a)
-              } catch (error) {
-                console.error('Download all failed:', error)
-              }
-            }}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-[hsl(var(--bolt-accent))] hover:bg-[hsl(var(--bolt-accent))]/80 rounded-lg text-white text-sm font-medium transition-colors"
-          >
-            <Download className="w-4 h-4" />
-            Download All ({documents.length})
-          </button>
+                  const blob = await response.blob()
+                  const url = window.URL.createObjectURL(blob)
+                  const a = document.createElement('a')
+                  a.href = url
+                  a.download = `${selectedProject?.title.replace(/\s+/g, '_') || 'project'}_documents.zip`
+                  document.body.appendChild(a)
+                  a.click()
+                  window.URL.revokeObjectURL(url)
+                  document.body.removeChild(a)
+                } catch (error) {
+                  console.error('Download all failed:', error)
+                }
+              }}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-[hsl(var(--bolt-accent))] hover:bg-[hsl(var(--bolt-accent))]/80 rounded-lg text-white text-sm font-medium transition-colors"
+            >
+              <Download className="w-4 h-4" />
+              Download All ({documents.length})
+            </button>
+          ) : (
+            <a
+              href="/pricing"
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-amber-500/20 border border-amber-500/30 hover:bg-amber-500/30 rounded-lg text-amber-400 text-sm font-medium transition-colors"
+            >
+              <Lock className="w-4 h-4" />
+              Download All (Premium)
+            </a>
+          )}
         </div>
       )}
     </div>
