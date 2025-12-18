@@ -3263,11 +3263,13 @@ Stream code in chunks for real-time display.
                 file_path = file_data['path']
                 file_content = file_data['content']
 
-                # Save file immediately
-                await self.file_manager.create_file(
+                # Save file to ALL 4 layers (sandbox, S3, database, checkpoint)
+                # This ensures files persist after sandbox cleanup
+                await self.save_file(
                     project_id=context.project_id,
                     file_path=file_path,
-                    content=file_content
+                    content=file_content,
+                    user_id=context.user_id
                 )
 
                 context.files_created.append({
@@ -3312,10 +3314,11 @@ Stream code in chunks for real-time display.
                             # Save partial file with warning comment
                             cleaned_content = partial_content.strip('\n')
                             salvaged_content = f"// WARNING: This file may be incomplete due to stream interruption\n{cleaned_content}"
-                            await self.file_manager.create_file(
+                            await self.save_file(
                                 project_id=context.project_id,
                                 file_path=partial_path,
-                                content=salvaged_content
+                                content=salvaged_content,
+                                user_id=context.user_id
                             )
                             context.files_created.append({
                                 'path': partial_path,
@@ -3409,6 +3412,24 @@ Stream code in chunks for real-time display.
                 "user_visible": True
             }
         )
+
+        # IMPORTANT: Create plan_json from generated files
+        # This allows the project to be loaded later from the dropdown
+        # Without this, plan_json is NULL and the project can't be restored
+        context.plan = {
+            "raw": f"<!-- Auto-generated from bolt_instant mode -->\n<project>\n  <name>{context.project_name or 'Project'}</name>\n  <files>{len(context.files_created)}</files>\n</project>",
+            "files": [
+                {
+                    "path": f,
+                    "type": "code",
+                    "description": f"Generated file: {f}"
+                }
+                for f in context.files_created
+            ],
+            "tasks": [],  # No tasks in bolt_instant mode
+            "features": []
+        }
+        logger.info(f"[Bolt Instant] Created plan_json with {len(context.files_created)} files for database storage")
 
         logger.info(f"[Bolt Instant] [OK] Fast generation complete, {len(context.files_created)} files created")
 
@@ -3522,11 +3543,12 @@ Stream code in chunks for real-time display.
                     file_path = file_data['path']
                     file_content = file_data['content']
 
-                    # Save regenerated file
-                    await self.file_manager.create_file(
+                    # Save regenerated file to ALL 4 layers
+                    await self.save_file(
                         project_id=context.project_id,
                         file_path=file_path,
-                        content=file_content
+                        content=file_content,
+                        user_id=context.user_id
                     )
 
                     # Update context
@@ -5705,30 +5727,54 @@ htmlcov
         docs_dir = f"docs"
 
         try:
-            # Generate Project Report (Word)
+            # ============================================================
+            # PARALLEL DOCUMENT GENERATION - All docs generated at once!
+            # ============================================================
             yield OrchestratorEvent(
                 type=EventType.STATUS,
-                data={"message": "Generating Project Report (Word)..."}
+                data={"message": "Generating all documents in PARALLEL (Project Report, SRS, PPT, Viva Q&A)..."}
             )
 
-            report_path = None
-            async for event in chunked_agent.generate_document(
-                context=agent_context,
-                document_type=DocumentType.PROJECT_REPORT,
-                project_data=project_data,
-                college_info=college_info,
-                parallel=True
-            ):
-                if event.get("type") == "complete":
-                    report_path = event.get("file_path")  # ChunkedDocumentAgent yields "file_path"
-                    logger.info(f"[Documenter] Project Report generated: {report_path}")
-                elif event.get("type") == "phase":
-                    yield OrchestratorEvent(
-                        type=EventType.STATUS,
-                        data={"message": f"Project Report: {event.get('message', '')}"}
-                    )
+            # Helper function to generate a single document and return its path
+            async def generate_single_doc(doc_type: DocumentType, doc_name: str) -> Optional[str]:
+                """Generate a single document and return its file path"""
+                try:
+                    file_path = None
+                    async for event in chunked_agent.generate_document(
+                        context=agent_context,
+                        document_type=doc_type,
+                        project_data=project_data,
+                        college_info=college_info,
+                        parallel=True
+                    ):
+                        if event.get("type") == "complete":
+                            file_path = event.get("file_path")
+                            logger.info(f"[Documenter] {doc_name} generated: {file_path}")
+                    return file_path
+                except Exception as e:
+                    logger.error(f"[Documenter] Failed to generate {doc_name}: {e}")
+                    return None
 
-            if report_path:
+            # Run ALL document generations in parallel
+            logger.info("[Documenter] Starting PARALLEL generation of all 4 documents...")
+            start_time = asyncio.get_event_loop().time()
+
+            results = await asyncio.gather(
+                generate_single_doc(DocumentType.PROJECT_REPORT, "Project Report"),
+                generate_single_doc(DocumentType.SRS, "SRS"),
+                generate_single_doc(DocumentType.PPT, "PPT"),
+                generate_single_doc(DocumentType.VIVA_QA, "Viva Q&A"),
+                return_exceptions=True
+            )
+
+            elapsed = asyncio.get_event_loop().time() - start_time
+            logger.info(f"[Documenter] PARALLEL generation completed in {elapsed:.1f}s")
+
+            # Unpack results
+            report_path, srs_path, ppt_path, viva_path = results
+
+            # Process Project Report
+            if report_path and not isinstance(report_path, Exception):
                 doc_count += 1
                 yield OrchestratorEvent(
                     type=EventType.FILE_OPERATION,
@@ -5736,49 +5782,8 @@ htmlcov
                 )
                 context.files_created.append({"path": report_path, "type": "documentation"})
 
-                # Generate PDF from Word
-                try:
-                    pdf_path = report_path.replace(".docx", ".pdf")
-                    pdf_gen = PDFGenerator()
-                    await asyncio.to_thread(
-                        pdf_gen.convert_docx_to_pdf,
-                        report_path,
-                        pdf_path
-                    )
-                    doc_count += 1
-                    yield OrchestratorEvent(
-                        type=EventType.FILE_OPERATION,
-                        data={"path": pdf_path, "operation": "documentation", "status": "complete"}
-                    )
-                    context.files_created.append({"path": pdf_path, "type": "documentation"})
-                    logger.info(f"[Documenter] Project Report PDF generated: {pdf_path}")
-                except Exception as pdf_err:
-                    logger.warning(f"[Documenter] PDF conversion failed: {pdf_err}")
-
-            # Generate SRS Document (Word)
-            yield OrchestratorEvent(
-                type=EventType.STATUS,
-                data={"message": "Generating SRS Document (Word)..."}
-            )
-
-            srs_path = None
-            async for event in chunked_agent.generate_document(
-                context=agent_context,
-                document_type=DocumentType.SRS,
-                project_data=project_data,
-                college_info=college_info,
-                parallel=True
-            ):
-                if event.get("type") == "complete":
-                    srs_path = event.get("file_path")  # ChunkedDocumentAgent yields "file_path"
-                    logger.info(f"[Documenter] SRS generated: {srs_path}")
-                elif event.get("type") == "phase":
-                    yield OrchestratorEvent(
-                        type=EventType.STATUS,
-                        data={"message": f"SRS: {event.get('message', '')}"}
-                    )
-
-            if srs_path:
+            # Process SRS
+            if srs_path and not isinstance(srs_path, Exception):
                 doc_count += 1
                 yield OrchestratorEvent(
                     type=EventType.FILE_OPERATION,
@@ -5786,49 +5791,8 @@ htmlcov
                 )
                 context.files_created.append({"path": srs_path, "type": "documentation"})
 
-                # Generate PDF from Word
-                try:
-                    pdf_path = srs_path.replace(".docx", ".pdf")
-                    pdf_gen = PDFGenerator()
-                    await asyncio.to_thread(
-                        pdf_gen.convert_docx_to_pdf,
-                        srs_path,
-                        pdf_path
-                    )
-                    doc_count += 1
-                    yield OrchestratorEvent(
-                        type=EventType.FILE_OPERATION,
-                        data={"path": pdf_path, "operation": "documentation", "status": "complete"}
-                    )
-                    context.files_created.append({"path": pdf_path, "type": "documentation"})
-                    logger.info(f"[Documenter] SRS PDF generated: {pdf_path}")
-                except Exception as pdf_err:
-                    logger.warning(f"[Documenter] SRS PDF conversion failed: {pdf_err}")
-
-            # Generate PPT
-            yield OrchestratorEvent(
-                type=EventType.STATUS,
-                data={"message": "Generating Presentation (PPT)..."}
-            )
-
-            ppt_path = None
-            async for event in chunked_agent.generate_document(
-                context=agent_context,
-                document_type=DocumentType.PPT,
-                project_data=project_data,
-                college_info=college_info,
-                parallel=True
-            ):
-                if event.get("type") == "complete":
-                    ppt_path = event.get("file_path")  # ChunkedDocumentAgent yields "file_path"
-                    logger.info(f"[Documenter] PPT generated: {ppt_path}")
-                elif event.get("type") == "phase":
-                    yield OrchestratorEvent(
-                        type=EventType.STATUS,
-                        data={"message": f"PPT: {event.get('message', '')}"}
-                    )
-
-            if ppt_path:
+            # Process PPT
+            if ppt_path and not isinstance(ppt_path, Exception):
                 doc_count += 1
                 yield OrchestratorEvent(
                     type=EventType.FILE_OPERATION,
@@ -5836,30 +5800,8 @@ htmlcov
                 )
                 context.files_created.append({"path": ppt_path, "type": "documentation"})
 
-            # Generate Viva Q&A Document (Word)
-            yield OrchestratorEvent(
-                type=EventType.STATUS,
-                data={"message": "Generating Viva Questions & Answers (Word)..."}
-            )
-
-            viva_path = None
-            async for event in chunked_agent.generate_document(
-                context=agent_context,
-                document_type=DocumentType.VIVA_QA,
-                project_data=project_data,
-                college_info=college_info,
-                parallel=True
-            ):
-                if event.get("type") == "complete":
-                    viva_path = event.get("file_path")  # ChunkedDocumentAgent yields "file_path"
-                    logger.info(f"[Documenter] Viva Q&A generated: {viva_path}")
-                elif event.get("type") == "phase":
-                    yield OrchestratorEvent(
-                        type=EventType.STATUS,
-                        data={"message": f"Viva Q&A: {event.get('message', '')}"}
-                    )
-
-            if viva_path:
+            # Process Viva Q&A
+            if viva_path and not isinstance(viva_path, Exception):
                 doc_count += 1
                 yield OrchestratorEvent(
                     type=EventType.FILE_OPERATION,
@@ -5869,7 +5811,7 @@ htmlcov
 
             yield OrchestratorEvent(
                 type=EventType.STATUS,
-                data={"message": f"Academic documentation complete ({doc_count} documents: Project Report, SRS, PPT, Viva Q&A)"}
+                data={"message": f"Academic documentation complete ({doc_count} documents in {elapsed:.0f}s - PARALLEL mode)"}
             )
 
         except asyncio.TimeoutError:
@@ -5956,11 +5898,12 @@ htmlcov
             if doc_path and doc_content:
                 logger.info(f"[Documenter] Saving document: {doc_path} ({len(doc_content)} chars)")
 
-                # Create document file
-                await self.file_manager.create_file(
+                # Create document file - save to ALL 4 layers for persistence
+                await self.save_file(
                     project_id=context.project_id,
                     file_path=doc_path,
-                    content=doc_content
+                    content=doc_content,
+                    user_id=context.user_id
                 )
 
                 doc_count += 1

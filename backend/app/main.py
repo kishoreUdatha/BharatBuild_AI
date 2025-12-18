@@ -115,25 +115,10 @@ app.add_middleware(SecurityHeadersMiddleware)
 # 3. Request size limit (10MB default)
 app.add_middleware(RequestSizeLimitMiddleware, max_size=10 * 1024 * 1024)
 
-# 4. CORS - Allow all origins in development
+# 4. CORS - Origins from CORS_ORIGINS_STR in .env
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:3002",
-        "http://localhost:3003",
-        "http://localhost:3004",
-        "http://localhost:3005",
-        "http://localhost:3006",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-        "http://127.0.0.1:3002",
-        "http://127.0.0.1:3003",
-        "http://127.0.0.1:3004",
-        "http://127.0.0.1:3005",
-        "http://127.0.0.1:3006",
-    ],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

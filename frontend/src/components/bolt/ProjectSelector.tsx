@@ -17,23 +17,13 @@ import {
   Github,
   Search,
   FileText,
-  File,
-  Presentation
+  Presentation,
+  Lock
 } from 'lucide-react'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { useProjectStore } from '@/store/projectStore'
 import { useProjectSwitch } from '@/hooks/useProjectSwitch'
-import { apiClient } from '@/lib/api-client'
-
-interface DocumentItem {
-  id: string | null
-  name: string
-  type: string
-  status: string
-  size_bytes: number
-  created_at: string | null
-  download_url: string
-}
+import { usePlanStatus } from '@/hooks/usePlanStatus'
 
 interface ProjectSelectorProps {
   onProjectSelect?: (project: Project) => void
@@ -45,8 +35,6 @@ export function ProjectSelector({ onProjectSelect, onNewProject }: ProjectSelect
   const [showRecentProjects, setShowRecentProjects] = useState(false)
   const [showExportOptions, setShowExportOptions] = useState(false)
   const [showDocuments, setShowDocuments] = useState(false)
-  const [documents, setDocuments] = useState<DocumentItem[]>([])
-  const [documentsLoading, setDocumentsLoading] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const dropdownRef = useRef<HTMLDivElement>(null)
 
@@ -54,6 +42,10 @@ export function ProjectSelector({ onProjectSelect, onNewProject }: ProjectSelect
   const { currentProject } = useProjectStore()
 
   const { isSwitching, switchProject, createNewProject } = useProjectSwitch()
+
+  // Check if user has download feature (Premium only)
+  const { features, isPremium, isLoading: planLoading } = usePlanStatus()
+  const canDownload = isPremium || features?.download_files === true
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -69,87 +61,50 @@ export function ProjectSelector({ onProjectSelect, onNewProject }: ProjectSelect
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Fetch documents for current project
-  const fetchDocuments = async () => {
+  // Download document by type - direct download, no API fetch
+  const downloadDocByType = async (docType: string) => {
     if (!currentProject?.id) return
-    setDocumentsLoading(true)
-    try {
-      const response = await apiClient.get(`/documents/list/${currentProject.id}`)
-      setDocuments(response.items || [])
-    } catch (err) {
-      console.error('Failed to fetch documents:', err)
-      setDocuments([])
-    } finally {
-      setDocumentsLoading(false)
+
+    // Check if user can download (Premium feature)
+    if (!canDownload) {
+      console.warn('[ProjectSelector] Download blocked - Premium feature required')
+      return
     }
-  }
 
-  // Download document
-  const handleDownloadDocument = async (doc: DocumentItem) => {
-    if (!currentProject?.id) return
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+    const token = localStorage.getItem('access_token')
+    const downloadUrl = `${baseUrl}/documents/download/${currentProject.id}/${docType}`
+
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
-      const token = localStorage.getItem('access_token')
+      const response = await fetch(downloadUrl, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
 
-      // If download_url is an S3 presigned URL (starts with http), use it directly
-      if (doc.download_url && (doc.download_url.startsWith('http://') || doc.download_url.startsWith('https://'))) {
-        window.open(doc.download_url, '_blank')
-      } else if (doc.id) {
-        // Use document ID endpoint for reliable download
-        const downloadUrl = `${baseUrl}/documents/download-by-id/${doc.id}`
-        const response = await fetch(downloadUrl, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        })
-
-        if (response.ok) {
-          const blob = await response.blob()
-          const url = window.URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = doc.name
-          document.body.appendChild(a)
-          a.click()
-          window.URL.revokeObjectURL(url)
-          document.body.removeChild(a)
-        }
+      if (response.ok) {
+        const blob = await response.blob()
+        const url = window.URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        // Get filename from content-disposition header or use default
+        const contentDisposition = response.headers.get('content-disposition')
+        const filenameMatch = contentDisposition?.match(/filename="?([^"]+)"?/)
+        const extension = docType === 'ppt' ? '.pptx' : '.docx'
+        a.download = filenameMatch ? filenameMatch[1] : `${docType}${extension}`
+        document.body.appendChild(a)
+        a.click()
+        window.URL.revokeObjectURL(url)
+        document.body.removeChild(a)
       } else {
-        // Fallback to legacy endpoint
-        const downloadUrl = `${baseUrl}${doc.download_url}`
-        const response = await fetch(downloadUrl, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        })
-
-        if (response.ok) {
-          const blob = await response.blob()
-          const url = window.URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = doc.name
-          document.body.appendChild(a)
-          a.click()
-          window.URL.revokeObjectURL(url)
-          document.body.removeChild(a)
-        }
+        console.error('Download failed:', response.status)
+        alert('Document not found or not generated yet')
       }
     } catch (err) {
-      console.error('Failed to download document:', err)
+      console.error('Download error:', err)
+      alert('Failed to download document')
     }
+
     setIsOpen(false)
     setShowDocuments(false)
-  }
-
-  // Get icon for document type
-  const getDocIcon = (name: string) => {
-    if (name.toLowerCase().includes('ppt') || name.endsWith('.pptx')) {
-      return <Presentation className="w-4 h-4 text-orange-400" />
-    }
-    if (name.toLowerCase().includes('srs')) {
-      return <FileText className="w-4 h-4 text-blue-400" />
-    }
-    if (name.toLowerCase().includes('viva') || name.toLowerCase().includes('q&a')) {
-      return <FileText className="w-4 h-4 text-green-400" />
-    }
-    return <File className="w-4 h-4 text-[hsl(var(--bolt-text-secondary))]" />
   }
 
   // Get latest project name to show
@@ -403,7 +358,6 @@ export function ProjectSelector({ onProjectSelect, onNewProject }: ProjectSelect
                 setShowDocuments(!showDocuments)
                 setShowRecentProjects(false)
                 setShowExportOptions(false)
-                if (!showDocuments) fetchDocuments()
               }}
               className="w-full flex items-center justify-between px-3 py-2.5 text-sm
                 text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))]
@@ -416,53 +370,71 @@ export function ProjectSelector({ onProjectSelect, onNewProject }: ProjectSelect
               <ChevronRight className={`w-4 h-4 text-[hsl(var(--bolt-text-secondary))] transition-transform ${showDocuments ? 'rotate-90' : ''}`} />
             </button>
 
-            {/* Documents Submenu */}
+            {/* Documents Submenu - Simple list, download on click */}
             {showDocuments && (
               <div
-                className="absolute left-full top-0 w-[280px]
+                className="absolute left-full top-0 w-[220px]
                   bg-[hsl(var(--bolt-bg-secondary))] border border-[hsl(var(--bolt-border))]
                   rounded-lg shadow-xl overflow-hidden z-50"
                 style={{ marginLeft: '4px' }}
               >
-                {/* Header */}
-                <div className="px-3 py-2 border-b border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-primary))]">
-                  <span className="text-xs font-semibold text-[hsl(var(--bolt-text-tertiary))] uppercase">
-                    Project Documents
-                  </span>
-                </div>
-
-                {/* Documents List */}
-                <div className="max-h-[300px] overflow-y-auto">
-                  {documentsLoading ? (
-                    <div className="flex items-center justify-center py-8">
-                      <Loader2 className="w-5 h-5 animate-spin text-[hsl(var(--bolt-accent))]" />
+                {!currentProject?.id ? (
+                  <div className="py-4 px-3 text-center text-sm text-[hsl(var(--bolt-text-tertiary))]">
+                    Select a project first
+                  </div>
+                ) : !canDownload && !planLoading ? (
+                  // Show upgrade prompt for non-premium users
+                  <div className="py-4 px-3">
+                    <div className="flex items-center gap-2 text-amber-400 mb-2">
+                      <Lock className="w-4 h-4" />
+                      <span className="text-sm font-medium">Premium Feature</span>
                     </div>
-                  ) : documents.length === 0 ? (
-                    <div className="py-6 text-center text-sm text-[hsl(var(--bolt-text-tertiary))]">
-                      No documents generated yet
-                    </div>
-                  ) : (
-                    documents.map((doc, index) => (
-                      <button
-                        key={doc.id || index}
-                        onClick={() => handleDownloadDocument(doc)}
-                        className="w-full flex items-center gap-3 px-3 py-2.5 text-left
-                          hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
-                      >
-                        {getDocIcon(doc.name)}
-                        <div className="flex-1 min-w-0">
-                          <span className="text-sm text-[hsl(var(--bolt-text-primary))] truncate block">
-                            {doc.name}
-                          </span>
-                          <span className="text-xs text-[hsl(var(--bolt-text-tertiary))]">
-                            {doc.size_bytes ? `${(doc.size_bytes / 1024).toFixed(1)} KB` : 'Click to download'}
-                          </span>
-                        </div>
-                        <Download className="w-3.5 h-3.5 text-[hsl(var(--bolt-text-tertiary))]" />
-                      </button>
-                    ))
-                  )}
-                </div>
+                    <p className="text-xs text-[hsl(var(--bolt-text-tertiary))] mb-3">
+                      Document downloads require a Premium plan.
+                    </p>
+                    <a
+                      href="/pricing"
+                      className="block w-full text-center px-3 py-2 rounded-lg bg-amber-500/20 border border-amber-500/30 text-amber-400 text-sm font-medium hover:bg-amber-500/30 transition-colors"
+                    >
+                      Upgrade to Premium
+                    </a>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => downloadDocByType('project_report')}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 text-left
+                        hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors border-b border-[hsl(var(--bolt-border))]"
+                    >
+                      <FileText className="w-4 h-4 text-blue-400" />
+                      <span className="text-sm text-[hsl(var(--bolt-text-primary))]">Project Report</span>
+                    </button>
+                    <button
+                      onClick={() => downloadDocByType('srs')}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 text-left
+                        hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors border-b border-[hsl(var(--bolt-border))]"
+                    >
+                      <FileText className="w-4 h-4 text-green-400" />
+                      <span className="text-sm text-[hsl(var(--bolt-text-primary))]">SRS Document</span>
+                    </button>
+                    <button
+                      onClick={() => downloadDocByType('ppt')}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 text-left
+                        hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors border-b border-[hsl(var(--bolt-border))]"
+                    >
+                      <Presentation className="w-4 h-4 text-orange-400" />
+                      <span className="text-sm text-[hsl(var(--bolt-text-primary))]">Presentation (PPT)</span>
+                    </button>
+                    <button
+                      onClick={() => downloadDocByType('viva_qa')}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 text-left
+                        hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
+                    >
+                      <FileText className="w-4 h-4 text-purple-400" />
+                      <span className="text-sm text-[hsl(var(--bolt-text-primary))]">Viva Q&A</span>
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -523,23 +495,44 @@ export function ProjectSelector({ onProjectSelect, onNewProject }: ProjectSelect
                   rounded-lg shadow-xl overflow-hidden z-50"
                 style={{ marginLeft: '4px' }}
               >
-                <button
-                  onClick={handleExportZip}
-                  className="w-full flex items-center gap-2 px-3 py-2.5 text-sm
-                    text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))]
-                    border-b border-[hsl(var(--bolt-border))]"
-                >
-                  <FileDown className="w-4 h-4 text-[hsl(var(--bolt-text-secondary))]" />
-                  <span>Download ZIP</span>
-                </button>
-                <button
-                  onClick={handleExportGithub}
-                  className="w-full flex items-center gap-2 px-3 py-2.5 text-sm
-                    text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))]"
-                >
-                  <Github className="w-4 h-4 text-[hsl(var(--bolt-text-secondary))]" />
-                  <span>Push to GitHub</span>
-                </button>
+                {!canDownload && !planLoading ? (
+                  // Show upgrade prompt for non-premium users
+                  <div className="py-3 px-3">
+                    <div className="flex items-center gap-2 text-amber-400 mb-2">
+                      <Lock className="w-4 h-4" />
+                      <span className="text-sm font-medium">Premium</span>
+                    </div>
+                    <p className="text-xs text-[hsl(var(--bolt-text-tertiary))] mb-3">
+                      Export requires Premium.
+                    </p>
+                    <a
+                      href="/pricing"
+                      className="block w-full text-center px-3 py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/30 text-amber-400 text-xs font-medium hover:bg-amber-500/30 transition-colors"
+                    >
+                      Upgrade
+                    </a>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      onClick={handleExportZip}
+                      className="w-full flex items-center gap-2 px-3 py-2.5 text-sm
+                        text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))]
+                        border-b border-[hsl(var(--bolt-border))]"
+                    >
+                      <FileDown className="w-4 h-4 text-[hsl(var(--bolt-text-secondary))]" />
+                      <span>Download ZIP</span>
+                    </button>
+                    <button
+                      onClick={handleExportGithub}
+                      className="w-full flex items-center gap-2 px-3 py-2.5 text-sm
+                        text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))]"
+                    >
+                      <Github className="w-4 h-4 text-[hsl(var(--bolt-text-secondary))]" />
+                      <span>Push to GitHub</span>
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>

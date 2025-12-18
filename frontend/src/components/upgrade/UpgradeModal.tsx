@@ -1,7 +1,7 @@
 'use client'
 
 import React from 'react'
-import { X, Sparkles, Zap, FileText, Code, Key, ArrowRight } from 'lucide-react'
+import { X, Sparkles, Zap, FileText, Code, Key, ArrowRight, FolderPlus } from 'lucide-react'
 
 interface UpgradeModalProps {
   isOpen: boolean
@@ -13,6 +13,11 @@ interface UpgradeModalProps {
 }
 
 const FEATURE_INFO: Record<string, { icon: React.ReactNode; title: string; description: string }> = {
+  project_limit: {
+    icon: <FolderPlus className="w-8 h-8" />,
+    title: 'Project Limit Reached',
+    description: 'You have reached your project limit. Upgrade to Premium to create more projects and unlock unlimited project generation.'
+  },
   agentic_mode: {
     icon: <Zap className="w-8 h-8" />,
     title: 'Agentic Mode',
@@ -41,9 +46,10 @@ const FEATURE_INFO: Record<string, { icon: React.ReactNode; title: string; descr
 }
 
 const PLAN_PRICES: Record<string, string> = {
-  Student: '99/month',
-  Pro: '499/month',
-  Enterprise: '1,999/month'
+  Student: '4,499',
+  Premium: '4,499',
+  Pro: '4,499',
+  Enterprise: '4,499'
 }
 
 export default function UpgradeModal({

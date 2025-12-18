@@ -8,6 +8,7 @@ class UserRegister(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8)
     full_name: Optional[str] = None
+    phone: Optional[str] = Field(None, pattern=r'^[6-9]\d{9}$', description="10-digit Indian mobile number")
     role: str = "student"
 
     # Student Academic Details
@@ -72,6 +73,7 @@ class UserResponse(BaseModel):
     email: str
     username: Optional[str] = None
     full_name: Optional[str] = None
+    phone: Optional[str] = None
     role: str
     is_active: bool
     is_verified: bool

@@ -10,6 +10,7 @@ import { PlanView } from './PlanView'
 import { ProjectSelector } from './ProjectSelector'
 import { ProjectRunControls } from './ProjectRunControls'
 import { BuildDocumentsPanel } from './BuildDocumentsPanel'
+import { ProjectStagesPanel } from './ProjectStagesPanel'
 // WelcomeScreen and QuickActions removed - now showing clean empty state
 
 // Dynamically import XTerminal to avoid SSR issues
@@ -48,6 +49,7 @@ import {
   Monitor,
   Check,
   FileText,
+  Lock,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useTerminal } from '@/hooks/useTerminal'
@@ -370,10 +372,9 @@ export function BoltLayout({
       return
     }
 
-    // Check if user has download_files feature enabled
+    // Double-check if user has download_files feature enabled (UI should already block this)
     if (features && !features.download_files) {
-      alert("Download requires Premium plan. Please upgrade to download your project files.")
-      window.open('/pricing', '_blank')
+      console.warn("[Export] User doesn't have download_files feature")
       return
     }
 
@@ -670,19 +671,6 @@ export function BoltLayout({
             >
               Preview
             </button>
-            <button
-              onClick={() => {
-                setMobilePanel('preview')
-                setActiveTab('docs')
-              }}
-              className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
-                activeTab === 'docs'
-                  ? 'bg-[hsl(var(--bolt-accent))] text-white'
-                  : 'text-[hsl(var(--bolt-text-secondary))]'
-              }`}
-            >
-              Docs
-            </button>
           </div>
         )}
 
@@ -715,17 +703,6 @@ export function BoltLayout({
             >
               <Eye className="w-4 h-4" />
               Preview
-            </button>
-            <button
-              onClick={() => setActiveTab('docs')}
-              className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                activeTab === 'docs'
-                  ? 'bg-[hsl(var(--bolt-accent))] text-white'
-                  : 'text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))]'
-              }`}
-            >
-              <FileText className="w-4 h-4" />
-              Docs
             </button>
           </div>
 
@@ -784,15 +761,27 @@ export function BoltLayout({
           )}
 
           {/* Export Project */}
-          <button
-            onClick={handleExportProject}
-            disabled={!currentProject || currentProject.files.length === 0}
-            className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            title="Download Project as ZIP"
-          >
-            <Download className="w-4 h-4" />
-            Export
-          </button>
+          {features && !features.download_files ? (
+            // Show locked button for non-premium users
+            <a
+              href="/pricing"
+              className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 transition-colors"
+              title="Upgrade to Premium to download projects"
+            >
+              <Lock className="w-4 h-4" />
+              Export (Premium)
+            </a>
+          ) : (
+            <button
+              onClick={handleExportProject}
+              disabled={!currentProject || currentProject.files.length === 0}
+              className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Download Project as ZIP"
+            >
+              <Download className="w-4 h-4" />
+              Export
+            </button>
+          )}
 
           {/* Connection Status Indicator - Only show when disconnected or reconnecting */}
           {connectionStatus !== 'connected' && connectionStatus !== 'checking' && (
@@ -998,79 +987,10 @@ export function BoltLayout({
           }`}
           style={!isMobile ? { width: isSidebarOpen ? `${leftPanelWidth}%` : '100%' } : undefined}
         >
-          {/* Messages */}
+          {/* Project Stages Panel - Timeline View */}
           <div ref={messagesContainerRef} className="flex-1 overflow-y-auto scrollbar-thin bg-[hsl(var(--bolt-bg-primary))]">
-            {messages.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-center px-6">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center mb-4">
-                  <Zap className="w-8 h-8 text-white" />
-                </div>
-                <h2 className="text-xl font-semibold text-[hsl(var(--bolt-text-primary))] mb-2">Start a conversation</h2>
-                <p className="text-sm text-[hsl(var(--bolt-text-secondary))] max-w-xs">
-                  Describe your project and AI will build it for you
-                </p>
-              </div>
-            ) : (
-              <>
-                {messages.map((message, index) => (
-                  <ChatMessage
-                    key={index}
-                    role={message.type}
-                    content={message.content}
-                    isStreaming={message.type === 'assistant' && message.isStreaming}
-                  />
-                ))}
-
-                {/* Generation Progress Panel - Shows during code generation */}
-                {messages.some(m => m.type === 'assistant' && ((m.thinkingSteps?.length ?? 0) > 0 || (m.fileOperations?.length ?? 0) > 0)) && (
-                  <div className="bg-[hsl(var(--bolt-bg-secondary))]">
-                    {/* Collapsible Header */}
-                    <button
-                      onClick={() => setIsPlanViewVisible(!isPlanViewVisible)}
-                      className="w-full flex items-center justify-between px-3 py-2 hover:bg-white/5 transition-colors border-t border-white/10"
-                    >
-                      <div className="flex items-center gap-2">
-                        <div className="w-5 h-5 rounded bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center">
-                          <ListTodo className="w-3 h-3 text-white" />
-                        </div>
-                        <span className="text-sm font-medium text-white/90">
-                          Generation Progress
-                        </span>
-                        {/* File count badge */}
-                        {(() => {
-                          const lastAssistantMsg = messages.filter(m => m.type === 'assistant').slice(-1)[0]
-                          const fileOps = (lastAssistantMsg as any)?.fileOperations || []
-                          const completed = fileOps.filter((f: any) => f.status === 'complete').length
-                          const total = fileOps.length
-                          if (total > 0) {
-                            return (
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-500/20 text-cyan-400">
-                                {completed}/{total} files
-                              </span>
-                            )
-                          }
-                          return null
-                        })()}
-                      </div>
-                      {isPlanViewVisible ? (
-                        <ChevronUp className="w-4 h-4 text-white/50" />
-                      ) : (
-                        <ChevronDown className="w-4 h-4 text-white/50" />
-                      )}
-                    </button>
-
-                    {/* Expanded Content - Full height scroll */}
-                    {isPlanViewVisible && (
-                      <div className="border-t border-white/10 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 400px)' }}>
-                        <PlanView />
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div ref={messagesEndRef} />
-              </>
-            )}
+            <ProjectStagesPanel />
+            <div ref={messagesEndRef} />
           </div>
 
           {/* Input */}
@@ -1196,6 +1116,37 @@ export function BoltLayout({
                 className={`border-t border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))] flex flex-col flex-shrink-0 ${showTerminal && activeTab === 'code' ? '' : 'hidden'}`}
                 style={{ height: `${terminalHeight}px` }}
               >
+                {/* Draggable Resize Handle */}
+                <div
+                  className="h-1.5 bg-[hsl(var(--bolt-border))] cursor-ns-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors group flex items-center justify-center"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    const startY = e.clientY
+                    const startHeight = terminalHeight
+
+                    const handleMouseMove = (moveEvent: MouseEvent) => {
+                      const delta = startY - moveEvent.clientY
+                      const newHeight = Math.min(600, Math.max(100, startHeight + delta))
+                      setTerminalHeight(newHeight)
+                    }
+
+                    const handleMouseUp = () => {
+                      document.removeEventListener('mousemove', handleMouseMove)
+                      document.removeEventListener('mouseup', handleMouseUp)
+                      document.body.style.cursor = ''
+                      document.body.style.userSelect = ''
+                    }
+
+                    document.addEventListener('mousemove', handleMouseMove)
+                    document.addEventListener('mouseup', handleMouseUp)
+                    document.body.style.cursor = 'ns-resize'
+                    document.body.style.userSelect = 'none'
+                  }}
+                >
+                  {/* Drag indicator */}
+                  <div className="w-10 h-0.5 rounded-full bg-gray-500 group-hover:bg-blue-400 transition-colors" />
+                </div>
+
                 {/* Terminal Header */}
                 <div className="flex items-center justify-between px-3 py-2 border-b border-[hsl(var(--bolt-border))]">
                   <div className="flex items-center gap-2">
@@ -1203,23 +1154,27 @@ export function BoltLayout({
                     <span className="text-sm font-medium text-[hsl(var(--bolt-text-primary))]">
                       Terminal
                     </span>
+                    <span className="text-xs text-gray-500">({terminalHeight}px)</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <button
-                      onClick={() => setTerminalHeight(Math.max(150, terminalHeight - 50))}
+                      onClick={() => setTerminalHeight(Math.max(100, terminalHeight - 50))}
                       className="p-1 hover:bg-[hsl(var(--bolt-bg-tertiary))] rounded"
+                      title="Decrease height"
                     >
                       <Minus className="w-3 h-3 text-[hsl(var(--bolt-text-secondary))]" />
                     </button>
                     <button
-                      onClick={() => setTerminalHeight(Math.min(400, terminalHeight + 50))}
+                      onClick={() => setTerminalHeight(Math.min(600, terminalHeight + 50))}
                       className="p-1 hover:bg-[hsl(var(--bolt-bg-tertiary))] rounded"
+                      title="Increase height"
                     >
                       <Maximize2 className="w-3 h-3 text-[hsl(var(--bolt-text-secondary))]" />
                     </button>
                     <button
                       onClick={() => toggleTerminal()}
                       className="p-1 hover:bg-[hsl(var(--bolt-bg-tertiary))] rounded"
+                      title="Close terminal"
                     >
                       <X className="w-3 h-3 text-[hsl(var(--bolt-text-secondary))]" />
                     </button>

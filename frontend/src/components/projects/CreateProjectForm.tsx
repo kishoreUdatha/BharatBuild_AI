@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { apiClient } from '@/lib/api-client'
 import { BookOpen, Code, Rocket, GraduationCap, AlertTriangle, Crown } from 'lucide-react'
 import { useRouter } from 'next/navigation'
+import { useUpgrade } from '@/contexts/UpgradeContext'
 
 interface CreateProjectFormProps {
   onProjectCreated?: (project: any) => void
@@ -71,6 +72,7 @@ interface PlanStatus {
 
 export function CreateProjectForm({ onProjectCreated }: CreateProjectFormProps) {
   const router = useRouter()
+  const { checkFeatureError, showUpgradePrompt } = useUpgrade()
   const [selectedMode, setSelectedMode] = useState<string>('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -119,13 +121,23 @@ export function CreateProjectForm({ onProjectCreated }: CreateProjectFormProps) 
 
     // Check if user can create projects
     if (planStatus && !planStatus.projects.can_create) {
-      setError(planStatus.upgrade_message || 'You have reached your project limit. Please upgrade your plan.')
+      showUpgradePrompt({
+        feature: 'project_limit',
+        currentPlan: `${planStatus.projects.created}/${planStatus.projects.limit} projects used`,
+        upgradeTo: 'Premium',
+        message: planStatus.upgrade_message || 'You have reached your project limit. Upgrade to create more projects.'
+      })
       return
     }
 
     // Check if project generation feature is enabled
     if (planStatus && !planStatus.features.project_generation) {
-      setError('Project generation is not available on your current plan. Please upgrade to Premium.')
+      showUpgradePrompt({
+        feature: 'project_generation',
+        currentPlan: planStatus.plan.name,
+        upgradeTo: 'Premium',
+        message: 'Project generation is not available on your current plan.'
+      })
       return
     }
 
@@ -145,10 +157,8 @@ export function CreateProjectForm({ onProjectCreated }: CreateProjectFormProps) 
         await apiClient.executeProject(project.id)
       } catch (execErr: any) {
         // Handle execution-specific errors (like limit reached)
-        const errorDetail = execErr.response?.data?.detail
-        if (errorDetail?.error === 'project_limit_reached') {
-          setError(errorDetail.message || 'Project limit reached. Please upgrade your plan.')
-          return
+        if (checkFeatureError(execErr)) {
+          return // Upgrade modal shown
         }
         throw execErr
       }
@@ -164,6 +174,11 @@ export function CreateProjectForm({ onProjectCreated }: CreateProjectFormProps) 
       setFeatures([])
       setSelectedMode('')
     } catch (err: any) {
+      // Check if it's a feature/limit restriction error
+      if (checkFeatureError(err)) {
+        return // Upgrade modal shown
+      }
+
       const errorDetail = err.response?.data?.detail
       if (typeof errorDetail === 'object') {
         setError(errorDetail.message || 'Failed to create project')

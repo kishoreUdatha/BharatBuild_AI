@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, List, Any
+from pydantic import BaseModel, Field, ConfigDict
+from typing import Optional, Dict, List, Any, Union
 from datetime import datetime
+from uuid import UUID
 
 
 class ProjectCreate(BaseModel):
@@ -32,16 +33,15 @@ class ProjectResponse(BaseModel):
     description: Optional[str]
     mode: str
     status: str
-    progress: int
-    current_agent: Optional[str]
-    total_tokens: int
-    total_cost: int
+    progress: Optional[int] = 0
+    current_agent: Optional[str] = None
+    total_tokens: Optional[int] = 0
+    total_cost: Optional[int] = 0
     created_at: datetime
-    updated_at: datetime
-    completed_at: Optional[datetime]
+    updated_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ProjectListResponse(BaseModel):

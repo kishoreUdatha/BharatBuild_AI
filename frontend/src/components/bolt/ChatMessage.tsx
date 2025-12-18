@@ -38,13 +38,15 @@ export function ChatMessage({
     return null
   }
 
-  // User Message - Right aligned block, but text flows left-to-right
+  // User Message - Right aligned with bubble background
   if (role === 'user') {
     return (
       <div className="py-2 flex justify-end">
-        <p className="text-[15px] leading-relaxed text-[hsl(var(--bolt-text-primary))]/90 whitespace-pre-wrap text-left max-w-[85%]">
-          {content}
-        </p>
+        <div className="max-w-[85%] px-4 py-2.5 rounded-2xl rounded-tr-sm bg-violet-600 text-white">
+          <p className="text-[15px] leading-relaxed whitespace-pre-wrap text-left">
+            {content}
+          </p>
+        </div>
       </div>
     )
   }

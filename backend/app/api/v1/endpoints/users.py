@@ -494,3 +494,112 @@ async def seed_sample_employees(
         "message": f"Created {len(created_users)} sample employees",
         "count": len(created_users)
     }
+
+
+# ==================== Email Endpoints ====================
+
+class SendEmailRequest(BaseModel):
+    """Request model for sending emails"""
+    subject: str
+    message: str
+    user_ids: Optional[List[str]] = None  # Specific user IDs
+    role: Optional[str] = None  # Send to all users with this role (e.g., "student")
+    include_login_link: bool = True
+
+
+class SendEmailResponse(BaseModel):
+    """Response model for email sending"""
+    success: bool
+    message: str
+    success_count: int
+    failed_count: int
+    failed_emails: List[str] = []
+
+
+@router.post("/send-email", response_model=SendEmailResponse)
+async def send_email_to_users(
+    request: SendEmailRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Send email to students/users.
+
+    Admin only endpoint. Can send to:
+    - Specific users by IDs
+    - All users with a specific role (e.g., 'student')
+
+    Requires SENDGRID_API_KEY or SMTP configuration.
+    """
+    from app.services.email_service import email_service
+
+    # Check admin permission
+    if not current_user.is_superuser and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can send bulk emails"
+        )
+
+    # Check if email is configured
+    if not email_service.is_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email service not configured. Set SENDGRID_API_KEY or SMTP credentials."
+        )
+
+    # Build query based on request
+    query = select(User).where(User.is_active == True)
+
+    if request.user_ids:
+        # Send to specific users
+        query = query.where(User.id.in_(request.user_ids))
+    elif request.role:
+        # Send to all users with specific role
+        try:
+            role = UserRole(request.role)
+            query = query.where(User.role == role)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid role: {request.role}"
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Must specify either user_ids or role"
+        )
+
+    # Get users
+    result = await db.execute(query)
+    users = result.scalars().all()
+
+    if not users:
+        return SendEmailResponse(
+            success=True,
+            message="No users found matching criteria",
+            success_count=0,
+            failed_count=0,
+            failed_emails=[]
+        )
+
+    # Prepare recipient list
+    recipients = [
+        {"email": user.email, "name": user.full_name or user.username or "Student"}
+        for user in users
+    ]
+
+    # Send emails
+    result = await email_service.send_to_students(
+        students=recipients,
+        subject=request.subject,
+        message=request.message,
+        include_login_link=request.include_login_link
+    )
+
+    return SendEmailResponse(
+        success=result["failed_count"] == 0,
+        message=f"Sent {result['success_count']} emails, {result['failed_count']} failed",
+        success_count=result["success_count"],
+        failed_count=result["failed_count"],
+        failed_emails=result["failed_emails"]
+    )

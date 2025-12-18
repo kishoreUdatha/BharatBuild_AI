@@ -1,23 +1,36 @@
+# ============================================
+# BharatBuild AI - CI/CD Pipeline
+# Automated testing, security scanning, and deployment
+# ============================================
+
 name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop, 'feature/*']
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '20'
 
 jobs:
+  # ================================
   # Backend Tests
+  # ================================
   backend-test:
+    name: Backend Tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
 
     services:
       postgres:
-        image: postgres:15
+        image: postgres:15-alpine
         env:
           POSTGRES_USER: test
           POSTGRES_PASSWORD: test
@@ -41,72 +54,138 @@ jobs:
           - 6379:6379
 
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
 
-    - name: Cache Python dependencies
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov httpx faker aiosqlite flake8
 
-    - name: Install dependencies
-      working-directory: ./backend
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: Run Ruff linting
+        run: |
+          pip install ruff
+          ruff check app --output-format=github
 
-    - name: Run tests
-      working-directory: ./backend
-      env:
-        DATABASE_URL: postgresql://test:test@localhost:5432/test_db
-        REDIS_URL: redis://localhost:6379/0
-      run: |
-        pytest --cov=app --cov-report=xml
+      - name: Run type checking
+        run: |
+          pip install mypy types-redis types-requests
+          mypy app --ignore-missing-imports --no-error-summary || echo "Type errors found (non-blocking for now)"
 
-    - name: Upload coverage
-      uses: codecov/codecov-action@v3
-      with:
-        files: ./backend/coverage.xml
-        flags: backend
+      - name: Run unit tests with coverage threshold
+        env:
+          TESTING: 'true'
+          DATABASE_URL: 'sqlite+aiosqlite:///./test.db'
+          SECRET_KEY: 'test-secret-key-for-ci'
+          JWT_SECRET_KEY: 'test-jwt-secret-for-ci'
+          ANTHROPIC_API_KEY: 'test-api-key'
+          REDIS_URL: 'redis://localhost:6379/0'
+          CELERY_BROKER_URL: 'redis://localhost:6379/0'
+          CELERY_RESULT_BACKEND: 'redis://localhost:6379/1'
+          USER_PROJECTS_PATH: '/tmp/projects'
+        run: |
+          pytest tests/unit -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=30
 
+      - name: Run integration tests
+        env:
+          TESTING: 'true'
+          DATABASE_URL: 'sqlite+aiosqlite:///./test.db'
+          SECRET_KEY: 'test-secret-key-for-ci'
+          JWT_SECRET_KEY: 'test-jwt-secret-for-ci'
+          ANTHROPIC_API_KEY: 'test-api-key'
+          REDIS_URL: 'redis://localhost:6379/0'
+          CELERY_BROKER_URL: 'redis://localhost:6379/0'
+          CELERY_RESULT_BACKEND: 'redis://localhost:6379/1'
+          USER_PROJECTS_PATH: '/tmp/projects'
+        run: |
+          pytest tests/integration -v --tb=short
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./backend/coverage.xml
+          flags: backend
+          fail_ci_if_error: false
+
+  # ================================
   # Frontend Tests
+  # ================================
   frontend-test:
+    name: Frontend Tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
 
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        cache: 'npm'
-        cache-dependency-path: frontend/package-lock.json
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
 
-    - name: Install dependencies
-      working-directory: ./frontend
-      run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
-    - name: Run linter
-      working-directory: ./frontend
-      run: npm run lint
+      - name: Run linter
+        run: npm run lint
 
-    - name: Type check
-      working-directory: ./frontend
-      run: npm run type-check
+      - name: Type check
+        run: npx tsc --noEmit
 
-    - name: Build
-      working-directory: ./frontend
-      run: npm run build
+      - name: Run tests
+        run: npm test -- --passWithNoTests --ci
 
+      - name: Build
+        env:
+          NEXT_PUBLIC_API_URL: 'http://localhost:8000/api/v1'
+          NEXT_PUBLIC_WS_URL: 'ws://localhost:8000/ws'
+        run: npm run build
+
+  # ================================
+  # Security Scan
+  # ================================
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [backend-test]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: Check for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+  # ================================
   # Build and Push Docker Images
+  # ================================
   build-and-push:
-    needs: [backend-test, frontend-test]
+    name: Build & Push Docker
+    needs: [backend-test, frontend-test, security-scan]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
@@ -119,43 +198,82 @@ jobs:
         component: [backend, frontend]
 
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.component }}
-        tags: |
-          type=ref,event=branch
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Build and push
-      uses: docker/build-push-action@v5
-      with:
-        context: ./${{ matrix.component }}
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.component }}:buildcache
-        cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.component }}:buildcache,mode=max
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.component }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
 
-  # Deploy (configure for your deployment target)
-  # deploy:
-  #   needs: build-and-push
-  #   runs-on: ubuntu-latest
-  #   if: github.ref == 'refs/heads/main'
-  #
-  #   steps:
-  #   - name: Deploy to production
-  #     run: |
-  #       # Add your deployment commands here
-  #       echo "Deploying to production..."
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${{ matrix.component }}
+          file: ./${{ matrix.component }}/${{ matrix.component == 'backend' && 'Dockerfile.light' || 'Dockerfile' }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            ${{ matrix.component == 'frontend' && 'NEXT_PUBLIC_API_URL=https://api.bharatbuild.ai/api/v1' || '' }}
+            ${{ matrix.component == 'frontend' && 'NEXT_PUBLIC_WS_URL=wss://api.bharatbuild.ai/ws' || '' }}
+
+  # ================================
+  # Deploy to Staging
+  # ================================
+  deploy-staging:
+    name: Deploy to Staging
+    needs: [build-and-push]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    environment: staging
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy notification
+        run: |
+          echo "🚀 Staging deployment triggered"
+          echo "Branch: ${{ github.ref }}"
+          echo "Commit: ${{ github.sha }}"
+          # Add your staging deployment commands here
+
+  # ================================
+  # Deploy to Production
+  # ================================
+  deploy-production:
+    name: Deploy to Production
+    needs: [build-and-push]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy notification
+        run: |
+          echo "🚀 Production deployment triggered"
+          echo "Branch: ${{ github.ref }}"
+          echo "Commit: ${{ github.sha }}"
+          # Add your production deployment commands here
+          # Example: SSH to server, pull images, docker-compose up -d

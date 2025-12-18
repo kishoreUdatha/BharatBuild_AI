@@ -509,6 +509,40 @@ async def get_project_metadata(
         return root
 
     file_tree = build_file_tree(project_files)
+    total_files = len([f for f in project_files if not f.is_folder])
+
+    # FALLBACK: If database has no files, try loading from sandbox (disk)
+    # This handles cases where files were written to disk but failed to save to DB
+    if total_files == 0:
+        try:
+            from app.services.unified_storage import unified_storage
+            user_id = str(current_user.id)
+            logger.info(f"[Metadata] DB has 0 files, trying sandbox fallback for {project_id}")
+
+            sandbox_files = await unified_storage.list_sandbox_files(project_id, user_id)
+            if sandbox_files:
+                # Convert sandbox files to FileTreeItem format
+                def convert_sandbox_to_tree(files) -> List[FileTreeItem]:
+                    result = []
+                    for f in files:
+                        item = FileTreeItem(
+                            path=f.path,
+                            name=f.name or f.path.split('/')[-1],
+                            type=f.type,
+                            hash=None,  # FileInfo doesn't have hash
+                            language=f.language or 'plaintext',
+                            size_bytes=f.size_bytes if f.type == 'file' else None,
+                            children=convert_sandbox_to_tree(f.children) if f.children else None
+                        )
+                        result.append(item)
+                    return result
+
+                file_tree = convert_sandbox_to_tree(sandbox_files)
+                flat_files = unified_storage._flatten_tree(sandbox_files)
+                total_files = len([f for f in flat_files if f.type == 'file'])
+                logger.info(f"[Metadata] Fallback to sandbox: loaded {total_files} files from disk for project {project_id}")
+        except Exception as e:
+            logger.warning(f"[Metadata] Sandbox fallback failed for project {project_id}: {e}")
 
     # Count messages
     from app.models.project_message import ProjectMessage
@@ -531,7 +565,7 @@ async def get_project_metadata(
         created_at=project.created_at.isoformat() if project.created_at else None,
         updated_at=project.updated_at.isoformat() if project.updated_at else None,
         file_tree=file_tree,
-        total_files=len([f for f in project_files if not f.is_folder]),
+        total_files=total_files,
         messages_count=messages_count
     )
 

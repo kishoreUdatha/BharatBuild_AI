@@ -62,8 +62,8 @@ async def check_and_mark_project_completed(
         # Get the project
         project_result = await db.execute(
             select(Project).where(
-                Project.id == UUID(project_id),
-                Project.user_id == UUID(user_id)
+                Project.id == str(project_id),
+                Project.user_id == str(user_id)
             )
         )
         project = project_result.scalar_one_or_none()
@@ -72,15 +72,20 @@ async def check_and_mark_project_completed(
             logger.warning(f"Project {project_id} not found for completion check")
             return False
 
-        # Only check if project is PARTIAL_COMPLETED
-        if project.status != ProjectStatus.PARTIAL_COMPLETED:
-            logger.info(f"Project {project_id} is not PARTIAL_COMPLETED, skipping completion check")
+        # Check if project can be marked as completed (not already completed)
+        if project.status == ProjectStatus.COMPLETED:
+            logger.info(f"Project {project_id} is already COMPLETED")
+            return True
+
+        # Allow completion check for PARTIAL_COMPLETED, PROCESSING, or IN_PROGRESS
+        if project.status not in [ProjectStatus.PARTIAL_COMPLETED, ProjectStatus.PROCESSING, ProjectStatus.IN_PROGRESS]:
+            logger.info(f"Project {project_id} status is {project.status.value}, skipping completion check")
             return False
 
         # Count existing documents by type
         doc_count_result = await db.execute(
             select(Document.doc_type, func.count(Document.id))
-            .where(Document.project_id == UUID(project_id))
+            .where(Document.project_id == str(project_id))
             .group_by(Document.doc_type)
         )
         existing_docs = {row[0]: row[1] for row in doc_count_result.all()}
@@ -159,8 +164,8 @@ async def generate_document_stream(
     # Verify project ownership
     result = await db.execute(
         select(Project).where(
-            Project.id == UUID(request.project_id),
-            Project.user_id == current_user.id
+            Project.id == str(request.project_id),
+            Project.user_id == str(current_user.id)
         )
     )
     if not result.scalar_one_or_none():
@@ -182,19 +187,27 @@ async def generate_document_stream(
                 yield f"data: {json.dumps({'type': 'error', 'error': f'Invalid document type: {request.document_type}'})}\n\n"
                 return
 
-            # Build project data
+            # Build project data - use user profile data as defaults
             project_data = {
                 "project_name": request.project_name,
                 "project_type": request.project_type,
-                "author": request.author,
-                "institution": request.institution,
-                "department": request.department,
-                "guide": request.guide,
+                "author": request.author if request.author != "Student Name" else (current_user.full_name or current_user.username or "Student"),
+                "institution": request.institution if request.institution != "University Name" else (current_user.college_name or "University"),
+                "department": request.department if request.department != "Computer Science" else (current_user.department or "Computer Science and Engineering"),
+                "guide": request.guide if request.guide != "Guide Name" else (current_user.guide_name or "Project Guide"),
                 "technologies": request.technologies,
                 "features": request.features,
                 "api_endpoints": request.api_endpoints,
                 "database_tables": request.database_tables,
-                "code_files": request.code_files
+                "code_files": request.code_files,
+                # Additional user profile data for documents
+                "roll_number": current_user.roll_number,
+                "university_name": current_user.university_name,
+                "guide_designation": current_user.guide_designation,
+                "hod_name": current_user.hod_name,
+                "course": current_user.course,
+                "year_semester": current_user.year_semester,
+                "batch": current_user.batch
             }
 
             # Create agent context with user_id for isolation
@@ -291,8 +304,8 @@ async def generate_document(
     # Verify project ownership
     result = await db.execute(
         select(Project).where(
-            Project.id == UUID(request.project_id),
-            Project.user_id == current_user.id
+            Project.id == str(request.project_id),
+            Project.user_id == str(current_user.id)
         )
     )
     if not result.scalar_one_or_none():
@@ -337,8 +350,8 @@ async def download_document(
     try:
         result = await db.execute(
             select(Project).where(
-                Project.id == UUID(project_id),
-                Project.user_id == current_user.id
+                Project.id == str(project_id),
+                Project.user_id == str(current_user.id)
             )
         )
         if not result.scalar_one_or_none():
@@ -353,10 +366,41 @@ async def download_document(
         )
 
     from app.core.config import settings
+    from app.services.storage_service import storage_service
 
     logger.info(f"[DocDownload] Downloading {document_type} for project {project_id}")
 
-    # Search in project docs folder first (preferred location)
+    # Map document_type parameter to database doc_type
+    doc_type_map = {
+        "project_report": DBDocumentType.REPORT,
+        "srs": DBDocumentType.SRS,
+        "ppt": DBDocumentType.PPT,
+        "viva_qa": DBDocumentType.VIVA_QA,
+    }
+
+    # First, try to find document in database (S3 stored)
+    target_doc_type = doc_type_map.get(document_type)
+    if target_doc_type:
+        doc_result = await db.execute(
+            select(Document).where(
+                Document.project_id == str(project_id),
+                Document.doc_type == target_doc_type
+            ).order_by(Document.created_at.desc())
+        )
+        document = doc_result.scalar_one_or_none()
+
+        if document and document.file_path:
+            logger.info(f"[DocDownload] Found document in DB: {document.file_name}, path: {document.file_path}")
+            # If file_path is an S3 key, redirect to presigned URL
+            if document.file_path.startswith('documents/'):
+                try:
+                    presigned_url = await storage_service.get_presigned_url(document.file_path)
+                    from fastapi.responses import RedirectResponse
+                    return RedirectResponse(url=presigned_url)
+                except Exception as e:
+                    logger.error(f"[DocDownload] Failed to get presigned URL: {e}")
+
+    # Search in project docs folder (local files)
     project_docs_dir = settings.get_project_docs_dir(project_id)
     logger.info(f"[DocDownload] Checking docs dir: {project_docs_dir}")
 
@@ -428,7 +472,7 @@ async def download_document_by_id(
     # Get document from database
     try:
         doc_result = await db.execute(
-            select(Document).where(Document.id == UUID(document_id))
+            select(Document).where(Document.id == str(document_id))
         )
         document = doc_result.scalar_one_or_none()
 
@@ -439,7 +483,7 @@ async def download_document_by_id(
         project_result = await db.execute(
             select(Project).where(
                 Project.id == document.project_id,
-                Project.user_id == current_user.id
+                Project.user_id == str(current_user.id)
             )
         )
         if not project_result.scalar_one_or_none():
@@ -501,8 +545,8 @@ async def download_all_documents(
     try:
         result = await db.execute(
             select(Project).where(
-                Project.id == UUID(project_id),
-                Project.user_id == current_user.id
+                Project.id == str(project_id),
+                Project.user_id == str(current_user.id)
             )
         )
         project = result.scalar_one_or_none()
@@ -586,8 +630,8 @@ async def list_project_documents(
     try:
         result = await db.execute(
             select(Project).where(
-                Project.id == UUID(project_id),
-                Project.user_id == current_user.id
+                Project.id == str(project_id),
+                Project.user_id == str(current_user.id)
             )
         )
         if not result.scalar_one_or_none():
@@ -608,7 +652,7 @@ async def list_project_documents(
 
     # Get documents from database (primary source)
     db_docs_result = await db.execute(
-        select(Document).where(Document.project_id == UUID(project_id)).order_by(Document.created_at.desc())
+        select(Document).where(Document.project_id == str(project_id)).order_by(Document.created_at.desc())
     )
     db_documents = db_docs_result.scalars().all()
 
@@ -688,8 +732,8 @@ async def regenerate_all_documents(
     try:
         result = await db.execute(
             select(Project).where(
-                Project.id == UUID(project_id),
-                Project.user_id == current_user.id
+                Project.id == str(project_id),
+                Project.user_id == str(current_user.id)
             )
         )
         project = result.scalar_one_or_none()
@@ -720,6 +764,7 @@ async def regenerate_all_documents(
     from app.services.storage_service import storage_service as storage_svc
 
     files_list = []
+    files_with_content = []  # For API/database extraction
     code_content = []
     for pf in project_files:
         if not pf.is_folder:
@@ -739,6 +784,11 @@ async def regenerate_all_documents(
                     "path": pf.path,
                     "type": "file",
                     "language": pf.language or "plaintext"
+                })
+                # Store file with content for API/database extraction
+                files_with_content.append({
+                    "path": pf.path,
+                    "content": content
                 })
                 # Collect code content for analysis (limit to avoid token overflow)
                 if len(code_content) < 20:
@@ -833,19 +883,29 @@ async def regenerate_all_documents(
             yield f"data: {json.dumps({'type': 'status', 'message': 'Generating Word and PPT documents...', 'progress': 92})}\n\n"
 
             try:
-                # Generate project report
+                # Extract API endpoints and database tables from generated files
+                api_endpoints = chunked_document_agent._extract_api_endpoints(files_with_content)
+                database_tables = chunked_document_agent._extract_database_tables(files_with_content)
+
+                logger.info(f"[DocRegen] Extracted {len(api_endpoints)} API endpoints and {len(database_tables)} database tables")
+
+                # Generate project report with properly extracted data
                 project_data = {
                     "project_name": project.title,
                     "project_type": project.domain or "Software Project",
                     "author": current_user.full_name or current_user.email.split('@')[0],
-                    "institution": "University",
-                    "department": "Computer Science",
-                    "guide": "Guide Name",
+                    "institution": current_user.college_name or "University",
+                    "department": current_user.department or "Computer Science",
+                    "guide": current_user.guide_name or "Guide Name",
+                    "roll_number": current_user.roll_number,
+                    "university_name": current_user.university_name,
+                    "hod_name": current_user.hod_name,
+                    "batch": current_user.batch,
                     "technologies": project.tech_stack or {},
                     "features": project.requirements or [],
-                    "api_endpoints": [],
-                    "database_tables": [],
-                    "code_files": [{"path": f["path"]} for f in files_list[:20]]
+                    "api_endpoints": api_endpoints,
+                    "database_tables": database_tables,
+                    "code_files": files_with_content[:20]  # Include content for code snippets
                 }
 
                 from app.modules.agents.base_agent import AgentContext

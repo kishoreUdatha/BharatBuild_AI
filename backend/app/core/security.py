@@ -20,10 +20,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def get_password_hash(password: str) -> str:
-    """Hash password"""
+    """Hash password with configurable rounds (BCRYPT_ROUNDS in .env)"""
     # Bcrypt has a 72 byte limit - truncate password if necessary
     password_bytes = password.encode('utf-8')[:72]
-    hashed = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
+    hashed = bcrypt.hashpw(password_bytes, bcrypt.gensalt(rounds=settings.BCRYPT_ROUNDS))
     return hashed.decode('utf-8')
 
 

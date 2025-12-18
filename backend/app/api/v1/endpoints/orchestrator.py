@@ -34,6 +34,7 @@ from app.models.project import Project, ProjectStatus, ProjectMode
 from app.models.user import User
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.usage_limits import check_token_limit, deduct_tokens, log_api_usage, get_user_limits, check_project_limit
+from app.modules.auth.feature_flags import check_feature_access
 from app.services.sandbox_cleanup import touch_project
 from app.services.enterprise_tracker import EnterpriseTracker
 from uuid import UUID as UUID_type
@@ -573,7 +574,24 @@ async def execute_workflow(
             user_limits = await get_user_limits(current_user, db)
             logger.info(f"[Execute Workflow] User {current_user.email} on {user_limits.plan_name} plan")
 
-            # Check if user's plan allows project generation
+            # Check if user has project_generation feature access (Premium required)
+            feature_access = await check_feature_access(db, current_user, "project_generation")
+            if not feature_access["allowed"]:
+                logger.warning(f"[Execute Workflow] Feature blocked for user {current_user.email}: {feature_access['reason']}")
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "feature_not_available",
+                        "message": "Project generation requires Premium plan. Upgrade to create full projects with code, documents, and bug fixing.",
+                        "feature": "project_generation",
+                        "current_plan": feature_access["current_plan"],
+                        "upgrade_to": "Premium",
+                        "upgrade_url": "/billing/plans"
+                    }
+                )
+            logger.info(f"[Execute Workflow] Feature access granted: project_generation")
+
+            # Check if user's plan allows project generation (project limit)
             project_check = await check_project_limit(current_user, db)
             if not project_check.allowed:
                 logger.warning(f"[Execute Workflow] Project limit reached for user {current_user.email}")

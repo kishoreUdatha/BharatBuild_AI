@@ -1,0 +1,15 @@
+{
+  "total_requests": 204,
+  "successful_requests": 0,
+  "failed_requests": 204,
+  "error_rate": 100.0,
+  "requests_per_second": 6.1581734742000185,
+  "avg_response_time": 4.051923751831055,
+  "p50_response_time": 3.741741180419922,
+  "p95_response_time": 5.45048713684082,
+  "p99_response_time": 9.139299392700195,
+  "max_response_time": 19.11783218383789,
+  "duration_seconds": 33.12670564651489,
+  "num_users": 10,
+  "pass": false
+}

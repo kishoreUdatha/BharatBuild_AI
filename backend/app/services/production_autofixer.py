@@ -1112,7 +1112,7 @@ class DeterministicFixer:
         return None
 
     async def _fix_tailwind_config(self, error: ParsedError) -> Optional[FixResult]:
-        """Fix Tailwind CSS configuration"""
+        """Fix Tailwind CSS configuration - uses CSS replacement as primary strategy"""
         missing_class = error.missing_class
 
         if not missing_class:
@@ -1123,6 +1123,48 @@ class DeterministicFixer:
 
         if not missing_class:
             return None
+
+        # =================================================================
+        # STRATEGY 1: Replace shadcn classes in CSS files with standard Tailwind
+        # This is more reliable than modifying tailwind.config.js
+        # =================================================================
+        shadcn_to_tailwind = {
+            "border-border": "border-gray-200 dark:border-gray-700",
+            "bg-background": "bg-white dark:bg-gray-900",
+            "text-foreground": "text-gray-900 dark:text-white",
+            "bg-card": "bg-white dark:bg-gray-800",
+            "text-card-foreground": "text-gray-900 dark:text-gray-100",
+            "bg-popover": "bg-white dark:bg-gray-800",
+            "text-popover-foreground": "text-gray-900 dark:text-gray-100",
+            "bg-primary": "bg-blue-600",
+            "text-primary-foreground": "text-white",
+            "bg-secondary": "bg-gray-100 dark:bg-gray-700",
+            "text-secondary-foreground": "text-gray-900 dark:text-gray-100",
+            "bg-muted": "bg-gray-100 dark:bg-gray-800",
+            "text-muted-foreground": "text-gray-500 dark:text-gray-400",
+            "bg-accent": "bg-gray-100 dark:bg-gray-700",
+            "text-accent-foreground": "text-gray-900 dark:text-gray-100",
+            "bg-destructive": "bg-red-600",
+            "text-destructive-foreground": "text-white",
+            "ring-ring": "ring-blue-500",
+            "bg-input": "bg-white dark:bg-gray-800",
+        }
+
+        if missing_class in shadcn_to_tailwind:
+            replacement = shadcn_to_tailwind[missing_class]
+            css_result = self._fix_shadcn_in_css_files(missing_class, replacement)
+            if css_result:
+                return FixResult(
+                    success=True,
+                    error=error,
+                    fix_applied=f"Replaced @apply {missing_class} with {replacement}",
+                    files_modified=css_result,
+                    rollback_data=None,
+                )
+
+        # =================================================================
+        # STRATEGY 2 (Fallback): Modify tailwind.config.js
+        # =================================================================
 
         # Check if we have a mapping for this class
         if missing_class not in self.TAILWIND_CLASS_MAPPINGS:
@@ -1172,6 +1214,53 @@ class DeterministicFixer:
             files_modified=[str(config_path)],
             rollback_data={"type": "file", "path": str(config_path), "content": original_content},
         )
+
+    def _fix_shadcn_in_css_files(self, shadcn_class: str, replacement: str) -> Optional[List[str]]:
+        """
+        Replace shadcn/ui @apply classes with standard Tailwind in CSS files.
+        Returns list of modified files, or None if no files were modified.
+        """
+        css_file_paths = [
+            self.project_path / "src" / "index.css",
+            self.project_path / "src" / "globals.css",
+            self.project_path / "src" / "app" / "globals.css",
+            self.project_path / "src" / "styles" / "globals.css",
+            self.project_path / "src" / "App.css",
+            self.project_path / "app" / "globals.css",
+            self.project_path / "styles" / "globals.css",
+            self.project_path / "frontend" / "src" / "index.css",
+            self.project_path / "frontend" / "src" / "globals.css",
+        ]
+
+        modified_files = []
+
+        for css_path in css_file_paths:
+            if not css_path.exists():
+                continue
+
+            try:
+                content = css_path.read_text(encoding='utf-8')
+                original_content = content
+
+                # Pattern to match @apply with the shadcn class
+                patterns = [
+                    (rf'@apply\s+{re.escape(shadcn_class)}\s*;', f'@apply {replacement};'),
+                    (rf'(@apply\s+[^;]*)\b{re.escape(shadcn_class)}\b([^;]*;)', rf'\1{replacement}\2'),
+                ]
+
+                for pattern, repl in patterns:
+                    content = re.sub(pattern, repl, content)
+
+                if content != original_content:
+                    css_path.write_text(content, encoding='utf-8')
+                    modified_files.append(str(css_path))
+                    logger.info(f"[DeterministicFixer] Fixed {shadcn_class} in {css_path}")
+
+            except Exception as e:
+                logger.warning(f"[DeterministicFixer] Error fixing {css_path}: {e}")
+                continue
+
+        return modified_files if modified_files else None
 
     def _add_tailwind_color(self, content: str, color_name: str, color_value: str) -> str:
         """Add a color to tailwind.config.js"""

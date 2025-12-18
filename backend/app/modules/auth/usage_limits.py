@@ -119,7 +119,7 @@ async def get_user_limits(user: User, db: AsyncSession) -> UserLimits:
             plan_name="Premium (Token Purchase)",
             plan_type=PlanType.PRO,
             token_limit=None,  # Unlimited for purchased tokens
-            project_limit=10,  # Allow 10 projects per purchase
+            project_limit=1,  # Allow 1 project per purchase
             api_calls_limit=None,
             code_generations_per_day=None,
             auto_fixes_per_day=None,

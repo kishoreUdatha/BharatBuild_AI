@@ -112,6 +112,11 @@ class Settings(BaseSettings):
     CLAUDE_MAX_TOKENS: int = 4096
     CLAUDE_TEMPERATURE: float = 0.7
     USE_PLAIN_TEXT_RESPONSES: bool = True
+    CLAUDE_REQUEST_TIMEOUT: int = 300  # 5 minutes for large document generations
+    CLAUDE_CONNECT_TIMEOUT: int = 60  # seconds
+    CLAUDE_MAX_RETRIES: int = 5
+    CLAUDE_RETRY_BASE_DELAY: float = 2.0  # seconds
+    CLAUDE_RETRY_MAX_DELAY: float = 30.0  # seconds
 
     # ==========================================
     # Storage Configuration
@@ -138,8 +143,9 @@ class Settings(BaseSettings):
     # ==========================================
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours - long sessions for better UX
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30  # 30 days refresh token
+    BCRYPT_ROUNDS: int = 12  # 4 for dev (fast), 12 for prod (secure)
 
     # ==========================================
     # Google OAuth
@@ -178,6 +184,10 @@ class Settings(BaseSettings):
     EMAIL_FROM: str = "noreply@bharatbuild.ai"
     EMAIL_FROM_NAME: str = "BharatBuild AI"
 
+    # SendGrid Configuration (preferred for bulk emails)
+    SENDGRID_API_KEY: str = ""
+    USE_SENDGRID: bool = True  # Use SendGrid when API key is available
+
     # ==========================================
     # Frontend
     # ==========================================
@@ -187,7 +197,7 @@ class Settings(BaseSettings):
     # ==========================================
     # CORS (stored as comma-separated string, parsed to list)
     # ==========================================
-    CORS_ORIGINS_STR: str = "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3003,http://localhost:3004,http://localhost:3005,http://localhost:3006,http://localhost:3007,http://localhost:3008"
+    CORS_ORIGINS_STR: str = "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3003,http://localhost:3004,http://localhost:3005,http://localhost:3006,http://127.0.0.1:3000,http://127.0.0.1:3001,http://127.0.0.1:3002,http://127.0.0.1:3003,http://127.0.0.1:3004,http://127.0.0.1:3005,http://127.0.0.1:3006"
 
     @property
     def CORS_ORIGINS(self) -> List[str]:
@@ -356,6 +366,16 @@ class Settings(BaseSettings):
     AGENT_BATCH_SIZE: int = 3
     AGENT_MAX_RETRIES: int = 3
     AGENT_MAX_AUTO_FIXES: int = 3
+
+    # ==========================================
+    # Auto-Fixer Settings
+    # ==========================================
+    AUTOFIXER_MAX_ATTEMPTS: int = 10  # Max fix attempts before giving up
+    AUTOFIXER_COOLDOWN_SECONDS: int = 10  # Cooldown between fixes
+    AUTOFIXER_FIX_COOLDOWN_SECONDS: int = 30  # Min seconds between fix attempts
+    AUTOFIXER_FIX_WINDOW_SECONDS: int = 300  # 5 min window for max attempts
+    AUTOFIXER_INSTALL_TIMEOUT: int = 120  # Timeout for install commands
+    LOG_RETENTION_MINUTES: int = 30  # Log bus retention
 
     # ==========================================
     # Timeouts and Intervals (in seconds/milliseconds as noted)

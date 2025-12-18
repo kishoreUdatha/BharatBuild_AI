@@ -57,6 +57,16 @@ export function UpgradeProvider({ children }: { children: React.ReactNode }) {
         })
         return true
       }
+      // Handle project limit reached
+      if (detail?.error === 'project_limit_reached') {
+        showUpgradePrompt({
+          feature: 'project_limit',
+          currentPlan: `${detail.current_usage}/${detail.limit} projects used`,
+          upgradeTo: 'Premium',
+          message: detail.message
+        })
+        return true
+      }
     }
 
     // Also check for direct detail object (from axios or fetch)
@@ -66,6 +76,18 @@ export function UpgradeProvider({ children }: { children: React.ReactNode }) {
         feature: detail.feature,
         currentPlan: detail.current_plan,
         upgradeTo: detail.upgrade_to,
+        message: detail.message
+      })
+      return true
+    }
+
+    // Handle project limit from direct detail
+    if (error?.status === 403 && error?.detail?.error === 'project_limit_reached') {
+      const detail = error.detail
+      showUpgradePrompt({
+        feature: 'project_limit',
+        currentPlan: `${detail.current_usage}/${detail.limit} projects used`,
+        upgradeTo: 'Premium',
         message: detail.message
       })
       return true

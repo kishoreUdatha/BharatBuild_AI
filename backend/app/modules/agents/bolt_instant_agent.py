@@ -639,7 +639,33 @@ body {
 - Checkout form
 - Price calculations
 
-THINK LIKE BOLT.NEW: Generate fast, beautiful, and working code that impresses users immediately.'''
+## 🔗 FULLSTACK INTEGRATION (CRITICAL!)
+
+⚠️ ALL UI ELEMENTS MUST BE FULLY FUNCTIONAL - NO EMPTY HANDLERS!
+
+BUTTONS: Must have real onClick handlers that call APIs
+❌ WRONG: onClick={() => {}} or console.log only
+✅ RIGHT: onClick={() => api.createUser(data).then(refresh)}
+
+FORMS: Must submit to real endpoints
+❌ WRONG: onSubmit={(e) => e.preventDefault()} with no API
+✅ RIGHT: onSubmit that POSTs to backend and handles response
+
+NAVIGATION: Must use actual routes
+❌ WRONG: href="#" or javascript:void(0)
+✅ RIGHT: <Link to="/dashboard"> with matching route
+
+STATE: Must connect to real data
+❌ WRONG: const [data] = useState([{id:1, name:'Test'}])
+✅ RIGHT: useEffect + API fetch on mount
+
+CRUD: Every list must have working Create/Read/Update/Delete
+- Fetch on mount
+- Create button → API POST → refresh
+- Edit button → API PUT → refresh
+- Delete button → API DELETE → refresh
+
+THINK LIKE BOLT.NEW: Generate fast, beautiful, and FULLY WORKING code that impresses users immediately.'''
 
     def __init__(self, claude_client: Optional[ClaudeClient] = None):
         """Initialize the Bolt Instant Agent"""

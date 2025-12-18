@@ -1,0 +1,79 @@
+# Pre-commit hooks for BharatBuild AI
+# Install: pip install pre-commit && pre-commit install
+
+repos:
+  # General hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        args: ['--branch', 'main', '--branch', 'master']
+
+  # Python linting with Ruff (fast)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.8
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^backend/
+      - id: ruff-format
+        files: ^backend/
+
+  # Python type checking
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.7.1
+    hooks:
+      - id: mypy
+        files: ^backend/app/
+        args: [--ignore-missing-imports, --no-error-summary]
+        additional_dependencies:
+          - pydantic
+          - fastapi
+          - sqlalchemy
+
+  # Security checks
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.6
+    hooks:
+      - id: bandit
+        args: ['-c', 'pyproject.toml', '-r', 'backend/app']
+        additional_dependencies: ['bandit[toml]']
+        files: ^backend/
+
+  # Frontend - ESLint
+  - repo: local
+    hooks:
+      - id: eslint
+        name: ESLint
+        entry: bash -c 'cd frontend && npm run lint'
+        language: system
+        files: ^frontend/.*\.(ts|tsx|js|jsx)$
+        pass_filenames: false
+
+  # Check for debug statements
+  - repo: local
+    hooks:
+      - id: no-print-statements
+        name: No print() in production code
+        entry: python -c "import sys; sys.exit(1 if 'print(' in open(sys.argv[1]).read() else 0)"
+        language: system
+        files: ^backend/app/.*\.py$
+        exclude: (test_|_test\.py|conftest\.py)
+
+  # Check for pass after except
+  - repo: local
+    hooks:
+      - id: no-silent-exceptions
+        name: No silent exception handling
+        entry: bash -c 'if grep -n "except.*:" "$@" | grep -A1 "pass" | grep -q "pass"; then echo "Found silent exception (except: pass) - please add proper error handling"; exit 1; fi'
+        language: system
+        files: ^backend/app/.*\.py$
+        exclude: (test_|_test\.py)

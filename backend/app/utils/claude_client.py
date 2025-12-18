@@ -7,12 +7,12 @@ import httpx
 from app.core.config import settings
 from app.core.logging_config import logger
 
-# Retry configuration
-MAX_RETRIES = 3
-BASE_DELAY = 2.0  # seconds
-MAX_DELAY = 30.0  # seconds
-REQUEST_TIMEOUT = 120.0  # seconds (2 minutes for large generations)
-CONNECT_TIMEOUT = 30.0  # seconds
+# Retry configuration - loaded from settings
+MAX_RETRIES = settings.CLAUDE_MAX_RETRIES
+BASE_DELAY = settings.CLAUDE_RETRY_BASE_DELAY
+MAX_DELAY = settings.CLAUDE_RETRY_MAX_DELAY
+REQUEST_TIMEOUT = float(settings.CLAUDE_REQUEST_TIMEOUT)
+CONNECT_TIMEOUT = float(settings.CLAUDE_CONNECT_TIMEOUT)
 RETRYABLE_ERRORS = ['overloaded_error', 'rate_limit_error', 'server_error']
 
 
