@@ -7,9 +7,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main, develop, 'feature/*']
+    branches: [main, master, develop, 'feature/*']
   pull_request:
-    branches: [main, develop]
+    branches: [main, master, develop]
 
 env:
   REGISTRY: ghcr.io
@@ -187,7 +187,7 @@ jobs:
     name: Build & Push Docker
     needs: [backend-test, frontend-test, security-scan]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
 
     permissions:
       contents: read
