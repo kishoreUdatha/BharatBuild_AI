@@ -20,15 +20,9 @@ if "sqlite" in DATABASE_URL:
         future=True
     )
 else:
-    # For AWS RDS: use NullPool to avoid connection pool issues
-    # and add SSL via connect_args with proper asyncpg format
-    import ssl
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE  # RDS uses self-signed certs
-
+    # For AWS RDS in private VPC: use NullPool to create fresh connections
+    # No SSL needed for private VPC connections
     connect_args = {
-        "ssl": ssl_context,
         "command_timeout": 60,
         "timeout": 30,
     }
