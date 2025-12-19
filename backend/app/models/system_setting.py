@@ -1,5 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Text, ForeignKey
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Column, String, DateTime, Text, ForeignKey, JSON
 from datetime import datetime
 
 from app.core.database import Base
@@ -16,7 +15,7 @@ class SystemSetting(Base):
     key = Column(String(100), unique=True, nullable=False, index=True)
 
     # Setting value (stored as JSON for flexibility)
-    value = Column(JSONB, nullable=False)
+    value = Column(JSON, nullable=False)
 
     # Metadata
     description = Column(Text, nullable=True)
