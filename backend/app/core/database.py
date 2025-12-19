@@ -20,12 +20,22 @@ if "sqlite" in DATABASE_URL:
         future=True
     )
 else:
+    # Add SSL and connection timeout settings for AWS RDS
+    connect_args = {
+        "ssl": "prefer",  # Use SSL if available (required for AWS RDS)
+        "command_timeout": 30,  # 30 second timeout for queries
+        "timeout": 10,  # 10 second connection timeout
+    }
+
     engine = create_async_engine(
         DATABASE_URL,
         echo=settings.DB_ECHO,
         pool_size=settings.DB_POOL_SIZE,
         max_overflow=settings.DB_MAX_OVERFLOW,
         pool_pre_ping=True,
+        pool_recycle=300,  # Recycle connections after 5 minutes
+        pool_timeout=10,  # 10 second pool timeout
+        connect_args=connect_args,
         future=True
     )
 
