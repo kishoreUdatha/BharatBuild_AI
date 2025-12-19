@@ -63,15 +63,31 @@ variable "domain_name" {
 }
 
 variable "db_password" {
-  description = "Database password"
+  description = "Database password (8+ chars, no @, \", /, or spaces)"
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = length(var.db_password) >= 8 && !can(regex("[@ \"/]", var.db_password))
+    error_message = "Database password must be at least 8 characters and cannot contain @, \", /, or spaces."
+  }
 }
 
 variable "redis_auth_token" {
-  description = "Redis auth token"
+  description = "Redis auth token (16-128 alphanumeric chars, no @, \", or /)"
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = length(var.redis_auth_token) >= 16 && length(var.redis_auth_token) <= 128 && !can(regex("[@\"/]", var.redis_auth_token))
+    error_message = "Redis auth token must be 16-128 characters and cannot contain @, \", or /."
+  }
+}
+
+variable "route53_zone_exists" {
+  description = "Set to true only if Route 53 hosted zone already exists for your domain"
+  type        = bool
+  default     = false
 }
 
 # =============================================================================
