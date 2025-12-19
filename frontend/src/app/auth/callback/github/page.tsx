@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, Suspense } from 'react'
+import { useEffect, useState, useRef, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { apiClient } from '@/lib/api-client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -12,8 +12,13 @@ function GitHubCallbackContent() {
   const searchParams = useSearchParams()
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading')
   const [error, setError] = useState('')
+  const processedRef = useRef(false)
 
   useEffect(() => {
+    // Prevent double execution in React Strict Mode
+    if (processedRef.current) return
+    processedRef.current = true
+
     const handleCallback = async () => {
       const code = searchParams.get('code')
       const state = searchParams.get('state')
@@ -57,12 +62,16 @@ function GitHubCallbackContent() {
         sessionStorage.removeItem('oauth_state')
         sessionStorage.removeItem('oauth_role')
 
+        // Store user info
+        localStorage.setItem('user', JSON.stringify(response.user))
+
         setStatus('success')
 
         // Redirect after short delay to show success
         setTimeout(() => {
           if (response.is_new_user) {
-            router.push('/build?welcome=true')
+            // New users go to profile completion
+            router.push('/complete-profile')
           } else {
             router.push('/build')
           }

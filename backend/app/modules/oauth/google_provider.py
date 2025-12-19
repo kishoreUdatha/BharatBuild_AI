@@ -6,6 +6,7 @@ from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
 from app.core.config import settings
+from app.core.logging_config import logger
 
 
 class GoogleOAuthProvider:
@@ -78,6 +79,7 @@ class GoogleOAuthProvider:
 
             # Verify the issuer
             if idinfo["iss"] not in ["accounts.google.com", "https://accounts.google.com"]:
+                logger.warning("[GoogleOAuth] Invalid token issuer")
                 return None
 
             return {
@@ -89,7 +91,11 @@ class GoogleOAuthProvider:
                 "given_name": idinfo.get("given_name", ""),
                 "family_name": idinfo.get("family_name", ""),
             }
-        except Exception:
+        except ValueError as e:
+            logger.error(f"[GoogleOAuth] Invalid ID token: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"[GoogleOAuth] Token verification error: {e}", exc_info=True)
             return None
 
     async def authenticate(self, code: str) -> Optional[Dict[str, Any]]:
@@ -104,6 +110,7 @@ class GoogleOAuthProvider:
             access_token = tokens.get("access_token")
 
             if not access_token:
+                logger.error("[GoogleOAuth] No access token received from token exchange")
                 return None
 
             # Get user info
@@ -118,7 +125,14 @@ class GoogleOAuthProvider:
                 "given_name": user_info.get("given_name", ""),
                 "family_name": user_info.get("family_name", ""),
             }
-        except Exception:
+        except httpx.HTTPStatusError as e:
+            logger.error(f"[GoogleOAuth] HTTP error during authentication: {e.response.status_code} - {e.response.text}")
+            return None
+        except httpx.RequestError as e:
+            logger.error(f"[GoogleOAuth] Request error during authentication: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"[GoogleOAuth] Unexpected error during authentication: {e}", exc_info=True)
             return None
 
 

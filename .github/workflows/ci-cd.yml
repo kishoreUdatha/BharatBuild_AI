@@ -232,8 +232,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            ${{ matrix.component == 'frontend' && 'NEXT_PUBLIC_API_URL=http://bharatbuild-alb-223139118.ap-south-1.elb.amazonaws.com/api/v1' || '' }}
-            ${{ matrix.component == 'frontend' && 'NEXT_PUBLIC_WS_URL=ws://bharatbuild-alb-223139118.ap-south-1.elb.amazonaws.com/ws' || '' }}
+            ${{ matrix.component == 'frontend' && 'NEXT_PUBLIC_API_URL=https://bharatbuild.ai/api/v1' || '' }}
+            ${{ matrix.component == 'frontend' && 'NEXT_PUBLIC_WS_URL=wss://bharatbuild.ai/ws' || '' }}
 
   # ================================
   # Deploy to Staging

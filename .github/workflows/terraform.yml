@@ -67,6 +67,9 @@ jobs:
         run: |
           terraform plan \
             -var="environment=${{ github.event.inputs.environment }}" \
+            -var="domain_name=${{ secrets.DOMAIN_NAME }}" \
+            -var="db_password=${{ secrets.DB_PASSWORD }}" \
+            -var="redis_auth_token=${{ secrets.REDIS_AUTH_TOKEN }}" \
             -out=tfplan
 
       - name: Terraform Apply
@@ -79,6 +82,9 @@ jobs:
           echo "⚠️ DESTROYING INFRASTRUCTURE"
           terraform destroy \
             -var="environment=${{ github.event.inputs.environment }}" \
+            -var="domain_name=${{ secrets.DOMAIN_NAME }}" \
+            -var="db_password=${{ secrets.DB_PASSWORD }}" \
+            -var="redis_auth_token=${{ secrets.REDIS_AUTH_TOKEN }}" \
             -auto-approve
 
       - name: Upload Plan
