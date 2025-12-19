@@ -20,19 +20,12 @@ if "sqlite" in DATABASE_URL:
         future=True
     )
 else:
-    # For AWS RDS in private VPC: use NullPool to create fresh connections
-    # No SSL needed for private VPC connections
-    connect_args = {
-        "command_timeout": 60,
-        "timeout": 30,
-    }
-
+    # For AWS RDS: use NullPool to create fresh connections (no pooling)
+    # Match the working create-tables endpoint: no custom connect_args
     engine = create_async_engine(
         DATABASE_URL,
         echo=settings.DB_ECHO,
-        poolclass=NullPool,  # Use NullPool to avoid stale connections
-        connect_args=connect_args,
-        future=True
+        poolclass=NullPool,
     )
 
 # Create async session factory
