@@ -96,9 +96,11 @@ class TestGetUserLimits:
 
         purchase = TokenPurchase(
             user_id=str(test_user.id),
-            amount=100,
-            tokens=10000,
+            package_name="pro",
+            tokens_purchased=10000,
+            amount_paid=100,
             payment_status="success",
+            valid_from=datetime.utcnow(),
             is_expired=False
         )
         db_session.add(purchase)
@@ -114,6 +116,7 @@ class TestGetUserLimits:
         """Test limits for user with subscription"""
         plan = Plan(
             name="Student",
+            slug="student",
             plan_type=PlanType.STUDENT,
             price=499,
             token_limit=50000,
@@ -126,7 +129,9 @@ class TestGetUserLimits:
         subscription = Subscription(
             user_id=str(test_user.id),
             plan_id=plan.id,
-            status=SubscriptionStatus.ACTIVE
+            status=SubscriptionStatus.ACTIVE,
+            current_period_start=datetime.utcnow(),
+            current_period_end=datetime.utcnow() + timedelta(days=30)
         )
         db_session.add(subscription)
         await db_session.commit()
@@ -147,9 +152,11 @@ class TestCheckTokenLimit:
 
         purchase = TokenPurchase(
             user_id=str(test_user.id),
-            amount=100,
-            tokens=10000,
+            package_name="pro",
+            tokens_purchased=10000,
+            amount_paid=100,
             payment_status="success",
+            valid_from=datetime.utcnow(),
             is_expired=False
         )
         db_session.add(purchase)
@@ -205,7 +212,7 @@ class TestCheckProjectLimit:
             user_id=str(test_user.id),
             title="Completed Project",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.COMPLETED
         )
         db_session.add(project)
@@ -223,7 +230,7 @@ class TestCheckProjectLimit:
             user_id=str(test_user.id),
             title="Partial Project",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.PARTIAL_COMPLETED
         )
         db_session.add(project)
@@ -276,9 +283,11 @@ class TestCheckDocumentGeneration:
         from app.models.token_balance import TokenPurchase
         purchase = TokenPurchase(
             user_id=str(test_user.id),
-            amount=100,
-            tokens=10000,
+            package_name="pro",
+            tokens_purchased=10000,
+            amount_paid=100,
             payment_status="success",
+            valid_from=datetime.utcnow(),
             is_expired=False
         )
         db_session.add(purchase)
@@ -306,9 +315,11 @@ class TestCheckDocumentType:
         from app.models.token_balance import TokenPurchase
         purchase = TokenPurchase(
             user_id=str(test_user.id),
-            amount=100,
-            tokens=10000,
+            package_name="pro",
+            tokens_purchased=10000,
+            amount_paid=100,
             payment_status="success",
+            valid_from=datetime.utcnow(),
             is_expired=False
         )
         db_session.add(purchase)
@@ -336,9 +347,11 @@ class TestCheckBugFixingLimit:
         from app.models.token_balance import TokenPurchase
         purchase = TokenPurchase(
             user_id=str(test_user.id),
-            amount=100,
-            tokens=10000,
+            package_name="pro",
+            tokens_purchased=10000,
+            amount_paid=100,
             payment_status="success",
+            valid_from=datetime.utcnow(),
             is_expired=False
         )
         db_session.add(purchase)
@@ -372,9 +385,11 @@ class TestCheckModelAccess:
         from app.models.token_balance import TokenPurchase
         purchase = TokenPurchase(
             user_id=str(test_user.id),
-            amount=100,
-            tokens=10000,
+            package_name="pro",
+            tokens_purchased=10000,
+            amount_paid=100,
             payment_status="success",
+            valid_from=datetime.utcnow(),
             is_expired=False
         )
         db_session.add(purchase)
@@ -468,9 +483,11 @@ class TestCheckProjectGenerationAllowed:
         from app.models.token_balance import TokenPurchase
         purchase = TokenPurchase(
             user_id=str(test_user.id),
-            amount=100,
-            tokens=10000,
+            package_name="pro",
+            tokens_purchased=10000,
+            amount_paid=100,
             payment_status="success",
+            valid_from=datetime.utcnow(),
             is_expired=False
         )
         db_session.add(purchase)

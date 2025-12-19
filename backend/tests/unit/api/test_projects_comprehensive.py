@@ -80,7 +80,7 @@ class TestListProjects:
             user_id=str(test_user.id),
             title="Test Project",
             description="Test Description",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -101,7 +101,7 @@ class TestListProjects:
                 user_id=str(test_user.id),
                 title=f"Test Project {i}",
                 description=f"Description {i}",
-                mode=ProjectMode.INSTANT,
+                mode=ProjectMode.STUDENT,
                 status=ProjectStatus.DRAFT
             )
             db_session.add(project)
@@ -131,14 +131,14 @@ class TestSearchProjects:
             user_id=str(test_user.id),
             title="React Dashboard",
             description="A dashboard project",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         project2 = Project(
             user_id=str(test_user.id),
             title="Python API",
             description="An API project",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add_all([project1, project2])
@@ -160,7 +160,7 @@ class TestSearchProjects:
             user_id=str(test_user.id),
             title="Test Project",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.COMPLETED
         )
         db_session.add(project)
@@ -184,7 +184,7 @@ class TestGetProject:
             user_id=str(test_user.id),
             title="Test Project",
             description="Test Description",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -220,7 +220,7 @@ class TestGetProject:
             user_id=other_user_id,
             title="Other User's Project",
             description="Not yours",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -245,7 +245,7 @@ class TestProjectMetadata:
             user_id=str(test_user.id),
             title="Metadata Test Project",
             description="Testing metadata endpoint",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -275,7 +275,7 @@ class TestProjectFiles:
             user_id=str(test_user.id),
             title="Empty Project",
             description="No files",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -298,7 +298,7 @@ class TestProjectFiles:
             user_id=str(test_user.id),
             title="File Test Project",
             description="Testing files",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -334,7 +334,7 @@ class TestProjectFiles:
             user_id=str(test_user.id),
             title="File Content Project",
             description="Testing file content",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -359,7 +359,7 @@ class TestProjectFiles:
             user_id=str(test_user.id),
             title="File Not Found Project",
             description="Testing",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -386,7 +386,7 @@ class TestDeleteProject:
             user_id=str(test_user.id),
             title="Delete Me",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -413,7 +413,7 @@ class TestProjectMessages:
             user_id=str(test_user.id),
             title="Messages Test Project",
             description="Testing messages",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -443,7 +443,7 @@ class TestBulkFileOperations:
             user_id=str(test_user.id),
             title="Bulk Files Project",
             description="Testing bulk files",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -485,7 +485,7 @@ class TestProjectActivity:
             user_id=str(test_user.id),
             title="Activity Test Project",
             description="Testing activity",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -513,7 +513,7 @@ class TestFixErrors:
             user_id=str(test_user.id),
             title="Fix Error Project",
             description="Testing error fix",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -546,7 +546,7 @@ class TestFixErrors:
             user_id=str(test_user.id),
             title="Fix Errors Project",
             description="Testing multiple error fix",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)

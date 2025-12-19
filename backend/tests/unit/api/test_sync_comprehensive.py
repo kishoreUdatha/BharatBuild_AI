@@ -25,7 +25,7 @@ class TestSandboxOperations:
             user_id=str(test_user.id),
             title="Sandbox Test",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -61,7 +61,7 @@ class TestSandboxOperations:
             user_id=str(test_user.id),
             title="Sandbox Fail Test",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -94,7 +94,7 @@ class TestSandboxOperations:
             user_id=str(test_user.id),
             title="Bulk Sandbox Test",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -130,7 +130,7 @@ class TestSandboxOperations:
             user_id=str(test_user.id),
             title="Get Sandbox Test",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -168,7 +168,7 @@ class TestSandboxOperations:
             user_id=str(test_user.id),
             title="Empty Sandbox Test",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -194,7 +194,7 @@ class TestSandboxOperations:
             user_id=str(test_user.id),
             title="Delete Sandbox Test",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -223,7 +223,7 @@ class TestS3Operations:
             user_id=str(test_user.id),
             title="S3 Save Test",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -262,7 +262,7 @@ class TestS3Operations:
             user_id=str(test_user.id),
             title="S3 No Sandbox Test",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -291,7 +291,7 @@ class TestS3Operations:
             user_id=str(test_user.id),
             title="Download URL Test",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -321,7 +321,7 @@ class TestGetProjectFiles:
             user_id=str(test_user.id),
             title="Get Files Sandbox Test",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -360,7 +360,7 @@ class TestGetProjectFiles:
             user_id=str(test_user.id),
             title="No Files Test",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -392,7 +392,7 @@ class TestListProjects:
             user_id=str(test_user.id),
             title="Sync Project",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -419,7 +419,7 @@ class TestLegacyEndpoints:
             user_id=str(test_user.id),
             title="Legacy Test",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -452,7 +452,7 @@ class TestLegacyEndpoints:
             user_id=str(test_user.id),
             title="Legacy Files Test",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)
@@ -507,7 +507,7 @@ class TestErrorHandling:
             user_id=str(test_user.id),
             title="Exception Test",
             description="Test",
-            mode=ProjectMode.INSTANT,
+            mode=ProjectMode.STUDENT,
             status=ProjectStatus.DRAFT
         )
         db_session.add(project)

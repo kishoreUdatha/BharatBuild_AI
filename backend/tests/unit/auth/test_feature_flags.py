@@ -3,6 +3,7 @@ Unit Tests for Feature Flags Module
 Tests for: feature access checking, plan-based features, global flags
 """
 import pytest
+from datetime import datetime, timedelta
 from unittest.mock import patch, AsyncMock, MagicMock
 from sqlalchemy.ext.asyncio import AsyncSession
 from faker import Faker
@@ -102,11 +103,14 @@ class TestHasTokenPurchase:
         """Test user with successful token purchase"""
         from app.models.token_balance import TokenPurchase
 
+        from datetime import datetime
         purchase = TokenPurchase(
             user_id=str(test_user.id),
-            amount=100,
-            tokens=10000,
+            package_name="pro",
+            tokens_purchased=10000,
+            amount_paid=100,
             payment_status="success",
+            valid_from=datetime.utcnow(),
             is_expired=False
         )
         db_session.add(purchase)
@@ -121,11 +125,14 @@ class TestHasTokenPurchase:
         """Test user with expired token purchase"""
         from app.models.token_balance import TokenPurchase
 
+        from datetime import datetime
         purchase = TokenPurchase(
             user_id=str(test_user.id),
-            amount=100,
-            tokens=10000,
+            package_name="pro",
+            tokens_purchased=10000,
+            amount_paid=100,
             payment_status="success",
+            valid_from=datetime.utcnow(),
             is_expired=True
         )
         db_session.add(purchase)
@@ -143,7 +150,7 @@ class TestHasTokenPurchase:
         balance = TokenBalance(
             user_id=str(test_user.id),
             premium_tokens=5000,
-            free_tokens=0
+            total_tokens=0
         )
         db_session.add(balance)
         await db_session.commit()
@@ -169,6 +176,7 @@ class TestGetUserPlan:
         # Create plan
         plan = Plan(
             name="Premium",
+            slug="premium",
             plan_type=PlanType.PRO,
             price=999,
             token_limit=None,
@@ -181,7 +189,9 @@ class TestGetUserPlan:
         subscription = Subscription(
             user_id=str(test_user.id),
             plan_id=plan.id,
-            status=SubscriptionStatus.ACTIVE
+            status=SubscriptionStatus.ACTIVE,
+            current_period_start=datetime.utcnow(),
+            current_period_end=datetime.utcnow() + timedelta(days=30)
         )
         db_session.add(subscription)
         await db_session.commit()
@@ -214,11 +224,14 @@ class TestCheckFeatureAccess:
         """Test access granted with token purchase"""
         from app.models.token_balance import TokenPurchase
 
+        from datetime import datetime
         purchase = TokenPurchase(
             user_id=str(test_user.id),
-            amount=100,
-            tokens=10000,
+            package_name="pro",
+            tokens_purchased=10000,
+            amount_paid=100,
             payment_status="success",
+            valid_from=datetime.utcnow(),
             is_expired=False
         )
         db_session.add(purchase)
@@ -251,6 +264,7 @@ class TestCheckFeatureAccess:
         # Create plan with feature
         plan = Plan(
             name="Premium",
+            slug="premium",
             plan_type=PlanType.PRO,
             price=999,
             feature_flags={"test_feature": True}
@@ -261,7 +275,9 @@ class TestCheckFeatureAccess:
         subscription = Subscription(
             user_id=str(test_user.id),
             plan_id=plan.id,
-            status=SubscriptionStatus.ACTIVE
+            status=SubscriptionStatus.ACTIVE,
+            current_period_start=datetime.utcnow(),
+            current_period_end=datetime.utcnow() + timedelta(days=30)
         )
         db_session.add(subscription)
         await db_session.commit()

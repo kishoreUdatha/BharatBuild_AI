@@ -1,6 +1,5 @@
-from sqlalchemy import Column, String, DateTime, Text, ForeignKey
+from sqlalchemy import Column, String, DateTime, Text, ForeignKey, JSON
 from sqlalchemy.orm import relationship
-from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime
 
 from app.core.database import Base
@@ -20,7 +19,7 @@ class AuditLog(Base):
     target_id = Column(GUID, nullable=True)  # ID of the affected entity
 
     # Change details
-    details = Column(JSONB, nullable=True)  # Changed fields, old/new values, etc.
+    details = Column(JSON, nullable=True)  # Changed fields, old/new values, etc.
 
     # Request metadata
     ip_address = Column(String(45), nullable=True)
