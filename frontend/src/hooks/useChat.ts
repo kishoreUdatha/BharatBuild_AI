@@ -5,7 +5,7 @@ import { useTokenStore } from '@/store/tokenStore'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useErrorStore } from '@/store/errorStore'
 import { parseFileOperationEvent } from '@/hooks/useFileChangeEvents'
-import { streamingClient } from '@/lib/streaming-client'
+import { streamingClient, StreamEvent } from '@/lib/streaming-client'
 import {
   classifyPromptAsync,
   getChatResponse,
@@ -602,7 +602,7 @@ I'll keep trying to help!`)
         projectId,  // Use fresh project ID (not stale closure value)
         workflow,  // Use classifier-suggested workflow
         workflowMetadata,
-        (event) => {
+        (event: StreamEvent) => {
           // Log ALL events for debugging
           console.log('[useChat] Event received:', event.type, event)
 
@@ -1142,7 +1142,7 @@ I'll keep trying to help!`)
                 setTerminalVisible(true)
 
                 // Execute each command in the terminal with simulated output
-                event.commands.forEach((cmd, index) => {
+                event.commands.forEach((cmd: string, index: number) => {
                   setTimeout(() => {
                     // Add command to terminal
                     addLog({
@@ -1376,7 +1376,7 @@ I'll keep trying to help!`)
               break
           }
         },
-        (error) => {
+        (error: Error) => {
           console.error('Streaming error:', error)
           updateMessageStatus(aiMessageId, 'complete')
           appendToMessage(aiMessageId, `\n\n⚠️ Error: ${error.message}`)
