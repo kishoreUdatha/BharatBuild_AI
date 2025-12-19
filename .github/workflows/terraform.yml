@@ -25,6 +25,14 @@ on:
         options:
           - production
           - staging
+      route53_zone_exists:
+        description: 'Route 53 hosted zone exists for domain?'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 env:
   TF_WORKING_DIR: aws-infrastructure/terraform
@@ -70,6 +78,7 @@ jobs:
             -var="domain_name=${{ secrets.DOMAIN_NAME }}" \
             -var="db_password=${{ secrets.DB_PASSWORD }}" \
             -var="redis_auth_token=${{ secrets.REDIS_AUTH_TOKEN }}" \
+            -var="route53_zone_exists=${{ github.event.inputs.route53_zone_exists }}" \
             -out=tfplan
 
       - name: Terraform Apply
@@ -85,6 +94,7 @@ jobs:
             -var="domain_name=${{ secrets.DOMAIN_NAME }}" \
             -var="db_password=${{ secrets.DB_PASSWORD }}" \
             -var="redis_auth_token=${{ secrets.REDIS_AUTH_TOKEN }}" \
+            -var="route53_zone_exists=${{ github.event.inputs.route53_zone_exists }}" \
             -auto-approve
 
       - name: Upload Plan
