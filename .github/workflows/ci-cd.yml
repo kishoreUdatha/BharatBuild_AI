@@ -146,7 +146,7 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Run tests
-        run: npm test -- --passWithNoTests --ci
+        run: npm test -- --passWithNoTests --run
 
       - name: Build
         env:
