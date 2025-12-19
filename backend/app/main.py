@@ -9,7 +9,7 @@ from pathlib import Path
 import time
 
 from app.core.config import settings
-from app.core.database import engine, Base
+from app.core.database import get_engine, Base, close_db
 from app.core.logging_config import logger
 from app.core.middleware import (
     RequestLoggingMiddleware,
@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
     temp_storage.cleanup_all()
     logger.info("Cleaned up all temp sessions")
 
-    await engine.dispose()
+    await close_db()
 
 
 # Create FastAPI app
