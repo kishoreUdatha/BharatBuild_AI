@@ -14,13 +14,18 @@ environment = "production"
 # Application name (used for resource naming)
 app_name = "bharatbuild"
 
-# Your domain name (must be registered in Route 53)
+# Your domain name (leave empty "" to use ALB URL only without custom domain)
 domain_name = "your-domain.com"
 
-# Database password (use a strong password!)
-# Generate with: openssl rand -base64 32
+# Set to true ONLY if Route 53 hosted zone already exists for your domain
+# If false, SSL/HTTPS and DNS records will be skipped (app works via ALB HTTP URL)
+# To create hosted zone: AWS Console -> Route 53 -> Create hosted zone
+route53_zone_exists = false
+
+# Database password (8+ chars, no @, ", /, or spaces allowed)
+# Generate with: openssl rand -base64 32 | tr -d '@"/\n'
 db_password = "CHANGE_ME_USE_STRONG_PASSWORD_32_CHARS"
 
-# Redis auth token (must be at least 16 characters)
-# Generate with: openssl rand -base64 24
+# Redis auth token (16-128 chars, no @, ", or / allowed)
+# Generate with: openssl rand -base64 24 | tr -d '@"/\n'
 redis_auth_token = "CHANGE_ME_USE_STRONG_TOKEN_24_CHARS"
