@@ -11,6 +11,7 @@ from pptx.enum.shapes import MSO_SHAPE
 from typing import Dict, List, Optional
 from datetime import datetime
 import os
+import re
 
 from app.core.logging_config import logger
 

@@ -19,6 +19,7 @@ Output: PNG images for Word/PPT embedding
 
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+from pathlib import Path
 import os
 import tempfile
 from io import BytesIO

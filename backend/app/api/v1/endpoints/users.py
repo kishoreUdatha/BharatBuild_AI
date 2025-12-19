@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, asc, desc
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List, Literal
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from app.core.database import get_db

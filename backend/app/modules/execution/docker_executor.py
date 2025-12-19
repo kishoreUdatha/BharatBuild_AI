@@ -1704,7 +1704,7 @@ class DockerExecutor:
             self._assigned_ports[project_id] = host_port
 
             port_detected = False
-            preview_url = f"http://localhost:{detected_port}"
+            preview_url = f"http://localhost:{host_port}"
 
             # Stream output and detect server ready
             async for line in process.stdout:

@@ -4,6 +4,7 @@ Combines PostgreSQL, S3/MinIO, and Redis for optimal performance
 """
 
 import asyncio
+from pathlib import Path
 from typing import Optional, List
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
