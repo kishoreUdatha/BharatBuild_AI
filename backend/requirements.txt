@@ -231,7 +231,7 @@ aiofiles==23.2.1
 aiosmtplib==3.0.1
 python-slugify==8.0.3
 shortuuid==1.0.11
-pytz==2024.1
+pytz>=2020.1,<2024  # Compatible with mlflow<2024 requirement
 arrow==1.3.0
 httpx==0.26.0
 lxml==6.0.2
