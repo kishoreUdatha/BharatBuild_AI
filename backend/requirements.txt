@@ -159,7 +159,7 @@ bentoml==1.2.2
 # ============================================
 # AutoML
 # ============================================
-auto-sklearn==0.15.0;platform_system!="Windows"
+# auto-sklearn==0.15.0;platform_system!="Windows"  # Requires old scikit-learn<0.25, incompatible with modern ML stack
 autogluon==1.0.0;platform_system!="Windows"
 pycaret==3.2.0
 flaml==2.1.1
