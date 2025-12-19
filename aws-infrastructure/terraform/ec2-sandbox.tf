@@ -430,9 +430,9 @@ resource "aws_lb_listener_rule" "sandbox_http" {
   }
 }
 
-# HTTPS rule (only when domain is configured)
+# HTTPS rule (only when domain is configured AND Route53 zone exists)
 resource "aws_lb_listener_rule" "sandbox_https" {
-  count        = var.domain_name != "" ? 1 : 0
+  count        = var.domain_name != "" && var.route53_zone_exists ? 1 : 0
   listener_arn = aws_lb_listener.https[0].arn
   priority     = 50
 

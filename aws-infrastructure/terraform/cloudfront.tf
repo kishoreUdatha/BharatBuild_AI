@@ -217,14 +217,14 @@ resource "aws_acm_certificate" "cloudfront" {
 }
 
 resource "aws_acm_certificate_validation" "cloudfront" {
-  count                   = var.domain_name != "" ? 1 : 0
+  count                   = var.domain_name != "" && var.route53_zone_exists ? 1 : 0
   provider                = aws.us_east_1
   certificate_arn         = aws_acm_certificate.cloudfront[0].arn
   validation_record_fqdns = [for record in aws_route53_record.cloudfront_cert_validation : record.fqdn]
 }
 
 resource "aws_route53_record" "cloudfront_cert_validation" {
-  for_each = var.domain_name != "" ? {
+  for_each = var.domain_name != "" && var.route53_zone_exists ? {
     for dvo in aws_acm_certificate.cloudfront[0].domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
       record = dvo.resource_record_value
@@ -240,9 +240,9 @@ resource "aws_route53_record" "cloudfront_cert_validation" {
   zone_id         = data.aws_route53_zone.main[0].zone_id
 }
 
-# Update Route53 to point to CloudFront (only when domain is configured)
+# Update Route53 to point to CloudFront (only when domain is configured AND zone exists)
 resource "aws_route53_record" "cloudfront" {
-  count   = var.domain_name != "" ? 1 : 0
+  count   = var.domain_name != "" && var.route53_zone_exists ? 1 : 0
   zone_id = data.aws_route53_zone.main[0].zone_id
   name    = var.domain_name
   type    = "A"
@@ -255,7 +255,7 @@ resource "aws_route53_record" "cloudfront" {
 }
 
 resource "aws_route53_record" "cloudfront_www" {
-  count   = var.domain_name != "" ? 1 : 0
+  count   = var.domain_name != "" && var.route53_zone_exists ? 1 : 0
   zone_id = data.aws_route53_zone.main[0].zone_id
   name    = "www.${var.domain_name}"
   type    = "A"
