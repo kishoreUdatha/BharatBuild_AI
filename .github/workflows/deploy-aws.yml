@@ -709,8 +709,8 @@ jobs:
             com.bharatbuild.build.number=${{ github.run_number }}
             com.bharatbuild.environment=${{ steps.vars.outputs.env_tag }}
           build-args: |
-            NEXT_PUBLIC_API_URL=https://${{ secrets.DOMAIN_NAME || 'bharatbuild.ai' }}/api/v1
-            NEXT_PUBLIC_WS_URL=wss://${{ secrets.DOMAIN_NAME || 'bharatbuild.ai' }}/ws
+            NEXT_PUBLIC_API_URL=http://bharatbuild-alb-223139118.ap-south-1.elb.amazonaws.com/api/v1
+            NEXT_PUBLIC_WS_URL=ws://bharatbuild-alb-223139118.ap-south-1.elb.amazonaws.com/ws
             BUILD_DATE=${{ steps.vars.outputs.timestamp }}
             GIT_SHA=${{ github.sha }}
             VERSION=${{ steps.vars.outputs.version_tag }}
