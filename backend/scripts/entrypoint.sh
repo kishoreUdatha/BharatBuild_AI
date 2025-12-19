@@ -88,13 +88,13 @@ init_tables() {
     echo "[Entrypoint] Ensuring database tables exist..."
 
     python -c "
-from app.core.database import Base, engine
+from app.core.database import Base, get_engine
 from app.models import *  # Import all models
 import asyncio
 
 async def init():
+    engine = get_engine()
     async with engine.begin() as conn:
-        # Create all tables that don't exist
         await conn.run_sync(Base.metadata.create_all)
         print('[Entrypoint] Database tables verified/created')
 

@@ -1,13 +1,17 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import auth, projects, api_keys, billing, tokens, streaming, bolt, automation, orchestrator, logs, execution, documents, adventure, resume, download, containers, preview, preview_proxy, jobs, agentic, classify, sync, payments, import_project, paper, feedback, sandbox, workspace, log_stream, retrieval, users, sdk_agents, errors, autofixer_metrics
+from app.api.v1.endpoints import auth, projects, api_keys, billing, tokens, streaming, bolt, automation, orchestrator, logs, execution, documents, adventure, resume, download, containers, preview, preview_proxy, jobs, agentic, classify, sync, payments, import_project, paper, feedback, sandbox, workspace, log_stream, retrieval, users, sdk_agents, errors, autofixer_metrics, health
 from app.api.v1.endpoints.admin import admin_router
 
 api_router = APIRouter()
 
-# Health check endpoint for ALB
+# Include deep health check endpoints (use /health/ready for ALB)
+api_router.include_router(health.router)
+
+# Simple health check endpoint for ALB (backward compatible)
+# NOTE: For better reliability, configure ALB to use /api/v1/health/ready instead
 @api_router.get("/health", tags=["Health"])
 async def health_check():
-    """Health check endpoint for load balancer"""
+    """Simple health check endpoint for load balancer (backward compatible)"""
     return {"status": "healthy", "service": "bharatbuild-backend"}
 
 
