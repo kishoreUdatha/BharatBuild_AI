@@ -6,21 +6,8 @@
 name: Deploy to AWS ECS
 
 on:
-  push:
-    branches:
-      - main
-      - master
-      - production
-      - develop
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.gitignore'
-  pull_request:
-    branches:
-      - main
-      - master
-      - production
+  # Only triggered via workflow_dispatch from ci-cd.yml
+  # This prevents duplicate runs
   workflow_dispatch:
     inputs:
       environment:
