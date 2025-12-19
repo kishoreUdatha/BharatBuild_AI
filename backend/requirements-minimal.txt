@@ -50,3 +50,4 @@ slowapi==0.1.9
 
 # OAuth
 google-auth==2.27.0
+requests>=2.31.0
