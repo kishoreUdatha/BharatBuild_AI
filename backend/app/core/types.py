@@ -10,13 +10,12 @@ def generate_uuid():
 
 
 class GUID(TypeDecorator):
-    """Platform-independent GUID type that works with PostgreSQL UUID columns"""
+    """Platform-independent GUID type that stores UUIDs as VARCHAR(36)"""
     impl = String(36)
     cache_ok = True
 
     def load_dialect_impl(self, dialect):
-        if dialect.name == 'postgresql':
-            return dialect.type_descriptor(PG_UUID(as_uuid=False))
+        # Always use String(36) to avoid type mismatch with existing VARCHAR columns
         return dialect.type_descriptor(String(36))
 
     def process_bind_param(self, value, dialect):

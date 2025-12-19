@@ -4,6 +4,7 @@ import httpx
 from typing import Optional, Dict, Any, List
 
 from app.core.config import settings
+from app.core.logging_config import logger
 
 
 class GitHubOAuthProvider:
@@ -106,6 +107,9 @@ class GitHubOAuthProvider:
             access_token = tokens.get("access_token")
 
             if not access_token:
+                error = tokens.get("error", "unknown")
+                error_description = tokens.get("error_description", "")
+                logger.error(f"[GitHubOAuth] No access token received: {error} - {error_description}")
                 return None
 
             # Get user info
@@ -114,8 +118,11 @@ class GitHubOAuthProvider:
             # Get email (GitHub may not return email in user info)
             email = user_info.get("email")
             if not email:
-                emails = await self.get_user_emails(access_token)
-                email = self.get_primary_email(emails)
+                try:
+                    emails = await self.get_user_emails(access_token)
+                    email = self.get_primary_email(emails)
+                except Exception as e:
+                    logger.warning(f"[GitHubOAuth] Failed to fetch user emails: {e}")
 
             return {
                 "github_id": str(user_info.get("id")),
@@ -127,7 +134,14 @@ class GitHubOAuthProvider:
                 "company": user_info.get("company", ""),
                 "location": user_info.get("location", ""),
             }
-        except Exception:
+        except httpx.HTTPStatusError as e:
+            logger.error(f"[GitHubOAuth] HTTP error during authentication: {e.response.status_code} - {e.response.text}")
+            return None
+        except httpx.RequestError as e:
+            logger.error(f"[GitHubOAuth] Request error during authentication: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"[GitHubOAuth] Unexpected error during authentication: {e}", exc_info=True)
             return None
 
 

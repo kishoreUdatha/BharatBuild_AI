@@ -567,11 +567,176 @@ async def validate_token(
     }
 
 
+@router.post("/logout")
+async def logout(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Logout user.
+
+    Note: JWT tokens are stateless, so this endpoint primarily:
+    1. Logs the logout event
+    2. Returns success for frontend to clear local storage
+
+    For enhanced security, implement token blacklisting with Redis.
+    """
+    logger.log_auth_event(
+        event="logout",
+        success=True,
+        user_email=current_user.email
+    )
+    return {"message": "Successfully logged out", "success": True}
+
+
+# ============================================
+# Profile Completion (for OAuth users)
+# ============================================
+
+class ProfileCompletionRequest(BaseModel):
+    """Request to complete user profile after OAuth signup"""
+    # Basic info
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+
+    # Role selection
+    role: Optional[str] = None
+
+    # Student Academic Details
+    roll_number: Optional[str] = None
+    college_name: Optional[str] = None
+    university_name: Optional[str] = None
+    department: Optional[str] = None
+    course: Optional[str] = None
+    year_semester: Optional[str] = None
+    batch: Optional[str] = None
+
+    # Guide/Mentor Details
+    guide_name: Optional[str] = None
+    guide_designation: Optional[str] = None
+    hod_name: Optional[str] = None
+
+
+@router.patch("/me/profile", response_model=UserResponse)
+async def complete_profile(
+    profile_data: ProfileCompletionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Complete or update user profile.
+
+    Used after OAuth signup to collect additional information
+    like student academic details, role selection, etc.
+    """
+    # Update basic info
+    if profile_data.full_name:
+        current_user.full_name = profile_data.full_name
+    if profile_data.phone:
+        current_user.phone = profile_data.phone
+
+    # Update role (validate it's allowed)
+    if profile_data.role:
+        validated_role = validate_oauth_role(profile_data.role)
+        current_user.role = validated_role
+
+    # Update student academic details
+    if profile_data.roll_number is not None:
+        current_user.roll_number = profile_data.roll_number
+    if profile_data.college_name is not None:
+        current_user.college_name = profile_data.college_name
+    if profile_data.university_name is not None:
+        current_user.university_name = profile_data.university_name
+    if profile_data.department is not None:
+        current_user.department = profile_data.department
+    if profile_data.course is not None:
+        current_user.course = profile_data.course
+    if profile_data.year_semester is not None:
+        current_user.year_semester = profile_data.year_semester
+    if profile_data.batch is not None:
+        current_user.batch = profile_data.batch
+
+    # Update guide/mentor details
+    if profile_data.guide_name is not None:
+        current_user.guide_name = profile_data.guide_name
+    if profile_data.guide_designation is not None:
+        current_user.guide_designation = profile_data.guide_designation
+    if profile_data.hod_name is not None:
+        current_user.hod_name = profile_data.hod_name
+
+    # Mark profile as completed
+    current_user.profile_completed = True
+    current_user.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(current_user)
+
+    logger.info(f"[Auth] Profile completed for user {current_user.email}")
+
+    return UserResponse(
+        id=current_user.id,
+        email=current_user.email,
+        username=current_user.username,
+        full_name=current_user.full_name,
+        phone=current_user.phone,
+        role=current_user.role.value,
+        is_active=current_user.is_active,
+        is_verified=current_user.is_verified,
+        created_at=current_user.created_at,
+        avatar_url=current_user.avatar_url,
+        oauth_provider=current_user.oauth_provider,
+        roll_number=current_user.roll_number,
+        college_name=current_user.college_name,
+        university_name=current_user.university_name,
+        department=current_user.department,
+        course=current_user.course,
+        year_semester=current_user.year_semester,
+        batch=current_user.batch,
+        guide_name=current_user.guide_name,
+        guide_designation=current_user.guide_designation,
+        hod_name=current_user.hod_name
+    )
+
+
+@router.get("/me/profile-status")
+async def get_profile_status(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Check if user profile is complete.
+
+    Returns whether the user needs to complete their profile
+    (e.g., after OAuth signup).
+    """
+    # For students, check if academic details are filled
+    is_student = current_user.role == UserRole.STUDENT
+
+    profile_complete = True
+    missing_fields = []
+
+    if is_student:
+        if not current_user.roll_number:
+            profile_complete = False
+            missing_fields.append("roll_number")
+        if not current_user.college_name:
+            profile_complete = False
+            missing_fields.append("college_name")
+        if not current_user.department:
+            profile_complete = False
+            missing_fields.append("department")
+
+    return {
+        "profile_complete": profile_complete,
+        "missing_fields": missing_fields,
+        "role": current_user.role.value,
+        "is_oauth_user": current_user.oauth_provider is not None
+    }
+
+
 # ============================================
 # OAuth Endpoints - Google
 # ============================================
 
 @router.get("/google/url", response_model=OAuthUrlResponse)
+@router.get("/google/authorize", response_model=OAuthUrlResponse)
 async def get_google_auth_url():
     """Get Google OAuth authorization URL."""
     if not settings.GOOGLE_CLIENT_ID:
@@ -587,6 +752,21 @@ async def get_google_auth_url():
         authorization_url=authorization_url,
         state=state
     )
+
+
+# Allowed roles for OAuth registration (exclude admin)
+ALLOWED_OAUTH_ROLES = {UserRole.STUDENT, UserRole.DEVELOPER, UserRole.FOUNDER, UserRole.FACULTY}
+
+
+def validate_oauth_role(role_value: str) -> UserRole:
+    """Validate and return a safe role for OAuth users."""
+    try:
+        role = UserRole(role_value)
+        if role in ALLOWED_OAUTH_ROLES:
+            return role
+    except ValueError:
+        pass
+    return UserRole.STUDENT  # Default to student for invalid/admin roles
 
 
 @router.post("/google/callback", response_model=OAuthTokenResponse)
@@ -609,6 +789,9 @@ async def google_oauth_callback(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Google OAuth is not configured"
         )
+
+    # Validate role before proceeding
+    validated_role = validate_oauth_role(oauth_request.role)
 
     # Authenticate with Google
     user_data = await google_oauth.authenticate(oauth_request.code)
@@ -649,6 +832,7 @@ async def google_oauth_callback(
     user = result.scalar_one_or_none()
 
     is_new_user = False
+    needs_profile_completion = False
 
     if user:
         # Update Google ID if not set (linking existing account)
@@ -658,11 +842,14 @@ async def google_oauth_callback(
             if user_data.get("avatar_url") and not user.avatar_url:
                 user.avatar_url = user_data.get("avatar_url")
         user.last_login = datetime.utcnow()
+        # Check if profile is incomplete
+        needs_profile_completion = not user.profile_completed
         await db.commit()
         await db.refresh(user)
     else:
-        # Create new user
+        # Create new user with validated role
         is_new_user = True
+        needs_profile_completion = True
         user = User(
             email=email,
             google_id=google_id,
@@ -670,8 +857,9 @@ async def google_oauth_callback(
             avatar_url=user_data.get("avatar_url", ""),
             oauth_provider="google",
             is_verified=user_data.get("email_verified", False),
-            role=oauth_request.role,
+            role=validated_role,  # Use validated role
             hashed_password="",  # No password for OAuth users
+            profile_completed=False,
         )
         db.add(user)
         await db.commit()
@@ -700,7 +888,7 @@ async def google_oauth_callback(
         refresh_token=refresh_token,
         token_type="bearer",
         user=UserResponse.model_validate(user),
-        is_new_user=is_new_user
+        is_new_user=needs_profile_completion  # Redirect to profile completion if not completed
     )
 
 
@@ -791,6 +979,7 @@ async def google_id_token_login(
 # ============================================
 
 @router.get("/github/url", response_model=OAuthUrlResponse)
+@router.get("/github/authorize", response_model=OAuthUrlResponse)
 async def get_github_auth_url():
     """Get GitHub OAuth authorization URL."""
     if not settings.GITHUB_CLIENT_ID:
@@ -979,6 +1168,9 @@ async def github_oauth_callback(
             detail="GitHub OAuth is not configured"
         )
 
+    # Validate role before proceeding
+    validated_role = validate_oauth_role(oauth_request.role)
+
     # Authenticate with GitHub
     user_data = await github_oauth.authenticate(oauth_request.code)
 
@@ -1018,6 +1210,7 @@ async def github_oauth_callback(
     user = result.scalar_one_or_none()
 
     is_new_user = False
+    needs_profile_completion = False
 
     if user:
         # Update GitHub ID if not set (linking existing account)
@@ -1027,11 +1220,14 @@ async def github_oauth_callback(
             if user_data.get("avatar_url") and not user.avatar_url:
                 user.avatar_url = user_data.get("avatar_url")
         user.last_login = datetime.utcnow()
+        # Check if profile is incomplete
+        needs_profile_completion = not user.profile_completed
         await db.commit()
         await db.refresh(user)
     else:
-        # Create new user
+        # Create new user with validated role
         is_new_user = True
+        needs_profile_completion = True
         user = User(
             email=email,
             github_id=github_id,
@@ -1041,8 +1237,9 @@ async def github_oauth_callback(
             bio=user_data.get("bio", ""),
             oauth_provider="github",
             is_verified=True,  # GitHub emails are verified
-            role=oauth_request.role,
+            role=validated_role,  # Use validated role
             hashed_password="",  # No password for OAuth users
+            profile_completed=False,
         )
         db.add(user)
         await db.commit()
@@ -1071,5 +1268,5 @@ async def github_oauth_callback(
         refresh_token=refresh_token,
         token_type="bearer",
         user=UserResponse.model_validate(user),
-        is_new_user=is_new_user
+        is_new_user=needs_profile_completion  # Redirect to profile completion if not completed
     )
