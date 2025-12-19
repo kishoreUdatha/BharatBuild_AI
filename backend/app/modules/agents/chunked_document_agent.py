@@ -19,8 +19,11 @@ Features:
 This bypasses Claude's token limits by chunking the generation.
 """
 
-from typing import Dict, List, Optional, Any, AsyncGenerator, Tuple
+from typing import Dict, List, Optional, Any, AsyncGenerator, Tuple, TYPE_CHECKING
 from collections import OrderedDict
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 from dataclasses import dataclass, field
 import json
 import asyncio
