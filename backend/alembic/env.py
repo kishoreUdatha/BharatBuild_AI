@@ -22,6 +22,13 @@ if "+asyncpg" in database_url:
 elif "postgresql+asyncpg" in database_url:
     database_url = database_url.replace("postgresql+asyncpg", "postgresql")
 
+# Add SSL mode for AWS RDS connections
+if "postgresql" in database_url and "sslmode" not in database_url:
+    if "?" in database_url:
+        database_url += "&sslmode=prefer"
+    else:
+        database_url += "?sslmode=prefer"
+
 # Override sqlalchemy.url with our DATABASE_URL (converted to sync)
 config.set_main_option("sqlalchemy.url", database_url)
 

@@ -1044,6 +1044,10 @@ jobs:
           if '+asyncpg' in db_url:
               db_url = db_url.replace('+asyncpg', '')
 
+          # Add SSL mode for AWS RDS
+          if 'sslmode' not in db_url:
+              db_url += '?sslmode=prefer' if '?' not in db_url else '&sslmode=prefer'
+
           engine = create_engine(db_url)
           inspector = inspect(engine)
           tables = inspector.get_table_names()
