@@ -64,8 +64,8 @@ export default function StudentDashboard() {
       setProjects(projectsList)
 
       // Calculate stats from projects
-      const completedCount = projectsList.filter(p => p.status === 'completed').length
-      const docsCount = projectsList.reduce((sum, p) => sum + (p.documents_count || 0), 0)
+      const completedCount = projectsList.filter((p: Project) => p.status === 'completed').length
+      const docsCount = projectsList.reduce((sum: number, p: Project) => sum + (p.documents_count || 0), 0)
 
       setStats({
         total_projects: projectsResponse.total || projectsList.length,
