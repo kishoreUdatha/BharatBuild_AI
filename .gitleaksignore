@@ -1,0 +1,13 @@
+# Gitleaks ignore file
+# These are example/test secrets, not real credentials
+
+# Documentation examples
+docs/API_DOCUMENTATION.md
+docs/BOLT_BACKEND_IMPLEMENTATION.md
+
+# Test files with mock/example tokens
+tests/e2e/tests/.auth/user.json
+backend/tests/unit/schemas/test_auth_schemas.py
+
+# Agent examples with placeholder API keys
+backend/app/modules/agents/architect_agent.py
