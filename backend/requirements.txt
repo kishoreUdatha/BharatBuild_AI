@@ -48,7 +48,7 @@ torch==2.2.0
 torchvision==0.17.0
 torchaudio==2.2.0
 tensorflow==2.15.0
-keras==3.0.5
+# keras version managed by tensorflow
 jax[cpu]==0.4.25
 flax==0.8.1
 
