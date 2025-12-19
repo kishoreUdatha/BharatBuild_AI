@@ -15,6 +15,28 @@ export interface ExportOptions {
 }
 
 /**
+ * Recursively flatten a hierarchical file tree into a flat array
+ * Handles nested children[] structure from Bolt.new-style project store
+ */
+function flattenFileTree(files: ProjectFile[]): ProjectFile[] {
+  const result: ProjectFile[] = []
+
+  const recurse = (items: ProjectFile[]) => {
+    for (const item of items) {
+      if (item.type === 'file') {
+        result.push(item)
+      }
+      if (item.children && item.children.length > 0) {
+        recurse(item.children)
+      }
+    }
+  }
+
+  recurse(files)
+  return result
+}
+
+/**
  * Export project as ZIP download
  */
 export async function exportProjectAsZip(
@@ -31,38 +53,49 @@ export async function exportProjectAsZip(
   try {
     const zip = new JSZip()
 
-    // Filter files based on options
-    const filesToExport = files.filter(file => {
-      // Skip folders
-      if (file.type === 'folder') return false
+    // Flatten hierarchical tree to get ALL files (including nested ones)
+    const allFiles = flattenFileTree(files)
+    console.log(`[Export] Flattened ${files.length} root items to ${allFiles.length} total files`)
 
+    // Filter files based on options
+    const filesToExport = allFiles.filter(file => {
       // Skip node_modules
-      if (!includeNodeModules && file.path.startsWith('node_modules/')) {
+      if (!includeNodeModules && file.path.includes('node_modules')) {
         return false
       }
 
       // Skip .git folder
-      if (!includeGitFolder && file.path.startsWith('.git/')) {
+      if (!includeGitFolder && file.path.includes('.git/')) {
         return false
       }
 
-      // Skip dot files
-      if (!includeDotFiles && file.path.startsWith('.') && file.path !== '.gitignore') {
+      // Skip dot files (but keep .gitignore, .env.example, etc.)
+      const fileName = file.path.split('/').pop() || ''
+      if (!includeDotFiles && fileName.startsWith('.') &&
+          !fileName.match(/^\.(gitignore|env\.example|prettierrc|eslintrc)/)) {
         return false
       }
 
       return true
     })
 
-    // Add files to ZIP
+    console.log(`[Export] After filtering: ${filesToExport.length} files to export`)
+
+    // Add files to ZIP - include files even with empty content (they're valid files)
+    let addedCount = 0
     for (const file of filesToExport) {
-      if (file.content) {
-        zip.file(file.path, file.content)
-      }
+      // Use content if available, otherwise use empty string
+      // This handles lazy-loaded files that haven't been viewed
+      const content = file.content ?? ''
+      zip.file(file.path, content)
+      addedCount++
     }
+
+    console.log(`[Export] Added ${addedCount} files to ZIP`)
 
     // Generate ZIP
     const blob = await zip.generateAsync({ type: 'blob' })
+    console.log(`[Export] Generated ZIP: ${blob.size} bytes`)
 
     // Trigger download
     const url = URL.createObjectURL(blob)
@@ -74,7 +107,7 @@ export async function exportProjectAsZip(
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
   } catch (error) {
-    console.error('Failed to export project:', error)
+    console.error('[Export] Failed to export project:', error)
     throw new Error('Failed to export project as ZIP')
   }
 }

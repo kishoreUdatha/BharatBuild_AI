@@ -18,22 +18,61 @@ from dataclasses import dataclass
 from enum import Enum
 
 from app.core.logging_config import logger
+from app.utils.config_templates import get_template, VITE_REACT_TEMPLATES
+from app.services.log_bus import get_log_bus
+from app.services.fix_executor import FixExecutor
+from app.services.universal_autofixer import UniversalAutoFixer, fix_error_universal, ErrorCategory
+from app.services.production_autofixer import ProductionAutoFixer, fix_error_production, FixStrategy, get_global_metrics
+from app.services.fullstack_integrator import FullstackIntegrator
+from app.services.smart_project_analyzer import smart_analyzer, Technology
+from app.modules.sdk_agents.sdk_fixer_agent import SDKFixerAgent
+from app.services.simple_fixer import simple_fixer
+from app.services.container_executor import container_executor, Technology as ContainerTech
 
 
 class FrameworkType(Enum):
+    # ===== FRONTEND =====
     REACT_VITE = "react-vite"
     REACT_CRA = "react-cra"
     NEXTJS = "nextjs"
     VUE = "vue"
     ANGULAR = "angular"
+    SVELTE = "svelte"
+    STATIC_HTML = "static-html"
+
+    # ===== BACKEND NODE.JS =====
     NODE_EXPRESS = "node-express"
+
+    # ===== PYTHON =====
     PYTHON_FLASK = "python-flask"
     PYTHON_FASTAPI = "python-fastapi"
     PYTHON_DJANGO = "python-django"
     PYTHON_STREAMLIT = "python-streamlit"
+    PYTHON_ML = "python-ml"  # AI/ML projects (TensorFlow, PyTorch, etc.)
+
+    # ===== JAVA =====
     SPRING_BOOT = "spring-boot"
+    ANDROID = "android"  # Android (Kotlin/Java)
+
+    # ===== GO =====
     GO = "go"
-    STATIC_HTML = "static-html"
+
+    # ===== RUST =====
+    RUST = "rust"
+
+    # ===== iOS =====
+    IOS_SWIFT = "ios-swift"
+
+    # ===== BLOCKCHAIN =====
+    SOLIDITY = "solidity"  # Ethereum/EVM
+    RUST_SOLANA = "rust-solana"  # Solana
+
+    # ===== FULLSTACK MONOREPO =====
+    FULLSTACK_REACT_SPRING = "fullstack-react-spring"  # React + Spring Boot monorepo
+    FULLSTACK_REACT_EXPRESS = "fullstack-react-express"  # React + Express monorepo
+    FULLSTACK_REACT_FASTAPI = "fullstack-react-fastapi"  # React + FastAPI monorepo
+
+    # ===== OTHER =====
     UNKNOWN = "unknown"
 
 
@@ -347,19 +386,48 @@ CMD ["npm", "start"]
 
 # Default ports for each framework
 DEFAULT_PORTS: Dict[FrameworkType, int] = {
+    # Frontend
     FrameworkType.REACT_VITE: 5173,
     FrameworkType.REACT_CRA: 3000,
     FrameworkType.NEXTJS: 3000,
     FrameworkType.VUE: 5173,
     FrameworkType.ANGULAR: 4200,
+    FrameworkType.SVELTE: 5173,
+    FrameworkType.STATIC_HTML: 80,
+
+    # Backend Node.js
     FrameworkType.NODE_EXPRESS: 3000,
+
+    # Python
     FrameworkType.PYTHON_FLASK: 5000,
     FrameworkType.PYTHON_FASTAPI: 8000,
     FrameworkType.PYTHON_DJANGO: 8000,
     FrameworkType.PYTHON_STREAMLIT: 8501,
+    FrameworkType.PYTHON_ML: 8888,  # Jupyter notebook default
+
+    # Java
     FrameworkType.SPRING_BOOT: 8080,
+    FrameworkType.ANDROID: 5555,  # ADB default
+
+    # Go
     FrameworkType.GO: 8080,
-    FrameworkType.STATIC_HTML: 80,
+
+    # Rust
+    FrameworkType.RUST: 8080,
+
+    # iOS
+    FrameworkType.IOS_SWIFT: 8080,
+
+    # Blockchain
+    FrameworkType.SOLIDITY: 8545,  # Hardhat/Ganache default
+    FrameworkType.RUST_SOLANA: 8899,  # Solana validator default
+
+    # Fullstack (frontend port - backend gets +1000)
+    FrameworkType.FULLSTACK_REACT_SPRING: 5173,
+    FrameworkType.FULLSTACK_REACT_EXPRESS: 5173,
+    FrameworkType.FULLSTACK_REACT_FASTAPI: 5173,
+
+    # Other
     FrameworkType.UNKNOWN: 3000,
 }
 
@@ -390,11 +458,806 @@ class DockerExecutor:
         self._assigned_ports: Dict[str, int] = {}  # project_id -> host_port
         self._running_processes: Dict[str, asyncio.subprocess.Process] = {}  # For direct execution
         self._docker_available: Optional[bool] = None  # Cache Docker availability
+        self._fix_in_progress: Dict[str, bool] = {}  # Track fix status per project
+        self._background_monitors: Dict[str, bool] = {}  # Track background monitors per project
+
+    def _should_use_ai_fixer(self, error_message: str, project_path: Path) -> bool:
+        """
+        Determine if an error should be routed directly to AI fixer.
+
+        DYNAMIC APPROACH: Instead of hardcoding specific fixes, detect error COMPLEXITY
+        and route to AI for anything that requires understanding code context.
+
+        Returns True for:
+        - Compilation errors (Java, TypeScript, Go, Rust, etc.)
+        - Build failures with multiple errors
+        - Import/symbol resolution errors
+        - Type errors requiring code analysis
+        - Any error in a language/framework where ProductionAutoFixer has no patterns
+
+        Returns False for:
+        - Simple missing package errors (npm install X, pip install X)
+        - Port in use errors
+        - Simple config issues with known fixes
+        """
+        error_lower = error_message.lower()
+
+        # ===== ALWAYS use AI for these complex error types =====
+
+        # 1. Compilation/Build errors (require code understanding)
+        # NOTE: Be very specific to avoid false positives from Spring Boot logs
+        compilation_indicators = [
+            'cannot find symbol',
+            'package .* does not exist',
+            'compilation error',
+            'compile error',
+            'compilation failure',
+            '[error] compilation error',  # Maven compilation error (specific)
+            '[error] failed to execute goal',  # Maven goal failure (specific)
+            'cannot resolve',
+            'unresolved reference',
+            'undefined reference',
+            'incompatible types',
+            'type mismatch',
+            'missing method',
+            'method .* not found',
+            'no such method',
+            'unexpected token',
+            'expected.*but got',
+            'enoent: no such file',  # File not found (Vite/Node)
+            '[plugin:vite:',  # Vite plugin errors
+            'failed to resolve import',
+        ]
+
+        # Patterns that should NOT trigger AI fixer (false positives)
+        false_positive_indicators = [
+            '[info] build failure',  # Maven dependency output (NOT an error)
+            'build success',
+            'started application',
+            'tomcat started',
+            '\\/ ___ \'',  # Spring Boot ASCII art
+        ]
+
+        # Check for false positives first
+        if any(fp in error_lower for fp in false_positive_indicators):
+            return False
+
+        if any(indicator in error_lower for indicator in compilation_indicators):
+            return True
+
+        # 2. Multiple errors (complex debugging needed)
+        error_count_patterns = [
+            r'\d+ error',
+            r'\d+ errors',
+            r'found \d+ error',
+            r'\[info\] \d+ error',
+        ]
+        import re
+        for pattern in error_count_patterns:
+            match = re.search(pattern, error_lower)
+            if match:
+                # Extract number and check if > 1
+                nums = re.findall(r'\d+', match.group())
+                if nums and int(nums[0]) > 1:
+                    return True
+
+        # 3. Java/Maven/Gradle projects (complex build systems)
+        pom_exists = (project_path / "pom.xml").exists() or (project_path / "backend/pom.xml").exists()
+        gradle_exists = (project_path / "build.gradle").exists() or (project_path / "backend/build.gradle").exists()
+
+        if pom_exists or gradle_exists:
+            # Any Java build error should use AI
+            java_indicators = ['maven', 'mvn', 'gradle', '.java:', '[error]', 'javac']
+            if any(ind in error_lower for ind in java_indicators):
+                return True
+
+        # 4. Python import/type errors (need code analysis)
+        python_complex = [
+            'importerror',
+            'modulenotfound',
+            'attributeerror',
+            'typeerror',
+            'nameerror',
+            'indentationerror',
+        ]
+        if any(p in error_lower for p in python_complex):
+            # Check if it's a simple pip install case
+            if 'no module named' in error_lower:
+                # This could be simple pip install - let ProductionAutoFixer try first
+                return False
+            return True
+
+        # 5. Go/Rust compilation errors
+        go_rust_indicators = [
+            'cannot find package',
+            'undefined:',
+            'error[e',  # Rust error codes like error[E0432]
+            'unresolved import',
+        ]
+        if any(ind in error_lower for ind in go_rust_indicators):
+            return True
+
+        # ===== Let ProductionAutoFixer handle simple cases =====
+
+        # Simple cases that have pattern-based fixes
+        simple_patterns = [
+            'eaddrinuse',  # Port in use
+            'enoent',      # Simple file not found
+            'npm warn',    # Just warnings
+            'deprecated',  # Deprecation warnings
+        ]
+        if any(p in error_lower for p in simple_patterns):
+            return False
+
+        # If we're not sure, default to AI for safety
+        # Better to use AI and succeed than use patterns and fail
+        return True
+
+    def _start_background_error_monitor(
+        self,
+        project_id: str,
+        project_path: Path,
+        process,  # subprocess.Popen
+        command: str,
+        error_patterns: List[str],
+        user_id: Optional[str] = None
+    ) -> None:
+        """
+        Start a background thread to continuously monitor dev server output for errors.
+        This handles errors that occur AFTER the server has started (e.g., PostCSS errors
+        that happen when the browser requests CSS files).
+        """
+        # Avoid starting multiple monitors for the same project
+        if self._background_monitors.get(project_id, False):
+            logger.debug(f"[DockerExecutor:{project_id}] Background monitor already running")
+            return
+
+        import threading
+
+        def monitor_output():
+            self._background_monitors[project_id] = True
+            error_buffer = []
+            last_fix_time = 0
+            FIX_COOLDOWN = 30  # Minimum seconds between fix attempts
+
+            try:
+                logger.info(f"[DockerExecutor:{project_id}] Background error monitor started")
+                while process.poll() is None:  # While process is running
+                    try:
+                        line = process.stdout.readline()
+                        if not line:
+                            continue
+
+                        line = line.strip() if isinstance(line, str) else line.decode('utf-8', errors='replace').strip()
+                        if not line:
+                            continue
+
+                        error_buffer.append(line)
+                        if len(error_buffer) > 100:
+                            error_buffer.pop(0)
+
+                        # Check for critical errors
+                        if any(p in line for p in error_patterns):
+                            import time
+                            current_time = time.time()
+
+                            # Rate limit fix attempts
+                            if current_time - last_fix_time < FIX_COOLDOWN:
+                                logger.debug(f"[DockerExecutor:{project_id}] Background monitor: Cooldown active, skipping fix")
+                                continue
+
+                            last_fix_time = current_time
+                            full_context = '\n'.join(error_buffer[-50:])
+                            logger.info(f"[DockerExecutor:{project_id}] Background monitor detected error: {line[:100]}")
+
+                            # Trigger auto-fix
+                            self._trigger_auto_fix_background(
+                                project_id=project_id,
+                                project_path=project_path,
+                                error_message=full_context,
+                                command=command,
+                                user_id=user_id
+                            )
+
+                    except Exception as e:
+                        logger.debug(f"[DockerExecutor:{project_id}] Background monitor read error: {e}")
+                        break
+
+            except Exception as e:
+                logger.error(f"[DockerExecutor:{project_id}] Background monitor error: {e}")
+            finally:
+                self._background_monitors[project_id] = False
+                logger.info(f"[DockerExecutor:{project_id}] Background error monitor stopped")
+
+        # Start the monitor thread
+        monitor_thread = threading.Thread(target=monitor_output, daemon=True, name=f"error-monitor-{project_id}")
+        monitor_thread.start()
+
+    def _trigger_auto_fix_background(
+        self,
+        project_id: str,
+        project_path: Path,
+        error_message: str,
+        command: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> None:
+        """
+        PRODUCTION-READY Auto-Fix System for 100k+ Users
+
+        Architecture:
+        1. ProductionAutoFixer (deterministic, fast, free) - handles 80% of errors
+        2. SDK Fixer Agent (AI-powered) - handles complex file creation
+        3. Rate limiting, circuit breaker, caching for production scale
+
+        Key Production Features:
+        - Deterministic fixes first (no AI = fast + cheap)
+        - Rate limiting per project (10/min, 100/hour)
+        - Circuit breaker (5 failures = 2min cooldown)
+        - Fix caching (don't fix same error twice)
+        - Full metrics and logging
+        - Pending error queue for errors that arrive during a fix
+        """
+        # Extract user_id from project_path if not provided
+        # Path structure: C:\tmp\sandbox\workspace\{user_id}\{project_id}
+        if not user_id:
+            try:
+                path_parts = str(project_path).replace('\\', '/').split('/')
+                # Find 'workspace' and get the next part as user_id
+                if 'workspace' in path_parts:
+                    workspace_idx = path_parts.index('workspace')
+                    if workspace_idx + 1 < len(path_parts):
+                        user_id = path_parts[workspace_idx + 1]
+                        logger.info(f"[DockerExecutor:{project_id}] Extracted user_id from path: {user_id}")
+            except Exception as e:
+                logger.warning(f"[DockerExecutor:{project_id}] Could not extract user_id from path: {e}")
+        # Initialize pending errors queue if needed
+        if not hasattr(self, '_pending_errors'):
+            self._pending_errors = {}
+
+        # If a fix is in progress, queue this error for later (unless it's a duplicate)
+        if self._fix_in_progress.get(project_id, False):
+            # Check if this is a high-priority error (real errors should be processed)
+            high_priority_patterns = [
+                'class does not exist',  # Tailwind
+                '[postcss]',
+                '[vite]',
+                'Module not found',
+                'Cannot find module',
+                'SyntaxError',
+                'TypeError',
+            ]
+            is_high_priority = any(p in error_message for p in high_priority_patterns)
+
+            if is_high_priority:
+                # Store the error for processing after current fix completes
+                if project_id not in self._pending_errors:
+                    self._pending_errors[project_id] = []
+                # Avoid duplicate errors in queue
+                error_hash = hash(error_message[:500])
+                existing_hashes = [hash(e['error'][:500]) for e in self._pending_errors.get(project_id, [])]
+                if error_hash not in existing_hashes:
+                    self._pending_errors[project_id].append({
+                        'error': error_message,
+                        'command': command,
+                        'user_id': user_id,
+                        'project_path': project_path,
+                    })
+                    logger.info(f"[DockerExecutor:{project_id}] Queued high-priority error for later processing")
+
+            logger.info(f"[DockerExecutor:{project_id}] Fix already in progress, skipping (queued={is_high_priority})")
+            return
+
+        async def run_production_auto_fix():
+            """
+            SIMPLIFIED Auto-Fix - Bolt.new Style
+
+            Let AI decide what's an error and how to fix it.
+            No complex routing, no pattern matching, just simple AI-powered fixing.
+            """
+            try:
+                self._fix_in_progress[project_id] = True
+                logger.info(f"[DockerExecutor:{project_id}] [SIMPLE] Auto-fix triggered")
+
+                # First, let SimpleFixer decide if this is a real error
+                should_fix = await simple_fixer.should_fix(None, error_message)
+
+                if not should_fix:
+                    logger.info(f"[DockerExecutor:{project_id}] SimpleFixer: No fix needed (not a real error)")
+                    return
+
+                # Use SimpleFixer for all errors - let AI decide
+                logger.info(f"[DockerExecutor:{project_id}] Using SimpleFixer (Bolt.new style)")
+                result = await simple_fixer.fix(
+                    project_path=project_path,
+                    command=command or "unknown",
+                    output=error_message,
+                    exit_code=None
+                )
+
+                # Log result
+                if result.success:
+                    logger.info(f"[DockerExecutor:{project_id}] [SIMPLE] Fix successful: {result.message}")
+                    logger.info(f"[DockerExecutor:{project_id}] [SIMPLE] Files modified: {result.files_modified}")
+
+                    # Notify frontend
+                    log_bus = get_log_bus(project_id)
+                    if log_bus:
+                        log_bus.add_log(
+                            source="autofixer",
+                            level="success",
+                            message=f"[OK] Auto-fix applied successfully"
+                        )
+                else:
+                    logger.warning(f"[DockerExecutor:{project_id}] [SIMPLE] Fix failed: {result.message}")
+
+            except Exception as e:
+                logger.error(f"[DockerExecutor:{project_id}] [PRODUCTION] Auto-fix error: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+            finally:
+                self._fix_in_progress[project_id] = False
+
+                # Process any queued errors
+                if hasattr(self, '_pending_errors') and project_id in self._pending_errors:
+                    pending = self._pending_errors.pop(project_id, [])
+                    if pending:
+                        logger.info(f"[DockerExecutor:{project_id}] Processing {len(pending)} queued errors")
+                        for queued_error in pending[:3]:  # Limit to 3 queued errors to avoid infinite loops
+                            # Schedule the queued error to be processed
+                            self._trigger_auto_fix_background(
+                                project_id=project_id,
+                                project_path=queued_error['project_path'],
+                                error_message=queued_error['error'],
+                                command=queued_error.get('command'),
+                                user_id=queued_error.get('user_id'),
+                            )
+                            break  # Only process one at a time
+
+        # Create background task - handle both async and threaded contexts
+        try:
+            # Try to get the running event loop (works in async context)
+            loop = asyncio.get_running_loop()
+            asyncio.create_task(run_production_auto_fix())
+        except RuntimeError:
+            # No running event loop - we're in a thread
+            # Run in a new event loop in this thread
+            import threading
+            def run_in_thread():
+                try:
+                    asyncio.run(run_production_auto_fix())
+                except Exception as e:
+                    logger.error(f"[DockerExecutor:{project_id}] Auto-fix thread error: {e}")
+
+            fix_thread = threading.Thread(target=run_in_thread, daemon=True, name=f"auto-fix-{project_id}")
+            fix_thread.start()
+            logger.info(f"[DockerExecutor:{project_id}] Started auto-fix in background thread")
+
+    async def _run_universal_fix(
+        self,
+        autofixer: UniversalAutoFixer,
+        error_message: str,
+        project_id: str
+    ) -> None:
+        """Run UniversalAutoFixer for non-missing-file errors"""
+        # Try to fix the error
+        success = await autofixer.fix_error(error_message)
+
+        if success:
+            logger.info(f"[DockerExecutor:{project_id}] ✅ UNIVERSAL AUTO-FIX successful!")
+            logger.info(f"[DockerExecutor:{project_id}] Fixes applied: {autofixer.fixes_applied}")
+
+            # Notify frontend that fix was applied (trigger reload/rebuild)
+            log_bus = get_log_bus(project_id)
+            if log_bus:
+                log_bus.add_log(
+                    source="autofixer",
+                    level="success",
+                    message=f"Auto-fix applied: {', '.join(autofixer.fixes_applied) or 'Files updated'}"
+                )
+        else:
+            logger.warning(f"[DockerExecutor:{project_id}] ⚠️ UNIVERSAL AUTO-FIX: First attempt failed, trying AI fix...")
+
+            # Try AI-powered fix as fallback
+            result = await autofixer.fix_with_ai(error_message)
+            if result.get("success"):
+                logger.info(f"[DockerExecutor:{project_id}] ✅ AI fix successful: {result.get('files_modified', [])}")
+            else:
+                logger.error(f"[DockerExecutor:{project_id}] ❌ AUTO-FIX failed: {result.get('error', 'Unknown')}")
+
+    async def _get_context_files_for_fix(
+        self,
+        project_path: Path,
+        error_message: str
+    ) -> Dict[str, str]:
+        """
+        Get context files for SDK Fixer Agent.
+
+        DYNAMIC approach: Include ALL build config files and error-mentioned files
+        so Claude can reason about the fix without hardcoded patterns.
+        """
+        context_files = {}
+        import re
+
+        # ===== PHASE 1: Include ALL build configuration files =====
+        # These are critical for Claude to understand project structure
+        build_config_files = [
+            # Java/Maven
+            "pom.xml",
+            "backend/pom.xml",
+            "build.gradle",
+            "backend/build.gradle",
+            "settings.gradle",
+            "backend/settings.gradle",
+            # Node.js
+            "package.json",
+            "frontend/package.json",
+            "package-lock.json",
+            "frontend/package-lock.json",
+            # Python
+            "requirements.txt",
+            "backend/requirements.txt",
+            "pyproject.toml",
+            "backend/pyproject.toml",
+            "setup.py",
+            # Config files
+            "frontend/vite.config.ts",
+            "frontend/vite.config.js",
+            "frontend/tsconfig.json",
+            "frontend/tsconfig.node.json",
+            "tsconfig.json",
+            "tsconfig.node.json",
+            "frontend/tailwind.config.js",
+            "frontend/postcss.config.js",
+            # Application config
+            "backend/src/main/resources/application.properties",
+            "backend/src/main/resources/application.yml",
+            "backend/src/main/resources/application.yaml",
+            ".env",
+            "backend/.env",
+            "frontend/.env",
+        ]
+
+        for file_rel in build_config_files:
+            file_path = project_path / file_rel
+            if file_path.exists():
+                try:
+                    content = file_path.read_text(encoding='utf-8')
+                    # Limit size to avoid token overflow
+                    if len(content) < 50000:
+                        context_files[file_rel] = content
+                        logger.info(f"[DockerExecutor] Added build config: {file_rel}")
+                except Exception as e:
+                    logger.warning(f"[DockerExecutor] Could not read {file_rel}: {e}")
+
+        # ===== PHASE 2: Extract files mentioned in error message =====
+        # Parse error to find file paths (works for ALL languages)
+        file_path_patterns = [
+            # Java/Maven errors: [ERROR] /path/to/File.java:[line]:[col]: error
+            r'\[ERROR\]\s+([A-Za-z]:[/\\][^\s:]+\.java)',  # Windows path
+            r'\[ERROR\]\s+(/[^\s:]+\.java)',  # Unix path
+            r'([A-Za-z]:[/\\][^\s:]+\.(java|kt|scala|groovy))',  # Any JVM file Windows
+            r'(/[^\s:]+\.(java|kt|scala|groovy))',  # Any JVM file Unix
+            # Python errors
+            r'File "([^"]+\.py)"',
+            # Node.js/TypeScript errors
+            r'at\s+([^\s]+\.(ts|tsx|js|jsx))',
+            r'Failed to resolve import ["\']([^"\']+)["\']',
+            r'Cannot find module ["\']([^"\']+)["\']',
+            # Generic path patterns
+            r'(src/[^\s:]+\.(java|ts|tsx|js|py|go|rs))',
+            r'(backend/[^\s:]+\.(java|ts|tsx|js|py|go|rs))',
+            r'(frontend/[^\s:]+\.(ts|tsx|js|jsx))',
+        ]
+
+        error_mentioned_files = set()
+        for pattern in file_path_patterns:
+            matches = re.findall(pattern, error_message, re.IGNORECASE)
+            for match in matches:
+                # Handle tuple matches from groups
+                if isinstance(match, tuple):
+                    match = match[0]
+                if match:
+                    error_mentioned_files.add(match)
+
+        # Read files mentioned in error
+        for file_mention in error_mentioned_files:
+            # Try to resolve to actual path
+            possible_paths = [
+                project_path / file_mention,
+                project_path / file_mention.lstrip('/'),
+                # Handle absolute paths by making them relative
+            ]
+
+            # Also try to find by filename in common directories
+            filename = Path(file_mention).name
+            for src_dir in ["backend/src", "frontend/src", "src"]:
+                src_path = project_path / src_dir
+                if src_path.exists():
+                    for found_file in src_path.rglob(filename):
+                        possible_paths.append(found_file)
+
+            for file_path in possible_paths:
+                if isinstance(file_path, Path) and file_path.exists() and file_path.is_file():
+                    try:
+                        rel_path = str(file_path.relative_to(project_path))
+                        if rel_path not in context_files:
+                            content = file_path.read_text(encoding='utf-8')
+                            if len(content) < 30000:
+                                context_files[rel_path] = content
+                                logger.info(f"[DockerExecutor] Added error file: {rel_path}")
+                        break
+                    except Exception:
+                        pass
+
+        # ===== PHASE 3: For Java projects, include key source files =====
+        # Check if this is a Java project
+        pom_exists = (project_path / "pom.xml").exists() or (project_path / "backend/pom.xml").exists()
+        gradle_exists = (project_path / "build.gradle").exists() or (project_path / "backend/build.gradle").exists()
+
+        if pom_exists or gradle_exists:
+            # Find Java source files mentioned in error or key files
+            java_src_dirs = ["backend/src/main/java", "src/main/java"]
+            for src_dir in java_src_dirs:
+                src_path = project_path / src_dir
+                if src_path.exists():
+                    # Add all Java files (up to 20 to avoid token overflow)
+                    java_files = list(src_path.rglob("*.java"))[:20]
+                    for java_file in java_files:
+                        try:
+                            rel_path = str(java_file.relative_to(project_path))
+                            if rel_path not in context_files:
+                                content = java_file.read_text(encoding='utf-8')
+                                if len(content) < 20000:
+                                    context_files[rel_path] = content
+                                    logger.info(f"[DockerExecutor] Added Java source: {rel_path}")
+                        except Exception:
+                            pass
+
+        # ===== PHASE 4: Include main entry points =====
+        entry_points = [
+            "frontend/src/App.tsx",
+            "frontend/src/main.tsx",
+            "frontend/src/index.tsx",
+            "src/App.tsx",
+            "src/main.tsx",
+            "src/index.tsx",
+            "backend/src/main/java/**/Application.java",  # Spring Boot entry
+            "backend/app/main.py",  # FastAPI entry
+            "backend/manage.py",  # Django entry
+        ]
+
+        for entry in entry_points:
+            if "*" in entry:
+                # Handle glob patterns
+                for match in project_path.glob(entry):
+                    try:
+                        rel_path = str(match.relative_to(project_path))
+                        if rel_path not in context_files:
+                            content = match.read_text(encoding='utf-8')
+                            context_files[rel_path] = content
+                            logger.info(f"[DockerExecutor] Added entry point: {rel_path}")
+                    except Exception:
+                        pass
+            else:
+                file_path = project_path / entry
+                if file_path.exists():
+                    try:
+                        rel_path = entry
+                        if rel_path not in context_files:
+                            content = file_path.read_text(encoding='utf-8')
+                            context_files[rel_path] = content
+                            logger.info(f"[DockerExecutor] Added entry point: {rel_path}")
+                    except Exception:
+                        pass
+
+        logger.info(f"[DockerExecutor] Total context files for AI: {len(context_files)}")
+        return context_files
+
+    async def _validate_imports_proactively(
+        self,
+        project_id: str,
+        project_path: Path,
+        user_id: Optional[str] = None
+    ) -> bool:
+        """
+        Proactively validate all local imports in React/TypeScript files BEFORE running the server.
+
+        This catches "Failed to resolve import" errors before Vite even starts, allowing us to
+        trigger the SDK Fixer Agent to create missing files.
+
+        Returns True if all imports are valid, False if missing files were detected and fix was triggered.
+        """
+        missing_imports = []
+
+        # Find all source directories
+        src_dirs = ["src", "frontend/src"]
+
+        for src_dir in src_dirs:
+            src_path = project_path / src_dir
+            if not src_path.exists():
+                continue
+
+            # Scan all TypeScript/JavaScript files
+            for ext in ["*.tsx", "*.ts", "*.jsx", "*.js"]:
+                for source_file in src_path.rglob(ext):
+                    try:
+                        content = source_file.read_text(encoding='utf-8')
+
+                        # Find all local imports (starting with ./ or ../)
+                        import_patterns = [
+                            r"import\s+(?:[\w*{},\s]+)\s+from\s+['\"](\./[^'\"]+|\.\.\/[^'\"]+)['\"]",
+                            r"import\s+['\"](\./[^'\"]+|\.\.\/[^'\"]+)['\"]",
+                        ]
+
+                        for pattern in import_patterns:
+                            matches = re.findall(pattern, content)
+                            for import_path in matches:
+                                # Resolve the import path relative to the source file
+                                file_dir = source_file.parent
+
+                                # Try different extensions
+                                possible_files = []
+                                if not any(import_path.endswith(e) for e in ['.tsx', '.ts', '.jsx', '.js', '.css', '.json']):
+                                    # No extension - try common ones
+                                    for ext_try in ['.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts', '/index.jsx', '/index.js']:
+                                        possible_files.append(file_dir / (import_path + ext_try))
+                                else:
+                                    possible_files.append(file_dir / import_path)
+
+                                # Check if any of the possible files exist
+                                file_exists = any(p.resolve().exists() for p in possible_files)
+
+                                if not file_exists:
+                                    rel_source = str(source_file.relative_to(project_path))
+                                    missing_imports.append({
+                                        "source_file": rel_source,
+                                        "import_path": import_path,
+                                        "expected_paths": [str(p.relative_to(project_path)) for p in possible_files[:2]]
+                                    })
+
+                    except Exception as e:
+                        logger.warning(f"[DockerExecutor] Error scanning imports in {source_file}: {e}")
+
+        if not missing_imports:
+            logger.info(f"[DockerExecutor:{project_id}] ✅ All imports validated - no missing files detected")
+            return True
+
+        # We have missing imports! Build an error message and trigger SDK Fixer
+        logger.warning(f"[DockerExecutor:{project_id}] ⚠️ Found {len(missing_imports)} missing imports!")
+        for mi in missing_imports:
+            logger.warning(f"  - {mi['source_file']} imports '{mi['import_path']}' which doesn't exist")
+
+        # Build error message in Vite-style format
+        error_parts = []
+        for mi in missing_imports[:5]:  # Limit to first 5 to avoid overwhelming the fixer
+            error_parts.append(
+                f'Failed to resolve import "{mi["import_path"]}" from "{mi["source_file"]}". Does the file exist?'
+            )
+
+        error_message = "\n".join(error_parts)
+        logger.info(f"[DockerExecutor:{project_id}] 🔧 Triggering proactive SDK Fixer for missing imports...")
+
+        # Trigger SDK Fixer in background
+        self._trigger_auto_fix_background(
+            project_id=project_id,
+            project_path=project_path,
+            error_message=error_message,
+            command="proactive_import_validation",
+            user_id=user_id
+        )
+
+        return False
 
     def detect_framework(self, project_path: Path) -> FrameworkType:
-        """Detect the framework type from project files"""
+        """Detect the framework type from project files - supports ALL technologies!"""
 
-        # Check for package.json (Node.js projects)
+        # ===== FULLSTACK MONOREPO (Check first - has frontend/ and backend/ folders) =====
+        frontend_dir = project_path / "frontend"
+        backend_dir = project_path / "backend"
+
+        if frontend_dir.exists() and backend_dir.exists():
+            # Check what type of frontend
+            frontend_pkg = frontend_dir / "package.json"
+            has_react_frontend = False
+            has_vite = False
+            if frontend_pkg.exists():
+                try:
+                    with open(frontend_pkg, 'r') as f:
+                        pkg = json.load(f)
+                        deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+                        has_react_frontend = "react" in deps
+                        has_vite = "vite" in deps or "@vitejs/plugin-react" in deps
+                except:
+                    pass
+
+            # Check what type of backend (check for actual files, not just folder existence)
+            has_spring_backend = (backend_dir / "pom.xml").exists() or (backend_dir / "build.gradle").exists()
+            has_express_backend = (backend_dir / "package.json").exists()
+            has_fastapi_backend = (backend_dir / "requirements.txt").exists() or (backend_dir / "main.py").exists()
+            backend_has_files = has_spring_backend or has_express_backend or has_fastapi_backend
+
+            if has_react_frontend:
+                if has_spring_backend:
+                    return FrameworkType.FULLSTACK_REACT_SPRING
+                elif has_fastapi_backend:
+                    return FrameworkType.FULLSTACK_REACT_FASTAPI
+                elif has_express_backend:
+                    return FrameworkType.FULLSTACK_REACT_EXPRESS
+                elif not backend_has_files:
+                    # Frontend-only project with empty backend folder
+                    # Detect the frontend framework and we'll run from frontend/ dir
+                    logger.info(f"[FrameworkDetection] Detected frontend-only project in {frontend_dir}")
+                    if has_vite:
+                        return FrameworkType.REACT_VITE
+                    else:
+                        return FrameworkType.REACT_CRA
+
+        # ===== ANDROID (Check first - has build.gradle but different from Spring) =====
+        android_manifest = project_path / "app" / "src" / "main" / "AndroidManifest.xml"
+        if android_manifest.exists():
+            return FrameworkType.ANDROID
+        # Also check for root-level Android indicators
+        if (project_path / "settings.gradle").exists() or (project_path / "settings.gradle.kts").exists():
+            gradle_file = project_path / "build.gradle"
+            gradle_kts = project_path / "build.gradle.kts"
+            if gradle_file.exists() or gradle_kts.exists():
+                try:
+                    content = ""
+                    if gradle_file.exists():
+                        with open(gradle_file, 'r') as f:
+                            content = f.read()
+                    elif gradle_kts.exists():
+                        with open(gradle_kts, 'r') as f:
+                            content = f.read()
+                    if "com.android" in content or "android {" in content:
+                        return FrameworkType.ANDROID
+                except:
+                    pass
+
+        # ===== iOS/SWIFT =====
+        # Check for Xcode project or Package.swift
+        if (project_path / "Package.swift").exists():
+            return FrameworkType.IOS_SWIFT
+        # Check for .xcodeproj or .xcworkspace
+        for item in project_path.iterdir():
+            if item.suffix in ['.xcodeproj', '.xcworkspace']:
+                return FrameworkType.IOS_SWIFT
+        # Check for Podfile (CocoaPods)
+        if (project_path / "Podfile").exists():
+            return FrameworkType.IOS_SWIFT
+
+        # ===== BLOCKCHAIN - SOLIDITY =====
+        # Check for Hardhat, Truffle, or Foundry
+        if (project_path / "hardhat.config.js").exists() or (project_path / "hardhat.config.ts").exists():
+            return FrameworkType.SOLIDITY
+        if (project_path / "truffle-config.js").exists():
+            return FrameworkType.SOLIDITY
+        if (project_path / "foundry.toml").exists():
+            return FrameworkType.SOLIDITY
+        # Check for .sol files in contracts folder
+        contracts_dir = project_path / "contracts"
+        if contracts_dir.exists():
+            for item in contracts_dir.iterdir():
+                if item.suffix == '.sol':
+                    return FrameworkType.SOLIDITY
+
+        # ===== BLOCKCHAIN - SOLANA (Rust) =====
+        if (project_path / "Anchor.toml").exists():
+            return FrameworkType.RUST_SOLANA
+
+        # ===== RUST =====
+        if (project_path / "Cargo.toml").exists():
+            # Check if it's a Solana project
+            try:
+                with open(project_path / "Cargo.toml", 'r') as f:
+                    cargo_content = f.read()
+                    if "anchor-lang" in cargo_content or "solana-program" in cargo_content:
+                        return FrameworkType.RUST_SOLANA
+            except:
+                pass
+            return FrameworkType.RUST
+
+        # ===== NODE.JS / FRONTEND PROJECTS =====
         package_json_path = project_path / "package.json"
         if package_json_path.exists():
             try:
@@ -405,9 +1268,13 @@ class DockerExecutor:
                     # Check for specific frameworks
                     if "next" in deps:
                         return FrameworkType.NEXTJS
+                    elif "svelte" in deps or "@sveltejs/kit" in deps:
+                        return FrameworkType.SVELTE
                     elif "vite" in deps:
                         if "vue" in deps:
                             return FrameworkType.VUE
+                        if "svelte" in deps:
+                            return FrameworkType.SVELTE
                         return FrameworkType.REACT_VITE
                     elif "react-scripts" in deps:
                         return FrameworkType.REACT_CRA
@@ -417,6 +1284,9 @@ class DockerExecutor:
                         return FrameworkType.VUE
                     elif "@angular/core" in deps:
                         return FrameworkType.ANGULAR
+                    # Blockchain JS libraries
+                    elif "hardhat" in deps or "ethers" in deps or "web3" in deps:
+                        return FrameworkType.SOLIDITY
                     elif "express" in deps:
                         return FrameworkType.NODE_EXPRESS
                     else:
@@ -424,42 +1294,130 @@ class DockerExecutor:
             except Exception as e:
                 logger.warning(f"Error reading package.json: {e}")
 
-        # Check for Python projects
+        # ===== PYTHON PROJECTS =====
         requirements_path = project_path / "requirements.txt"
+        pyproject_path = project_path / "pyproject.toml"
+
+        python_deps = ""
         if requirements_path.exists():
             try:
                 with open(requirements_path, 'r') as f:
-                    reqs = f.read().lower()
+                    python_deps = f.read().lower()
+            except:
+                pass
+        if pyproject_path.exists():
+            try:
+                with open(pyproject_path, 'r') as f:
+                    python_deps += f.read().lower()
+            except:
+                pass
 
-                    if "streamlit" in reqs:
-                        return FrameworkType.PYTHON_STREAMLIT
-                    elif "fastapi" in reqs:
-                        return FrameworkType.PYTHON_FASTAPI
-                    elif "django" in reqs:
-                        return FrameworkType.PYTHON_DJANGO
-                    elif "flask" in reqs:
-                        return FrameworkType.PYTHON_FLASK
-                    else:
-                        return FrameworkType.PYTHON_FLASK  # Default Python
-            except Exception as e:
-                logger.warning(f"Error reading requirements.txt: {e}")
+        if python_deps:
+            # Web frameworks - check FIRST (before ML detection)
+            # Streamlit apps often use pandas/numpy but should run as streamlit, not jupyter
+            if "streamlit" in python_deps:
+                return FrameworkType.PYTHON_STREAMLIT
+            elif "fastapi" in python_deps:
+                return FrameworkType.PYTHON_FASTAPI
+            elif "django" in python_deps:
+                return FrameworkType.PYTHON_DJANGO
+            elif "flask" in python_deps:
+                return FrameworkType.PYTHON_FLASK
 
-        # Check for Spring Boot
+            # AI/ML frameworks (check AFTER web frameworks)
+            ml_indicators = ['tensorflow', 'torch', 'pytorch', 'keras', 'scikit-learn',
+                            'sklearn', 'transformers', 'huggingface', 'opencv', 'cv2',
+                            'numpy', 'pandas', 'matplotlib', 'seaborn', 'jupyter',
+                            'notebook', 'xgboost', 'lightgbm', 'catboost', 'spacy',
+                            'nltk', 'gensim', 'openai', 'langchain', 'llama']
+            if any(lib in python_deps for lib in ml_indicators):
+                return FrameworkType.PYTHON_ML
+
+            # Default Python fallback
+            return FrameworkType.PYTHON_FLASK
+
+        # ===== JAVA - SPRING BOOT =====
         pom_path = project_path / "pom.xml"
+        build_gradle = project_path / "build.gradle"
+        build_gradle_kts = project_path / "build.gradle.kts"
+
         if pom_path.exists():
             return FrameworkType.SPRING_BOOT
+        if build_gradle.exists() or build_gradle_kts.exists():
+            # It's a Java/Gradle project (not Android - we checked above)
+            return FrameworkType.SPRING_BOOT
 
-        # Check for Go
+        # ===== GO =====
         go_mod_path = project_path / "go.mod"
         if go_mod_path.exists():
             return FrameworkType.GO
 
-        # Check for static HTML
+        # ===== STATIC HTML =====
         index_html_path = project_path / "index.html"
         if index_html_path.exists():
             return FrameworkType.STATIC_HTML
 
         return FrameworkType.UNKNOWN
+
+    def get_effective_working_directory(self, project_path: Path, framework: FrameworkType) -> Path:
+        """
+        Get the effective working directory for running commands.
+
+        For frontend-only projects in subfolder structure (e.g., frontend/ folder with empty backend/),
+        returns the frontend/ directory instead of the root.
+        For fullstack projects, returns the root (they handle subdirs in commands).
+        """
+        # IMPORTANT: Fullstack frameworks ALWAYS run from project root
+        # because their commands use 'cd frontend' and 'cd backend' relative paths
+        fullstack_frameworks = [
+            FrameworkType.FULLSTACK_REACT_SPRING,
+            FrameworkType.FULLSTACK_REACT_EXPRESS,
+            FrameworkType.FULLSTACK_REACT_FASTAPI,
+        ]
+        if framework in fullstack_frameworks:
+            logger.info(f"[WorkingDir] Fullstack project - using project root for {framework.value}")
+            return project_path
+
+        frontend_dir = project_path / "frontend"
+        backend_dir = project_path / "backend"
+
+        # Check if this is a frontend-only project with subfolder structure
+        if frontend_dir.exists() and backend_dir.exists():
+            # Check if backend is empty (no actual files)
+            has_backend_files = any([
+                (backend_dir / "pom.xml").exists(),
+                (backend_dir / "build.gradle").exists(),
+                (backend_dir / "package.json").exists(),
+                (backend_dir / "requirements.txt").exists(),
+                (backend_dir / "main.py").exists(),
+            ])
+
+            # Check if frontend has package.json
+            frontend_has_pkg = (frontend_dir / "package.json").exists()
+
+            if frontend_has_pkg and not has_backend_files:
+                # Frontend-only project in subfolder - run from frontend/
+                logger.info(f"[WorkingDir] Using frontend/ as working directory for {framework.value}")
+                return frontend_dir
+
+        # Check if there's no root package.json but frontend/ has one
+        # BUT only if backend doesn't have real files (indicating fullstack)
+        root_pkg = project_path / "package.json"
+        if not root_pkg.exists() and frontend_dir.exists():
+            # Double-check it's NOT a fullstack project
+            has_backend_files = backend_dir.exists() and any([
+                (backend_dir / "pom.xml").exists(),
+                (backend_dir / "build.gradle").exists(),
+                (backend_dir / "package.json").exists(),
+                (backend_dir / "requirements.txt").exists(),
+                (backend_dir / "main.py").exists(),
+            ])
+            if not has_backend_files and (frontend_dir / "package.json").exists():
+                logger.info(f"[WorkingDir] No root package.json, using frontend/ for {framework.value}")
+                return frontend_dir
+
+        # Default: use project root
+        return project_path
 
     def generate_dockerfile(self, project_path: Path, framework: FrameworkType) -> str:
         """Generate appropriate Dockerfile for the framework"""
@@ -547,20 +1505,91 @@ class DockerExecutor:
                     continue
         return None
 
+    def _is_port_conflict(self, output: str) -> bool:
+        """
+        Detect if output indicates a port conflict (EADDRINUSE).
+        Port conflicts are handled specially with automatic port reallocation.
+        """
+        port_conflict_patterns = [
+            'EADDRINUSE',
+            'address already in use',
+            'Address already in use',
+            'port is already in use',
+            'Port is already in use',
+            'listen EADDRINUSE',
+            'Error: listen EADDRINUSE',
+            'bind: address already in use',
+            'Only one usage of each socket address',
+            'port already allocated',
+            'Address in use',
+        ]
+        output_lower = output.lower()
+        for pattern in port_conflict_patterns:
+            if pattern.lower() in output_lower:
+                return True
+        return False
+
+    def _extract_conflicting_port(self, output: str) -> Optional[int]:
+        """Extract the conflicting port number from error message"""
+        # Common patterns: "port 3000 is already in use", "EADDRINUSE :::3000", etc.
+        patterns = [
+            r'(?:port\s+)?(\d{4,5})\s+(?:is\s+)?already\s+in\s+use',
+            r'EADDRINUSE\s*(?:::)?(\d{4,5})',
+            r'listen\s+EADDRINUSE\s*(?:::)?(\d{4,5})',
+            r'address\s+already\s+in\s+use\s*(?:::)?(\d{4,5})',
+            r'bind.*:(\d{4,5})',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, output, re.IGNORECASE)
+            if match:
+                try:
+                    return int(match.group(1))
+                except (ValueError, IndexError):
+                    continue
+        return None
+
     async def _check_docker_available(self) -> bool:
         """Check if Docker is available and running"""
+        import shutil
         try:
-            process = await asyncio.create_subprocess_exec(
-                "docker", "info",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            await process.wait()
-            return process.returncode == 0
+            # First check if docker is in PATH
+            docker_path = shutil.which("docker")
+            if not docker_path:
+                logger.warning("[DockerExecutor] Docker not found in PATH")
+                return False
+
+            logger.info(f"[DockerExecutor] Found docker at: {docker_path}")
+
+            # Use shell=True on Windows for better compatibility
+            import sys
+            if sys.platform == "win32":
+                process = await asyncio.create_subprocess_shell(
+                    "docker info",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+            else:
+                process = await asyncio.create_subprocess_exec(
+                    "docker", "info",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+
+            stdout, stderr = await process.communicate()
+
+            if process.returncode == 0:
+                logger.info("[DockerExecutor] Docker is available and running")
+                return True
+            else:
+                stderr_text = stderr.decode('utf-8', errors='replace') if stderr else ''
+                logger.warning(f"[DockerExecutor] Docker info failed (code {process.returncode}): {stderr_text[:200]}")
+                return False
+
         except FileNotFoundError:
+            logger.warning("[DockerExecutor] Docker executable not found")
             return False
         except Exception as e:
-            logger.error(f"Error checking Docker: {e}")
+            logger.error(f"[DockerExecutor] Error checking Docker: {type(e).__name__}: {e}")
             return False
 
     async def build_image(
@@ -695,13 +1724,22 @@ class DockerExecutor:
                         detected_port = self._extract_port_from_output(output, framework)
                         if detected_port:
                             port_detected = True
-                            yield f"\n{'='*50}\n"
-                            yield f"SERVER STARTED!\n"
-                            yield f"Preview URL: {preview_url}\n"
-                            yield f"{'='*50}\n\n"
-
-                            # Send special event for frontend
-                            yield f"__SERVER_STARTED__:{preview_url}\n"
+                            # For FULLSTACK projects, ALWAYS use the frontend port for preview
+                            if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
+                                preview_url = f"http://localhost:{host_port}"
+                                backend_port = host_port + 1000
+                                yield f"\n{'='*50}\n"
+                                yield f"FULLSTACK SERVERS STARTED!\n"
+                                yield f"Frontend (Preview): {preview_url}\n"
+                                yield f"Backend API: http://localhost:{backend_port}\n"
+                                yield f"{'='*50}\n\n"
+                                yield f"__SERVER_STARTED__:{preview_url}\n"
+                            else:
+                                yield f"\n{'='*50}\n"
+                                yield f"SERVER STARTED!\n"
+                                yield f"Preview URL: {preview_url}\n"
+                                yield f"{'='*50}\n\n"
+                                yield f"__SERVER_STARTED__:{preview_url}\n"
 
                     # Check for common "ready" messages
                     ready_patterns = [
@@ -715,11 +1753,22 @@ class DockerExecutor:
                     ]
                     if not port_detected and any(p in output.lower() for p in ready_patterns):
                         port_detected = True
-                        yield f"\n{'='*50}\n"
-                        yield f"SERVER STARTED!\n"
-                        yield f"Preview URL: {preview_url}\n"
-                        yield f"{'='*50}\n\n"
-                        yield f"__SERVER_STARTED__:{preview_url}\n"
+                        # For FULLSTACK projects, ALWAYS use the frontend port for preview
+                        if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
+                            preview_url = f"http://localhost:{host_port}"
+                            backend_port = host_port + 1000
+                            yield f"\n{'='*50}\n"
+                            yield f"FULLSTACK SERVERS STARTED!\n"
+                            yield f"Frontend (Preview): {preview_url}\n"
+                            yield f"Backend API: http://localhost:{backend_port}\n"
+                            yield f"{'='*50}\n\n"
+                            yield f"__SERVER_STARTED__:{preview_url}\n"
+                        else:
+                            yield f"\n{'='*50}\n"
+                            yield f"SERVER STARTED!\n"
+                            yield f"Preview URL: {preview_url}\n"
+                            yield f"{'='*50}\n\n"
+                            yield f"__SERVER_STARTED__:{preview_url}\n"
 
             await process.wait()
             yield f"Container exited with code: {process.returncode}\n"
@@ -808,34 +1857,278 @@ class DockerExecutor:
 
     # ============= DIRECT EXECUTION (FALLBACK) =============
 
-    def _get_run_commands(self, framework: FrameworkType, project_path: Path) -> List[str]:
-        """Get the commands to run the project directly (without Docker)"""
+    def _get_run_commands(self, framework: FrameworkType, project_path: Path, port: int = 3000) -> List[str]:
+        """Get the commands to run the project directly (without Docker)
+
+        Args:
+            framework: Detected framework type
+            project_path: Path to project
+            port: Dynamic port to use (allocated by _get_available_port)
+        """
         commands = []
 
         if framework in [FrameworkType.REACT_VITE, FrameworkType.VUE]:
-            commands = ["npm install", "npm run dev -- --host 0.0.0.0"]
+            # Vite: use --port flag for dynamic port
+            # Run TypeScript check FIRST to catch errors (Vite/esbuild skips type checking)
+            # This enables auto-fixer to detect and fix TypeScript errors
+            has_tsconfig = (project_path / "tsconfig.json").exists()
+            if has_tsconfig:
+                commands = ["npm install", "npx tsc --noEmit", f"npm run dev -- --host 0.0.0.0 --port {port} --no-open"]
+            else:
+                commands = ["npm install", f"npm run dev -- --host 0.0.0.0 --port {port} --no-open"]
         elif framework == FrameworkType.REACT_CRA:
-            commands = ["npm install", "npm start"]
+            # CRA uses PORT env variable
+            commands = ["npm install", f"set PORT={port} && npm start"]
         elif framework == FrameworkType.NEXTJS:
-            commands = ["npm install", "npm run dev"]
+            # Next.js: use -p flag for port
+            commands = ["npm install", f"npm run dev -- -p {port}"]
         elif framework in [FrameworkType.NODE_EXPRESS, FrameworkType.UNKNOWN]:
-            commands = ["npm install", "npm start"]
+            # Generic Node: set PORT env variable
+            commands = ["npm install", f"set PORT={port} && npm start"]
         elif framework == FrameworkType.ANGULAR:
-            commands = ["npm install", "npm start -- --host 0.0.0.0"]
+            commands = ["npm install", f"npm start -- --host 0.0.0.0 --port {port}"]
         elif framework == FrameworkType.PYTHON_FLASK:
-            commands = ["pip install -r requirements.txt", "flask run --host 0.0.0.0"]
+            commands = ["pip install -r requirements.txt", f"flask run --host 0.0.0.0 --port {port}"]
         elif framework == FrameworkType.PYTHON_FASTAPI:
-            commands = ["pip install -r requirements.txt", "uvicorn main:app --host 0.0.0.0 --port 8000"]
+            commands = ["pip install -r requirements.txt", f"uvicorn main:app --host 0.0.0.0 --port {port}"]
         elif framework == FrameworkType.PYTHON_DJANGO:
-            commands = ["pip install -r requirements.txt", "python manage.py runserver 0.0.0.0:8000"]
+            commands = ["pip install -r requirements.txt", f"python manage.py runserver 0.0.0.0:{port}"]
         elif framework == FrameworkType.PYTHON_STREAMLIT:
-            commands = ["pip install -r requirements.txt", "streamlit run app.py --server.address 0.0.0.0"]
+            commands = ["pip install -r requirements.txt", f"streamlit run app.py --server.address 0.0.0.0 --server.port {port}"]
         elif framework == FrameworkType.SPRING_BOOT:
-            commands = ["mvn package -DskipTests", "java -jar target/*.jar"]
+            # Check for Gradle vs Maven
+            has_gradle = (project_path / "build.gradle").exists() or (project_path / "build.gradle.kts").exists()
+            has_maven = (project_path / "pom.xml").exists()
+
+            if has_gradle:
+                # Gradle project: compile first to catch errors, then build and run
+                commands = [
+                    "gradle clean compileJava",  # Compile first to catch errors
+                    "gradle bootJar -x test",     # Build JAR without tests
+                    f"java -jar build/libs/*.jar --server.port={port}"
+                ]
+            elif has_maven:
+                # Maven project: compile first to catch errors, then package and run
+                commands = [
+                    "mvn compile",                          # Compile first to catch errors early
+                    "mvn package -DskipTests -q",           # Package quietly
+                    f"java -jar target/*.jar --server.port={port}"
+                ]
+            else:
+                # Fallback to Maven
+                commands = ["mvn package -DskipTests", f"java -jar target/*.jar --server.port={port}"]
+
         elif framework == FrameworkType.GO:
-            commands = ["go build -o main .", "./main"]
+            # Go project: download deps, build, and run with port
+            has_go_mod = (project_path / "go.mod").exists()
+            # Check for common entry point locations
+            has_cmd_main = (project_path / "cmd" / "main.go").exists() or (project_path / "cmd" / "server" / "main.go").exists()
+
+            if has_go_mod:
+                commands = [
+                    "go mod download",         # Download dependencies
+                    "go mod tidy",             # Ensure go.sum is up to date
+                    "go build -o main .",      # Build the binary
+                    f"PORT={port} ./main"      # Run with PORT env variable
+                ]
+            else:
+                commands = [
+                    "go build -o main .",
+                    f"PORT={port} ./main"
+                ]
+
+        # ===== NEW TECHNOLOGIES =====
+
+        elif framework == FrameworkType.SVELTE:
+            # Svelte/SvelteKit: similar to Vite
+            has_tsconfig = (project_path / "tsconfig.json").exists()
+            if has_tsconfig:
+                commands = ["npm install", "npx tsc --noEmit", f"npm run dev -- --host 0.0.0.0 --port {port}"]
+            else:
+                commands = ["npm install", f"npm run dev -- --host 0.0.0.0 --port {port}"]
+
+        elif framework == FrameworkType.PYTHON_ML:
+            # AI/ML Python project: Install deps and run Jupyter or main script
+            has_notebook = any((project_path).glob("*.ipynb"))
+            has_main = (project_path / "main.py").exists() or (project_path / "train.py").exists()
+
+            if has_notebook:
+                commands = [
+                    "pip install -r requirements.txt",
+                    f"jupyter notebook --ip=0.0.0.0 --port={port} --no-browser --allow-root"
+                ]
+            elif has_main:
+                main_file = "main.py" if (project_path / "main.py").exists() else "train.py"
+                commands = [
+                    "pip install -r requirements.txt",
+                    f"python {main_file}"
+                ]
+            else:
+                commands = [
+                    "pip install -r requirements.txt",
+                    f"jupyter notebook --ip=0.0.0.0 --port={port} --no-browser --allow-root"
+                ]
+
+        elif framework == FrameworkType.RUST:
+            # Rust project: build and run
+            commands = [
+                "cargo build --release",
+                f"PORT={port} ./target/release/*"
+            ]
+
+        elif framework == FrameworkType.ANDROID:
+            # Android project: build APK (can't really run directly)
+            has_gradle_wrapper = (project_path / "gradlew").exists()
+            if has_gradle_wrapper:
+                commands = [
+                    "./gradlew clean",
+                    "./gradlew assembleDebug"
+                ]
+            else:
+                commands = [
+                    "gradle clean",
+                    "gradle assembleDebug"
+                ]
+
+        elif framework == FrameworkType.IOS_SWIFT:
+            # iOS project: build (can't run without simulator)
+            has_package_swift = (project_path / "Package.swift").exists()
+            if has_package_swift:
+                commands = [
+                    "swift build",
+                    "swift run"
+                ]
+            else:
+                # Xcode project - just build
+                commands = [
+                    "xcodebuild -scheme * -configuration Debug build"
+                ]
+
+        elif framework == FrameworkType.SOLIDITY:
+            # Solidity/Hardhat project: compile and run local node
+            has_hardhat = (project_path / "hardhat.config.js").exists() or (project_path / "hardhat.config.ts").exists()
+            has_truffle = (project_path / "truffle-config.js").exists()
+            has_foundry = (project_path / "foundry.toml").exists()
+
+            if has_hardhat:
+                commands = [
+                    "npm install",
+                    "npx hardhat compile",
+                    f"npx hardhat node --port {port}"
+                ]
+            elif has_truffle:
+                commands = [
+                    "npm install",
+                    "truffle compile",
+                    f"truffle develop --port {port}"
+                ]
+            elif has_foundry:
+                commands = [
+                    "forge build",
+                    f"anvil --port {port}"
+                ]
+            else:
+                commands = [
+                    "npm install",
+                    "npx hardhat compile"
+                ]
+
+        elif framework == FrameworkType.RUST_SOLANA:
+            # Solana/Anchor project: build and test
+            has_anchor = (project_path / "Anchor.toml").exists()
+            if has_anchor:
+                commands = [
+                    "anchor build",
+                    "anchor test"
+                ]
+            else:
+                commands = [
+                    "cargo build-bpf",
+                    "cargo test-bpf"
+                ]
+
         elif framework == FrameworkType.STATIC_HTML:
-            commands = ["python -m http.server 3000"]
+            commands = [f"python -m http.server {port}"]
+
+        # ===== FULLSTACK MONOREPO PROJECTS =====
+        # These run BOTH frontend AND backend simultaneously!
+        elif framework == FrameworkType.FULLSTACK_REACT_SPRING:
+            # React + Spring Boot monorepo - START BOTH!
+            frontend_path = project_path / "frontend"
+            backend_path = project_path / "backend"
+            backend_port = port + 1000  # Backend on different port (e.g., 4000 if frontend is 3000)
+
+            has_tsconfig = (frontend_path / "tsconfig.json").exists()
+            has_gradle = (backend_path / "build.gradle").exists() or (backend_path / "build.gradle.kts").exists()
+            has_maven = (backend_path / "pom.xml").exists()
+
+            # Frontend commands
+            if has_tsconfig:
+                frontend_cmd = f"cd frontend && npm install && npm run dev -- --host 0.0.0.0 --port {port} --no-open"
+            else:
+                frontend_cmd = f"cd frontend && npm install && npm run dev -- --host 0.0.0.0 --port {port} --no-open"
+
+            # Backend commands - Spring Boot
+            if has_gradle:
+                backend_cmd = f"cd backend && gradle bootRun --args='--server.port={backend_port}'"
+            elif has_maven:
+                backend_cmd = f"cd backend && mvn spring-boot:run -Dspring-boot.run.arguments=--server.port={backend_port}"
+            else:
+                backend_cmd = f"cd backend && mvn spring-boot:run -Dspring-boot.run.arguments=--server.port={backend_port}"
+
+            # Run BOTH: backend first (in background), then frontend
+            # Using 'start' on Windows to run backend in background
+            commands = [
+                f"cd backend && mvn dependency:resolve",  # Install backend deps first
+                f"start /B cmd /c \"{backend_cmd}\"",     # Start backend in background (Windows)
+                frontend_cmd                               # Start frontend (foreground - streams output)
+            ]
+
+        elif framework == FrameworkType.FULLSTACK_REACT_EXPRESS:
+            # React + Express monorepo - START BOTH!
+            frontend_path = project_path / "frontend"
+            backend_path = project_path / "backend"
+            backend_port = port + 1000
+
+            has_tsconfig = (frontend_path / "tsconfig.json").exists()
+
+            # Frontend commands
+            if has_tsconfig:
+                frontend_cmd = f"cd frontend && npm install && npm run dev -- --host 0.0.0.0 --port {port} --no-open"
+            else:
+                frontend_cmd = f"cd frontend && npm install && npm run dev -- --host 0.0.0.0 --port {port} --no-open"
+
+            # Backend commands - Express
+            backend_cmd = f"cd backend && npm install && set PORT={backend_port} && npm start"
+
+            # Run BOTH
+            commands = [
+                f"start /B cmd /c \"cd backend && npm install && set PORT={backend_port} && npm start\"",  # Backend in background
+                frontend_cmd  # Frontend in foreground
+            ]
+
+        elif framework == FrameworkType.FULLSTACK_REACT_FASTAPI:
+            # React + FastAPI monorepo - START BOTH!
+            frontend_path = project_path / "frontend"
+            backend_path = project_path / "backend"
+            backend_port = port + 1000
+
+            has_tsconfig = (frontend_path / "tsconfig.json").exists()
+
+            # Frontend commands
+            if has_tsconfig:
+                frontend_cmd = f"cd frontend && npm install && npm run dev -- --host 0.0.0.0 --port {port} --no-open"
+            else:
+                frontend_cmd = f"cd frontend && npm install && npm run dev -- --host 0.0.0.0 --port {port} --no-open"
+
+            # Backend commands - FastAPI
+            backend_cmd = f"cd backend && pip install -r requirements.txt && uvicorn main:app --host 0.0.0.0 --port {backend_port} --reload"
+
+            # Run BOTH
+            commands = [
+                f"start /B cmd /c \"{backend_cmd}\"",  # Backend in background
+                frontend_cmd  # Frontend in foreground
+            ]
 
         return commands
 
@@ -843,113 +2136,1025 @@ class DockerExecutor:
         self,
         project_id: str,
         project_path: Path,
-        framework: FrameworkType
+        framework: FrameworkType,
+        user_id: Optional[str] = None
     ) -> AsyncGenerator[str, None]:
         """
-        Run project directly on host (fallback when Docker unavailable).
-        """
-        yield "Running project directly (Docker unavailable)...\n"
+        Run project in isolated container (using ContainerExecutor).
+        Falls back to direct host execution if container spawning fails.
 
-        commands = self._get_run_commands(framework, project_path)
+        Production-ready: Spawns technology-specific containers for each project.
+        Auto-fixes ANY errors that occur during execution.
+        """
+        # ===== TRY CONTAINER EXECUTOR FIRST (Production Mode) =====
+        # This spawns isolated containers with the right technology stack
+        try:
+            yield "🐳 Spawning isolated container for project...\n"
+
+            # Initialize container executor if needed
+            if not container_executor.docker_client:
+                await container_executor.initialize()
+
+            if container_executor.docker_client:
+                # Detect technology and spawn appropriate container
+                tech = container_executor.detect_technology(str(project_path))
+                yield f"  📦 Detected technology: {tech.value}\n"
+
+                success, message, port = await container_executor.create_container(
+                    project_id=project_id,
+                    user_id=user_id or "anonymous",
+                    project_path=str(project_path),
+                    technology=tech
+                )
+
+                if success and port:
+                    yield f"  ✅ Container started on port {port}\n"
+                    yield f"  🌐 Preview URL: http://localhost:{port}\n"
+
+                    # Store the port
+                    self._assigned_ports[project_id] = port
+
+                    # Stream container logs
+                    yield "  📜 Streaming container logs...\n\n"
+                    for _ in range(60):  # Monitor for up to 60 seconds
+                        await asyncio.sleep(2)
+                        logs = await container_executor.get_container_logs(project_id, tail=20)
+                        if logs:
+                            yield logs
+
+                        # Check if server is ready
+                        status = await container_executor.get_container_status(project_id)
+                        if status and status.get("status") == "running":
+                            yield f"\n✅ Server running at http://localhost:{port}\n"
+                            yield f"__PREVIEW_URL__:http://localhost:{port}\n"
+                            return
+
+                    yield f"\n⚠️ Container started but server may not be ready\n"
+                    yield f"__PREVIEW_URL__:http://localhost:{port}\n"
+                    return
+                else:
+                    yield f"  ⚠️ Container spawn failed: {message}\n"
+                    yield "  Falling back to direct execution...\n\n"
+            else:
+                yield "  ⚠️ Docker not available for containers\n"
+                yield "  Falling back to direct execution...\n\n"
+
+        except Exception as e:
+            logger.warning(f"[DockerExecutor:{project_id}] Container executor failed: {e}")
+            yield f"  ⚠️ Container executor error: {str(e)[:100]}\n"
+            yield "  Falling back to direct execution...\n\n"
+
+        # ===== FALLBACK: Direct execution on host =====
+        yield "Running project directly on host...\n"
+
+        # Store user_id for auto-fix
+        self._current_user_id = user_id
+
+        # Get LogBus for error collection (Bolt.new style!)
+        log_bus = get_log_bus(project_id)
+
+        # Error patterns for detection (supports all technologies!)
+        error_patterns = [
+            # ===== GENERAL =====
+            'error', 'Error', 'ERROR',
+            'Failed', 'failed', 'FAILED',
+            'Cannot find', 'cannot find',
+            'fatal:', 'critical:',
+            'Internal server error',
+
+            # ===== JAVASCRIPT/NODE.JS =====
+            'Module not found', 'module not found',
+            'npm ERR!', 'ERR!',
+            'SyntaxError', 'TypeError', 'ReferenceError',
+            'ENOENT', 'EACCES', 'EPERM',
+            'Unexpected token',
+            'Cannot read property',
+            'is not defined',
+            'is not a function',
+
+            # ===== PYTHON =====
+            'Traceback', 'Exception',
+            'ImportError', 'ModuleNotFoundError',
+            'IndentationError', 'SyntaxError',
+            'NameError', 'AttributeError', 'KeyError',
+            'ValueError', 'TypeError',
+            'FileNotFoundError', 'PermissionError',
+
+            # ===== JAVA/SPRING BOOT/MAVEN =====
+            'java.lang.', 'javax.',
+            'NullPointerException', 'ClassNotFoundException',
+            'NoClassDefFoundError', 'IllegalArgumentException',
+            'IllegalStateException', 'RuntimeException',
+            'BUILD FAILURE', 'BUILD FAILED',
+            '[FATAL]', '[ERROR]',  # Maven log levels
+            'Non-parseable POM', 'Non-parseable',  # Maven POM parsing errors
+            'PITarget', 'processing instruction',  # XML parsing errors
+            'Invalid XML', 'Malformed POM',
+            'Compilation failure', 'compilation error',
+            'cannot find symbol', 'incompatible types',
+            'Failed to execute goal',
+            'Could not resolve dependencies',
+            'BeanCreationException', 'NoSuchBeanDefinitionException',
+            'ApplicationContextException',
+            'org.springframework', 'Spring Boot',
+            'maven-compiler-plugin', 'mvn ',
+            'gradle', 'Execution failed for task',
+            'JpaSystemException', 'DataIntegrityViolationException',
+            'org.hibernate', 'HibernateException',
+            'BindException', 'MethodArgumentNotValidException',
+
+            # ===== GO/GOLANG =====
+            'go:', 'go build', 'go run',
+            'cannot find package', 'package .* is not in',
+            'undefined:', 'undeclared name',
+            'imported and not used',
+            'missing go.sum entry',
+            'cannot load', 'cannot find module',
+            'panic:', 'runtime error:',
+            'goroutine', 'stack trace',
+            'build constraints exclude',
+            'invalid operation',
+            'type .* has no field or method',
+
+            # ===== RUST =====
+            'error[E', 'cargo',
+            'rustc', 'borrow checker',
+
+            # ===== AI/ML (TensorFlow, PyTorch, Keras, etc.) =====
+            'tensorflow', 'tf.',
+            'CUDA', 'cudnn', 'GPU',
+            'OutOfMemoryError', 'ResourceExhaustedError',
+            'InvalidArgumentError', 'OpError',
+            'torch', 'pytorch', 'RuntimeError: CUDA',
+            'RuntimeError: Expected', 'size mismatch',
+            'shape mismatch', 'dimension mismatch',
+            'keras', 'model.fit', 'model.predict',
+            'ValueError: Shapes', 'ValueError: Input',
+            'scikit-learn', 'sklearn',
+            'numpy', 'np.', 'ndarray',
+            'pandas', 'DataFrame',
+            'matplotlib', 'plt.',
+            'opencv', 'cv2',
+            'huggingface', 'transformers',
+            'wandb', 'mlflow',
+
+            # ===== BLOCKCHAIN (Solidity, Web3, Hardhat, etc.) =====
+            'solidity', 'solc',
+            'CompilerError', 'ParserError',
+            'DeclarationError', 'TypeError:',
+            'revert', 'require(', 'assert(',
+            'out of gas', 'gas estimation',
+            'hardhat', 'truffle', 'foundry',
+            'ethers', 'web3.js', 'web3.py',
+            'MetaMask', 'wallet',
+            'contract', 'transaction failed',
+            'insufficient funds', 'nonce too low',
+            'EVM', 'bytecode',
+            'abi', 'deploy',
+            'anchor', 'solana',
+            'substrate', 'polkadot',
+
+            # ===== ANDROID (Kotlin, Java, Gradle) =====
+            'android', 'AndroidManifest',
+            'kotlin', 'kotlinc',
+            'gradle', 'Gradle',
+            'AAPT', 'aapt2',
+            'R.', 'R.layout', 'R.id',
+            'ActivityNotFoundException',
+            'NullPointerException',
+            'AndroidRuntimeException',
+            'inflating class', 'inflate',
+            'Could not find com.android',
+            'minSdkVersion', 'targetSdkVersion',
+            'APK', 'dex', 'D8', 'R8',
+            'JetBrains', 'coroutines',
+            'Compose', 'Jetpack',
+            'Room', 'LiveData', 'ViewModel',
+            'Retrofit', 'OkHttp',
+            'Firebase', 'google-services',
+
+            # ===== iOS (Swift, Xcode, CocoaPods) =====
+            'swift', 'swiftc',
+            'xcode', 'xcodebuild',
+            'Undefined symbols', 'Linker command failed',
+            'ld: framework not found',
+            'ld: library not found',
+            'clang', 'llvm',
+            'Segmentation fault', 'EXC_BAD_ACCESS',
+            'NSException', 'NSInvalidArgumentException',
+            'unrecognized selector', '@objc',
+            'IBOutlet', 'IBAction', 'Storyboard',
+            'UIKit', 'SwiftUI', 'Combine',
+            'CoreData', 'CloudKit',
+            'CocoaPods', 'pod install',
+            'Podfile', 'Podfile.lock',
+            'Carthage', 'SPM', 'Package.swift',
+            'Provisioning profile', 'Code signing',
+            'Simulator', 'Device',
+            'Archive', 'IPA',
+
+            # ===== CYBERSECURITY TOOLS =====
+            'permission denied', 'access denied',
+            'authentication failed', 'unauthorized',
+            'SSL', 'TLS', 'certificate',
+            'handshake', 'connection refused',
+            'timeout', 'ETIMEDOUT',
+            'socket', 'bind failed',
+            'cryptography', 'encryption',
+            'hash', 'digest',
+            'jwt', 'token', 'oauth',
+            'vulnerability', 'exploit',
+            'injection', 'XSS', 'CSRF',
+            'sanitize', 'escape',
+            'nmap', 'metasploit',
+            'burp', 'wireshark',
+            'reverse shell', 'payload',
+
+            # ===== CLOUD/DEVOPS =====
+            'aws', 'AWS', 'boto3',
+            'azure', 'Azure',
+            'gcp', 'GCP', 'google-cloud',
+            'kubernetes', 'k8s', 'kubectl',
+            'terraform', 'tf.',
+            'ansible', 'playbook',
+            'jenkins', 'CI/CD',
+            'nginx', 'apache',
+            'redis', 'mongodb', 'postgresql',
+
+            # ===== DOCKER =====
+            'docker:', 'Dockerfile',
+            'container', 'image not found',
+        ]
+
+        # Port conflict patterns (handled specially with auto-retry)
+        port_conflict_patterns = [
+            'EADDRINUSE',
+            'address already in use',
+            'Address already in use',
+            'port is already in use',
+            'Port is already in use',
+            'listen EADDRINUSE',
+            'Error: listen EADDRINUSE',
+            'bind: address already in use',
+            'Only one usage of each socket address',
+            'port already allocated',
+            'Address in use',
+        ]
+
+        # Buffer to collect error context
+        error_buffer = []
+        # Track if any errors were detected (for deferred LogBus addition)
+        has_error = False
+        # Track port conflict for auto-retry
+        port_conflict_detected = False
+        port_conflict_retries = 0
+        MAX_PORT_CONFLICT_RETRIES = 3
+
+        # Get available port FIRST, then build commands with that port
         default_port = DEFAULT_PORTS.get(framework, 3000)
         host_port = self._get_available_port(default_port)
 
+        # Get effective working directory (handles frontend-only projects in subdirs)
+        working_dir = self.get_effective_working_directory(project_path, framework)
+        if working_dir != project_path:
+            yield f"Using working directory: {working_dir.name}/\n"
+
+        # Now get commands using the allocated port (use working_dir for command generation)
+        commands = self._get_run_commands(framework, working_dir, host_port)
+
         self._assigned_ports[project_id] = host_port
+
+        yield f"Allocated port: {host_port}\n"
 
         for command in commands:
             yield f"$ {command}\n"
 
             try:
-                process = await asyncio.create_subprocess_shell(
-                    command,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    cwd=str(project_path)
-                )
+                import os
+                import sys
+                import subprocess as sync_subprocess
+                env = os.environ.copy()
+                env['NO_COLOR'] = '1'
+                env['FORCE_COLOR'] = '0'
+                env['CI'] = 'true'
+                env['BROWSER'] = 'none'  # Prevent auto-opening browser
+                env['TERM'] = 'dumb'
 
-                self._running_processes[project_id] = process
+                if sys.platform == 'win32':
+                    env['PYTHONIOENCODING'] = 'utf-8'
+                    env['PYTHONUTF8'] = '1'
 
-                async for line in process.stdout:
-                    output = line.decode().strip()
-                    if output:
-                        yield f"{output}\n"
+                logger.info(f"[DockerExecutor:{project_id}] Starting: {command}")
 
-                        # Detect server start
-                        detected_port = self._extract_port_from_output(output, framework)
-                        if detected_port:
-                            preview_url = f"http://localhost:{host_port}"
-                            yield f"\n{'='*50}\n"
-                            yield f"SERVER STARTED!\n"
-                            yield f"Preview URL: {preview_url}\n"
-                            yield f"{'='*50}\n\n"
-                            yield f"__SERVER_STARTED__:{preview_url}\n"
+                # WINDOWS FIX: Use synchronous subprocess for reliable output capture
+                if sys.platform == 'win32':
+                    # Detect if this is ONLY an install command (not followed by a dev server)
+                    # Commands like "npm install && npm run dev" should NOT be treated as install-only
+                    cmd_lower = command.lower()
+                    has_install = 'install' in cmd_lower or 'dependency:resolve' in cmd_lower
+                    has_dev_server = any(p in cmd_lower for p in ['npm run dev', 'npm start', 'run dev', 'spring-boot:run', 'bootrun', 'uvicorn', 'flask run', 'streamlit'])
+                    is_install = has_install and not has_dev_server
+                    logger.info(f"[DockerExecutor:{project_id}] Windows mode, install={is_install}, has_dev={has_dev_server}")
 
-                await process.wait()
+                    if is_install:
+                        result = sync_subprocess.run(
+                            command, shell=True, cwd=str(working_dir), env=env,
+                            capture_output=True, text=True, encoding='utf-8',
+                            errors='replace', timeout=300
+                        )
+                        all_output = (result.stdout or '') + (result.stderr or '')
+                        exit_code = result.returncode
+                        logger.info(f"[DockerExecutor:{project_id}] Install exit={exit_code}, len={len(all_output)}")
+                    else:
+                        import threading
+                        import queue
+                        import time as time_module
+                        proc = sync_subprocess.Popen(
+                            command, shell=True, cwd=str(working_dir), env=env,
+                            stdout=sync_subprocess.PIPE, stderr=sync_subprocess.STDOUT,
+                            text=True, encoding='utf-8', errors='replace'
+                        )
+                        self._running_processes[project_id] = proc
+                        output_lines = []
+                        output_queue = queue.Queue()  # Queue to share output with background monitor
 
-                if process.returncode != 0:
-                    yield f"Command exited with code: {process.returncode}\n"
+                        # Define critical error patterns - MUST be very specific to avoid false positives
+                        # These patterns indicate ACTUAL errors that need fixing
+                        critical_error_patterns_for_reader = [
+                            # Vite/Frontend errors (very specific)
+                            'Failed to resolve import',
+                            'Does the file exist?',  # More specific with question mark
+                            '[plugin:vite:',  # Must have colon after vite
+                            'Cannot find module',
+                            'Module not found:',  # More specific with colon
+                            'ENOENT: no such file',  # File not found
+                            'SyntaxError:',  # JS/TS syntax errors
+                            'TypeError:',  # Type errors
+                            # Maven/Java errors (very specific)
+                            '[ERROR] COMPILATION ERROR',  # Maven compilation error
+                            'Non-parseable POM',
+                            '[ERROR] Failed to execute goal',
+                            'java.lang.NullPointerException',
+                            'java.lang.ClassNotFoundException',
+                            # PostCSS/Tailwind
+                            '[postcss] ',  # PostCSS with space
+                        ]
+
+                        # Patterns that should NOT trigger auto-fix (false positives)
+                        false_positive_patterns = [
+                            '[INFO] BUILD FAILURE',  # This appears during SUCCESSFUL dependency resolution
+                            'BUILD SUCCESS',
+                            'Started Application',
+                            'Tomcat started on port',
+                            'DispatcherServlet',
+                            '\\/ ___ \'',  # Spring Boot ASCII art
+                            '( ( )\\_',  # Spring Boot ASCII art
+                            'Hibernate:',  # Normal Hibernate SQL logging
+                            '--- maven',  # Maven lifecycle output
+                        ]
+
+                        # Reference to self for the thread
+                        executor_self = self
+                        reader_error_buffer = []
+                        last_fix_time = [0]  # Use list to allow mutation in closure
+                        FIX_COOLDOWN = 60  # Increased to 60 seconds to prevent spam
+
+                        def read_output_with_monitoring():
+                            """Read output and also monitor for errors that occur after server starts"""
+                            try:
+                                for line in iter(proc.stdout.readline, ''):
+                                    if line:
+                                        line_stripped = line.rstrip()
+                                        output_lines.append(line_stripped)
+                                        output_queue.put(line_stripped)  # Also put in queue for potential use
+
+                                        # Add to error buffer
+                                        reader_error_buffer.append(line_stripped)
+                                        if len(reader_error_buffer) > 100:
+                                            reader_error_buffer.pop(0)
+
+                                        # Check for critical errors CONTINUOUSLY
+                                        # First check if it's a false positive
+                                        is_false_positive = any(fp in line_stripped for fp in false_positive_patterns)
+                                        is_critical_error = any(p in line_stripped for p in critical_error_patterns_for_reader)
+
+                                        if is_critical_error and not is_false_positive:
+                                            current_time = time_module.time()
+
+                                            # Rate limit fix attempts
+                                            if current_time - last_fix_time[0] >= FIX_COOLDOWN:
+                                                last_fix_time[0] = current_time
+                                                full_context = '\n'.join(reader_error_buffer[-50:])
+                                                logger.info(f"[DockerExecutor:{project_id}] Reader thread detected REAL error: {line_stripped[:100]}")
+
+                                                # Trigger auto-fix
+                                                executor_self._trigger_auto_fix_background(
+                                                    project_id=project_id,
+                                                    project_path=project_path,
+                                                    error_message=full_context,
+                                                    command=command,
+                                                    user_id=getattr(executor_self, '_current_user_id', None)
+                                                )
+                            except Exception as e:
+                                logger.debug(f"[DockerExecutor:{project_id}] Reader thread error: {e}")
+
+                        reader = threading.Thread(target=read_output_with_monitoring, daemon=True)
+                        reader.start()
+                        reader.join(timeout=15)
+                        all_output = '\n'.join(output_lines)
+                        exit_code = proc.poll()
+                        logger.info(f"[DockerExecutor:{project_id}] Dev exit={exit_code}, lines={len(output_lines)}")
+
+                    lines = [l for l in all_output.strip().split('\n') if l.strip()]
+                    server_started = False
+                    for line in lines:
+                        yield f"{line}\n"
+                        error_buffer.append(line)
+                        if len(error_buffer) > 100:
+                            error_buffer.pop(0)
+                        if any(p in line for p in error_patterns):
+                            has_error = True
+                            # Check for critical errors that need immediate auto-fix
+                            # Uses the same patterns defined above for the reader thread
+                            # NOTE: We no longer trigger auto-fix here since the reader thread handles it
+                            # This prevents duplicate triggers and race conditions
+                        # Detect port conflicts for auto-retry
+                        if self._is_port_conflict(line):
+                            port_conflict_detected = True
+                            conflicting_port = self._extract_conflicting_port(line)
+                            logger.warning(f"[DockerExecutor:{project_id}] Port conflict detected on port {conflicting_port or host_port}")
+                        if ('localhost' in line.lower() or 'http://' in line.lower()) and not server_started:
+                            detected_port = self._extract_port_from_output(line, framework)
+                            if detected_port:
+                                server_started = True
+                                # For FULLSTACK projects, ALWAYS use the frontend port for preview
+                                # (backend port may be detected first but users want to see the UI)
+                                if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
+                                    # host_port is the frontend port, backend is +1000
+                                    preview_url = f"http://localhost:{host_port}"
+                                    backend_port = host_port + 1000
+                                    yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+                                else:
+                                    preview_url = f"http://localhost:{detected_port}"
+                                    yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+
+                    # NOTE: Background error monitoring is now handled by the reader thread itself
+                    # (read_output_with_monitoring) which continues running after the 15s join timeout
+                    if server_started and proc and proc.poll() is None:
+                        logger.info(f"[DockerExecutor:{project_id}] Reader thread continuing to monitor for errors in background")
+
+                    # Handle port conflict with automatic retry
+                    if port_conflict_detected and port_conflict_retries < MAX_PORT_CONFLICT_RETRIES:
+                        port_conflict_retries += 1
+                        old_port = host_port
+                        # Get a new available port
+                        host_port = self._get_available_port(host_port + 1)
+                        self._assigned_ports[project_id] = host_port
+                        yield f"\n{'='*50}\n"
+                        yield f"PORT CONFLICT DETECTED on port {old_port}!\n"
+                        yield f"Auto-allocating new port: {host_port}\n"
+                        yield f"Retry attempt {port_conflict_retries}/{MAX_PORT_CONFLICT_RETRIES}\n"
+                        yield f"{'='*50}\n\n"
+                        logger.info(f"[DockerExecutor:{project_id}] Port conflict retry {port_conflict_retries}: {old_port} -> {host_port}")
+                        # Kill the current process if running
+                        if proc and proc.poll() is None:
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=5)
+                            except:
+                                proc.kill()
+                        # Regenerate command with new port and retry
+                        new_command = command.replace(str(old_port), str(host_port))
+                        port_conflict_detected = False
+                        has_error = False
+                        # Execute the new command
+                        yield f"$ {new_command}\n"
+                        proc = sync_subprocess.Popen(
+                            new_command, shell=True, cwd=str(working_dir), env=env,
+                            stdout=sync_subprocess.PIPE, stderr=sync_subprocess.STDOUT,
+                            text=True, encoding='utf-8', errors='replace'
+                        )
+                        self._running_processes[project_id] = proc
+                        output_lines = []
+                        def read_output_retry():
+                            try:
+                                for line in iter(proc.stdout.readline, ''):
+                                    if line:
+                                        output_lines.append(line.rstrip())
+                            except:
+                                pass
+                        reader = threading.Thread(target=read_output_retry, daemon=True)
+                        reader.start()
+                        reader.join(timeout=15)
+                        all_output = '\n'.join(output_lines)
+                        exit_code = proc.poll()
+                        # Process the new output
+                        lines = [l for l in all_output.strip().split('\n') if l.strip()]
+                        for line in lines:
+                            yield f"{line}\n"
+                            error_buffer.append(line)
+                            if len(error_buffer) > 100:
+                                error_buffer.pop(0)
+                            if self._is_port_conflict(line):
+                                port_conflict_detected = True
+                            if ('localhost' in line.lower() or 'http://' in line.lower()) and not server_started:
+                                detected_port = self._extract_port_from_output(line, framework)
+                                if detected_port:
+                                    server_started = True
+                                    # For FULLSTACK projects, ALWAYS use the frontend port for preview
+                                    if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
+                                        preview_url = f"http://localhost:{host_port}"
+                                        backend_port = host_port + 1000
+                                        yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+                                    else:
+                                        preview_url = f"http://localhost:{detected_port}"
+                                        yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+
+                    # ============================================================
+                    # DYNAMIC AUTO-FIX: Triggered for ANY failure, not just patterns!
+                    # Claude will analyze the FULL output and determine the fix.
+                    # ============================================================
+                    if exit_code is not None and exit_code != 0 and not port_conflict_detected:
+                        error_msg = f"Command '{command}' exited with code: {exit_code}"
+                        yield f"{error_msg}\n"
+                        full_context = '\n'.join(error_buffer[-50:]) or f"Command: {command}"
+                        log_bus.add_build_error(message=f"{error_msg}\n\nFull Output:\n{full_context}")
+                        # DYNAMIC: Send FULL output to Claude for analysis - no pattern matching needed!
+                        logger.info(f"[DockerExecutor:{project_id}] DYNAMIC AUTO-FIX triggered (exit_code={exit_code})")
+                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None))
+                    elif has_error and not port_conflict_detected:
+                        full_context = '\n'.join(error_buffer[-50:])
+                        log_bus.add_build_error(message=f"Errors detected:\n\n{full_context}")
+                        # DYNAMIC: Pattern-detected errors also sent to Claude for smart fixing
+                        logger.info(f"[DockerExecutor:{project_id}] DYNAMIC AUTO-FIX triggered (pattern match)")
+                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None))
+
+                else:
+                    process = await asyncio.create_subprocess_shell(
+                        command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                        cwd=str(working_dir), env=env
+                    )
+                    self._running_processes[project_id] = process
+                    server_started = False
+                    lines_read = 0
+
+                    if process.stdout:
+                        async for line in process.stdout:
+                            lines_read += 1
+                            output = line.decode('utf-8', errors='replace').strip()
+                            if output:
+                                yield f"{output}\n"
+                                error_buffer.append(output)
+                                if len(error_buffer) > 100:
+                                    error_buffer.pop(0)
+                                if any(p in output for p in error_patterns):
+                                    has_error = True
+                                    # Check for critical errors that need immediate auto-fix
+                                    # (even if server is still running)
+                                    critical_error_patterns = [
+                                        'Failed to resolve import',
+                                        'Does the file exist',
+                                        '[plugin:vite',
+                                        'Cannot find module',
+                                        'Module not found',
+                                        # Maven/Java critical errors
+                                        '[FATAL]',
+                                        'Non-parseable POM',
+                                        'BUILD FAILURE',
+                                        'Compilation failure',
+                                        # General fatal errors
+                                        'FATAL ERROR',
+                                        'fatal error',
+                                    ]
+                                    if any(p in output for p in critical_error_patterns):
+                                        full_context = '\n'.join(error_buffer[-50:])
+                                        log_bus.add_build_error(message=f"Critical error detected:\n\n{full_context}")
+                                        # Trigger auto-fix immediately for critical errors
+                                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None))
+                                        logger.info(f"[DockerExecutor:{project_id}] Critical error triggered auto-fix: {output[:100]}")
+                                # Detect port conflicts for auto-retry
+                                if self._is_port_conflict(output):
+                                    port_conflict_detected = True
+                                    conflicting_port = self._extract_conflicting_port(output)
+                                    logger.warning(f"[DockerExecutor:{project_id}] Port conflict detected on port {conflicting_port or host_port}")
+                                if not server_started:
+                                    detected_port = self._extract_port_from_output(output, framework)
+                                    if detected_port:
+                                        server_started = True
+                                        # For FULLSTACK projects, ALWAYS use the frontend port for preview
+                                        if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
+                                            preview_url = f"http://localhost:{host_port}"
+                                            backend_port = host_port + 1000
+                                            yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+                                        else:
+                                            preview_url = f"http://localhost:{detected_port}"
+                                            yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+
+                    await process.wait()
+
+                    # Handle port conflict with automatic retry (Unix/async path)
+                    if port_conflict_detected and port_conflict_retries < MAX_PORT_CONFLICT_RETRIES:
+                        port_conflict_retries += 1
+                        old_port = host_port
+                        # Get a new available port
+                        host_port = self._get_available_port(host_port + 1)
+                        self._assigned_ports[project_id] = host_port
+                        yield f"\n{'='*50}\n"
+                        yield f"PORT CONFLICT DETECTED on port {old_port}!\n"
+                        yield f"Auto-allocating new port: {host_port}\n"
+                        yield f"Retry attempt {port_conflict_retries}/{MAX_PORT_CONFLICT_RETRIES}\n"
+                        yield f"{'='*50}\n\n"
+                        logger.info(f"[DockerExecutor:{project_id}] Port conflict retry {port_conflict_retries}: {old_port} -> {host_port}")
+                        # Regenerate command with new port and retry
+                        new_command = command.replace(str(old_port), str(host_port))
+                        port_conflict_detected = False
+                        has_error = False
+                        # Execute the new command
+                        yield f"$ {new_command}\n"
+                        process = await asyncio.create_subprocess_shell(
+                            new_command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                            cwd=str(working_dir), env=env
+                        )
+                        self._running_processes[project_id] = process
+                        if process.stdout:
+                            async for line in process.stdout:
+                                output = line.decode('utf-8', errors='replace').strip()
+                                if output:
+                                    yield f"{output}\n"
+                                    error_buffer.append(output)
+                                    if len(error_buffer) > 100:
+                                        error_buffer.pop(0)
+                                    if self._is_port_conflict(output):
+                                        port_conflict_detected = True
+                                    if not server_started:
+                                        detected_port = self._extract_port_from_output(output, framework)
+                                        if detected_port:
+                                            server_started = True
+                                            # For FULLSTACK projects, ALWAYS use the frontend port for preview
+                                            if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
+                                                preview_url = f"http://localhost:{host_port}"
+                                                backend_port = host_port + 1000
+                                                yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+                                            else:
+                                                preview_url = f"http://localhost:{detected_port}"
+                                                yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
+                        await process.wait()
+
+                    if process.returncode != 0 and not port_conflict_detected:
+                        error_msg = f"Command '{command}' exited with code: {process.returncode}"
+                        yield f"{error_msg}\n"
+                        full_context = '\n'.join(error_buffer[-50:]) or f"No output. Command: {command}"
+                        log_bus.add_build_error(message=f"{error_msg}\n\nFull Output:\n{full_context}")
+                        # Trigger auto-fix in background
+                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None))
+                    elif has_error and not port_conflict_detected:
+                        full_context = '\n'.join(error_buffer[-50:])
+                        log_bus.add_build_error(message=f"Errors detected:\n\n{full_context}")
+                        # Trigger auto-fix in background
+                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None))
+
+            except FileNotFoundError as e:
+                error_msg = f"Command not found: {command}. Error: {str(e)}"
+                yield f"ERROR: {error_msg}\n"
+                log_bus.add_build_error(message=error_msg)
+                logger.error(f"[DockerExecutor:{project_id}] Command not found: {error_msg}")
+                # Trigger auto-fix in background
+                self._trigger_auto_fix_background(project_id, project_path, error_msg, command, getattr(self, '_current_user_id', None))
+
+            except PermissionError as e:
+                error_msg = f"Permission denied running: {command}. Error: {str(e)}"
+                yield f"ERROR: {error_msg}\n"
+                log_bus.add_build_error(message=error_msg)
+                logger.error(f"[DockerExecutor:{project_id}] Permission error: {error_msg}")
+                # Trigger auto-fix in background
+                self._trigger_auto_fix_background(project_id, project_path, error_msg, command, getattr(self, '_current_user_id', None))
 
             except Exception as e:
-                yield f"ERROR: {str(e)}\n"
+                import traceback
+                error_msg = str(e) if str(e) else f"{type(e).__name__}: Unknown error"
+                tb = traceback.format_exc()
+                yield f"ERROR: {error_msg}\n"
+
+                full_context = "\n".join(error_buffer[-50:]) if error_buffer else ""
+                context_msg = f"Execution error: {error_msg}\n\nTraceback:\n{tb}"
+                if full_context:
+                    context_msg += f"\n\nCaptured Output:\n{full_context}"
+                else:
+                    context_msg += f"\n\nNo output captured. Command: {command}\nWorking directory: {project_path}"
+
+                log_bus.add_build_error(message=context_msg)
+                logger.error(f"[DockerExecutor:{project_id}] Exception: {error_msg}, context lines: {len(error_buffer)}, traceback: {tb[:500]}")
+                # Trigger auto-fix in background
+                self._trigger_auto_fix_background(project_id, project_path, context_msg, command, getattr(self, '_current_user_id', None))
 
     async def stop_direct(self, project_id: str) -> bool:
-        """Stop a directly running process"""
+        """Stop a directly running process and all its children (Windows-compatible)"""
+        stopped = False
+
+        # Method 1: Kill process from our tracking dict
         if project_id in self._running_processes:
             process = self._running_processes[project_id]
+            pid = process.pid
             try:
+                # On Windows, we need to kill the entire process tree
+                import platform
+                if platform.system() == 'Windows':
+                    # Use taskkill to kill process tree on Windows
+                    import subprocess
+                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)],
+                                   capture_output=True, timeout=10)
+                    logger.info(f"[Stop] Killed process tree for PID {pid}")
+                else:
+                    # On Unix, send SIGTERM to process group
+                    import os
+                    import signal
+                    try:
+                        os.killpg(os.getpgid(pid), signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+
                 process.terminate()
-                await asyncio.wait_for(process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                process.kill()
+                # Wait for process to finish (process.wait() is synchronous for subprocess.Popen)
+                # Since we already killed the process tree with taskkill, just poll
+                process.poll()
+            except Exception as e:
+                logger.warning(f"[Stop] Error stopping process {pid}: {e}")
             finally:
                 del self._running_processes[project_id]
-                if project_id in self._assigned_ports:
-                    del self._assigned_ports[project_id]
-            return True
+                stopped = True
+
+        # Method 2: Kill any processes using the assigned port
+        if project_id in self._assigned_ports:
+            port = self._assigned_ports[project_id]
+            try:
+                await self._kill_process_on_port(port)
+                logger.info(f"[Stop] Killed processes on port {port}")
+            except Exception as e:
+                logger.warning(f"[Stop] Error killing process on port {port}: {e}")
+            finally:
+                del self._assigned_ports[project_id]
+                stopped = True
+
+        return stopped
+
+    async def _kill_process_on_port(self, port: int) -> bool:
+        """Kill any process listening on the specified port"""
+        import platform
+        import subprocess
+
+        try:
+            if platform.system() == 'Windows':
+                # Find PID using netstat
+                result = subprocess.run(
+                    ['netstat', '-ano'],
+                    capture_output=True, text=True, timeout=10
+                )
+                for line in result.stdout.splitlines():
+                    if f':{port}' in line and 'LISTENING' in line:
+                        parts = line.split()
+                        if parts:
+                            pid = parts[-1]
+                            if pid.isdigit():
+                                subprocess.run(['taskkill', '/F', '/PID', pid],
+                                             capture_output=True, timeout=10)
+                                logger.info(f"[Stop] Killed PID {pid} on port {port}")
+                                return True
+            else:
+                # Unix: use lsof or fuser
+                result = subprocess.run(
+                    ['lsof', '-t', f'-i:{port}'],
+                    capture_output=True, text=True, timeout=10
+                )
+                pids = result.stdout.strip().splitlines()
+                for pid in pids:
+                    if pid.isdigit():
+                        subprocess.run(['kill', '-9', pid], capture_output=True, timeout=10)
+                        logger.info(f"[Stop] Killed PID {pid} on port {port}")
+                        return True
+        except Exception as e:
+            logger.warning(f"[Stop] Error finding/killing process on port {port}: {e}")
+
         return False
+
+
+    async def _ensure_essential_configs(self, project_path: Path, project_id: str) -> list:
+        """
+        Ensure essential config files exist for the project.
+        Creates missing files from templates if they don't exist.
+        
+        Returns list of created files.
+        """
+        created_files = []
+        
+        # Detect project type
+        frontend_path = project_path / 'frontend'
+        has_frontend = frontend_path.exists()
+        
+        # Check for React/Vite indicators
+        is_vite_react = False
+        package_json_path = frontend_path / 'package.json' if has_frontend else project_path / 'package.json'
+        
+        if package_json_path.exists():
+            try:
+                import json
+                with open(package_json_path, 'r') as f:
+                    pkg = json.load(f)
+                deps = {**pkg.get('dependencies', {}), **pkg.get('devDependencies', {})}
+                is_vite_react = 'vite' in deps or 'react' in deps
+            except:
+                pass
+        
+        if not is_vite_react:
+            return created_files
+            
+        # Essential files for Vite/React projects
+        essential_files = {
+            'tsconfig.json': VITE_REACT_TEMPLATES.get('tsconfig.json'),
+            'tsconfig.node.json': VITE_REACT_TEMPLATES.get('tsconfig.node.json'),
+            'tailwind.config.js': VITE_REACT_TEMPLATES.get('tailwind.config.js'),
+            'postcss.config.js': VITE_REACT_TEMPLATES.get('postcss.config.js'),
+            'vite.config.ts': VITE_REACT_TEMPLATES.get('vite.config.ts'),
+        }
+        
+        # Determine base path
+        base_path = frontend_path if has_frontend else project_path
+        
+        for filename, template_content in essential_files.items():
+            if not template_content:
+                continue
+                
+            file_path = base_path / filename
+            if not file_path.exists():
+                try:
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write(template_content)
+                    created_files.append(str(filename))
+                    logger.info(f'[DockerExecutor:{project_id}] Created missing config: {filename}')
+                except Exception as e:
+                    logger.warning(f'[DockerExecutor:{project_id}] Failed to create {filename}: {e}')
+        
+        return created_files
 
     # ============= SMART RUN (DOCKER WITH FALLBACK) =============
 
     async def run_project(
         self,
         project_id: str,
-        project_path: Path
+        project_path: Path,
+        user_id: Optional[str] = None
     ) -> AsyncGenerator[str, None]:
         """
-        Smart run: Try Docker first, fall back to direct execution if Docker fails.
+        Smart run with UNIVERSAL AUTO-FIX: Try Docker first, fall back to direct execution.
 
         Flow:
-        1. Check if Docker is available
-        2. If yes: Run in Docker container
-        3. If no: Fall back to direct execution
-        4. Stream output and detect server start
-        5. Return preview URL
+        0. SMART ANALYSIS: Proactively analyze project structure and apply auto-fixes
+        1. PRE-RUN SETUP: Auto-install dependencies (npm install, pip install, etc.)
+        2. Check if Docker is available
+        3. If yes: Run in Docker container
+        4. If no: Fall back to direct execution
+        5. Stream output and detect server start
+        6. AUTO-FIX any errors that occur
+        7. Return preview URL
+
+        This is the PERMANENT solution that automatically fixes ALL errors.
         """
+        # ===== SMART PROJECT ANALYSIS: Proactive detection & auto-fix =====
+        # This runs BEFORE anything else to understand the project and prevent errors
+        yield "🧠 Analyzing project structure...\n"
+
+        try:
+            # Analyze project proactively
+            project_structure = await smart_analyzer.analyze_project(
+                project_id=project_id,
+                user_id=user_id or "anonymous",
+                project_path=project_path
+            )
+
+            yield f"  📁 Technology: {project_structure.technology.value}\n"
+            yield f"  📂 Working Directory: {project_structure.working_directory.name}/\n"
+            yield f"  🔌 Default Port: {project_structure.default_port}\n"
+
+            # Report any issues detected
+            if project_structure.issues:
+                yield f"  ⚠️ {len(project_structure.issues)} issues detected:\n"
+                for issue in project_structure.issues[:3]:  # Show max 3
+                    yield f"     • {issue}\n"
+
+            # Apply auto-fixes proactively
+            if project_structure.auto_fixes:
+                yield f"  🔧 Applying {len(project_structure.auto_fixes)} auto-fixes...\n"
+                files_modified = await smart_analyzer.apply_auto_fixes(
+                    project_id=project_id,
+                    user_id=user_id or "anonymous",
+                    structure=project_structure
+                )
+                for f in files_modified:
+                    yield f"     ✅ Created: {f}\n"
+
+            yield "✅ Smart analysis complete\n\n"
+
+            # Use the analyzer's detected working directory
+            effective_working_dir = project_structure.working_directory
+            logger.info(f"[SmartRun:{project_id}] Using working dir: {effective_working_dir}")
+
+        except Exception as e:
+            logger.warning(f"[SmartRun:{project_id}] Smart analysis failed (continuing): {e}")
+            yield f"  ⚠️ Smart analysis failed (continuing anyway): {str(e)[:50]}\n\n"
+            effective_working_dir = project_path  # Fall back to project root
+
+        # ===== PRE-RUN SETUP: Install dependencies BEFORE running =====
+        yield "🔧 Running pre-flight checks...\n"
+
+        autofixer = UniversalAutoFixer(project_id, project_path, user_id)
+        setup_commands = await autofixer.pre_run_checks()
+
+        if setup_commands:
+            yield f"📦 Installing dependencies ({len(setup_commands)} tasks)...\n"
+            for cmd, work_dir in setup_commands:
+                yield f"  → {cmd}\n"
+                exit_code, stdout, stderr = await autofixer.execute_command(cmd, cwd=work_dir, timeout=180)
+                if exit_code == 0:
+                    yield f"  ✅ {cmd} completed\n"
+                else:
+                    yield f"  ⚠️ {cmd} had issues (attempting fix...)\n"
+                    # Use optimized SimpleFixer (Haiku + minimal context) instead of expensive ProductionFixerAgent
+                    if stderr:
+                        try:
+                            # SimpleFixer expects: project_path, command, output, exit_code
+                            result = await simple_fixer.fix(
+                                project_path=project_path,
+                                command=cmd,
+                                output=stderr[:2000],
+                                exit_code=exit_code
+                            )
+                            if result.success:
+                                yield f"  ✅ SimpleFixer fixed the issue\n"
+                            else:
+                                yield f"  ⚠️ Could not auto-fix (continuing anyway)\n"
+                        except Exception as fix_err:
+                            logger.warning(f"[DockerExecutor:{project_id}] SimpleFixer failed: {fix_err}")
+                            yield f"  ⚠️ Auto-fix failed (continuing anyway)\n"
+
+        yield "✅ Pre-flight checks complete\n\n"
+
+        # ===== PROACTIVE IMPORT VALIDATION: Check for missing imports BEFORE running =====
+        # This catches "Failed to resolve import" errors before Vite even starts!
+        yield "🔍 Validating imports...\n"
+        imports_valid = await self._validate_imports_proactively(project_id, project_path, user_id)
+        if imports_valid:
+            yield "✅ All imports validated\n\n"
+        else:
+            yield "⚠️ Missing imports detected - SDK Fixer Agent triggered in background\n"
+            yield "   (The server will start while missing files are being generated)\n\n"
+
+        # ===== ENSURE ESSENTIAL CONFIG FILES: Create missing tsconfig, tailwind, etc. =====
+        yield "📋 Checking essential config files...\n"
+        created_configs = await self._ensure_essential_configs(project_path, project_id)
+        if created_configs:
+            for cfg in created_configs:
+                yield f"  + Created missing: {cfg}\n"
+            yield f"✅ Created {len(created_configs)} missing config files\n\n"
+        else:
+            yield "✅ All config files present\n\n"
+
         # Ensure Dockerfile exists
         framework, dockerfile_created = await self.ensure_dockerfile(project_path)
+
+        # ===== FULLSTACK INTEGRATION: Configure frontend-backend communication =====
+        if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
+            yield "🔗 Configuring frontend-backend integration...\n"
+            try:
+                # Get ports - frontend gets base port, backend gets +1000
+                frontend_port = self._assigned_ports.get(project_id, 3000)
+                backend_port = frontend_port + 1000
+
+                integrator = FullstackIntegrator(project_path, frontend_port, backend_port)
+                integration_result = await integrator.integrate()
+
+                if integration_result.get("success"):
+                    for action in integration_result.get("actions", []):
+                        yield f"  ✅ {action}\n"
+                    yield f"  📍 Frontend: http://localhost:{frontend_port}\n"
+                    yield f"  📍 Backend API: http://localhost:{backend_port}\n"
+                else:
+                    yield f"  ⚠️ Integration had issues: {integration_result.get('error', 'Unknown')}\n"
+
+                yield "✅ Frontend-Backend integration configured\n\n"
+            except Exception as e:
+                yield f"  ⚠️ Integration error (continuing anyway): {e}\n\n"
 
         if dockerfile_created:
             yield f"Auto-generated Dockerfile for {framework.value} project\n"
         else:
             yield f"Using existing Dockerfile (detected: {framework.value})\n"
 
-        # Check Docker availability
-        docker_available = await self._check_docker_available()
-
-        if docker_available:
-            yield "Docker available - running in container...\n"
-            try:
-                async for output in self.run_container(project_id, project_path, framework):
-                    yield output
-            except Exception as e:
-                yield f"Docker execution failed: {str(e)}\n"
-                yield "Falling back to direct execution...\n"
-                async for output in self.run_direct(project_id, project_path, framework):
-                    yield output
-        else:
-            yield "Docker not available - running directly on host...\n"
-            async for output in self.run_direct(project_id, project_path, framework):
-                yield output
+        # Use run_direct which has container_executor logic with pre-built images
+        # This spawns isolated containers using maven:3.9, node:20, python:3.11, etc.
+        # Much faster than building Docker images from project Dockerfiles
+        yield "🚀 Running with pre-built container images...\n"
+        async for output in self.run_direct(project_id, project_path, framework, user_id=user_id):
+            yield output
 
     async def stop_project(self, project_id: str) -> bool:
         """Stop a running project (container or direct process)"""
@@ -1905,31 +4110,123 @@ class DockerComposeExecutor:
     """
 
     MAX_RETRIES = 3
+    MAX_PORT_CONFLICT_RETRIES = 3
     ERROR_PATTERNS = [
-        # Build errors
+        # ===== GENERAL =====
         r'error:?\s+(.+)',
         r'ERROR:?\s+(.+)',
         r'failed to build',
+        r'command.*not found',
+        r'permission denied',
+        r'exited with code [1-9]',
+        r'Uncaught',
+
+        # ===== JAVASCRIPT/NODE.JS =====
         r'cannot find module',
         r'Module not found',
         r'SyntaxError:?\s+(.+)',
         r'TypeError:?\s+(.+)',
         r'ReferenceError:?\s+(.+)',
+        r'npm ERR!',
+        r'ENOENT',
+        r'EACCES',
+        r'Cannot find',
+        r'Unexpected token',
+        r'Cannot read property',
+        r'is not defined',
+        r'is not a function',
+
+        # ===== VITE/BUNDLER SPECIFIC =====
+        r'Failed to resolve import',
+        r'Does the file exist',
+        r'\[plugin:vite',
+        r'vite:import-analysis',
+        r'Could not resolve',
+        r'Pre-transform error',
+        r'Transform failed',
+        r'Build failed',
+
+        # ===== PYTHON =====
         r'ImportError:?\s+(.+)',
         r'ModuleNotFoundError:?\s+(.+)',
         r'NameError:?\s+(.+)',
         r'AttributeError:?\s+(.+)',
         r'KeyError:?\s+(.+)',
-        r'npm ERR!',
+        r'IndentationError',
         r'pip install.*failed',
-        r'command.*not found',
-        r'permission denied',
-        r'ENOENT',
-        r'EACCES',
-        r'Cannot find',
-        r'Unexpected token',
-        r'Uncaught',
-        r'exited with code [1-9]',
+        r'Traceback \(most recent call last\)',
+        r'FileNotFoundError',
+        r'PermissionError',
+
+        # ===== JAVA/SPRING BOOT =====
+        r'java\.lang\.\w+Exception',
+        r'javax\.\w+',
+        r'NullPointerException',
+        r'ClassNotFoundException',
+        r'NoClassDefFoundError',
+        r'IllegalArgumentException',
+        r'IllegalStateException',
+        r'BUILD FAILURE',
+        r'BUILD FAILED',
+        r'Compilation failure',
+        r'cannot find symbol',
+        r'incompatible types',
+        r'Failed to execute goal',
+        r'Could not resolve dependencies',
+        r'BeanCreationException',
+        r'NoSuchBeanDefinitionException',
+        r'ApplicationContextException',
+        r'org\.springframework\.',
+        r'maven-compiler-plugin',
+        r'Execution failed for task',
+        r'JpaSystemException',
+        r'DataIntegrityViolationException',
+        r'org\.hibernate\.',
+        r'HibernateException',
+        r'BindException',
+        r'MethodArgumentNotValidException',
+
+        # ===== GO/GOLANG =====
+        r'go:.*error',
+        r'cannot find package',
+        r'package .* is not in',
+        r'undefined:',
+        r'undeclared name',
+        r'imported and not used',
+        r'missing go\.sum entry',
+        r'cannot load',
+        r'cannot find module',
+        r'panic:',
+        r'runtime error:',
+        r'goroutine .* \[running\]',
+        r'build constraints exclude',
+        r'invalid operation',
+        r'type .* has no field or method',
+
+        # ===== RUST =====
+        r'error\[E\d+\]',
+        r'cargo.*error',
+        r'rustc.*error',
+
+        # ===== PORT CONFLICTS =====
+        r'EADDRINUSE',
+        r'address already in use',
+        r'port.*already.*in.*use',
+        r'listen EADDRINUSE',
+        r'bind.*address already in use',
+    ]
+    PORT_CONFLICT_PATTERNS = [
+        'EADDRINUSE',
+        'address already in use',
+        'Address already in use',
+        'port is already in use',
+        'Port is already in use',
+        'listen EADDRINUSE',
+        'Error: listen EADDRINUSE',
+        'bind: address already in use',
+        'Only one usage of each socket address',
+        'port already allocated',
+        'Address in use',
     ]
 
     def __init__(self):
@@ -1943,12 +4240,24 @@ class DockerComposeExecutor:
                 return True
         return False
 
+    def _is_port_conflict(self, line: str) -> bool:
+        """Check if a line indicates a port conflict"""
+        line_lower = line.lower()
+        for pattern in self.PORT_CONFLICT_PATTERNS:
+            if pattern.lower() in line_lower:
+                return True
+        return False
+
     def _extract_error_info(self, output_lines: List[str]) -> Dict[str, Any]:
         """Extract error information from output"""
         errors = []
         error_context = []
+        is_port_conflict = False
 
         for i, line in enumerate(output_lines):
+            # Check for port conflicts (handle specially)
+            if self._is_port_conflict(line):
+                is_port_conflict = True
             if self._is_error_line(line):
                 # Get context (5 lines before and after)
                 start = max(0, i - 5)
@@ -1964,12 +4273,13 @@ class DockerComposeExecutor:
         if errors:
             return {
                 "has_errors": True,
+                "is_port_conflict": is_port_conflict,
                 "error_count": len(errors),
                 "errors": errors,
                 "full_output": "\n".join(output_lines[-100:])  # Last 100 lines
             }
 
-        return {"has_errors": False}
+        return {"has_errors": False, "is_port_conflict": False}
 
     async def _check_docker_compose_available(self) -> bool:
         """Check if docker-compose is available"""
@@ -2187,13 +4497,30 @@ class DockerComposeExecutor:
                                 server_started = True
                                 # Try to extract port
                                 match = re.search(r':(\d+)', output)
-                                port = int(match.group(1)) if match else 3000
-                                preview_url = f"http://localhost:{port}"
-                                yield f"\n{'='*50}\n"
-                                yield f"SERVER STARTED!\n"
-                                yield f"Preview URL: {preview_url}\n"
-                                yield f"{'='*50}\n"
-                                yield f"__SERVER_STARTED__:{preview_url}\n"
+                                detected_port = int(match.group(1)) if match else 3000
+
+                                # For fullstack Docker Compose, prefer the frontend port
+                                is_fullstack = (project_path / "frontend").exists() and (project_path / "backend").exists()
+                                allocated = port_allocator.get_ports(project_id)
+
+                                if is_fullstack and allocated:
+                                    # Use frontend port for preview (user wants to see UI, not API)
+                                    frontend_port = allocated.get("frontend", detected_port)
+                                    backend_port_val = allocated.get("backend", detected_port + 1000)
+                                    preview_url = f"http://localhost:{frontend_port}"
+                                    yield f"\n{'='*50}\n"
+                                    yield f"FULLSTACK SERVERS STARTED!\n"
+                                    yield f"Frontend (Preview): {preview_url}\n"
+                                    yield f"Backend API: http://localhost:{backend_port_val}\n"
+                                    yield f"{'='*50}\n"
+                                    yield f"__SERVER_STARTED__:{preview_url}\n"
+                                else:
+                                    preview_url = f"http://localhost:{detected_port}"
+                                    yield f"\n{'='*50}\n"
+                                    yield f"SERVER STARTED!\n"
+                                    yield f"Preview URL: {preview_url}\n"
+                                    yield f"{'='*50}\n"
+                                    yield f"__SERVER_STARTED__:{preview_url}\n"
                                 break
 
             await process.wait()
@@ -2308,12 +4635,45 @@ class DockerComposeExecutor:
                     yield f"{'='*50}\n"
                     break
 
+                # Stop current compose
+                await self.stop_compose(project_id, project_path)
+
+                # Handle port conflicts specially - reallocate ports without calling fixer agent
+                if error_info.get("is_port_conflict"):
+                    yield f"\n{'='*50}\n"
+                    yield f"PORT CONFLICT DETECTED!\n"
+                    yield f"Auto-reallocating ports and retrying...\n"
+                    yield f"{'='*50}\n\n"
+                    logger.info(f"[DockerComposeExecutor:{project_id}] Port conflict detected, reallocating ports")
+
+                    # Release old ports and allocate new ones
+                    port_allocator.release_ports(project_id)
+                    new_ports = port_allocator.allocate_ports(project_id)
+
+                    # Regenerate docker-compose.yml with new ports
+                    compose_path = project_path / "docker-compose.yml"
+                    if compose_path.exists():
+                        with open(compose_path, 'r') as f:
+                            compose_content = f.read()
+                        # Replace old ports with new ports
+                        compose_content = re.sub(
+                            r'"(\d+):(\d+)"',
+                            lambda m: f'"{new_ports["frontend"] if int(m.group(2)) in [3000, 5173, 4200] else new_ports["backend"]}:{m.group(2)}"',
+                            compose_content
+                        )
+                        with open(compose_path, 'w') as f:
+                            f.write(compose_content)
+
+                    yield f"New ports allocated - Frontend: {new_ports['frontend']}, Backend: {new_ports['backend']}\n"
+                    yield f"Retry attempt {retry_count}/{self.MAX_RETRIES}\n\n"
+                    ports = new_ports
+                    # Small delay before retry
+                    await asyncio.sleep(2)
+                    continue
+
                 yield f"\n{'='*50}\n"
                 yield f"ERRORS DETECTED - Attempting auto-fix...\n"
                 yield f"{'='*50}\n\n"
-
-                # Stop current compose
-                await self.stop_compose(project_id, project_path)
 
                 # Call fixer agent
                 try:

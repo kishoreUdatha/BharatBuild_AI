@@ -26,13 +26,12 @@ except ImportError:
     PDFPLUMBER_SUPPORT = False
 
 from app.core.database import get_db
+from app.core.logging_config import logger
 from app.modules.auth.dependencies import get_current_user
 from app.models.user import User
 from app.models.project import Project
 from app.modules.agents.paper_analyzer_agent import paper_analyzer_agent
 from app.core.types import generate_uuid
-
-logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Max file size (10MB)

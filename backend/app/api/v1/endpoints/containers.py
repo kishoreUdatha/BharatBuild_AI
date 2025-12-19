@@ -16,21 +16,43 @@ Frontend calls these endpoints to:
 
 import asyncio
 import json
-import logging
 from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Query, Request, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.execution import (
     get_container_manager,
     ContainerConfig,
     ContainerStatus,
 )
-
-logger = logging.getLogger(__name__)
+from app.core.security import decode_token
+from app.core.database import get_db
+from app.core.logging_config import logger
+from app.services.workspace_restore import workspace_restore
+from app.modules.auth.feature_flags import require_code_execution
 
 router = APIRouter(prefix="/containers", tags=["Container Execution"])
+
+
+def safe_get_container_manager():
+    """
+    Safely get container manager, raising proper HTTP exception if Docker is unavailable.
+
+    This allows frontend to detect Docker unavailability and fall back to direct execution.
+    """
+    try:
+        return get_container_manager()
+    except RuntimeError as e:
+        error_msg = str(e)
+        if "Docker" in error_msg or "docker" in error_msg:
+            raise HTTPException(
+                status_code=503,  # Service Unavailable
+                detail=f"Docker not available: {error_msg}"
+            )
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Request/Response Models
@@ -74,21 +96,30 @@ class FileInfo(BaseModel):
     size: int
 
 
-# Helper to get user_id from request (implement your auth)
+# Helper to get user_id from request
 async def get_current_user_id(request: Request) -> str:
     """Extract user ID from request headers or auth token"""
-    # Check header
+    # Check header first
     user_id = request.headers.get("X-User-ID")
     if user_id:
+        logger.info(f"[Auth] Got user_id from X-User-ID header: {user_id}")
         return user_id
 
-    # Check auth token (implement based on your auth system)
+    # Decode JWT token to get user_id
     auth_header = request.headers.get("Authorization")
+    logger.info(f"[Auth] Authorization header present: {bool(auth_header)}")
     if auth_header and auth_header.startswith("Bearer "):
-        # Decode JWT and extract user_id
-        # For now, return a default
-        pass
+        try:
+            token = auth_header[7:]  # Remove "Bearer " prefix
+            payload = decode_token(token)
+            user_id = payload.get("sub")
+            if user_id:
+                logger.info(f"[Auth] Extracted user_id from JWT: {user_id}")
+                return user_id
+        except Exception as e:
+            logger.warning(f"[Auth] Failed to decode JWT token: {e}")
 
+    logger.info("[Auth] No valid auth found, returning 'anonymous'")
     return "anonymous"
 
 
@@ -98,7 +129,9 @@ async def get_current_user_id(request: Request) -> str:
 async def create_container(
     project_id: str,
     request: CreateContainerRequest,
-    user_id: str = Depends(get_current_user_id)
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_code_execution)
 ):
     """
     Create an isolated container for a project.
@@ -112,8 +145,52 @@ async def create_container(
     - Resource limits (CPU, memory)
     - Port forwarding for preview
     - Auto-cleanup after 24 hours
+
+    Before creating the container, workspace files are restored from
+    database if the workspace directory doesn't exist (e.g., after sandbox cleanup).
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
+
+    # Restore workspace from database if needed (Bolt.new style)
+    try:
+        # Pass None if user_id is "anonymous" so restore service can get real user_id from project
+        restore_user_id = user_id if user_id != "anonymous" else None
+        restore_result = await workspace_restore.auto_restore(
+            project_id=project_id,
+            db=db,
+            user_id=restore_user_id,
+            project_type=request.project_type  # Pass project type for essential file check
+        )
+        if restore_result.get("success"):
+            method = restore_result.get('method', 'unknown')
+            logger.info(f"[Container] Workspace restore for {project_id}: {method}")
+
+            if restore_result.get("restored_files"):
+                logger.info(f"[Container] Restored {restore_result['restored_files']} files from database")
+
+            # Log warning if workspace is incomplete
+            if method == "incomplete":
+                missing = restore_result.get("missing_files", [])
+                logger.warning(f"[Container] Workspace incomplete for {project_id}, missing: {missing}")
+                logger.warning(f"[Container] Project files may need to be synced from frontend before running")
+
+            # Use user_id from workspace path if we restored successfully
+            workspace_path = restore_result.get("workspace_path", "")
+            if workspace_path and "anonymous" not in workspace_path:
+                # Extract user_id from path like: C:/tmp/sandbox/workspace/{user_id}/{project_id}
+                import os
+                path_parts = workspace_path.replace("\\", "/").split("/")
+                if len(path_parts) >= 2:
+                    potential_user_id = path_parts[-2]
+                    if potential_user_id != project_id and potential_user_id != "workspace":
+                        user_id = potential_user_id
+                        logger.info(f"[Container] Using user_id from restore: {user_id}")
+        else:
+            # Not an error - might be a new project with no files
+            logger.info(f"[Container] No workspace restore available for {project_id}: {restore_result.get('error', 'N/A')}")
+    except Exception as e:
+        logger.warning(f"[Container] Workspace restore failed for {project_id}: {e}")
+        # Continue anyway - container can still be created
 
     config = ContainerConfig(
         memory_limit=request.memory_limit,
@@ -128,17 +205,39 @@ async def create_container(
             config=config,
         )
 
-        # Build preview URLs
+        # Build preview URLs - Direct port URLs work better on Windows Docker
         preview_urls = {}
+        primary_url = None
+
+        # Common dev server ports in priority order
+        priority_ports = [3000, 5173, 5174, 4173, 8080, 8000, 5000]
+
         for container_port, host_port in container.port_mappings.items():
-            preview_urls[str(container_port)] = f"http://localhost:{host_port}"
+            direct_url = f"http://localhost:{host_port}"
+            preview_urls[str(container_port)] = direct_url
+
+            # Set primary URL from first matching priority port
+            if primary_url is None and int(container_port) in priority_ports:
+                primary_url = direct_url
+
+        # Fallback to first available port if no priority port found
+        if primary_url is None and container.port_mappings:
+            first_host_port = list(container.port_mappings.values())[0]
+            primary_url = f"http://localhost:{first_host_port}"
+
+        # Also include reverse proxy as fallback (may work in some setups)
+        bolt_style_preview_url = f"/api/v1/preview/{project_id}/"
 
         return ContainerInfo(
             container_id=container.container_id[:12],
             project_id=project_id,
             status=container.status.value,
             ports=container.port_mappings,
-            preview_urls=preview_urls,
+            preview_urls={
+                "primary": primary_url or bolt_style_preview_url,  # Direct URL as primary
+                "reverse_proxy": bolt_style_preview_url,  # Reverse proxy as fallback
+                **preview_urls  # All port URLs
+            },
             created_at=container.created_at.isoformat(),
             memory_limit=config.memory_limit,
             cpu_limit=config.cpu_limit,
@@ -153,6 +252,7 @@ async def create_container(
 async def execute_command(
     project_id: str,
     request: ExecuteCommandRequest,
+    _: None = Depends(require_code_execution)
 ):
     """
     Execute a command inside project container with streaming output.
@@ -166,7 +266,7 @@ async def execute_command(
 
     Returns: Server-Sent Events stream with real-time output
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     async def event_stream():
         """Generate SSE events from command execution"""
@@ -209,7 +309,7 @@ async def write_file(
     - User saves file from editor
     - Creating new files
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     try:
         success = await manager.write_file(
@@ -239,7 +339,7 @@ async def list_files(
     - File explorer in UI
     - Getting project structure
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     try:
         files = await manager.list_files(project_id, path)
@@ -264,7 +364,7 @@ async def read_file(
     - Code editor to display file content
     - AI to read existing code
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     try:
         content = await manager.read_file(project_id, file_path)
@@ -287,22 +387,63 @@ async def read_file(
 async def get_preview_url(
     project_id: str,
     port: int = Query(default=3000, description="Container port"),
+    request: Request = None,
 ):
     """
     Get the preview URL for a running project.
 
-    This returns the URL where the project is accessible:
-    - http://localhost:10001 (local dev)
-    - https://project-abc123.bharatbuild.dev (production)
+    Uses Bolt.new-style reverse proxy routing:
+    - /api/v1/preview/{project_id}/ (path-based, infinite scaling)
+
+    Falls back to direct port mapping for WebSocket HMR support.
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
-    url = await manager.get_preview_url(project_id, port)
+    if project_id not in manager.containers:
+        raise HTTPException(status_code=404, detail="Preview not available - container not found")
 
-    if not url:
-        raise HTTPException(status_code=404, detail="Preview not available")
+    container_info = manager.containers[project_id]
+    active_port = container_info.active_port
 
-    return {"url": url, "port": port}
+    # Bolt.new-style: Use reverse proxy URL (no port collision, infinite scaling)
+    # The preview_proxy endpoint will route to the container's internal IP
+    reverse_proxy_url = f"/api/v1/preview/{project_id}/"
+
+    # Also provide direct port URL for HMR WebSocket fallback
+    direct_url = await manager.get_preview_url(project_id, port)
+
+    return {
+        "url": reverse_proxy_url,  # Primary: Bolt.new-style reverse proxy
+        "direct_url": direct_url,  # Fallback: Direct port mapping (for HMR)
+        "port": port,
+        "active_port": active_port,
+        "auto_detected": active_port is not None,
+        "routing_method": "reverse_proxy",
+        "note": "Use 'url' for iframe preview. Use 'direct_url' for WebSocket HMR."
+    }
+
+
+@router.get("/{project_id}/ports")
+async def get_all_ports(project_id: str):
+    """
+    Get all available port mappings for a project.
+
+    Returns all mapped ports so the frontend can try them.
+    Useful when the dev server falls back to a different port.
+    """
+    manager = safe_get_container_manager()
+
+    if project_id not in manager.containers:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    container = manager.containers[project_id]
+
+    return {
+        "project_id": project_id,
+        "active_port": container.active_port,
+        "port_mappings": container.port_mappings,  # container_port -> host_port
+        "preview_urls": manager.get_all_preview_urls(project_id),
+    }
 
 
 @router.get("/{project_id}/stats")
@@ -315,7 +456,7 @@ async def get_container_stats(project_id: str):
     - Memory usage
     - Container status
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     stats = await manager.get_container_stats(project_id)
 
@@ -332,7 +473,7 @@ async def stop_container(project_id: str):
 
     Container can be restarted later. Files are preserved.
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     success = await manager.stop_container(project_id)
 
@@ -352,7 +493,7 @@ async def delete_container(
 
     If delete_files=True, also removes all project files (irreversible).
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     success = await manager.delete_container(project_id, delete_files)
 
@@ -371,7 +512,7 @@ async def get_container_status(project_id: str):
     """
     Get container status and info.
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     if project_id not in manager.containers:
         raise HTTPException(status_code=404, detail="Container not found")
@@ -407,7 +548,7 @@ async def batch_write_files(
     More efficient than calling write_file multiple times.
     Used when AI generates multiple files.
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     results = []
     for file in request.files:
@@ -440,7 +581,7 @@ async def batch_execute_commands(
 
     Common use case: npm install && npm run build && npm run dev
     """
-    manager = get_container_manager()
+    manager = safe_get_container_manager()
 
     async def event_stream():
         for i, command in enumerate(request.commands):

@@ -8,6 +8,12 @@ Collects logs from 5 sources:
 4. Network Errors (fetch/XHR failures, CORS)
 5. Docker/Dev Server (container logs, startup errors)
 
+BOLT.NEW STYLE AUTO-HEALING:
+- Collects file context (Dockerfile, docker-compose.yml, package.json)
+- Tracks last changed files
+- Builds structured fixer_payload.json for Claude
+- Enables self-healing loop
+
 All logs feed into the Fixer Agent when user requests a fix.
 """
 
@@ -15,10 +21,15 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from collections import defaultdict
+from pathlib import Path
 import threading
 import re
+import json
+import os
 
 from app.core.logging_config import logger
+from app.core.config import settings
+from app.services.log_rebuilder import log_rebuilder, DetectedError
 
 
 @dataclass
@@ -67,7 +78,7 @@ class LogBus:
     # Log retention (keep last N entries per source)
     MAX_LOGS_PER_SOURCE = 50
     # Time-based retention (logs older than this are cleaned)
-    LOG_RETENTION_MINUTES = 30
+    LOG_RETENTION_MINUTES = settings.LOG_RETENTION_MINUTES
 
     def __init__(self, project_id: str):
         self.project_id = project_id
@@ -121,7 +132,9 @@ class LogBus:
             if entry.stack:
                 self._extract_stack_trace(entry)
 
-        logger.debug(f"[LogBus:{self.project_id}] Added {source}/{level}: {message[:100]}...")
+        # Sanitize message for Windows console logging (cp1252 encoding)
+        safe_msg = message[:100].encode('ascii', 'replace').decode('ascii')
+        logger.debug(f"[LogBus:{self.project_id}] Added {source}/{level}: {safe_msg}...")
 
     def add_browser_error(
         self,
@@ -345,6 +358,303 @@ class LogBus:
                     e for e in self._logs[source]
                     if e.timestamp > cutoff
                 ]
+
+    # ============= BOLT.NEW STYLE FILE CONTEXT COLLECTION =============
+
+    def collect_file_context(self, project_path: str) -> Dict[str, Any]:
+        """
+        Collect file context for Fixer Agent (Bolt.new style).
+
+        Collects:
+        1. Dockerfile
+        2. docker-compose.yml
+        3. package.json
+        4. Main scripts
+        5. Config files
+        6. Last changed files
+        """
+        project_path = Path(project_path)
+        context = {
+            "dockerfile": None,
+            "docker_compose": None,
+            "package_json": None,
+            "requirements_txt": None,
+            "tsconfig_json": None,
+            "vite_config": None,
+            "main_files": {},
+            "config_files": {},
+            "source_files": {},
+        }
+
+        # Collect specific config files
+        config_files = [
+            ("Dockerfile", "dockerfile"),
+            ("docker-compose.yml", "docker_compose"),
+            ("docker-compose.yaml", "docker_compose"),
+            ("package.json", "package_json"),
+            ("requirements.txt", "requirements_txt"),
+            ("tsconfig.json", "tsconfig_json"),
+            ("vite.config.ts", "vite_config"),
+            ("vite.config.js", "vite_config"),
+        ]
+
+        for filename, key in config_files:
+            file_path = project_path / filename
+            if file_path.exists():
+                try:
+                    content = file_path.read_text(encoding='utf-8', errors='ignore')
+                    context[key] = content[:10000]  # Limit size
+                except Exception as e:
+                    logger.warning(f"Could not read {filename}: {e}")
+
+        # Collect main entry files
+        main_files = [
+            "src/main.tsx", "src/main.ts", "src/main.jsx", "src/main.js",
+            "src/index.tsx", "src/index.ts", "src/index.jsx", "src/index.js",
+            "src/App.tsx", "src/App.ts", "src/App.jsx", "src/App.js",
+            "main.py", "app.py", "server.py",
+            "index.html",
+        ]
+
+        for main_file in main_files:
+            file_path = project_path / main_file
+            if file_path.exists():
+                try:
+                    content = file_path.read_text(encoding='utf-8', errors='ignore')
+                    context["main_files"][main_file] = content[:5000]
+                except Exception as e:
+                    logger.warning(f"Could not read {main_file}: {e}")
+
+        # Collect files mentioned in errors
+        for error_file in self._error_files:
+            file_path = project_path / error_file
+            if file_path.exists() and error_file not in context["source_files"]:
+                try:
+                    content = file_path.read_text(encoding='utf-8', errors='ignore')
+                    context["source_files"][error_file] = content[:5000]
+                except Exception as e:
+                    logger.warning(f"Could not read error file {error_file}: {e}")
+
+        return context
+
+    def detect_environment(self, project_path: str) -> Dict[str, Any]:
+        """Detect project environment info"""
+        project_path = Path(project_path)
+        env = {
+            "node_version": None,
+            "python_version": None,
+            "framework": None,
+            "ports": [],
+            "has_docker": False,
+            "project_type": "unknown"
+        }
+
+        # Check for Docker
+        if (project_path / "Dockerfile").exists() or (project_path / "docker-compose.yml").exists():
+            env["has_docker"] = True
+
+        # Check package.json for Node info
+        pkg_path = project_path / "package.json"
+        if pkg_path.exists():
+            try:
+                pkg = json.loads(pkg_path.read_text(encoding='utf-8'))
+                deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+
+                if "vite" in deps:
+                    env["framework"] = "vite"
+                    env["ports"].append(5173)
+                elif "next" in deps:
+                    env["framework"] = "nextjs"
+                    env["ports"].append(3000)
+                elif "react" in deps:
+                    env["framework"] = "react"
+                    env["ports"].append(3000)
+
+                env["project_type"] = "node"
+            except Exception as e:
+                logger.warning(f"Could not parse package.json: {e}")
+
+        # Check requirements.txt for Python info
+        req_path = project_path / "requirements.txt"
+        if req_path.exists():
+            try:
+                reqs = req_path.read_text(encoding='utf-8').lower()
+                if "fastapi" in reqs:
+                    env["framework"] = "fastapi"
+                    env["ports"].append(8000)
+                elif "flask" in reqs:
+                    env["framework"] = "flask"
+                    env["ports"].append(5000)
+                elif "django" in reqs:
+                    env["framework"] = "django"
+                    env["ports"].append(8000)
+
+                env["project_type"] = "python"
+            except Exception as e:
+                logger.warning(f"Could not parse requirements.txt: {e}")
+
+        return env
+
+    def _rebuild_error_logs(self, errors: List[LogEntry], context: Optional[Dict] = None) -> List[Dict]:
+        """
+        Rebuild error logs using Log Rebuilder for complete context.
+
+        Even if sandbox sends truncated logs, this ensures Claude gets
+        full stack traces and error context.
+        """
+        rebuilt_errors = []
+        for error in errors:
+            # Handle both LogEntry objects and dicts
+            if isinstance(error, LogEntry):
+                message = error.message
+            elif isinstance(error, dict):
+                message = error.get("message", "")
+            else:
+                message = str(error)
+
+            if not message:
+                continue
+
+            try:
+                # Use Log Rebuilder to complete truncated logs
+                detected = log_rebuilder.rebuild(message, context)
+
+                rebuilt_errors.append({
+                    "original": message,
+                    "rebuilt": detected.rebuilt_log,
+                    "error_type": detected.error_type.value,
+                    "file": detected.file,
+                    "line": detected.line,
+                    "module": detected.module,
+                    "confidence": detected.confidence,
+                })
+            except Exception as e:
+                logger.warning(f"[LogBus] Failed to rebuild error log: {e}")
+                # Fallback to original message
+                rebuilt_errors.append({
+                    "original": message,
+                    "rebuilt": message,
+                    "error_type": "unknown",
+                    "confidence": 0.0,
+                })
+
+        return rebuilt_errors
+
+    def get_bolt_fixer_payload(self, project_path: str, command: str = None, error_message: str = None) -> Dict[str, Any]:
+        """
+        Get complete Bolt.new-style fixer payload for Claude.
+
+        This is the exact format that enables Claude to fix accurately:
+        - exact logs (rebuilt with full stack traces)
+        - exact file code
+        - environment details
+
+        The Log Rebuilder ensures even truncated logs are completed
+        with template-based stack traces, giving Claude full context.
+
+        Returns structured fixer_payload.json
+        """
+        # Collect file context
+        file_context = self.collect_file_context(project_path)
+
+        # Detect environment
+        environment = self.detect_environment(project_path)
+
+        # Get all errors
+        all_errors = self.get_errors()
+
+        # Context for log rebuilding (helps with file path inference)
+        rebuild_context = {
+            "project_path": project_path,
+            "framework": environment.get("framework"),
+            "project_type": environment.get("project_type"),
+            "error_files": list(self._error_files),
+        }
+
+        # Rebuild error logs with full context using Log Rebuilder
+        browser_errors = self._rebuild_error_logs(
+            [e for e in self._logs["browser"] if e.level == "error"],
+            rebuild_context
+        )[-10:]
+
+        build_errors = self._rebuild_error_logs(
+            [e for e in self._logs["build"] if e.level == "error"],
+            rebuild_context
+        )[-10:]
+
+        docker_errors = self._rebuild_error_logs(
+            [e for e in self._logs["docker"] if e.level == "error"],
+            rebuild_context
+        )[-10:]
+
+        backend_errors = self._rebuild_error_logs(
+            [e for e in self._logs["backend"] if e.level == "error"],
+            rebuild_context
+        )[-10:]
+
+        # Use rebuilt primary error message
+        primary_error = error_message
+        if not primary_error and all_errors:
+            # Get the rebuilt version of the primary error
+            primary_rebuilt = self._rebuild_error_logs([all_errors[0]], rebuild_context)
+            if primary_rebuilt:
+                primary_error = primary_rebuilt[0].get("rebuilt", all_errors[0]["message"])
+            else:
+                primary_error = all_errors[0]["message"]
+        primary_error = primary_error or "Unknown error"
+
+        # Build the payload with rebuilt logs
+        payload = {
+            "error": primary_error,
+            "command": command or "unknown",
+            "fileContext": {
+                "package.json": file_context.get("package_json"),
+                "Dockerfile": file_context.get("dockerfile"),
+                "docker-compose.yml": file_context.get("docker_compose"),
+                "requirements.txt": file_context.get("requirements_txt"),
+                "vite.config": file_context.get("vite_config"),
+                "tsconfig.json": file_context.get("tsconfig_json"),
+                **file_context.get("main_files", {}),
+                **file_context.get("source_files", {}),
+            },
+            "environment": environment,
+            # Rebuilt error logs with full context
+            "errorLogs": {
+                "browser": browser_errors,
+                "build": build_errors,
+                "docker": docker_errors,
+                "backend": backend_errors,
+            },
+            # Also include simple message arrays for backward compatibility
+            "errorMessages": {
+                "browser": [e.get("rebuilt", e.get("original", "")) for e in browser_errors],
+                "build": [e.get("rebuilt", e.get("original", "")) for e in build_errors],
+                "docker": [e.get("rebuilt", e.get("original", "")) for e in docker_errors],
+                "backend": [e.get("rebuilt", e.get("original", "")) for e in backend_errors],
+            },
+            "stackTraces": self._stack_traces[-5:],
+            "errorFiles": list(self._error_files),
+            "timestamp": datetime.utcnow().isoformat(),
+            # Log Rebuilder metadata
+            "logRebuilderUsed": True,
+        }
+
+        # Remove None values from fileContext
+        payload["fileContext"] = {k: v for k, v in payload["fileContext"].items() if v is not None}
+
+        logger.info(f"[LogBus:{self.project_id}] Built fixer payload with {len(build_errors)} rebuilt build errors")
+
+        return payload
+
+    def set_last_command(self, command: str) -> None:
+        """Track the last executed command"""
+        with self._lock:
+            self._last_command = command
+
+    def get_last_command(self) -> Optional[str]:
+        """Get the last executed command"""
+        with self._lock:
+            return getattr(self, '_last_command', None)
 
 
 class LogBusManager:

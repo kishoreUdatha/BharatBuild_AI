@@ -3,14 +3,12 @@ Paper Analyzer Agent - Extracts implementation requirements from IEEE/research p
 """
 
 import json
-import logging
 import re
 from typing import Dict, Any, AsyncGenerator, Optional
 from pathlib import Path
 
 from app.utils.claude_client import claude_client
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 # Token limits
 MAX_PAPER_TOKENS = 30000  # ~120KB of text

@@ -9,6 +9,9 @@ import { CodeEditor } from './CodeEditor'
 import { PlanView } from './PlanView'
 import { ProjectSelector } from './ProjectSelector'
 import { ProjectRunControls } from './ProjectRunControls'
+import { BuildDocumentsPanel } from './BuildDocumentsPanel'
+import { ProjectStagesPanel } from './ProjectStagesPanel'
+// WelcomeScreen and QuickActions removed - now showing clean empty state
 
 // Dynamically import XTerminal to avoid SSR issues
 const XTerminal = dynamic(() => import('./XTerminal'), {
@@ -30,18 +33,33 @@ import {
   Maximize2,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
   ListTodo,
-  FolderKanban,
-  MessageSquare,
+  Home,
+  Layers,
+  Crown,
+  RefreshCw,
+  AlertCircle,
+  LogOut,
+  User,
+  HelpCircle,
+  CreditCard,
+  Sun,
+  Moon,
+  Monitor,
+  Check,
+  FileText,
+  Lock,
 } from 'lucide-react'
-import { FeedbackModal } from '@/components/feedback/FeedbackModal'
 import { useRouter } from 'next/navigation'
 import { useTerminal } from '@/hooks/useTerminal'
 import { Message, useChatStore } from '@/store/chatStore'
 import { useVersionControl } from '@/services/versionControl/historyManager'
 import { exportProjectAsZip } from '@/services/project/exportService'
 import { useProject } from '@/hooks/useProject'
+import { useAuth } from '@/hooks/useAuth'
 import { useProjectStore } from '@/store/projectStore'
+import { usePlanStatus } from '@/hooks/usePlanStatus'
 // import { useConnectionHealth } from '@/hooks/useConnectionHealth' // Disabled - was causing header blinking
 import { ReconnectionBanner } from '@/components/ReconnectionBanner'
 
@@ -53,6 +71,9 @@ interface FileNode {
   type: 'file' | 'folder'
   children?: FileNode[]
   content?: string
+  hash?: string  // MD5 hash for change detection (Bolt.new style)
+  isLoading?: boolean  // True while content is being fetched
+  isLoaded?: boolean  // True if content has been fetched
 }
 
 interface BoltLayoutProps {
@@ -63,35 +84,100 @@ interface BoltLayoutProps {
   isLoading?: boolean
   tokenBalance?: number
   livePreview?: React.ReactNode
-  onGenerateProject?: () => void
   onServerStart?: (url: string) => void
   onServerStop?: () => void
+  onGenerateProject?: () => void
 }
 
 export function BoltLayout({
   onSendMessage,
   onStopGeneration,
   messages,
-  onGenerateProject,
   files,
   isLoading = false,
   tokenBalance = 0,
   livePreview,
   onServerStart,
   onServerStop,
+  onGenerateProject,
 }: BoltLayoutProps) {
   const router = useRouter()
+  const { user, logout } = useAuth()
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
+  const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false)
+  const [theme, setTheme] = useState<'dark' | 'light' | 'system'>('dark')
+  const userMenuRef = useRef<HTMLDivElement>(null)
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null)
-  const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview')
+  const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'docs'>('preview')
   const [isPlanViewVisible, setIsPlanViewVisible] = useState(true)
-  const [showFeedback, setShowFeedback] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
 
+  // Mobile responsiveness
+  const [isMobile, setIsMobile] = useState(false)
+  const [mobilePanel, setMobilePanel] = useState<'chat' | 'code' | 'preview'>('chat')
+
+  // Detect mobile screen
+  useEffect(() => {
+    const checkMobile = () => {
+      const mobile = window.innerWidth < 768
+      setIsMobile(mobile)
+      if (mobile) {
+        setIsSidebarOpen(false) // Close sidebar on mobile by default
+      }
+    }
+    checkMobile()
+    window.addEventListener('resize', checkMobile)
+    return () => window.removeEventListener('resize', checkMobile)
+  }, [])
+
+  // Close user menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+        setIsUserMenuOpen(false)
+        setIsThemeMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  // Handle theme change
+  const handleThemeChange = (newTheme: 'dark' | 'light' | 'system') => {
+    setTheme(newTheme)
+    // Apply theme to document
+    if (newTheme === 'system') {
+      const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      document.documentElement.classList.toggle('dark', systemTheme === 'dark')
+    } else {
+      document.documentElement.classList.toggle('dark', newTheme === 'dark')
+    }
+    localStorage.setItem('theme', newTheme)
+  }
+
+  // Initialize theme on mount
+  useEffect(() => {
+    const savedTheme = localStorage.getItem('theme') as 'dark' | 'light' | 'system' | null
+    if (savedTheme) {
+      setTheme(savedTheme)
+      if (savedTheme === 'system') {
+        const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        document.documentElement.classList.toggle('dark', systemTheme === 'dark')
+      } else {
+        document.documentElement.classList.toggle('dark', savedTheme === 'dark')
+      }
+    } else {
+      // Default to dark theme
+      document.documentElement.classList.add('dark')
+      localStorage.setItem('theme', 'dark')
+    }
+  }, [])
+
   // Resizable panel states - thin like border lines
-  const [leftPanelWidth, setLeftPanelWidth] = useState(28) // percentage (balanced chat panel)
-  const [fileExplorerWidth, setFileExplorerWidth] = useState(180) // pixels (balanced file explorer)
+  const [leftPanelWidth, setLeftPanelWidth] = useState(22) // percentage (narrower chat panel)
+  const [fileExplorerWidth, setFileExplorerWidth] = useState(260) // pixels (wider for readable file names)
   const [isResizingMain, setIsResizingMain] = useState(false)
   const [isResizingExplorer, setIsResizingExplorer] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -139,6 +225,137 @@ export function BoltLayout({
   // Get chat store for clearing messages
   const { clearMessages } = useChatStore()
 
+  // Get plan status for project limits
+  const { projectsCreated, projectLimit, isPremium, isFree, needsUpgrade, features } = usePlanStatus()
+
+  // Resume generation state
+  const [canResume, setCanResume] = useState(false)
+  const [isResuming, setIsResuming] = useState(false)
+  const [resumeMessage, setResumeMessage] = useState<string | null>(null)
+
+  // Check if project generation was interrupted
+  useEffect(() => {
+    const checkResumeStatus = async () => {
+      if (!currentProject?.id || currentProject.id === 'default-project') return
+
+      try {
+        const token = localStorage.getItem('access_token')
+        if (!token) return
+
+        const response = await fetch(`${API_BASE_URL}/orchestrator/project/${currentProject.id}/status`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+
+        if (response.ok) {
+          const data = await response.json()
+          setCanResume(data.can_resume)
+          if (data.can_resume) {
+            setResumeMessage(`Generation interrupted. ${data.files_generated} files generated.`)
+          }
+        }
+      } catch (error) {
+        console.warn('[BoltLayout] Failed to check resume status:', error)
+      }
+    }
+
+    checkResumeStatus()
+  }, [currentProject?.id])
+
+  // Resume generation handler
+  const handleResumeGeneration = async () => {
+    if (!currentProject?.id || isResuming) return
+
+    setIsResuming(true)
+    try {
+      const token = localStorage.getItem('access_token')
+      if (!token) {
+        alert('Please log in to resume generation')
+        return
+      }
+
+      // Use SSE to stream resume events
+      const response = await fetch(`${API_BASE_URL}/orchestrator/resume`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          project_id: currentProject.id,
+          continue_message: 'Continue generating the remaining files'
+        })
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        if (error.detail?.error === 'file_limit_reached') {
+          alert('FREE plan limit reached. Please upgrade to continue.')
+          window.open('/pricing', '_blank')
+        } else {
+          alert(`Failed to resume: ${error.detail || 'Unknown error'}`)
+        }
+        return
+      }
+
+      // Stream the response (similar to normal generation)
+      const reader = response.body?.getReader()
+      if (!reader) return
+
+      const decoder = new TextDecoder()
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = decoder.decode(value)
+        const lines = chunk.split('\n')
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const event = JSON.parse(line.slice(6))
+              console.log('[Resume] Event:', event.type, event.data)
+
+              // Handle file_complete events to update the UI
+              if (event.type === 'file_complete' && event.data?.path) {
+                const projectStore = useProjectStore.getState()
+                const filePath = event.data.path
+                const ext = filePath.split('.').pop()?.toLowerCase() || ''
+                const langMap: Record<string, string> = {
+                  'ts': 'typescript', 'tsx': 'typescript', 'js': 'javascript', 'jsx': 'javascript',
+                  'py': 'python', 'css': 'css', 'html': 'html', 'json': 'json', 'md': 'markdown'
+                }
+                projectStore.addFile({
+                  path: filePath,
+                  content: event.data.full_content || '',
+                  type: 'file',
+                  language: langMap[ext] || ext || 'text'
+                })
+              }
+
+              if (event.type === 'complete') {
+                setCanResume(false)
+                setResumeMessage(null)
+              }
+
+              if (event.type === 'upgrade_required') {
+                alert(event.data?.message || 'Upgrade required to continue')
+                window.open('/pricing', '_blank')
+              }
+            } catch (e) {
+              // Ignore parse errors for partial chunks
+            }
+          }
+        }
+      }
+
+    } catch (error) {
+      console.error('[Resume] Error:', error)
+      alert('Failed to resume generation. Please try again.')
+    } finally {
+      setIsResuming(false)
+    }
+  }
+
   // Handle new project - clears everything for a fresh start
   const handleNewProject = useCallback(() => {
     resetProject()  // Clears project, files, tabs, session
@@ -148,65 +365,91 @@ export function BoltLayout({
     console.log('[BoltLayout] New project started')
   }, [resetProject, clearMessages])
 
-  // Export project handler - uses ephemeral session storage (like Bolt.new)
+  // Export project handler - downloads entire project as ZIP
   const handleExportProject = async () => {
-    // First try: Use ephemeral session download (preferred - like Bolt.new)
+    if (!currentProject) {
+      console.error("No project to export")
+      return
+    }
+
+    // Double-check if user has download_files feature enabled (UI should already block this)
+    if (features && !features.download_files) {
+      console.warn("[Export] User doesn't have download_files feature")
+      return
+    }
+
+    // First try: Backend export (PREFERRED - has access to ALL files in sandbox/storage)
+    // This is the most reliable method as it exports directly from the server filesystem
+    if (currentProject.id) {
+      try {
+        const token = localStorage.getItem('access_token')
+        console.log(`[Export] Attempting backend export for project: ${currentProject.id}`)
+        const response = await fetch(`${API_BASE_URL}/execution/export/${currentProject.id}`, {
+          headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+        })
+        if (response.ok) {
+          const blob = await response.blob()
+          // Verify it's actually a ZIP with content
+          if (blob.size > 100) {  // Minimum valid ZIP size
+            const url = URL.createObjectURL(blob)
+            const link = document.createElement("a")
+            link.href = url
+            link.download = (currentProject.name || currentProject.id) + ".zip"
+            document.body.appendChild(link)
+            link.click()
+            document.body.removeChild(link)
+            URL.revokeObjectURL(url)
+            console.log(`[Export] Successfully exported ${blob.size} bytes from backend`)
+            return
+          } else {
+            console.warn("[Export] Backend returned empty/tiny ZIP, trying fallback")
+          }
+        } else {
+          console.warn(`[Export] Backend export failed: ${response.status} ${response.statusText}`)
+        }
+      } catch (error) {
+        console.warn("[Export] Backend export error, trying fallback:", error)
+      }
+    }
+
+    // Second try: Session download URL (if available from recent generation)
     if (sessionId && downloadUrl) {
       try {
+        console.log("[Export] Attempting session download")
         const response = await fetch(`${API_BASE_URL}${downloadUrl.replace('/api/v1', '')}`)
-        if (!response.ok) {
-          throw new Error("Failed to download: " + response.statusText)
+        if (response.ok) {
+          const blob = await response.blob()
+          if (blob.size > 100) {
+            const url = URL.createObjectURL(blob)
+            const link = document.createElement("a")
+            link.href = url
+            link.download = (currentProject.name || "project") + ".zip"
+            document.body.appendChild(link)
+            link.click()
+            document.body.removeChild(link)
+            URL.revokeObjectURL(url)
+            console.log("[Export] Project downloaded from session storage")
+            return
+          }
         }
-        const blob = await response.blob()
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement("a")
-        link.href = url
-        link.download = (currentProject?.name || "project") + ".zip"
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        URL.revokeObjectURL(url)
-        console.log("Project downloaded from session storage")
-        return
       } catch (error) {
-        console.warn("Session download failed, trying fallback:", error)
+        console.warn("[Export] Session download failed:", error)
       }
     }
 
-    // Second try: Client-side ZIP generation (works offline)
-    if (currentProject && currentProject.files.length > 0) {
+    // Third try: Client-side ZIP generation (works offline, but only includes loaded files)
+    if (currentProject.files.length > 0) {
       try {
+        console.log("[Export] Attempting client-side ZIP generation")
         await exportProjectAsZip(currentProject.name, currentProject.files)
-        console.log("Project exported via client-side ZIP")
+        console.log("[Export] Project exported via client-side ZIP")
         return
       } catch (error) {
-        console.error("Client-side export failed:", error)
+        console.error("[Export] Client-side export failed:", error)
       }
     }
 
-    // Third try: Legacy backend export (if project saved permanently)
-    if (currentProject?.id) {
-      try {
-        const response = await fetch(`${API_BASE_URL}/execution/export/${currentProject.id}`)
-        if (!response.ok) {
-          throw new Error("Failed to export: " + response.statusText)
-        }
-        const blob = await response.blob()
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement("a")
-        link.href = url
-        link.download = (currentProject.name || currentProject.id) + ".zip"
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        URL.revokeObjectURL(url)
-        console.log("Project exported from backend")
-      } catch (error) {
-        console.error("All export methods failed:", error)
-      }
-    } else {
-      console.error("No project to export")
-    }
+    console.error("[Export] All export methods failed")
   }
 
 
@@ -313,6 +556,10 @@ export function BoltLayout({
   const lastMessageContent = lastMessage?.content || ''
   const lastMessageIsStreaming = lastMessage?.type === 'assistant' && (lastMessage as any).isStreaming || false
 
+  // Track thinkingSteps and fileOperations for auto-scroll during generation
+  const lastMessageThinkingSteps = (lastMessage as any)?.thinkingSteps?.length || 0
+  const lastMessageFileOperations = (lastMessage as any)?.fileOperations?.length || 0
+
   useEffect(() => {
     if (lastMessageIsStreaming) {
       // Use requestAnimationFrame for smoother scroll during streaming
@@ -328,6 +575,15 @@ export function BoltLayout({
       scrollToBottom(true)
     }
   }, [isLoading, scrollToBottom])
+
+  // Auto-scroll when thinkingSteps or fileOperations update (PlanView content)
+  useEffect(() => {
+    if (lastMessageThinkingSteps > 0 || lastMessageFileOperations > 0) {
+      requestAnimationFrame(() => {
+        scrollToBottom(true)
+      })
+    }
+  }, [lastMessageThinkingSteps, lastMessageFileOperations, scrollToBottom])
 
   // Auto-switch to Code tab when files are generated
   useEffect(() => {
@@ -348,7 +604,7 @@ export function BoltLayout({
   }, [files.length])
 
   return (
-    <div className="h-screen flex flex-col bg-[hsl(var(--bolt-bg-primary))]">
+    <div className="h-screen w-screen flex flex-col bg-[hsl(var(--bolt-bg-primary))] overflow-hidden">
       {/* Reconnection Banner */}
       <ReconnectionBanner
         projectId={currentProject?.id}
@@ -358,20 +614,76 @@ export function BoltLayout({
         }}
       />
 
-      {/* Top Header */}
-      <div className="flex items-center justify-between px-6 py-3 border-b border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))]">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
-              <Zap className="w-5 h-5 text-white" />
-            </div>
-            <span className="font-bold text-lg bolt-gradient-text">BharatBuild AI</span>
-          </div>
+      {/* Top Header - Responsive */}
+      <div className="relative z-50 flex items-center justify-between px-3 md:px-6 py-2 md:py-3 border-b border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))] flex-shrink-0 overflow-visible">
+        <div className="flex items-center gap-2 md:gap-3">
+          {/* Home Button */}
+          <a
+            href="/"
+            className="flex items-center justify-center w-8 h-8 rounded-lg text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
+            title="Go to Home"
+          >
+            <Home className="w-5 h-5" />
+          </a>
 
-          {/* Code & Preview Buttons */}
-          <div className="flex items-center gap-1 ml-4">
+          {/* Project Selector - Hidden on very small screens */}
+          <div className="hidden sm:block">
+            <ProjectSelector onNewProject={handleNewProject} />
+          </div>
+        </div>
+
+        {/* Mobile Panel Switcher */}
+        {isMobile && (
+          <div className="flex items-center gap-1 bg-[hsl(var(--bolt-bg-tertiary))] rounded-lg p-1">
             <button
-              onClick={() => setActiveTab('code')}
+              onClick={() => setMobilePanel('chat')}
+              className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                mobilePanel === 'chat'
+                  ? 'bg-[hsl(var(--bolt-accent))] text-white'
+                  : 'text-[hsl(var(--bolt-text-secondary))]'
+              }`}
+            >
+              Chat
+            </button>
+            <button
+              onClick={() => {
+                setMobilePanel('code')
+                setActiveTab('code')
+              }}
+              className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                mobilePanel === 'code'
+                  ? 'bg-[hsl(var(--bolt-accent))] text-white'
+                  : 'text-[hsl(var(--bolt-text-secondary))]'
+              }`}
+            >
+              Code
+            </button>
+            <button
+              onClick={() => {
+                setMobilePanel('preview')
+                setActiveTab('preview')
+              }}
+              className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                mobilePanel === 'preview'
+                  ? 'bg-[hsl(var(--bolt-accent))] text-white'
+                  : 'text-[hsl(var(--bolt-text-secondary))]'
+              }`}
+            >
+              Preview
+            </button>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          {/* Code & Preview Buttons - Hidden on mobile (use mobile switcher instead) */}
+          <div className="hidden md:flex items-center gap-1 mr-32">
+            <button
+              onClick={() => {
+                setActiveTab('code')
+                if (terminalLogs.length > 0) {
+                  openTerminal()
+                }
+              }}
               className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                 activeTab === 'code'
                   ? 'bg-[hsl(var(--bolt-accent))] text-white'
@@ -394,23 +706,6 @@ export function BoltLayout({
             </button>
           </div>
 
-          {/* Project Selector */}
-          <ProjectSelector onNewProject={handleNewProject} />
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* Generate Project */}
-          {onGenerateProject && (
-            <button
-              onClick={onGenerateProject}
-              className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:from-blue-700 hover:to-purple-700 transition-colors"
-              title="Generate Complete Project"
-            >
-              <Sparkles className="w-4 h-4" />
-              Generate
-            </button>
-          )}
-
           {/* Project Run Controls (Docker) */}
           <ProjectRunControls
             onOpenTerminal={() => {
@@ -425,9 +720,12 @@ export function BoltLayout({
               }
             }}
             onOutput={(line) => {
-              // Show terminal (use openTerminal to avoid race conditions with toggle)
-              openTerminal()
-              // Add output to terminal
+              // Only open terminal if in Code mode, NOT in Preview mode
+              // User must click Code tab to see terminal output
+              if (activeTab === 'code') {
+                openTerminal()
+              }
+              // Always add output to terminal buffer (user can view later)
               addLog({
                 type: 'output',
                 content: line
@@ -436,6 +734,8 @@ export function BoltLayout({
             onStartSession={() => {
               // Start session - keeps terminal open during and after execution
               startSession()
+              // Switch to Preview tab when Run is clicked
+              setActiveTab('preview')
             }}
             onEndSession={() => {
               // End session but keep terminal open for user to review output
@@ -443,16 +743,45 @@ export function BoltLayout({
             }}
           />
 
+          {/* Resume Generation - Show when generation was interrupted */}
+          {canResume && (
+            <button
+              onClick={handleResumeGeneration}
+              disabled={isResuming}
+              className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 transition-colors disabled:opacity-50"
+              title={resumeMessage || "Resume interrupted generation"}
+            >
+              {isResuming ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <AlertCircle className="w-4 h-4" />
+              )}
+              {isResuming ? 'Resuming...' : 'Resume'}
+            </button>
+          )}
+
           {/* Export Project */}
-          <button
-            onClick={handleExportProject}
-            disabled={!currentProject || currentProject.files.length === 0}
-            className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            title="Download Project as ZIP"
-          >
-            <Download className="w-4 h-4" />
-            Export
-          </button>
+          {features && !features.download_files ? (
+            // Show locked button for non-premium users
+            <a
+              href="/pricing"
+              className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 transition-colors"
+              title="Upgrade to Premium to download projects"
+            >
+              <Lock className="w-4 h-4" />
+              Export (Premium)
+            </a>
+          ) : (
+            <button
+              onClick={handleExportProject}
+              disabled={!currentProject || currentProject.files.length === 0}
+              className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Download Project as ZIP"
+            >
+              <Download className="w-4 h-4" />
+              Export
+            </button>
+          )}
 
           {/* Connection Status Indicator - Only show when disconnected or reconnecting */}
           {connectionStatus !== 'connected' && connectionStatus !== 'checking' && (
@@ -475,40 +804,175 @@ export function BoltLayout({
             </div>
           )}
 
-          {/* Token Balance */}
-          <div className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-[hsl(var(--bolt-bg-tertiary))] border border-[hsl(var(--bolt-border))]">
-            <Sparkles className="w-4 h-4 text-[hsl(var(--bolt-accent))]" />
+          {/* Projects Counter */}
+          <div
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-lg border ${
+              isPremium
+                ? 'bg-gradient-to-r from-amber-500/10 to-yellow-500/10 border-amber-500/30'
+                : 'bg-[hsl(var(--bolt-bg-tertiary))] border-[hsl(var(--bolt-border))]'
+            }`}
+            title={projectLimit !== null ? `${projectsCreated} of ${projectLimit} projects used` : 'Unlimited projects'}
+          >
+            {isPremium ? (
+              <Crown className="w-4 h-4 text-amber-500" />
+            ) : (
+              <Layers className="w-4 h-4 text-[hsl(var(--bolt-accent))]" />
+            )}
             <span className="text-sm font-medium text-[hsl(var(--bolt-text-primary))]">
-              {tokenBalance.toLocaleString()} tokens
+              {projectLimit !== null ? (
+                <>
+                  {projectsCreated}/{projectLimit} Projects
+                </>
+              ) : (
+                'Unlimited'
+              )}
             </span>
+            {needsUpgrade && isFree && (
+              <a
+                href="/pricing"
+                className="ml-1 px-2 py-0.5 text-xs font-medium rounded-full bg-gradient-to-r from-blue-500 to-cyan-500 text-white hover:from-blue-600 hover:to-cyan-600 transition-colors"
+              >
+                Upgrade
+              </a>
+            )}
           </div>
 
-          {/* My Projects */}
-          <button
-            onClick={() => router.push('/projects')}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
-            title="My Projects"
-          >
-            <FolderKanban className="w-4 h-4" />
-            <span className="text-sm hidden sm:inline">Projects</span>
-          </button>
+          {/* User Menu Dropdown */}
+          {user && (
+            <div className="relative" ref={userMenuRef}>
+              {/* User Avatar/Name - Click to open dropdown */}
+              <button
+                onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[hsl(var(--bolt-bg-tertiary))] border border-[hsl(var(--bolt-border))] hover:bg-[hsl(var(--bolt-bg-secondary))] transition-colors"
+              >
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-white text-xs font-bold">
+                  {(user.full_name || user.name || user.email || 'U').charAt(0).toUpperCase()}
+                </div>
+                <span className="hidden sm:block text-xs font-medium text-[hsl(var(--bolt-text-primary))] max-w-[100px] truncate">
+                  {user.full_name || user.name || user.email?.split('@')[0] || 'User'}
+                </span>
+                <ChevronDown className={`w-4 h-4 text-[hsl(var(--bolt-text-secondary))] transition-transform ${isUserMenuOpen ? 'rotate-180' : ''}`} />
+              </button>
 
-          {/* Feedback */}
-          <button
-            onClick={() => setShowFeedback(true)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
-            title="Send Feedback"
-          >
-            <MessageSquare className="w-4 h-4" />
-            <span className="text-sm hidden sm:inline">Feedback</span>
-          </button>
+              {/* Dropdown Menu - Fixed position to avoid overflow clipping */}
+              {isUserMenuOpen && (
+                <div
+                  className="fixed w-48 rounded-xl bg-[#1a1a2e] border border-[#2a2a3e] shadow-2xl shadow-black/40 py-1"
+                  style={{
+                    top: (userMenuRef.current?.getBoundingClientRect().bottom || 0) + 8,
+                    right: window.innerWidth - (userMenuRef.current?.getBoundingClientRect().right || 0),
+                    zIndex: 9999
+                  }}
+                >
+                  {/* Menu Items */}
+                  <a
+                    href="/profile"
+                    className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
+                    onClick={() => setIsUserMenuOpen(false)}
+                  >
+                    <Settings className="w-4 h-4" />
+                    Settings
+                  </a>
+                  <a
+                    href="/help"
+                    className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
+                    onClick={() => setIsUserMenuOpen(false)}
+                  >
+                    <HelpCircle className="w-4 h-4" />
+                    Help
+                  </a>
+                  <a
+                    href="/pricing"
+                    className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
+                    onClick={() => setIsUserMenuOpen(false)}
+                  >
+                    <CreditCard className="w-4 h-4" />
+                    Subscription
+                  </a>
 
-          {/* Settings */}
-          <button
-            className="flex items-center justify-center w-8 h-8 rounded-lg text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
+                  {/* Theme with Submenu */}
+                  <div className="relative">
+                    <button
+                      onClick={() => setIsThemeMenuOpen(!isThemeMenuOpen)}
+                      className="flex items-center justify-between w-full px-4 py-2.5 text-sm text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        {theme === 'dark' ? <Moon className="w-4 h-4" /> : theme === 'light' ? <Sun className="w-4 h-4" /> : <Monitor className="w-4 h-4" />}
+                        Theme
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-500 capitalize">{theme}</span>
+                        <ChevronRight className="w-4 h-4 text-gray-500 rotate-180" />
+                      </div>
+                    </button>
+
+                    {/* Theme Submenu */}
+                    {isThemeMenuOpen && (
+                      <div
+                        className="absolute right-full top-0 mr-1 w-36 rounded-lg bg-[#1a1a2e] border border-[#2a2a3e] shadow-xl py-1"
+                      >
+                        <button
+                          onClick={() => {
+                            handleThemeChange('dark')
+                            setIsThemeMenuOpen(false)
+                          }}
+                          className={`flex items-center gap-3 w-full px-4 py-2 text-sm transition-colors ${
+                            theme === 'dark' ? 'text-blue-400 bg-blue-500/10' : 'text-gray-300 hover:text-white hover:bg-white/5'
+                          }`}
+                        >
+                          <Moon className="w-4 h-4" />
+                          Dark
+                          {theme === 'dark' && <Check className="w-4 h-4 ml-auto" />}
+                        </button>
+                        <button
+                          onClick={() => {
+                            handleThemeChange('light')
+                            setIsThemeMenuOpen(false)
+                          }}
+                          className={`flex items-center gap-3 w-full px-4 py-2 text-sm transition-colors ${
+                            theme === 'light' ? 'text-blue-400 bg-blue-500/10' : 'text-gray-300 hover:text-white hover:bg-white/5'
+                          }`}
+                        >
+                          <Sun className="w-4 h-4" />
+                          Light
+                          {theme === 'light' && <Check className="w-4 h-4 ml-auto" />}
+                        </button>
+                        <button
+                          onClick={() => {
+                            handleThemeChange('system')
+                            setIsThemeMenuOpen(false)
+                          }}
+                          className={`flex items-center gap-3 w-full px-4 py-2 text-sm transition-colors ${
+                            theme === 'system' ? 'text-blue-400 bg-blue-500/10' : 'text-gray-300 hover:text-white hover:bg-white/5'
+                          }`}
+                        >
+                          <Monitor className="w-4 h-4" />
+                          System
+                          {theme === 'system' && <Check className="w-4 h-4 ml-auto" />}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Divider */}
+                  <div className="my-1 border-t border-[#2a2a3e]" />
+
+                  {/* Sign Out */}
+                  <button
+                    onClick={() => {
+                      setIsUserMenuOpen(false)
+                      setIsThemeMenuOpen(false)
+                      logout()
+                    }}
+                    className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Sign out
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -516,85 +980,17 @@ export function BoltLayout({
       <div ref={containerRef} className="flex-1 flex overflow-hidden">
         {/* Left Panel - AI Chat Interaction */}
         <div
-          className="flex flex-col border-r border-[hsl(var(--bolt-border))] flex-shrink-0 min-w-0"
-          style={{ width: isSidebarOpen ? `${leftPanelWidth}%` : '100%' }}
+          className={`flex flex-col border-r border-[hsl(var(--bolt-border))] flex-shrink-0 min-w-0 ${
+            isMobile
+              ? mobilePanel === 'chat' ? 'w-full' : 'hidden'
+              : ''
+          }`}
+          style={!isMobile ? { width: isSidebarOpen ? `${leftPanelWidth}%` : '100%' } : undefined}
         >
-          {/* Messages */}
-          <div ref={messagesContainerRef} className="flex-1 overflow-y-auto scrollbar-thin">
-            {messages.length === 0 ? (
-              <div className="h-full flex items-center justify-center">
-                <div className="text-center max-w-2xl px-4">
-                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center mx-auto mb-6">
-                    <Zap className="w-8 h-8 text-white" />
-                  </div>
-                  <h2 className="text-2xl font-bold mb-3 text-[hsl(var(--bolt-text-primary))]">
-                    Welcome to BharatBuild AI
-                  </h2>
-                  <p className="text-[hsl(var(--bolt-text-secondary))] mb-8">
-                    Describe your project and watch as AI agents build it in real-time.
-                    Generate complete academic projects, production-ready code, and more.
-                  </p>
-
-                  <div className="grid grid-cols-2 gap-3 text-left">
-                    {[
-                      'Build a task management app with React',
-                      'Create an e-commerce platform',
-                      'Generate SRS for student project',
-                      'Build a REST API with FastAPI',
-                    ].map((example, index) => (
-                      <button
-                        key={index}
-                        onClick={() => onSendMessage(example)}
-                        className="p-3 rounded-lg bg-[hsl(var(--bolt-bg-secondary))] border border-[hsl(var(--bolt-border))] hover:border-[hsl(var(--bolt-accent))] transition-colors text-left"
-                      >
-                        <p className="text-sm text-[hsl(var(--bolt-text-primary))]">{example}</p>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <>
-                {messages.map((message, index) => (
-                  <ChatMessage
-                    key={index}
-                    role={message.type}
-                    content={message.content}
-                    isStreaming={message.type === 'assistant' && message.isStreaming}
-                  />
-                ))}
-
-                {/* Task Progress Panel - Only show when generating project */}
-                {messages.some(m => m.type === 'assistant' && ((m.thinkingSteps?.length ?? 0) > 0 || (m.fileOperations?.length ?? 0) > 0)) && (
-                  <div className="border-t border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))]">
-                    <button
-                      onClick={() => setIsPlanViewVisible(!isPlanViewVisible)}
-                      className="w-full flex items-center justify-between px-4 py-2 hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        <ListTodo className="w-4 h-4 text-[hsl(var(--bolt-accent))]" />
-                        <span className="text-sm font-medium text-[hsl(var(--bolt-text-primary))]">
-                          Generation Progress
-                        </span>
-                      </div>
-                      {isPlanViewVisible ? (
-                        <ChevronUp className="w-4 h-4 text-[hsl(var(--bolt-text-secondary))]" />
-                      ) : (
-                        <ChevronDown className="w-4 h-4 text-[hsl(var(--bolt-text-secondary))]" />
-                      )}
-                    </button>
-
-                    {isPlanViewVisible && (
-                      <div className="border-t border-[hsl(var(--bolt-border))] max-h-[300px] overflow-y-auto">
-                        <PlanView />
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div ref={messagesEndRef} />
-              </>
-            )}
+          {/* Project Stages Panel - Timeline View */}
+          <div ref={messagesContainerRef} className="flex-1 overflow-y-auto scrollbar-thin bg-[hsl(var(--bolt-bg-primary))]">
+            <ProjectStagesPanel />
+            <div ref={messagesEndRef} />
           </div>
 
           {/* Input */}
@@ -615,8 +1011,14 @@ export function BoltLayout({
         )}
 
         {/* Right Panel - Monaco Code Editor & Preview */}
-        {isSidebarOpen && (
-          <div className="flex-1 flex flex-col border-l border-[hsl(var(--bolt-border))] min-w-0">
+        {(isSidebarOpen || isMobile) && (
+          <div
+            className={`flex-1 flex flex-col border-l border-[hsl(var(--bolt-border))] min-w-0 ${
+              isMobile
+                ? (mobilePanel === 'code' || mobilePanel === 'preview') ? 'w-full' : 'hidden'
+                : ''
+            }`}
+          >
             {/* Tab Content */}
             <div className="flex-1 flex flex-col overflow-hidden">
               {activeTab === 'code' && (
@@ -630,14 +1032,47 @@ export function BoltLayout({
                     >
                       <FileExplorer
                         files={files}
-                        onFileSelect={(file) => {
-                          // Convert FileNode to ProjectFile and open in tab
-                          openTab({
-                            path: file.path || file.name,
-                            content: file.content || '',
-                            language: '',
-                            type: 'file'
-                          })
+                        onFileSelect={async (file) => {
+                          // Bolt.new-style lazy loading: content is loaded on-demand
+                          const filePath = file.path || file.name
+
+                          // Check if content already loaded
+                          if (file.content !== undefined && file.content !== null) {
+                            // Content already available, open tab immediately
+                            openTab({
+                              path: filePath,
+                              content: file.content,
+                              language: '',
+                              type: 'file'
+                            })
+                          } else {
+                            // Content not loaded yet - lazy load from backend
+                            console.log(`[BoltLayout] Lazy loading file: ${filePath}`)
+
+                            // Open tab with loading state
+                            openTab({
+                              path: filePath,
+                              content: '// Loading...',
+                              language: '',
+                              type: 'file',
+                              isLoading: true
+                            })
+
+                            // Load content from store (which fetches from backend)
+                            const { loadFileContent } = useProjectStore.getState()
+                            const content = await loadFileContent(filePath)
+
+                            if (content !== null) {
+                              // Update the tab with loaded content
+                              openTab({
+                                path: filePath,
+                                content: content,
+                                language: '',
+                                type: 'file',
+                                isLoaded: true
+                              })
+                            }
+                          }
                         }}
                         selectedFile={selectedFile?.name}
                       />
@@ -662,19 +1097,56 @@ export function BoltLayout({
               )}
 
               {activeTab === 'preview' && (
-                <div className={`flex-1 flex flex-col bg-white ${showTerminal ? '' : 'h-full'}`}>
-                  {/* Preview Content */}
+                <div className="flex-1 flex flex-col bg-white h-full">
+                  {/* Preview Content - Full height, no terminal in preview mode */}
                   <div className="flex-1 h-full">
                     {livePreview || <div className="h-full w-full" />}
                   </div>
                 </div>
               )}
 
-              {/* Shared Terminal Panel - Single instance, persists across tab switches */}
+              {activeTab === 'docs' && (
+                <div className="flex-1 flex flex-col h-full">
+                  <BuildDocumentsPanel />
+                </div>
+              )}
+
+              {/* Terminal Panel - Only visible in Code mode */}
               <div
-                className={`border-t border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))] flex flex-col flex-shrink-0 ${showTerminal ? '' : 'hidden'}`}
+                className={`border-t border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))] flex flex-col flex-shrink-0 ${showTerminal && activeTab === 'code' ? '' : 'hidden'}`}
                 style={{ height: `${terminalHeight}px` }}
               >
+                {/* Draggable Resize Handle */}
+                <div
+                  className="h-1.5 bg-[hsl(var(--bolt-border))] cursor-ns-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors group flex items-center justify-center"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    const startY = e.clientY
+                    const startHeight = terminalHeight
+
+                    const handleMouseMove = (moveEvent: MouseEvent) => {
+                      const delta = startY - moveEvent.clientY
+                      const newHeight = Math.min(600, Math.max(100, startHeight + delta))
+                      setTerminalHeight(newHeight)
+                    }
+
+                    const handleMouseUp = () => {
+                      document.removeEventListener('mousemove', handleMouseMove)
+                      document.removeEventListener('mouseup', handleMouseUp)
+                      document.body.style.cursor = ''
+                      document.body.style.userSelect = ''
+                    }
+
+                    document.addEventListener('mousemove', handleMouseMove)
+                    document.addEventListener('mouseup', handleMouseUp)
+                    document.body.style.cursor = 'ns-resize'
+                    document.body.style.userSelect = 'none'
+                  }}
+                >
+                  {/* Drag indicator */}
+                  <div className="w-10 h-0.5 rounded-full bg-gray-500 group-hover:bg-blue-400 transition-colors" />
+                </div>
+
                 {/* Terminal Header */}
                 <div className="flex items-center justify-between px-3 py-2 border-b border-[hsl(var(--bolt-border))]">
                   <div className="flex items-center gap-2">
@@ -682,23 +1154,27 @@ export function BoltLayout({
                     <span className="text-sm font-medium text-[hsl(var(--bolt-text-primary))]">
                       Terminal
                     </span>
+                    <span className="text-xs text-gray-500">({terminalHeight}px)</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <button
-                      onClick={() => setTerminalHeight(Math.max(150, terminalHeight - 50))}
+                      onClick={() => setTerminalHeight(Math.max(100, terminalHeight - 50))}
                       className="p-1 hover:bg-[hsl(var(--bolt-bg-tertiary))] rounded"
+                      title="Decrease height"
                     >
                       <Minus className="w-3 h-3 text-[hsl(var(--bolt-text-secondary))]" />
                     </button>
                     <button
-                      onClick={() => setTerminalHeight(Math.min(400, terminalHeight + 50))}
+                      onClick={() => setTerminalHeight(Math.min(600, terminalHeight + 50))}
                       className="p-1 hover:bg-[hsl(var(--bolt-bg-tertiary))] rounded"
+                      title="Increase height"
                     >
                       <Maximize2 className="w-3 h-3 text-[hsl(var(--bolt-text-secondary))]" />
                     </button>
                     <button
                       onClick={() => toggleTerminal()}
                       className="p-1 hover:bg-[hsl(var(--bolt-bg-tertiary))] rounded"
+                      title="Close terminal"
                     >
                       <X className="w-3 h-3 text-[hsl(var(--bolt-text-secondary))]" />
                     </button>
@@ -740,7 +1216,6 @@ export function BoltLayout({
       </div>
 
       {/* Feedback Modal */}
-      <FeedbackModal isOpen={showFeedback} onClose={() => setShowFeedback(false)} />
     </div>
   )
 }

@@ -105,12 +105,12 @@ SAMPLE_COLLEGES = [
 
 SAMPLE_DOCUMENTS = [
     {"type": DocumentType.SRS, "title": "Software Requirements Specification"},
-    {"type": DocumentType.DESIGN, "title": "System Design Document"},
+    {"type": DocumentType.PRD, "title": "Product Requirements Document"},
     {"type": DocumentType.UML, "title": "UML Diagrams"},
     {"type": DocumentType.CODE, "title": "Source Code Documentation"},
-    {"type": DocumentType.TEST, "title": "Test Cases Document"},
-    {"type": DocumentType.USER_MANUAL, "title": "User Manual"},
     {"type": DocumentType.REPORT, "title": "Project Report"},
+    {"type": DocumentType.PPT, "title": "Project Presentation"},
+    {"type": DocumentType.VIVA_QA, "title": "Viva Q&A Document"},
 ]
 
 TOKEN_PACKAGES = [

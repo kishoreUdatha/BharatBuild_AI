@@ -172,8 +172,8 @@ describe('Prompt Classifier', () => {
         const result = classifyPrompt('build a React app with TypeScript and Tailwind')
 
         expect(result.entities).toBeDefined()
-        if (result.entities?.technologies) {
-          expect(result.entities.technologies.length).toBeGreaterThan(0)
+        if (result.entities?.technology) {
+          expect(result.entities.technology.length).toBeGreaterThan(0)
         }
       })
 

@@ -15,10 +15,9 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from enum import Enum
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 import asyncio
 import json
-import logging
 import uuid
 
 from app.modules.orchestrator.dynamic_orchestrator import (
@@ -29,17 +28,42 @@ from app.modules.orchestrator.dynamic_orchestrator import (
     OrchestratorEvent
 )
 from app.core.database import get_db
+from app.core.config import settings
+from app.core.logging_config import logger
 from app.models.project import Project, ProjectStatus, ProjectMode
 from app.models.user import User
 from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.usage_limits import check_token_limit, deduct_tokens, log_api_usage, get_user_limits, check_project_limit
+from app.modules.auth.feature_flags import check_feature_access
 from app.services.sandbox_cleanup import touch_project
-
-logger = logging.getLogger(__name__)
+from app.services.enterprise_tracker import EnterpriseTracker
+from uuid import UUID as UUID_type
 
 router = APIRouter(prefix="/orchestrator", tags=["orchestrator"])
 
 # Global orchestrator instance
 orchestrator = DynamicOrchestrator()
+
+# ==================== Cancellation Registry ====================
+# Track cancelled project IDs to stop ongoing generation
+_cancelled_projects: set = set()
+
+
+def is_project_cancelled(project_id: str) -> bool:
+    """Check if a project has been cancelled"""
+    return project_id in _cancelled_projects
+
+
+def cancel_project(project_id: str):
+    """Mark a project as cancelled"""
+    _cancelled_projects.add(project_id)
+    logger.info(f"[Cancellation] Project {project_id} marked as cancelled")
+
+
+def clear_cancellation(project_id: str):
+    """Clear cancellation flag for a project"""
+    _cancelled_projects.discard(project_id)
+    logger.info(f"[Cancellation] Project {project_id} cancellation cleared")
 
 # Optional security for SSE endpoints (auth is optional but recommended)
 optional_security = HTTPBearer(auto_error=False)
@@ -157,7 +181,16 @@ class WorkflowExecuteRequest(BaseModel):
     user_request: str = Field(..., description="User's request for code generation")
     project_id: str = Field(..., description="Project ID to work on")
     workflow_name: str = Field(default="bolt_standard", description="Workflow to execute")
-    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional metadata")
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="""Additional metadata. Supports:
+        - color_theme: Custom UI colors for generated projects
+          - preset: "ecommerce", "healthcare", "finance", "education", "social", "ai", "blockchain", "gaming", "portfolio", "food", "travel", "fitness"
+          - OR: primary + secondary colors (e.g., {"primary": "pink", "secondary": "rose"})
+        - project_name: Optional project name
+        - user_id: User ID for authenticated requests
+        """
+    )
 
 
 class AgentUpdatePromptRequest(BaseModel):
@@ -201,7 +234,8 @@ async def event_generator(
     user_request: str,
     project_id: str,
     workflow_name: str,
-    metadata: Optional[Dict[str, Any]]
+    metadata: Optional[Dict[str, Any]],
+    tracker: Optional[EnterpriseTracker] = None
 ):
     """
     Generator for Server-Sent Events (SSE) streaming.
@@ -211,9 +245,15 @@ async def event_generator(
 
     IMPORTANT: Each yield MUST be followed by an await to allow the event loop
     to flush the data to the client. Without this, events get buffered.
+
+    If tracker is provided, important agent responses will be saved to the database.
     """
     try:
         logger.info("[SSE Generator] Starting event generator...")
+
+        # Get file limit from metadata (FREE users get 3 files only)
+        max_files_limit = metadata.get("max_files_limit") if metadata else None
+        files_generated = 0
 
         # Send initial connection event to ensure stream is open
         initial_event = {
@@ -229,6 +269,11 @@ async def event_generator(
         await asyncio.sleep(0)
 
         logger.info("[SSE Generator] Starting workflow execution...")
+        if max_files_limit:
+            logger.info(f"[SSE Generator] File limit active: {max_files_limit} files max")
+
+        # Clear any previous cancellation for this project
+        clear_cancellation(project_id)
 
         # Execute workflow and stream events
         async for event in orchestrator.execute_workflow(
@@ -237,13 +282,190 @@ async def event_generator(
             workflow_name=workflow_name,
             metadata=metadata
         ):
+            # Check for cancellation before processing each event
+            if is_project_cancelled(project_id):
+                logger.info(f"[SSE Generator] Project {project_id} cancelled, stopping generation")
+                cancelled_event = {
+                    "type": "cancelled",
+                    "data": {"message": "Generation stopped by user"},
+                    "step": None,
+                    "agent": None,
+                    "timestamp": None
+                }
+                yield f"data: {json.dumps(cancelled_event)}\n\n"
+                await asyncio.sleep(0)
+                # Clear cancellation flag after sending event
+                clear_cancellation(project_id)
+                return  # Exit the generator
+
             # Log all events for debugging
             event_type = event.type.value if hasattr(event.type, 'value') else str(event.type)
             logger.info(f"[SSE Generator] Yielding event: {event_type}")
 
-            # Log plan_created events for debugging
+            # Track file completions for FREE user limit
+            if event_type == "file_complete" and max_files_limit:
+                files_generated += 1
+                logger.info(f"[SSE Generator] Files generated: {files_generated}/{max_files_limit}")
+
+                # Check if file limit reached (FREE users get 3 files only)
+                if files_generated >= max_files_limit:
+                    # Send the current file event first
+                    event_data = {
+                        "type": event_type,
+                        "data": event.data,
+                        "step": event.step,
+                        "agent": event.agent,
+                        "timestamp": event.timestamp.isoformat() if event.timestamp else None
+                    }
+                    yield f"data: {json.dumps(event_data)}\n\n"
+                    await asyncio.sleep(0)
+
+                    # Then send upgrade required event
+                    upgrade_event = {
+                        "type": "upgrade_required",
+                        "data": {
+                            "message": f"🔒 FREE plan limit reached! You've generated {files_generated} files.",
+                            "reason": "file_limit_reached",
+                            "files_generated": files_generated,
+                            "max_files": max_files_limit,
+                            "upgrade_message": "Upgrade to Premium to generate the complete project with all files, bug fixing, and documentation.",
+                            "upgrade_url": "/pricing"
+                        },
+                        "step": None,
+                        "agent": None,
+                        "timestamp": None
+                    }
+                    logger.info(f"[SSE Generator] File limit reached! Sending upgrade_required event")
+                    yield f"data: {json.dumps(upgrade_event)}\n\n"
+                    await asyncio.sleep(0)
+
+                    # Send complete event to end the stream gracefully
+                    complete_event = {
+                        "type": "complete",
+                        "data": {
+                            "status": "partial",
+                            "message": f"Generated {files_generated} preview files. Upgrade to Premium for the complete project.",
+                            "files_generated": files_generated,
+                            "upgrade_required": True
+                        },
+                        "step": None,
+                        "agent": None,
+                        "timestamp": None
+                    }
+                    yield f"data: {json.dumps(complete_event)}\n\n"
+                    await asyncio.sleep(0)
+                    return  # Stop generation
+
+            # Log plan_created events and save planned files to DB
             if event_type == "plan_created":
                 logger.info(f"[SSE] Sending plan_created event to client with {len(event.data.get('tasks', []))} tasks")
+
+                # Save planned files to database for resume capability
+                try:
+                    from app.models.project_file import ProjectFile, FileGenerationStatus
+                    from app.core.database import AsyncSessionLocal
+
+                    async with AsyncSessionLocal() as db_session:
+                        tasks = event.data.get('tasks', [])
+                        order = 1
+                        for task in tasks:
+                            # Extract file path from task
+                            file_path = task.get('file') or task.get('path') or task.get('name', '')
+                            if file_path and not file_path.startswith('Run ') and '.' in file_path:
+                                # Check if file already exists
+                                existing = await db_session.execute(
+                                    select(ProjectFile).where(
+                                        ProjectFile.project_id == project_id,
+                                        ProjectFile.path == file_path
+                                    )
+                                )
+                                if not existing.scalar_one_or_none():
+                                    # Create planned file entry
+                                    planned_file = ProjectFile(
+                                        project_id=project_id,
+                                        path=file_path,
+                                        name=file_path.split('/')[-1],
+                                        generation_status=FileGenerationStatus.PLANNED,
+                                        generation_order=order,
+                                        is_folder=False
+                                    )
+                                    db_session.add(planned_file)
+                                    order += 1
+                        await db_session.commit()
+                        logger.info(f"[SSE] Saved {order-1} planned files for project {project_id}")
+                except Exception as plan_save_err:
+                    logger.warning(f"[SSE] Failed to save planned files: {plan_save_err}")
+
+            # Track important agent responses to database
+            if tracker:
+                try:
+                    project_uuid = UUID_type(project_id)
+
+                    # Track plan creation (planner agent response)
+                    if event_type == "plan_created":
+                        plan_content = json.dumps(event.data, indent=2)
+                        await tracker.track_agent_response(
+                            project_id=project_uuid,
+                            agent_type="planner",
+                            content=plan_content,
+                            tokens_used=0,  # Actual tokens tracked in orchestrator
+                            model_used=settings.CLAUDE_SONNET_MODEL
+                        )
+                        logger.debug(f"[SSE] Tracked planner response for project {project_id}")
+
+                    # Track file completions (writer agent)
+                    elif event_type == "file_complete":
+                        file_path = event.data.get("file_path", "unknown")
+                        await tracker.track_agent_response(
+                            project_id=project_uuid,
+                            agent_type="writer",
+                            content=f"Generated file: {file_path}",
+                            tokens_used=0
+                        )
+                except Exception as track_err:
+                    logger.warning(f"[SSE] Failed to track agent response: {track_err}")
+
+            # Update file status to COMPLETED when file is done
+            if event_type == "file_complete":
+                try:
+                    from app.models.project_file import ProjectFile, FileGenerationStatus
+                    from app.core.database import AsyncSessionLocal
+
+                    file_path = event.data.get("path") or event.data.get("file_path", "")
+                    if file_path:
+                        async with AsyncSessionLocal() as db_session:
+                            # Find and update the file status
+                            result = await db_session.execute(
+                                select(ProjectFile).where(
+                                    ProjectFile.project_id == project_id,
+                                    ProjectFile.path == file_path
+                                )
+                            )
+                            file_record = result.scalar_one_or_none()
+                            if file_record:
+                                file_record.generation_status = FileGenerationStatus.COMPLETED
+                                await db_session.commit()
+                                logger.info(f"[SSE] Marked file as COMPLETED: {file_path}")
+                except Exception as status_err:
+                    logger.warning(f"[SSE] Failed to update file status: {status_err}")
+
+            # Track important agent responses to database (continued)
+            if tracker:
+                try:
+                    project_uuid = UUID_type(project_id)
+
+                    # Track step completions with agent info
+                    if event_type == "step_complete" and event.agent:
+                        step_summary = event.data.get("message", "") or event.data.get("status", "completed")
+                        await tracker.track_agent_response(
+                            project_id=project_uuid,
+                            agent_type=event.agent,
+                            content=f"Step completed: {step_summary}",
+                            tokens_used=0
+                        )
+
+                except Exception as track_err:
+                    logger.warning(f"[SSE] Failed to track agent response: {track_err}")
 
             # Convert OrchestratorEvent to SSE format
             # Use event.type.value to ensure enum is serialized as string
@@ -346,6 +568,69 @@ async def execute_workflow(
         # Get user if authenticated
         current_user = await get_optional_user(credentials, db)
 
+        # Check usage limits for authenticated users
+        max_files_limit = None  # Default: unlimited
+        if current_user:
+            user_limits = await get_user_limits(current_user, db)
+            logger.info(f"[Execute Workflow] User {current_user.email} on {user_limits.plan_name} plan")
+
+            # Check if user has project_generation feature access (Premium required)
+            feature_access = await check_feature_access(db, current_user, "project_generation")
+            if not feature_access["allowed"]:
+                logger.warning(f"[Execute Workflow] Feature blocked for user {current_user.email}: {feature_access['reason']}")
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "feature_not_available",
+                        "message": "Project generation requires Premium plan. Upgrade to create full projects with code, documents, and bug fixing.",
+                        "feature": "project_generation",
+                        "current_plan": feature_access["current_plan"],
+                        "upgrade_to": "Premium",
+                        "upgrade_url": "/billing/plans"
+                    }
+                )
+            logger.info(f"[Execute Workflow] Feature access granted: project_generation")
+
+            # Check if user's plan allows project generation (project limit)
+            project_check = await check_project_limit(current_user, db)
+            if not project_check.allowed:
+                logger.warning(f"[Execute Workflow] Project limit reached for user {current_user.email}")
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "project_limit_reached",
+                        "message": project_check.reason or "You have reached your project limit. Please upgrade your plan.",
+                        "current_usage": project_check.current_usage,
+                        "limit": project_check.limit,
+                        "upgrade_url": "/billing/plans"
+                    }
+                )
+            logger.info(f"[Execute Workflow] Project limit check passed: {project_check.current_usage}/{project_check.limit} projects")
+
+            # Get file limit for FREE users (3 files only)
+            max_files_limit = user_limits.max_files_per_project
+            if max_files_limit:
+                logger.info(f"[Execute Workflow] File limit: {max_files_limit} files (FREE plan preview)")
+
+            # Check token limit (estimate ~5000 tokens for a typical workflow)
+            # The actual deduction happens in the orchestrator after completion
+            if not user_limits.is_unlimited and user_limits.token_limit:
+                from app.modules.auth.usage_limits import get_current_token_usage
+                current_usage = await get_current_token_usage(current_user, db)
+                if current_usage >= user_limits.token_limit:
+                    raise HTTPException(
+                        status_code=429,
+                        detail={
+                            "error": "token_limit_exceeded",
+                            "message": f"You've used all {user_limits.token_limit:,} tokens in your {user_limits.plan_name} plan",
+                            "current_usage": current_usage,
+                            "limit": user_limits.token_limit,
+                            "upgrade_url": "/billing/plans"
+                        }
+                    )
+                remaining_tokens = user_limits.token_limit - current_usage
+                logger.info(f"[Execute Workflow] Token check passed: {remaining_tokens:,} tokens remaining")
+
         # Determine the actual project_id to use for file storage
         actual_project_id = request.project_id
         db_project = None
@@ -369,9 +654,21 @@ async def execute_workflow(
             # Update project status
             db_project.status = ProjectStatus.PROCESSING
             await db.commit()
+
+            # Track user message in database (Enterprise feature)
+            tracker = EnterpriseTracker(db)
+            try:
+                await tracker.track_user_message(
+                    project_id=UUID_type(actual_project_id),
+                    content=request.user_request
+                )
+                logger.info(f"[Execute Workflow] Tracked user message for project {actual_project_id}")
+            except Exception as e:
+                logger.warning(f"[Execute Workflow] Failed to track user message: {e}")
         else:
             # Anonymous user - use the provided project_id as-is
             logger.info(f"[Execute Workflow] Anonymous user, using provided project_id: {actual_project_id}")
+            tracker = None  # No tracking for anonymous users
 
         # Add user context to metadata
         enhanced_metadata = request.metadata or {}
@@ -384,6 +681,10 @@ async def execute_workflow(
             enhanced_metadata["user_role"] = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
             logger.info(f"[Execute Workflow] User role: {enhanced_metadata['user_role']}")
             logger.info(f"[Execute Workflow] Added user_id={enhanced_metadata['user_id']} to metadata")
+            # Add file limit for FREE users (3 files only)
+            if max_files_limit:
+                enhanced_metadata["max_files_limit"] = max_files_limit
+                logger.info(f"[Execute Workflow] Added max_files_limit={max_files_limit} to metadata")
         else:
             logger.warning(f"[Execute Workflow] No authenticated user - sandbox will NOT have user-scoped path!")
 
@@ -415,16 +716,20 @@ async def execute_workflow(
                     user_request=request.user_request,
                     project_id=actual_project_id,
                     workflow_name=request.workflow_name,
-                    metadata=enhanced_metadata
+                    metadata=enhanced_metadata,
+                    tracker=tracker if current_user else None
                 ):
                     # Encode to bytes for proper streaming
                     yield event.encode('utf-8')
 
-                # Update project status on completion if authenticated
+                # Update project status on code completion if authenticated
+                # Mark as PARTIAL_COMPLETED (code done, documents pending)
+                # Project becomes COMPLETED only after documents are generated
                 if db_project:
                     try:
-                        db_project.status = ProjectStatus.COMPLETED
+                        db_project.status = ProjectStatus.PARTIAL_COMPLETED
                         await db.commit()
+                        logger.info(f"Project {db_project.id} marked as PARTIAL_COMPLETED (code generation done)")
                     except Exception as e:
                         logger.warning(f"Failed to update project status: {e}")
 
@@ -456,6 +761,306 @@ async def execute_workflow(
     except Exception as e:
         logger.error(f"Failed to start workflow execution: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Resume Generation Endpoint ====================
+
+class ResumeRequest(BaseModel):
+    """Request to resume interrupted generation"""
+    project_id: str
+    continue_message: Optional[str] = "Continue generating the remaining files"
+
+
+@router.post("/resume")
+async def resume_generation(
+    request: ResumeRequest,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Resume an interrupted project generation.
+
+    Use this when:
+    - Internet connection dropped during generation
+    - Browser was closed mid-generation
+    - Generation failed/stopped unexpectedly
+
+    The endpoint will:
+    1. Find the project and check its status
+    2. Get list of already generated files
+    3. Continue generating remaining files
+    """
+    try:
+        # Get authenticated user
+        current_user = await get_optional_user(credentials, db)
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required to resume generation")
+
+        # Get project from database
+        project_result = await db.execute(
+            select(Project).where(
+                Project.id == request.project_id,
+                Project.user_id == current_user.id
+            )
+        )
+        project = project_result.scalar_one_or_none()
+
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Get existing files for this project
+        from app.models.project_file import ProjectFile
+        files_result = await db.execute(
+            select(ProjectFile).where(ProjectFile.project_id == request.project_id)
+        )
+        existing_files = files_result.scalars().all()
+        existing_file_paths = [f.path for f in existing_files if f.path]
+
+        logger.info(f"[Resume] Project {request.project_id} has {len(existing_file_paths)} existing files")
+
+        # Build resume context
+        resume_context = f"""Continue generating this project.
+
+Already generated files (DO NOT regenerate these):
+{chr(10).join(['- ' + p for p in existing_file_paths]) if existing_file_paths else '(none yet)'}
+
+Original project: {project.title}
+Description: {project.description or 'N/A'}
+
+{request.continue_message}
+
+Generate the remaining files needed to complete this project. Skip any files that already exist."""
+
+        # Update project status
+        project.status = ProjectStatus.PROCESSING
+        await db.commit()
+
+        # Get user limits for file limit check
+        user_limits = await get_user_limits(current_user, db)
+        max_files_limit = user_limits.max_files_per_project
+
+        # Build metadata
+        metadata = {
+            "user_id": str(current_user.id),
+            "user_email": current_user.email,
+            "db_project_id": request.project_id,
+            "is_resume": True,
+            "existing_files": existing_file_paths,
+            "existing_file_count": len(existing_file_paths)
+        }
+
+        # Add file limit if applicable (for FREE users)
+        if max_files_limit:
+            # Subtract already generated files from limit
+            remaining_files = max(0, max_files_limit - len(existing_file_paths))
+            if remaining_files <= 0:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "file_limit_reached",
+                        "message": f"FREE plan limit reached. You've already generated {len(existing_file_paths)} files.",
+                        "upgrade_url": "/pricing"
+                    }
+                )
+            metadata["max_files_limit"] = remaining_files
+            logger.info(f"[Resume] File limit: {remaining_files} more files allowed")
+
+        # Create SSE generator
+        async def byte_generator():
+            try:
+                touch_project(request.project_id)
+
+                async for event in event_generator(
+                    user_request=resume_context,
+                    project_id=request.project_id,
+                    workflow_name="bolt_standard",
+                    metadata=metadata,
+                    tracker=None
+                ):
+                    yield event.encode('utf-8')
+
+                # Update project status on code completion
+                # Mark as PARTIAL_COMPLETED (code done, documents pending)
+                project.status = ProjectStatus.PARTIAL_COMPLETED
+                await db.commit()
+                logger.info(f"Project {project.id} marked as PARTIAL_COMPLETED after resume")
+
+            except Exception as e:
+                logger.error(f"Error in resume generation: {e}")
+                project.status = ProjectStatus.FAILED
+                await db.commit()
+                raise
+
+        return StreamingResponse(
+            byte_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to resume generation: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/project/{project_id}/status")
+async def get_project_generation_status(
+    project_id: str,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get project generation status - useful for checking if resume is needed.
+
+    Returns:
+    - status: current project status
+    - files_generated: number of files created
+    - can_resume: whether resume is possible
+    - last_activity: when project was last modified
+    """
+    current_user = await get_optional_user(credentials, db)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # Get project
+    project_result = await db.execute(
+        select(Project).where(
+            Project.id == project_id,
+            Project.user_id == current_user.id
+        )
+    )
+    project = project_result.scalar_one_or_none()
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Get file count
+    from app.models.project_file import ProjectFile
+    files_result = await db.execute(
+        select(func.count(ProjectFile.id)).where(ProjectFile.project_id == project_id)
+    )
+    files_count = files_result.scalar() or 0
+
+    # Determine if resume is possible
+    can_resume = project.status in [ProjectStatus.PROCESSING, ProjectStatus.FAILED, ProjectStatus.IN_PROGRESS]
+
+    return {
+        "project_id": project_id,
+        "title": project.title,
+        "status": project.status.value,
+        "files_generated": files_count,
+        "can_resume": can_resume,
+        "last_activity": project.last_activity.isoformat() if project.last_activity else None,
+        "progress": project.progress or 0,
+        "message": (
+            "Generation was interrupted. Click 'Resume' to continue."
+            if can_resume else
+            "Project fully complete with documents." if project.status == ProjectStatus.COMPLETED else
+            "Code generation complete. Generate documents to finish." if project.status == ProjectStatus.PARTIAL_COMPLETED else
+            "Project is ready for generation."
+        )
+    }
+
+
+@router.get("/project/{project_id}/progress")
+async def get_generation_progress(
+    project_id: str,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get detailed generation progress with file statuses.
+
+    Use this for polling when SSE connection is lost.
+    Returns list of all planned files with their generation status.
+
+    Status values:
+    - planned: In plan, not yet generated
+    - generating: Currently being generated
+    - completed: Successfully generated (has content)
+    - failed: Generation failed
+    - skipped: Skipped
+    """
+    current_user = await get_optional_user(credentials, db)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # Get project
+    project_result = await db.execute(
+        select(Project).where(
+            Project.id == project_id,
+            Project.user_id == current_user.id
+        )
+    )
+    project = project_result.scalar_one_or_none()
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Get all files with their status
+    from app.models.project_file import ProjectFile, FileGenerationStatus
+    files_result = await db.execute(
+        select(ProjectFile)
+        .where(ProjectFile.project_id == project_id)
+        .order_by(ProjectFile.generation_order.asc().nullslast(), ProjectFile.created_at.asc())
+    )
+    files = files_result.scalars().all()
+
+    # Count by status
+    status_counts = {
+        "planned": 0,
+        "generating": 0,
+        "completed": 0,
+        "failed": 0,
+        "skipped": 0
+    }
+
+    file_list = []
+    for f in files:
+        status = f.generation_status.value if f.generation_status else "completed"
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+        file_list.append({
+            "path": f.path,
+            "name": f.name,
+            "status": status,
+            "order": f.generation_order,
+            "has_content": bool(f.content_inline or f.s3_key),
+            "updated_at": f.updated_at.isoformat() if f.updated_at else None
+        })
+
+    total_files = len(files)
+    completed_files = status_counts["completed"]
+    progress_percent = int((completed_files / total_files * 100)) if total_files > 0 else 0
+
+    # Determine overall status
+    is_complete = status_counts["planned"] == 0 and status_counts["generating"] == 0
+    is_in_progress = status_counts["generating"] > 0 or (status_counts["planned"] > 0 and completed_files > 0)
+
+    return {
+        "project_id": project_id,
+        "title": project.title,
+        "project_status": project.status.value,
+        "generation": {
+            "total_files": total_files,
+            "completed": completed_files,
+            "planned": status_counts["planned"],
+            "generating": status_counts["generating"],
+            "failed": status_counts["failed"],
+            "progress_percent": progress_percent,
+            "is_complete": is_complete,
+            "is_in_progress": is_in_progress
+        },
+        "files": file_list,
+        "can_resume": status_counts["planned"] > 0 or status_counts["failed"] > 0,
+        "last_update": project.updated_at.isoformat() if project.updated_at else None
+    }
 
 
 # ==================== Workflow Management Endpoints ====================
@@ -880,6 +1485,49 @@ async def regenerate_project(
         raise
     except Exception as e:
         logger.error(f"[Regenerate] Failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Cancellation Endpoint ====================
+
+class CancelRequest(BaseModel):
+    """Request to cancel an ongoing workflow"""
+    project_id: str = Field(..., description="Project ID to cancel")
+
+
+@router.post("/cancel")
+async def cancel_workflow(
+    request: CancelRequest,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Cancel an ongoing workflow for a project.
+
+    This immediately marks the project as cancelled, which will:
+    - Stop any ongoing file generation
+    - Skip remaining workflow steps
+    - Return a cancellation event to the frontend
+
+    The cancellation is checked:
+    - Before each workflow step
+    - During file content streaming
+    - Before each agent execution
+    """
+    try:
+        logger.info(f"[Cancel] Received cancel request for project: {request.project_id}")
+
+        # Mark project as cancelled
+        cancel_project(request.project_id)
+
+        return {
+            "success": True,
+            "message": f"Cancellation requested for project {request.project_id}",
+            "project_id": request.project_id
+        }
+
+    except Exception as e:
+        logger.error(f"[Cancel] Failed to cancel project: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

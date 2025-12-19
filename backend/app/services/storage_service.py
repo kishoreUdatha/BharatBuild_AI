@@ -24,8 +24,10 @@ class StorageService:
 
     def __init__(self):
         self._client = None
-        self._bucket_name = settings.S3_BUCKET_NAME
+        self._public_client = None  # Separate client for presigned URLs with public endpoint
+        self._bucket_name = settings.effective_bucket_name
         self._initialized = False
+        logger.info(f"StorageService initialized with bucket: {self._bucket_name}")
 
     def _get_client(self):
         """Lazy initialization of S3/MinIO client"""
@@ -45,17 +47,55 @@ class StorageService:
                 )
             else:
                 # AWS S3 configuration
-                self._client = boto3.client(
-                    's3',
-                    aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-                    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-                    region_name=settings.AWS_REGION
-                )
+                # In ECS/Fargate, use IAM role (no explicit credentials needed)
+                # For local dev, use explicit credentials if provided
+                if settings.AWS_ACCESS_KEY_ID and settings.AWS_SECRET_ACCESS_KEY:
+                    self._client = boto3.client(
+                        's3',
+                        aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+                        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+                        region_name=settings.AWS_REGION
+                    )
+                else:
+                    # Use IAM role credentials (automatic in ECS/EC2)
+                    self._client = boto3.client(
+                        's3',
+                        region_name=settings.AWS_REGION
+                    )
+                    logger.info("S3 client using IAM role credentials")
 
             # Ensure bucket exists
             self._ensure_bucket()
 
         return self._client
+
+    def _get_public_client(self):
+        """Get client configured with public endpoint for presigned URLs"""
+        if self._public_client is None:
+            if settings.USE_MINIO:
+                # Use public endpoint for presigned URLs (browser accessible)
+                public_endpoint = getattr(settings, 'MINIO_PUBLIC_ENDPOINT', None)
+                if not public_endpoint and 'minio:' in settings.MINIO_ENDPOINT:
+                    public_endpoint = "localhost:9002"
+                else:
+                    public_endpoint = settings.MINIO_ENDPOINT
+
+                self._public_client = boto3.client(
+                    's3',
+                    endpoint_url=f"http://{public_endpoint}",
+                    aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+                    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+                    config=Config(
+                        signature_version='s3v4',
+                        s3={'addressing_style': 'path'}
+                    ),
+                    region_name=settings.AWS_REGION
+                )
+            else:
+                # For AWS S3, use the same client
+                self._public_client = self._get_client()
+
+        return self._public_client
 
     def _ensure_bucket(self):
         """Create bucket if it doesn't exist"""
@@ -220,7 +260,8 @@ class StorageService:
     async def get_presigned_url(self, s3_key: str, expiration: int = 3600) -> str:
         """Generate presigned URL for direct file download"""
         try:
-            client = self._get_client()
+            # Use public client so signature is valid for browser access
+            client = self._get_public_client()
             url = client.generate_presigned_url(
                 'get_object',
                 Params={'Bucket': self._bucket_name, 'Key': s3_key},

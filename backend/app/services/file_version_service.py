@@ -14,6 +14,7 @@ from sqlalchemy import select, delete, func
 from app.models.file_version import ProjectFileVersion
 from app.models.project_file import ProjectFile
 from app.core.logging_config import logger
+from app.services.storage_service import storage_service
 
 
 class FileVersionService:
@@ -221,7 +222,18 @@ class FileVersionService:
         file_record = result.scalar_one_or_none()
 
         if file_record:
-            file_record.content_inline = target_version.content
+            # Upload restored content to S3
+            content_bytes = target_version.content.encode('utf-8')
+            upload_result = await storage_service.upload_file(
+                str(project_id),
+                file_record.path,
+                content_bytes
+            )
+            s3_key = upload_result.get('s3_key')
+
+            file_record.s3_key = s3_key
+            file_record.content_inline = None  # Never store content inline
+            file_record.is_inline = False  # Always use S3
             file_record.content_hash = target_version.content_hash
             file_record.size_bytes = target_version.size_bytes
             await self.db.commit()

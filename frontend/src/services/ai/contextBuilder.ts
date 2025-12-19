@@ -93,7 +93,7 @@ export function buildAIContext(
   let totalTokens = 0
 
   for (const { file, score } of scoredFiles) {
-    const fileTokens = estimateTokens(file.content)
+    const fileTokens = estimateTokens(file.content || '')
 
     if (totalTokens + fileTokens > maxTokens) {
       break // Token limit reached

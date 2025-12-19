@@ -58,7 +58,8 @@ class WordDocumentGenerator:
         sections: List[Dict],
         project_data: Dict,
         document_type: str,
-        project_id: str = None
+        project_id: str = None,
+        user_id: str = None
     ) -> str:
         """
         Create complete Word document from sections.
@@ -68,10 +69,15 @@ class WordDocumentGenerator:
             project_data: Project metadata
             document_type: Type of document (project_report, srs, etc.)
             project_id: Project ID for saving to project's docs folder
+            user_id: User ID for isolation
 
         Returns:
             Path to generated document
         """
+        # Store user_id for diagram generation
+        self.user_id = user_id
+        self.project_id = project_id
+
         try:
             # Create document
             self.document = Document()
@@ -92,19 +98,45 @@ class WordDocumentGenerator:
             # Add table of contents (placeholder - Word will update)
             self._update_toc_fields()
 
-            # Determine output directory - prefer project docs folder
+            # Determine output directory - prefer project docs folder with user isolation
             if project_id:
-                output_dir = settings.get_project_docs_dir(project_id)
+                output_dir = settings.get_project_docs_dir(project_id, user_id)
             else:
                 output_dir = settings.GENERATED_DIR / "documents"
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            filename = f"{project_data.get('project_name', 'Document')}_{document_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+            project_name = project_data.get('project_name', 'Document')
+            filename = f"{project_name}_{document_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
             file_path = output_dir / filename
 
             self.document.save(str(file_path))
 
             logger.info(f"[WordGenerator] Created document: {file_path}")
+
+            # Save to S3 and PostgreSQL if project_id and user_id are available
+            if project_id and user_id:
+                try:
+                    from app.services.document_storage_service import document_storage
+
+                    save_result = await document_storage.save_document(
+                        user_id=user_id,
+                        project_id=project_id,
+                        local_file_path=str(file_path),
+                        title=f"{project_name} - {document_type.upper()}",
+                        doc_type=document_type,
+                        extra_metadata={
+                            'project_name': project_name,
+                            'document_type': document_type,
+                            'generated_at': datetime.now().isoformat()
+                        }
+                    )
+
+                    if save_result:
+                        logger.info(f"[WordGenerator] Saved to S3+DB: {save_result.get('s3_key')}")
+                    else:
+                        logger.warning(f"[WordGenerator] Failed to save to cloud storage")
+                except Exception as e:
+                    logger.error(f"[WordGenerator] Error saving to S3+DB: {e}")
 
             return str(file_path)
 
@@ -987,6 +1019,11 @@ We further declare that:"""
         elif not isinstance(content, dict):
             content = {}
 
+        # Get project name for more contextual content
+        project_name = "the project"
+        if project_data:
+            project_name = project_data.get("project_name", "the project")
+
         # Chapter/Section heading
         if section_id.startswith("ch"):
             # Chapter heading
@@ -999,14 +1036,20 @@ We further declare that:"""
         # Add main content
         main_content = content.get("content", "")
 
-        # If no main content but has error/fallback flag, generate placeholder
-        if not main_content and content.get("fallback"):
-            main_content = f"""This section covers {title}. The {title.lower()} provides essential information about the project implementation, covering key aspects of the system design and development process.
+        # If content is a dict (nested structure), extract the actual text
+        if isinstance(main_content, dict):
+            main_content = main_content.get("content", "") or main_content.get("text", "")
+
+        # If still no content and has error/fallback flag, generate project-specific placeholder
+        if not main_content and (content.get("fallback") or content.get("error")):
+            fallback_reason = content.get("fallback_reason", "")
+            logger.warning(f"[WordGenerator] Using fallback content for section {section_id}: {fallback_reason}")
+
+            main_content = f"""This section covers {title} for {project_name}. The {title.lower()} provides essential information about the project implementation, covering key aspects of the system design and development process.
 
 The content in this section is organized to give readers a comprehensive understanding of the technical aspects involved. Each subsection addresses specific components and their roles in the overall system architecture.
 
 Key points covered include the design decisions, implementation strategies, and best practices followed during development. The technical details are presented in a manner that facilitates understanding for both technical and non-technical stakeholders."""
-            logger.warning(f"[WordGenerator] Using fallback content for section: {section_id}")
 
         if main_content:
             self._add_formatted_text(main_content)
@@ -1465,7 +1508,7 @@ The section includes relevant technical details, design decisions, and implement
             })
 
     def _generate_diagram(self, diagram_type: str, project_data: Dict) -> Optional[str]:
-        """Generate a specific diagram using UML generator"""
+        """Generate a specific diagram using UML generator with DYNAMIC project data"""
         try:
             # Check if diagram was pre-generated by chunked_document_agent
             pre_generated = project_data.get('generated_diagrams', {})
@@ -1473,73 +1516,59 @@ The section includes relevant technical details, design decisions, and implement
                 return pre_generated[diagram_type]
 
             project_name = project_data.get('project_name', 'System')
-            features = project_data.get('features', [])
-            database_tables = project_data.get('database_tables', [])
+            # Use stored project_id and user_id for isolation
+            project_id = getattr(self, 'project_id', None) or project_data.get('project_id')
+            user_id = getattr(self, 'user_id', None) or project_data.get('user_id')
 
+            # Use UML generator's DYNAMIC extraction methods for project-specific diagrams
             if diagram_type == "use_case":
-                # Generate use case diagram
-                actors = ['User', 'Admin']
-                if 'authentication' in str(features).lower():
-                    actors.append('Guest')
-                use_cases = features[:8] if features else ['Login', 'Register', 'View Dashboard', 'Manage Data']
+                # DYNAMIC: Extract actors and use cases from actual project features
+                actors = uml_generator._extract_actors_from_project(project_data)
+                use_cases = uml_generator._extract_use_cases_from_project(project_data)
                 return uml_generator.generate_use_case_diagram(
                     project_name=project_name,
                     actors=actors,
-                    use_cases=use_cases
+                    use_cases=use_cases,
+                    project_id=project_id,
+                    user_id=user_id
                 )
 
             elif diagram_type == "class":
-                # Generate class diagram
-                classes = self._extract_classes(project_data)
-                return uml_generator.generate_class_diagram(classes)
+                # DYNAMIC: Extract classes from database tables and project structure
+                classes = uml_generator._extract_classes_from_project(project_data)
+                return uml_generator.generate_class_diagram(classes, project_id=project_id, user_id=user_id)
 
             elif diagram_type == "sequence":
-                # Generate sequence diagram
-                participants = ['User', 'Frontend', 'API', 'Database']
-                messages = [
-                    {'from': 'User', 'to': 'Frontend', 'message': 'Submit Request'},
-                    {'from': 'Frontend', 'to': 'API', 'message': 'API Call'},
-                    {'from': 'API', 'to': 'Database', 'message': 'Query'},
-                    {'from': 'Database', 'to': 'API', 'message': 'Result', 'type': 'return'},
-                    {'from': 'API', 'to': 'Frontend', 'message': 'Response', 'type': 'return'},
-                    {'from': 'Frontend', 'to': 'User', 'message': 'Display', 'type': 'return'},
-                ]
-                return uml_generator.generate_sequence_diagram(participants, messages)
+                # DYNAMIC: Extract participants from tech stack and API endpoints
+                participants, messages = uml_generator._extract_sequence_from_project(project_data)
+                return uml_generator.generate_sequence_diagram(participants, messages, project_id=project_id, user_id=user_id)
 
             elif diagram_type == "activity":
-                # Generate activity diagram
-                activities = [
-                    'Start Application',
-                    'User Authentication',
-                    'Load Dashboard',
-                    'Process User Request',
-                    'Update Database',
-                    'Return Response'
-                ]
-                return uml_generator.generate_activity_diagram(activities)
+                # DYNAMIC: Extract activities from project features
+                activities = uml_generator._extract_activities_from_project(project_data)
+                return uml_generator.generate_activity_diagram(activities, project_id=project_id, user_id=user_id)
 
             elif diagram_type == "er":
-                # Generate ER diagram
-                entities = self._extract_entities(project_data)
-                return uml_generator.generate_er_diagram(entities)
+                # DYNAMIC: Extract entities from database tables
+                entities = uml_generator._extract_entities_from_project(project_data)
+                return uml_generator.generate_er_diagram(entities, project_id=project_id, user_id=user_id)
 
             elif diagram_type == "dfd_0":
-                # Generate DFD Level 0
+                # DYNAMIC: Extract DFD components from project data
+                external_entities, data_stores, data_flows = uml_generator._extract_dfd_from_project(project_data)
                 return uml_generator.generate_dfd(
                     level=0,
                     processes=[project_name],
-                    data_stores=['Database'],
-                    external_entities=['User', 'Admin'],
-                    data_flows=[
-                        {'from': 'User', 'to': project_name, 'data': 'Request'},
-                        {'from': project_name, 'to': 'User', 'data': 'Response'},
-                        {'from': project_name, 'to': 'Database', 'data': 'Query'},
-                    ]
+                    data_stores=data_stores,
+                    external_entities=external_entities,
+                    data_flows=data_flows,
+                    project_id=project_id,
+                    user_id=user_id
                 )
 
             elif diagram_type == "system_architecture":
-                # Generate System Architecture Diagram
-                return uml_generator.generate_system_architecture_diagram(project_data)
+                # Generate System Architecture Diagram (already uses project_data)
+                return uml_generator.generate_system_architecture_diagram(project_data, project_id=project_id, user_id=user_id)
 
             return None
 

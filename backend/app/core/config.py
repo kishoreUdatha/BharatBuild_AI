@@ -108,10 +108,15 @@ class Settings(BaseSettings):
     ANTHROPIC_BASE_URL: str = ""  # Empty means use default Anthropic URL
     USE_MOCK_CLAUDE: bool = False
     CLAUDE_HAIKU_MODEL: str = "claude-3-5-haiku-20241022"
-    CLAUDE_SONNET_MODEL: str = "claude-3-5-sonnet-20241022"
+    CLAUDE_SONNET_MODEL: str = "claude-sonnet-4-20250514"
     CLAUDE_MAX_TOKENS: int = 4096
     CLAUDE_TEMPERATURE: float = 0.7
     USE_PLAIN_TEXT_RESPONSES: bool = True
+    CLAUDE_REQUEST_TIMEOUT: int = 300  # 5 minutes for large document generations
+    CLAUDE_CONNECT_TIMEOUT: int = 60  # seconds
+    CLAUDE_MAX_RETRIES: int = 5
+    CLAUDE_RETRY_BASE_DELAY: float = 2.0  # seconds
+    CLAUDE_RETRY_MAX_DELAY: float = 30.0  # seconds
 
     # ==========================================
     # Storage Configuration
@@ -123,17 +128,24 @@ class Settings(BaseSettings):
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""
     AWS_REGION: str = "us-east-1"
-    S3_BUCKET_NAME: str = "bharatbuild-projects"
+    S3_BUCKET_NAME: str = ""  # Primary bucket name
+    S3_BUCKET: str = ""  # Alias for S3_BUCKET_NAME (used in ECS task definition)
     MINIO_ENDPOINT: str = "localhost:9000"
     STORAGE_URL_EXPIRY: int = 3600  # 1 hour
+
+    @property
+    def effective_bucket_name(self) -> str:
+        """Get the effective S3 bucket name (supports both S3_BUCKET and S3_BUCKET_NAME)"""
+        return self.S3_BUCKET or self.S3_BUCKET_NAME or "bharatbuild-projects"
 
     # ==========================================
     # Authentication
     # ==========================================
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours - long sessions for better UX
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30  # 30 days refresh token
+    BCRYPT_ROUNDS: int = 12  # 4 for dev (fast), 12 for prod (secure)
 
     # ==========================================
     # Google OAuth
@@ -172,6 +184,10 @@ class Settings(BaseSettings):
     EMAIL_FROM: str = "noreply@bharatbuild.ai"
     EMAIL_FROM_NAME: str = "BharatBuild AI"
 
+    # SendGrid Configuration (preferred for bulk emails)
+    SENDGRID_API_KEY: str = ""
+    USE_SENDGRID: bool = True  # Use SendGrid when API key is available
+
     # ==========================================
     # Frontend
     # ==========================================
@@ -181,7 +197,7 @@ class Settings(BaseSettings):
     # ==========================================
     # CORS (stored as comma-separated string, parsed to list)
     # ==========================================
-    CORS_ORIGINS_STR: str = "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3003,http://localhost:3004,http://localhost:3005,http://localhost:3006,http://localhost:3007,http://localhost:3008"
+    CORS_ORIGINS_STR: str = "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3003,http://localhost:3004,http://localhost:3005,http://localhost:3006,http://127.0.0.1:3000,http://127.0.0.1:3001,http://127.0.0.1:3002,http://127.0.0.1:3003,http://127.0.0.1:3004,http://127.0.0.1:3005,http://127.0.0.1:3006"
 
     @property
     def CORS_ORIGINS(self) -> List[str]:
@@ -231,6 +247,7 @@ class Settings(BaseSettings):
     TOKEN_PACKAGE_STARTER: str = "50000,9900,Starter Pack"
     TOKEN_PACKAGE_PRO: str = "200000,34900,Pro Pack"
     TOKEN_PACKAGE_UNLIMITED: str = "1000000,149900,Unlimited Pack"
+    TOKEN_PACKAGE_COMPLETE: str = "500000,449900,Premium"  # ₹4,499 one-time
 
     # Monthly Plans
     MONTHLY_PLAN_FREE: str = "10000,0,Free Tier"
@@ -351,6 +368,16 @@ class Settings(BaseSettings):
     AGENT_MAX_AUTO_FIXES: int = 3
 
     # ==========================================
+    # Auto-Fixer Settings
+    # ==========================================
+    AUTOFIXER_MAX_ATTEMPTS: int = 10  # Max fix attempts before giving up
+    AUTOFIXER_COOLDOWN_SECONDS: int = 10  # Cooldown between fixes
+    AUTOFIXER_FIX_COOLDOWN_SECONDS: int = 30  # Min seconds between fix attempts
+    AUTOFIXER_FIX_WINDOW_SECONDS: int = 300  # 5 min window for max attempts
+    AUTOFIXER_INSTALL_TIMEOUT: int = 120  # Timeout for install commands
+    LOG_RETENTION_MINUTES: int = 30  # Log bus retention
+
+    # ==========================================
     # Timeouts and Intervals (in seconds/milliseconds as noted)
     # ==========================================
     SESSION_TTL: int = 3600  # 1 hour in seconds
@@ -448,6 +475,8 @@ class Settings(BaseSettings):
     # Storage Paths (configurable via env)
     # ==========================================
     USER_PROJECTS_PATH: str  # External path for generated projects (required)
+    DOCUMENTS_PATH: str = "C:/tmp/documents"  # Separate path for documents (reports, SRS, PPT)
+    DIAGRAMS_PATH: str = "C:/tmp/diagrams"  # Separate path for UML diagrams
 
     # ==========================================
     # Paths (computed, not from env)
@@ -466,12 +495,16 @@ class Settings(BaseSettings):
         self._temp_dir = self._base_dir / "temp"
         self._generated_dir = self._base_dir / "generated"
         self._user_projects_dir = Path(self.USER_PROJECTS_PATH)
+        self._documents_dir = Path(self.DOCUMENTS_PATH)
+        self._diagrams_dir = Path(self.DIAGRAMS_PATH)
 
         # Create directories if they don't exist
         self._upload_dir.mkdir(exist_ok=True, parents=True)
         self._temp_dir.mkdir(exist_ok=True, parents=True)
         self._generated_dir.mkdir(exist_ok=True, parents=True)
         self._user_projects_dir.mkdir(exist_ok=True, parents=True)
+        self._documents_dir.mkdir(exist_ok=True, parents=True)
+        self._diagrams_dir.mkdir(exist_ok=True, parents=True)
         Path(self.LOG_FILE).parent.mkdir(exist_ok=True, parents=True)
 
     @property
@@ -494,11 +527,37 @@ class Settings(BaseSettings):
     def USER_PROJECTS_DIR(self) -> Path:
         return self._user_projects_dir
 
-    def get_project_docs_dir(self, project_id: str) -> Path:
-        """Get the docs directory for a specific project"""
-        docs_dir = self._user_projects_dir / project_id / "docs"
+    @property
+    def DOCUMENTS_DIR(self) -> Path:
+        return self._documents_dir
+
+    @property
+    def DIAGRAMS_DIR(self) -> Path:
+        return self._diagrams_dir
+
+    def get_project_docs_dir(self, project_id: str, user_id: str = None) -> Path:
+        """
+        Get the docs directory for a specific project - stored OUTSIDE sandbox.
+        Now supports user isolation: /documents/<user_id>/<project_id>/
+        """
+        if user_id:
+            docs_dir = self._documents_dir / user_id / project_id
+        else:
+            docs_dir = self._documents_dir / project_id
         docs_dir.mkdir(parents=True, exist_ok=True)
         return docs_dir
+
+    def get_project_diagrams_dir(self, project_id: str, user_id: str = None) -> Path:
+        """
+        Get the diagrams directory for a specific project - stored OUTSIDE sandbox.
+        Now supports user isolation: /diagrams/<user_id>/<project_id>/
+        """
+        if user_id:
+            diagrams_dir = self._diagrams_dir / user_id / project_id
+        else:
+            diagrams_dir = self._diagrams_dir / project_id
+        diagrams_dir.mkdir(parents=True, exist_ok=True)
+        return diagrams_dir
 
     # ==========================================
     # Helper Methods for Token Configuration
@@ -508,7 +567,8 @@ class Settings(BaseSettings):
         return {
             "starter": parse_token_package(self.TOKEN_PACKAGE_STARTER),
             "pro": parse_token_package(self.TOKEN_PACKAGE_PRO),
-            "unlimited": parse_token_package(self.TOKEN_PACKAGE_UNLIMITED)
+            "unlimited": parse_token_package(self.TOKEN_PACKAGE_UNLIMITED),
+            "complete": parse_token_package(self.TOKEN_PACKAGE_COMPLETE)
         }
 
     def get_monthly_plans(self) -> Dict[str, Dict[str, Any]]:

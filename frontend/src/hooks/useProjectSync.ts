@@ -141,7 +141,7 @@ export function useProjectSync() {
     // Get content for all pending files
     const getAllFiles = (files: typeof currentProject.files): void => {
       for (const file of files) {
-        if (file.type === 'file' && pendingSaves.has(file.path)) {
+        if (file.type === 'file' && pendingSaves.has(file.path) && file.content !== undefined) {
           filesToSave.push({
             path: file.path,
             content: file.content

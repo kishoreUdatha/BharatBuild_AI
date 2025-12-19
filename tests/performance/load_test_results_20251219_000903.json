@@ -1,0 +1,23 @@
+{
+  "total_requests": 786,
+  "successful_requests": 786,
+  "failed_requests": 0,
+  "error_rate": 0.0,
+  "requests_per_second": 23.731603287235014,
+  "avg_response_time": 3.3833034165942943,
+  "p50_response_time": 3.1245946884155273,
+  "p95_response_time": 5.516290664672852,
+  "p99_response_time": 8.511781692504883,
+  "max_response_time": 17.64369010925293,
+  "duration_seconds": 33.120391845703125,
+  "num_users": 10,
+  "mode": "public",
+  "status_codes": {
+    "200": 786
+  },
+  "endpoints": {
+    "/health": 393,
+    "/documents/types": 393
+  },
+  "pass": true
+}

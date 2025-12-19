@@ -176,6 +176,9 @@ function FileTreeNode({
 }
 
 export function FileExplorer({ files, onFileSelect, selectedFile }: FileExplorerProps) {
+  // Debug: Log files received
+  console.log('[FileExplorer] Received files:', files.length, files.map(f => ({ name: f.name, type: f.type })))
+
   return (
     <div className="h-full flex flex-col bg-[hsl(var(--bolt-bg-secondary))] border-r border-[hsl(var(--bolt-border))]">
       {/* Header */}

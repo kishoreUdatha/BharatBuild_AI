@@ -276,7 +276,7 @@ export default function ImportPage() {
           </Link>
 
           <div className="flex items-center gap-4">
-            <Link href="/bolt">
+            <Link href="/build">
               <Button variant="outline" className="border-[hsl(var(--bolt-border))]">
                 Go to Editor
               </Button>
@@ -608,7 +608,7 @@ export default function ImportPage() {
                 >
                   Import Another Project
                 </Button>
-                <Button onClick={() => router.push('/bolt')}>
+                <Button onClick={() => router.push('/build')}>
                   Open in Editor <ArrowRight className="w-4 h-4 ml-1" />
                 </Button>
               </div>

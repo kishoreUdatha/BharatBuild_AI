@@ -16,6 +16,7 @@ import asyncio
 
 from app.core.database import get_db
 from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.feature_flags import require_feature
 from app.models.user import User
 from app.models.project import Project
 from app.models.project_file import ProjectFile
@@ -300,11 +301,14 @@ async def generate_documentation(
     project_id: str,
     doc_type: str = Form("all"),  # all, readme, srs, api, architecture
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_feature("document_generation"))
 ):
     """
     Generate documentation from existing code.
     Supports: README, SRS, API docs, Architecture docs
+
+    Requires: Premium plan (document_generation feature)
     """
     # Verify project
     result = await db.execute(

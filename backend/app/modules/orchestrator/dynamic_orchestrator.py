@@ -68,11 +68,11 @@ class PlanXMLSchema:
     # Required tags - now supports 'files' as alternative to 'tasks'
     REQUIRED_TAGS = {'plan'}  # 'files' OR 'tasks' required
 
-    # Optional tags
-    OPTIONAL_TAGS = {'project_name', 'project_description', 'project_type', 'category', 'complexity', 'tech_stack', 'notes', 'features', 'estimated_files'}
+    # Optional tags - PRODUCTION FIX: Added 'project_structure' as valid fallback source for files
+    OPTIONAL_TAGS = {'project_name', 'project_description', 'project_type', 'category', 'complexity', 'tech_stack', 'notes', 'features', 'estimated_files', 'project_structure'}
 
     # All allowed tags
-    ALLOWED_TAGS = REQUIRED_TAGS | OPTIONAL_TAGS | {'files', 'file', 'description', 'tasks', 'step', 'frontend', 'backend', 'database', 'feature'}
+    ALLOWED_TAGS = REQUIRED_TAGS | OPTIONAL_TAGS | {'files', 'file', 'description', 'tasks', 'step', 'frontend', 'backend', 'database', 'feature', 'category'}
 
     @staticmethod
     def validate(xml_string: str) -> Dict[str, Any]:
@@ -97,12 +97,13 @@ class PlanXMLSchema:
                 result['errors'].append(f"Root tag must be <plan>, got <{root.tag}>")
                 return result
 
-            # Check for required tags - must have either <files> or <tasks>
+            # PRODUCTION FIX: Check for required tags - must have <files>, <tasks>, or <project_structure>
             files_elem = root.find('files')
             tasks_elem = root.find('tasks')
+            structure_elem = root.find('project_structure')
 
-            if files_elem is None and tasks_elem is None:
-                result['errors'].append("Missing required tag: <files> or <tasks>")
+            if files_elem is None and tasks_elem is None and structure_elem is None:
+                result['errors'].append("Missing required tag: <files>, <tasks>, or <project_structure>")
 
             # Check for disallowed tags
             for elem in root.iter():
@@ -148,9 +149,91 @@ class PlanXMLSchema:
         return result
 
     @staticmethod
+    def _extract_files_from_structure(structure_text: str) -> List[Dict[str, Any]]:
+        """
+        PRODUCTION FIX: Extract file paths from ASCII tree <project_structure>
+
+        This parses structures like:
+        frontend/
+        ├── src/
+        │   ├── pages/
+        │   │   ├── LoginPage.tsx
+        │   │   └── Dashboard.tsx
+        │   ├── App.tsx
+        │   └── main.tsx
+        └── package.json
+
+        Returns:
+            List of file dicts with full paths reconstructed from tree
+        """
+        import re
+        files = []
+
+        # Track directory stack for full path reconstruction
+        dir_stack = []
+
+        # File extension patterns
+        file_extensions = r'\.(tsx?|jsx?|py|java|html|css|scss|json|yaml|yml|md|txt|sql|sh|bat|xml|gradle|properties|toml|lock|config\.js|config\.ts|Dockerfile|gitignore|env)$'
+
+        for line in structure_text.split('\n'):
+            if not line.strip():
+                continue
+
+            # Calculate indent level by counting leading spaces/tree chars
+            # Remove tree characters: │ ├ └ ─ and spaces
+            indent_chars = ""
+            clean_name = line
+            for i, char in enumerate(line):
+                if char in '│├└─ \t':
+                    indent_chars += char
+                else:
+                    clean_name = line[i:].strip()
+                    break
+
+            # Approximate indent level (4 chars = 1 level typically)
+            indent_level = len(indent_chars) // 4
+
+            # Skip empty or comment lines
+            if not clean_name or clean_name.startswith('#') or clean_name.startswith('//'):
+                continue
+
+            # Check if directory (ends with /)
+            is_directory = clean_name.endswith('/')
+
+            if is_directory:
+                dir_name = clean_name.rstrip('/')
+                # Adjust stack to current level
+                while len(dir_stack) > indent_level:
+                    dir_stack.pop()
+                dir_stack.append(dir_name)
+            elif re.search(file_extensions, clean_name, re.IGNORECASE):
+                # This is a file - reconstruct full path
+                while len(dir_stack) > indent_level:
+                    dir_stack.pop()
+
+                if dir_stack:
+                    full_path = '/'.join(dir_stack) + '/' + clean_name
+                else:
+                    full_path = clean_name
+
+                # Clean up path (remove any double slashes)
+                full_path = re.sub(r'/+', '/', full_path)
+
+                files.append({
+                    'path': full_path,
+                    'description': f"Generated from project structure",
+                    'priority': len(files) + 1,
+                    'status': 'pending'
+                })
+
+        return files
+
+    @staticmethod
     def parse_files_from_plan(xml_string: str) -> List[Dict[str, Any]]:
         """
         Parse <files> from plan XML - new file-based format
+
+        PRODUCTION FIX: Falls back to <project_structure> if <files> is missing
 
         Returns:
             List of file dicts with path, description, priority
@@ -180,7 +263,18 @@ class PlanXMLSchema:
 
                 # Sort by priority
                 files.sort(key=lambda x: x['priority'])
-                logger.info(f"[PlanXMLSchema] Parsed {len(files)} files from plan")
+                logger.info(f"[PlanXMLSchema] Parsed {len(files)} files from <files> section")
+
+            # PRODUCTION FIX: Fallback to <project_structure> if no <files>
+            if not files:
+                structure_elem = root.find('project_structure')
+                if structure_elem is not None and structure_elem.text:
+                    structure_text = structure_elem.text.strip()
+                    files = PlanXMLSchema._extract_files_from_structure(structure_text)
+                    if files:
+                        logger.info(f"[PlanXMLSchema] [FALLBACK] Extracted {len(files)} files from <project_structure>")
+                    else:
+                        logger.warning("[PlanXMLSchema] No files found in <project_structure>")
 
         except ET.ParseError as e:
             logger.error(f"[PlanXMLSchema] Failed to parse files: {e}")
@@ -323,7 +417,7 @@ class BoltStreamingBuffer:
 
                 files.append({
                     "path": path.strip(),
-                    "content": content
+                    "content": content.strip('\n')
                 })
                 logger.info(f"[Bolt Buffer] [OK] Extracted: {path}")
 
@@ -641,6 +735,7 @@ class WorkflowStep:
     retry_count: int = 3
     timeout: int = 120  # seconds
     stream_output: bool = False  # Whether to stream output in real-time
+    hidden: bool = False  # If True, step runs but doesn't show in UI progress
 
 
 @dataclass
@@ -659,6 +754,16 @@ class ExecutionContext:
     project_type: Optional[str] = None  # Commercial, Academic, Research, Prototype, etc.
     tech_stack: Optional[Dict[str, Any]] = None  # Detected tech stack from Planner
     workflow_steps: List[Dict[str, Any]] = None  # Workflow steps for frontend UI display
+    project_name: Optional[str] = None  # Human-readable project name from Planner
+    project_description: Optional[str] = None  # Project description from Planner
+    features: Optional[List[str]] = None  # Project features from Planner
+
+    # Token usage tracking
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    token_usage_by_model: Dict[str, Dict[str, int]] = None  # {"haiku": {"input": 0, "output": 0}}
+    token_usage_by_agent: Dict[str, Dict[str, int]] = None  # {"planner": {"input": 0, "output": 0}}
+    pending_token_transactions: List[Dict[str, Any]] = None  # Transactions to save at end
 
     def __post_init__(self):
         if self.files_created is None:
@@ -673,6 +778,61 @@ class ExecutionContext:
             self.metadata = {}
         if self.workflow_steps is None:
             self.workflow_steps = []
+        if self.token_usage_by_model is None:
+            self.token_usage_by_model = {}
+        if self.token_usage_by_agent is None:
+            self.token_usage_by_agent = {}
+        if self.pending_token_transactions is None:
+            self.pending_token_transactions = []
+
+    def track_tokens(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        model: str,
+        agent_type: str = "other",
+        operation: str = "other",
+        file_path: str = None
+    ):
+        """
+        Track token usage from a Claude API call.
+
+        Args:
+            input_tokens: Number of input tokens
+            output_tokens: Number of output tokens
+            model: Model used (haiku, sonnet, opus)
+            agent_type: Agent type (planner, writer, fixer, etc.)
+            operation: Operation type (plan_project, generate_file, etc.)
+            file_path: File path for file operations
+        """
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
+
+        # Track by model
+        if model not in self.token_usage_by_model:
+            self.token_usage_by_model[model] = {"input": 0, "output": 0}
+        self.token_usage_by_model[model]["input"] += input_tokens
+        self.token_usage_by_model[model]["output"] += output_tokens
+
+        # Track by agent
+        if agent_type not in self.token_usage_by_agent:
+            self.token_usage_by_agent[agent_type] = {"input": 0, "output": 0}
+        self.token_usage_by_agent[agent_type]["input"] += input_tokens
+        self.token_usage_by_agent[agent_type]["output"] += output_tokens
+
+        # Store transaction for saving later
+        self.pending_token_transactions.append({
+            "agent_type": agent_type,
+            "operation": operation,
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "file_path": file_path
+        })
+
+    @property
+    def total_tokens(self) -> int:
+        return self.total_input_tokens + self.total_output_tokens
 
 
 class AgentRegistry:
@@ -833,36 +993,38 @@ class WorkflowEngine:
         """Load default workflow patterns"""
 
         # Bolt.new standard workflow with run → fix → run loop
+        # Simplified step names for students - shows only essential progress
         self._workflows["bolt_standard"] = [
             WorkflowStep(
                 agent_type=AgentType.PLANNER,
-                name="Create Plan",
-                description="Analyze request and create implementation plan",
+                name="Planning Project",
+                description="Analyzing your request and designing the project structure",
                 timeout=120,
                 retry_count=2
             ),
             WorkflowStep(
                 agent_type=AgentType.WRITER,
-                name="Generate Code",
-                description="Write code based on plan",
+                name="Writing Code",
+                description="Creating all project files and code",
                 timeout=300,
                 retry_count=2,
                 stream_output=True
             ),
             WorkflowStep(
                 agent_type=AgentType.VERIFIER,
-                name="Verify Files",
-                description="Check if all files are complete and correct",
+                name="Checking Files",
+                description="Verifying all files are complete",
                 timeout=120,
                 retry_count=1,
-                stream_output=False
+                stream_output=False,
+                hidden=True  # Hide from UI - internal step
             ),
             # Runner: Run npm install / npm run build to check for compilation errors
             # ALWAYS runs if files are created (fixed condition to check file paths properly)
             WorkflowStep(
                 agent_type=AgentType.RUNNER,
-                name="Build & Check Errors",
-                description="Install dependencies and check for compilation errors",
+                name="Building Project",
+                description="Installing dependencies and building your project",
                 timeout=180,
                 retry_count=1,
                 stream_output=True,
@@ -876,31 +1038,30 @@ class WorkflowEngine:
             # Fixer: Fix any errors found during build
             WorkflowStep(
                 agent_type=AgentType.FIXER,
-                name="Fix Errors",
-                description="Fix any compilation or syntax errors",
+                name="Fixing Issues",
+                description="Automatically fixing any errors found",
                 timeout=300,
                 retry_count=2,
                 stream_output=True,
                 condition=lambda ctx: len(ctx.errors) > 0
             ),
-            # Re-run after fixes to verify they work
+            # Re-run after fixes to verify they work - Hidden from UI
             WorkflowStep(
                 agent_type=AgentType.RUNNER,
-                name="Verify Fixes",
-                description="Re-run build to verify errors are fixed",
+                name="Verifying Build",
+                description="Confirming all issues are resolved",
                 timeout=180,
                 retry_count=1,
                 stream_output=True,
+                hidden=True,  # Hide from UI - internal verification
                 condition=lambda ctx: len(ctx.files_modified) > 0 and any(f.get("operation") == "fix" for f in ctx.files_modified)
             ),
             # Documenter: Generate documentation (SRS, UML, Reports, etc.)
-            # NOW runs for ALL projects (not just Academic)
-            # For Academic projects: Full docs (SRS, UML, Reports, PPT, Viva)
-            # For Commercial projects: Basic docs (SRS, Architecture, API docs)
+            # For students: Full docs (Project Report, SRS, PPT, Viva Q&A)
             WorkflowStep(
                 agent_type=AgentType.DOCUMENTER,
-                name="Generate Documentation",
-                description="Create SRS, UML diagrams, Reports, PPT for project documentation",
+                name="Creating Documents",
+                description="Generating Project Report, SRS, Presentation, and Viva Q&A",
                 timeout=300,
                 retry_count=2,
                 stream_output=True,
@@ -957,6 +1118,18 @@ class WorkflowEngine:
                 timeout=180,
                 retry_count=2,
                 stream_output=True
+            ),
+            # DOCUMENTER: Generate academic docs for ALL users
+            # This is a student-focused platform, so always generate docs
+            WorkflowStep(
+                agent_type=AgentType.DOCUMENTER,
+                name="Creating Documents",
+                description="Create Project Report, SRS, PPT, Viva Q&A",
+                timeout=300,
+                retry_count=2,
+                stream_output=True,
+                # Run for ALL projects that created files
+                condition=lambda ctx: len(ctx.files_created) > 0
             ),
         ]
 
@@ -1156,6 +1329,7 @@ class DynamicOrchestrator:
                     "complexity": "simple",
                     "max_files": max_files,
                     "recommended_stack": stacks.get('flutter_simple', "Flutter + Dart") if "flutter" in request_lower else stacks.get('react_native_simple', "React Native + TypeScript"),
+                    "include_frontend": True,  # Mobile apps are "frontend"
                     "include_backend": False,
                     "include_docker": False,
                     "hint": f"Simple mobile app. Generate {max_files} files max. Include screens, widgets, models."
@@ -1167,6 +1341,7 @@ class DynamicOrchestrator:
                     "complexity": "complex",
                     "max_files": max_files,
                     "recommended_stack": stacks.get('flutter_complex', "Flutter + Dart + Provider/Bloc") if "flutter" in request_lower else stacks.get('react_native_complex', "React Native + TypeScript + Redux"),
+                    "include_frontend": True,  # Mobile apps are "frontend"
                     "include_backend": "backend" in request_lower or "api" in request_lower,
                     "include_docker": False,
                     "hint": f"Full mobile app. Generate up to {max_files} files. Include screens, widgets, models, services, state management."
@@ -1174,7 +1349,16 @@ class DynamicOrchestrator:
 
         # ============== JAVA/SPRING BOOT ==============
         if is_java:
-            spring_limits = tech_limits.get('spring_boot', {'simple': 20, 'complex': 50})
+            spring_limits = tech_limits.get('spring_boot', {'simple': 20, 'complex': 50, 'fullstack': 60})
+
+            # Check if user explicitly wants "backend only" (no frontend)
+            # NOTE: "backend use spring boot" means "use spring boot FOR backend", not "only backend"
+            backend_only_keywords = ["backend only", "api only", "rest api only", "no frontend", "only backend", "just backend", "backend api only"]
+            is_backend_only = any(kw in request_lower for kw in backend_only_keywords)
+
+            # Check if user wants fullstack (app, application, platform, ecommerce, etc.)
+            fullstack_keywords = ["app", "application", "platform", "website", "fullstack", "full-stack", "full stack", "with frontend", "with react", "with angular", "with vue"]
+            wants_fullstack = any(kw in request_lower for kw in fullstack_keywords) and not is_backend_only
 
             if any(kw in request_lower for kw in simple_keywords):
                 logger.info(f"[ComplexityDetection] Detected SIMPLE Spring Boot project")
@@ -1184,19 +1368,34 @@ class DynamicOrchestrator:
                     "max_files": max_files,
                     "recommended_stack": stacks.get('spring_boot_simple', "Spring Boot + Java + Maven + PostgreSQL"),
                     "include_backend": True,
+                    "include_frontend": False,
                     "include_docker": False,
                     "hint": f"Simple Spring Boot API. Generate {max_files} files max. Include controllers, services, repositories, models."
                 }
+            elif wants_fullstack:
+                # Fullstack: Spring Boot backend + React/Vue frontend
+                logger.info(f"[ComplexityDetection] Detected FULLSTACK Spring Boot + React project")
+                max_files = spring_limits.get('fullstack', 60)
+                return {
+                    "complexity": "complex",
+                    "max_files": max_files,
+                    "recommended_stack": stacks.get('spring_boot_fullstack', "Spring Boot + Java + Maven + PostgreSQL + React + Vite + TypeScript"),
+                    "include_backend": True,
+                    "include_frontend": True,
+                    "include_docker": True,
+                    "hint": f"Full-stack application with Spring Boot backend and React frontend. Generate up to {max_files} files. Structure: backend/ folder with Spring Boot (controllers, services, repositories, models, DTOs, configs, security) AND frontend/ folder with React (components, pages, hooks, services, styles). Include docker-compose.yml for both services."
+                }
             else:
-                logger.info(f"[ComplexityDetection] Detected FULL Spring Boot project")
+                logger.info(f"[ComplexityDetection] Detected FULL Spring Boot backend-only project")
                 max_files = spring_limits.get('complex', 50)
                 return {
                     "complexity": "complex",
                     "max_files": max_files,
                     "recommended_stack": stacks.get('spring_boot_complex', "Spring Boot + Java + Maven + PostgreSQL + Spring Security"),
                     "include_backend": True,
+                    "include_frontend": False,
                     "include_docker": True,
-                    "hint": f"Full Spring Boot application. Generate up to {max_files} files. Include controllers, services, repositories, models, DTOs, configs, security."
+                    "hint": f"Full Spring Boot backend application. Generate up to {max_files} files. Include controllers, services, repositories, models, DTOs, configs, security."
                 }
 
         # ============== DJANGO ==============
@@ -1210,6 +1409,7 @@ class DynamicOrchestrator:
                     "complexity": "simple",
                     "max_files": max_files,
                     "recommended_stack": stacks.get('django_simple', "Django + Python + PostgreSQL"),
+                    "include_frontend": True,  # Django includes templates (frontend)
                     "include_backend": True,
                     "include_docker": False,
                     "hint": f"Simple Django app. Generate {max_files} files max. Include models, views, urls, templates."
@@ -1221,6 +1421,7 @@ class DynamicOrchestrator:
                     "complexity": "complex",
                     "max_files": max_files,
                     "recommended_stack": stacks.get('django_complex', "Django + DRF + PostgreSQL + Celery"),
+                    "include_frontend": True,  # Django includes templates (frontend)
                     "include_backend": True,
                     "include_docker": True,
                     "hint": f"Full Django application. Generate up to {max_files} files. Include models, views, serializers, urls, templates, admin, celery tasks."
@@ -1235,6 +1436,7 @@ class DynamicOrchestrator:
                 "complexity": "intermediate",
                 "max_files": max_files,
                 "recommended_stack": stacks.get('ai_ml', "Python + TensorFlow/PyTorch + Streamlit + Jupyter"),
+                "include_frontend": True,  # Includes Streamlit/Gradio UI
                 "include_backend": False,
                 "include_docker": False,
                 "hint": f"AI/ML project. Generate {max_files} files max. Include model, preprocessing, training, inference, notebooks, Streamlit/Gradio interface."
@@ -1249,6 +1451,7 @@ class DynamicOrchestrator:
                 "complexity": "minimal",
                 "max_files": max_files,
                 "recommended_stack": stacks.get('minimal', "HTML + CSS + JavaScript OR React + Vite"),
+                "include_frontend": True,
                 "include_backend": False,
                 "include_docker": False,
                 "hint": f"Generate {max_files} files MAX. Frontend only. NO backend, NO Docker."
@@ -1262,6 +1465,7 @@ class DynamicOrchestrator:
                 "complexity": "simple",
                 "max_files": max_files,
                 "recommended_stack": stacks.get('simple', "React + Vite + TypeScript + Tailwind"),
+                "include_frontend": True,
                 "include_backend": False,
                 "include_docker": False,
                 "hint": f"Generate {max_files} files MAX. Frontend only unless backend explicitly requested."
@@ -1275,9 +1479,10 @@ class DynamicOrchestrator:
                 "complexity": "complex",
                 "max_files": max_files,
                 "recommended_stack": stacks.get('complex', "Next.js + FastAPI + PostgreSQL"),
+                "include_frontend": True,
                 "include_backend": True,
                 "include_docker": True,
-                "hint": f"Full-stack project. Generate up to {max_files} files. Include frontend, backend, database models, and Docker setup."
+                "hint": f"Full-stack project. Generate up to {max_files} files. Structure: frontend/ folder with React/Next.js AND backend/ folder with FastAPI/Node.js. Include database models and Docker setup."
             }
 
         # Check if "e-commerce" without "platform" or "full"
@@ -1289,6 +1494,7 @@ class DynamicOrchestrator:
                     "complexity": "simple",
                     "max_files": max_files,
                     "recommended_stack": stacks.get('simple', "React + Vite + TypeScript + Tailwind"),
+                    "include_frontend": True,
                     "include_backend": False,
                     "include_docker": False,
                     "hint": f"E-commerce landing page. Generate {max_files} files max. Frontend only with mock data."
@@ -1302,9 +1508,10 @@ class DynamicOrchestrator:
             "complexity": "intermediate",
             "max_files": max_files,
             "recommended_stack": stacks.get('intermediate_with_backend', "React + FastAPI + PostgreSQL") if needs_backend else stacks.get('intermediate', "React + Vite + TypeScript"),
+            "include_frontend": True,
             "include_backend": needs_backend,
             "include_docker": needs_backend,
-            "hint": f"Generate {max_files} files max. {'Include backend and database.' if needs_backend else 'Frontend focused.'}"
+            "hint": f"Generate {max_files} files max. {'Structure: frontend/ and backend/ folders. Include backend and database.' if needs_backend else 'Frontend focused.'}"
         }
 
     def _parse_xml_plan(self, plan_text: str) -> Dict[str, Any]:
@@ -1486,6 +1693,18 @@ class DynamicOrchestrator:
                                     task_num += 1
 
                 logger.info(f"[lxml DOM Parser] Extracted {len(result['tasks'])} tasks from lxml DOM (legacy mode)")
+
+            # PRODUCTION FIX: Fallback to <project_structure> if no <files> extracted
+            # This ensures we always have file paths for the writer agent
+            if not result['files']:
+                structure_elem = dom.find('project_structure')
+                if structure_elem is not None and structure_elem.text:
+                    structure_text = structure_elem.text.strip()
+                    result['files'] = PlanXMLSchema._extract_files_from_structure(structure_text)
+                    if result['files']:
+                        logger.info(f"[lxml DOM Parser] [FALLBACK] Extracted {len(result['files'])} files from <project_structure>")
+                    else:
+                        logger.warning("[lxml DOM Parser] No files found in <project_structure>")
 
             # Extract project_name from lxml DOM
             project_name_elem = dom.find('project_name')
@@ -1849,19 +2068,20 @@ class DynamicOrchestrator:
         context.total_steps = len(workflow)
 
         # Store workflow steps as tasks for frontend UI display
-        # This allows the UI to show ALL workflow steps upfront (not just the ones that execute)
+        # Filter out hidden steps - only show user-facing steps to keep UI clean
+        visible_steps = [(idx, step) for idx, step in enumerate(workflow) if not getattr(step, 'hidden', False)]
         context.workflow_steps = [
             {
-                "number": idx + 1,
+                "number": visible_idx + 1,  # Renumber visible steps 1, 2, 3...
                 "title": step.name,
                 "name": step.name,
                 "description": step.description,
                 "agent_type": step.agent_type,
                 "has_condition": step.condition is not None
             }
-            for idx, step in enumerate(workflow)
+            for visible_idx, (_, step) in enumerate(visible_steps)
         ]
-        logger.info(f"[Workflow] Prepared {len(context.workflow_steps)} workflow steps for frontend UI")
+        logger.info(f"[Workflow] Prepared {len(context.workflow_steps)} visible workflow steps for frontend UI (hidden {len(workflow) - len(visible_steps)} internal steps)")
 
         yield OrchestratorEvent(
             type=EventType.STATUS,
@@ -1935,8 +2155,20 @@ class DynamicOrchestrator:
         logger.info(f"[WORKFLOW_STARTED] Sent initial plan_created event with {len(context.workflow_steps)} workflow tasks")
 
         try:
+            # Import cancellation check from API layer
+            from app.api.v1.endpoints.orchestrator import is_project_cancelled
+
             # Execute each step in workflow
             for step_index, step in enumerate(workflow, 1):
+                # Check for cancellation before each step
+                if is_project_cancelled(project_id):
+                    logger.info(f"[Workflow] Project {project_id} cancelled, stopping at step {step_index}")
+                    yield OrchestratorEvent(
+                        type=EventType.STATUS,
+                        data={"message": "Generation cancelled by user"}
+                    )
+                    return  # Exit workflow
+
                 context.current_step = step_index
 
                 # Check step condition (if any)
@@ -2062,22 +2294,97 @@ class DynamicOrchestrator:
                     ]
 
                     # Update project record
+                    # Build update values - mark as PARTIAL_COMPLETED (code done, documents pending)
+                    # Project becomes COMPLETED only after documents are generated
+                    update_values = {
+                        'status': ProjectStatus.PARTIAL_COMPLETED,
+                        's3_path': self._unified_storage.get_s3_prefix(str(user_id), project_id) if user_id else None,
+                        's3_zip_key': s3_zip_key,
+                        'plan_json': context.plan if hasattr(context, 'plan') else None,
+                        'file_index': file_index,
+                        'progress': 100
+                    }
+                    
+                    # Update project metadata from context (extracted from planner)
+                    if hasattr(context, 'project_name') and context.project_name:
+                        update_values['title'] = context.project_name
+                    if hasattr(context, 'project_description') and context.project_description:
+                        update_values['description'] = context.project_description
+                    if hasattr(context, 'project_type') and context.project_type:
+                        update_values['domain'] = context.project_type
+                    if hasattr(context, 'tech_stack') and context.tech_stack:
+                        update_values['tech_stack'] = context.tech_stack
+                    if hasattr(context, 'features') and context.features:
+                        update_values['requirements'] = context.features
+                    
                     await db.execute(
                         update(Project)
                         .where(Project.id == project_id)
-                        .values(
-                            status=ProjectStatus.COMPLETED,
-                            s3_path=self._unified_storage.get_s3_prefix(str(user_id), project_id) if user_id else None,
-                            s3_zip_key=s3_zip_key,
-                            plan_json=context.plan if hasattr(context, 'plan') else None,
-                            file_index=file_index,
-                            progress=100
-                        )
+                        .values(**update_values)
                     )
                     await db.commit()
                     logger.info(f"[Layer3-PostgreSQL] Updated project metadata for {project_id}")
             except Exception as db_err:
                 logger.warning(f"[Layer3-PostgreSQL] Failed to update project: {db_err}")
+
+            # Save token usage to database
+            if user_id and context.total_tokens > 0:
+                try:
+                    from app.modules.auth.usage_limits import deduct_tokens
+                    from app.models.user import User
+                    from app.core.database import async_session
+                    from sqlalchemy import select
+
+                    async with async_session() as token_db:
+                        # Get user
+                        user_result = await token_db.execute(
+                            select(User).where(User.id == user_id)
+                        )
+                        user = user_result.scalar_one_or_none()
+
+                        if user:
+                            # Deduct tokens for each model used
+                            for model_name, usage in context.token_usage_by_model.items():
+                                model_total = usage["input"] + usage["output"]
+                                await deduct_tokens(user, token_db, model_total, model_name)
+                                logger.info(f"[TokenTracker] Saved {model_total} tokens for model {model_name}")
+
+                            logger.info(f"[TokenTracker] Total tokens saved: {context.total_tokens} (input: {context.total_input_tokens}, output: {context.total_output_tokens})")
+
+                            # Save detailed token transactions
+                            if context.pending_token_transactions:
+                                from app.services.token_tracker import token_tracker
+                                from app.models.usage import AgentType, OperationType
+
+                                for tx in context.pending_token_transactions:
+                                    try:
+                                        # Map string agent_type to enum
+                                        agent_type_str = tx.get("agent_type", "other")
+                                        agent_type = AgentType(agent_type_str) if agent_type_str in [e.value for e in AgentType] else AgentType.OTHER
+
+                                        # Map string operation to enum
+                                        operation_str = tx.get("operation", "other")
+                                        operation = OperationType(operation_str) if operation_str in [e.value for e in OperationType] else OperationType.OTHER
+
+                                        await token_tracker.log_transaction(
+                                            db=token_db,
+                                            user_id=str(user_id),
+                                            project_id=str(project_id),
+                                            agent_type=agent_type,
+                                            operation=operation,
+                                            model=tx.get("model", "haiku"),
+                                            input_tokens=tx.get("input_tokens", 0),
+                                            output_tokens=tx.get("output_tokens", 0),
+                                            file_path=tx.get("file_path"),
+                                            metadata=tx.get("metadata")
+                                        )
+                                    except Exception as tx_err:
+                                        logger.warning(f"[TokenTracker] Failed to save transaction: {tx_err}")
+
+                                logger.info(f"[TokenTracker] Saved {len(context.pending_token_transactions)} detailed token transactions")
+
+                except Exception as token_err:
+                    logger.warning(f"[TokenTracker] Failed to save token usage: {token_err}")
 
             # Workflow complete - include session_id for ZIP download
             yield OrchestratorEvent(
@@ -2090,7 +2397,13 @@ class DynamicOrchestrator:
                     "errors": len(context.errors),
                     "session_id": session_id,  # For ZIP download
                     "download_url": f"/api/v1/download/session/{session_id}" if session_id else None,
-                    "s3_zip_key": s3_zip_key  # S3 download key
+                    "s3_zip_key": s3_zip_key,  # S3 download key
+                    "token_usage": {
+                        "total": context.total_tokens,
+                        "input": context.total_input_tokens,
+                        "output": context.total_output_tokens,
+                        "by_model": context.token_usage_by_model
+                    }
                 }
             )
 
@@ -2302,21 +2615,26 @@ class DynamicOrchestrator:
         logger.info(f"[Planner] Complexity: {complexity_info['complexity']}, Max files: {complexity_info['max_files']}")
 
         # Build complexity-aware prompt
+        include_frontend = complexity_info.get('include_frontend', True)  # Default to True for backward compatibility
         complexity_hint = f"""
-⚠️ COMPLEXITY DETECTION RESULT:
+COMPLEXITY DETECTION RESULT:
 - Detected Complexity: {complexity_info['complexity'].upper()}
 - Maximum Files Allowed: {complexity_info['max_files']}
 - Recommended Stack: {complexity_info['recommended_stack']}
+- Include Frontend: {'YES - Generate frontend/ folder with React/Vue/Angular' if include_frontend else 'NO - Backend only, no frontend files'}
 - Include Backend: {'YES' if complexity_info['include_backend'] else 'NO'}
 - Include Docker: {'YES' if complexity_info['include_docker'] else 'NO'}
 
-🚨 CRITICAL INSTRUCTION: {complexity_info['hint']}
+CRITICAL INSTRUCTION: {complexity_info['hint']}
 """
+
+        # Build color theme instruction if user specified colors
+        color_instruction = self._build_color_instruction(context)
 
         user_prompt = f"""
 USER REQUEST:
 {context.user_request}
-
+{color_instruction}
 {complexity_hint}
 
 PROJECT CONTEXT:
@@ -2357,6 +2675,21 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
             max_tokens=config.max_tokens,
             temperature=config.temperature
         ):
+            # Check for token usage marker at end of stream
+            if chunk.startswith("__TOKEN_USAGE__:"):
+                parts = chunk.split(":")
+                if len(parts) >= 4:
+                    input_tokens = int(parts[1])
+                    output_tokens = int(parts[2])
+                    model_used = parts[3]
+                    context.track_tokens(
+                        input_tokens, output_tokens, model_used,
+                        agent_type="planner",
+                        operation="plan_project"
+                    )
+                    logger.info(f"[Planner] Token usage tracked: {input_tokens}+{output_tokens}={input_tokens+output_tokens} ({model_used})")
+                continue  # Don't process marker as content
+
             # Feed chunk to Bolt XML parser (incremental parsing with lxml)
             xml_parser.feed(chunk)
 
@@ -2454,11 +2787,21 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
         project_name = parsed_data.get('project_name')
         project_description = parsed_data.get('project_description')
         complexity = parsed_data.get('complexity')
+        features = context.plan.get('features', []) if context.plan else []
 
         if project_name:
             logger.info(f"[OK] Claude suggested project name: {project_name}")
+            context.project_name = project_name  # Save to context for DOCUMENTER
         else:
-            project_name = None  # Will use frontend's extracted name as fallback
+            # Fallback: extract from user request only if Claude didn't suggest one
+            project_name = self._extract_project_name_from_request(context.user_request)
+            logger.info(f"[FALLBACK] Extracted project name from request: {project_name}")
+            context.project_name = project_name
+        
+        # Save project metadata to context for downstream use (DOCUMENTER, etc.)
+        if project_description:
+            context.project_description = project_description
+        context.features = features
 
         # NEW: Handle file-based plan format
         if use_file_mode:
@@ -2575,9 +2918,9 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
                 yield OrchestratorEvent(
                     type=EventType.FILE_OPERATION,
                     data={
-                        "operation": "generating",
+                        "operation": "create",
                         "path": file_path,
-                        "status": "in-progress",
+                        "operation_status": "in_progress",
                         "file_number": file_index,
                         "total_files": len(files_to_generate),
                         "description": file_description
@@ -2596,13 +2939,21 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
                     ):
                         yield event
 
-                    # Mark file as complete
+                    # Mark file as complete - include file_content so frontend can display it
+                    # Get the content from the last created file
+                    file_content_for_event = ""
+                    for fc in reversed(context.files_created):
+                        if fc.get('path') == file_path:
+                            file_content_for_event = fc.get('content', '')
+                            break
+
                     yield OrchestratorEvent(
                         type=EventType.FILE_OPERATION,
                         data={
                             "operation": "create",
                             "path": file_path,
-                            "status": "complete",
+                            "operation_status": "complete",
+                            "file_content": file_content_for_event,
                             "file_number": file_index,
                             "total_files": len(files_to_generate)
                         }
@@ -2709,12 +3060,15 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
         - No risk of truncation or incomplete files
         """
 
+        # Build color theme instruction if user specified colors
+        color_instruction = self._build_color_instruction(context)
+
         # Build prompt for single file generation
         user_prompt = f"""
 FILE TO GENERATE:
 Path: {file_path}
 Description: {file_description}
-
+{color_instruction}
 PROJECT CONTEXT:
 User Request: {context.user_request}
 Project Type: {context.project_type or 'Web Application'}
@@ -2740,6 +3094,22 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
             max_tokens=config.max_tokens,
             temperature=config.temperature
         ):
+            # Check for token usage marker at end of stream
+            if chunk.startswith("__TOKEN_USAGE__:"):
+                parts = chunk.split(":")
+                if len(parts) >= 4:
+                    input_tokens = int(parts[1])
+                    output_tokens = int(parts[2])
+                    model_used = parts[3]
+                    context.track_tokens(
+                        input_tokens, output_tokens, model_used,
+                        agent_type="writer",
+                        operation="generate_file",
+                        file_path=file_path
+                    )
+                    logger.info(f"[Writer] Token usage tracked: {input_tokens}+{output_tokens}={input_tokens+output_tokens} ({model_used})")
+                continue  # Don't process marker as content
+
             # Feed chunk to buffer and extract complete files
             complete_files = streaming_buffer.feed_chunk(chunk)
 
@@ -2792,7 +3162,8 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
                         partial_content = partial_buffer[content_start:] if content_start > 0 else ""
 
                         if partial_content.strip():
-                            salvaged_content = f"// WARNING: This file may be incomplete\n{partial_content}"
+                            cleaned_content = partial_content.strip('\n')
+                            salvaged_content = f"// WARNING: This file may be incomplete\n{cleaned_content}"
                             await self.save_file(
                                 project_id=context.project_id,
                                 file_path=partial_path,
@@ -2825,6 +3196,9 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
     ) -> AsyncGenerator[OrchestratorEvent, None]:
         """Execute writer agent for a single task"""
 
+        # Build color theme instruction if user specified colors
+        color_instruction = self._build_color_instruction(context)
+
         if task:
             user_prompt = f"""
 CURRENT TASK:
@@ -2835,7 +3209,7 @@ FULL PLAN CONTEXT:
 
 USER REQUEST:
 {context.user_request}
-
+{color_instruction}
 Generate ONLY the files needed for THIS SPECIFIC TASK (Step {task['number']}).
 Use <file path="...">CONTENT</file> tags.
 Do NOT generate files for other steps - focus only on Step {task['number']}.
@@ -2844,7 +3218,7 @@ Do NOT generate files for other steps - focus only on Step {task['number']}.
             user_prompt = f"""
 TASK:
 {context.user_request}
-
+{color_instruction}
 PLAN:
 {context.plan.get('raw', 'No plan available') if context.plan else 'No plan available'}
 
@@ -2864,6 +3238,21 @@ Stream code in chunks for real-time display.
             max_tokens=config.max_tokens,
             temperature=config.temperature
         ):
+            # Check for token usage marker at end of stream
+            if chunk.startswith("__TOKEN_USAGE__:"):
+                parts = chunk.split(":")
+                if len(parts) >= 4:
+                    input_tokens = int(parts[1])
+                    output_tokens = int(parts[2])
+                    model_used = parts[3]
+                    context.track_tokens(
+                        input_tokens, output_tokens, model_used,
+                        agent_type="writer",
+                        operation="generate_batch"
+                    )
+                    logger.info(f"[Writer] Token usage tracked: {input_tokens}+{output_tokens}={input_tokens+output_tokens} ({model_used})")
+                continue  # Don't process marker as content
+
             # EXACT Bolt.new technique:
             # buffer += chunk
             # while "</file>" in buffer: extract, parse, save
@@ -2874,11 +3263,13 @@ Stream code in chunks for real-time display.
                 file_path = file_data['path']
                 file_content = file_data['content']
 
-                # Save file immediately
-                await self.file_manager.create_file(
+                # Save file to ALL 4 layers (sandbox, S3, database, checkpoint)
+                # This ensures files persist after sandbox cleanup
+                await self.save_file(
                     project_id=context.project_id,
                     file_path=file_path,
-                    content=file_content
+                    content=file_content,
+                    user_id=context.user_id
                 )
 
                 context.files_created.append({
@@ -2921,11 +3312,13 @@ Stream code in chunks for real-time display.
                         if partial_content.strip():
                             logger.info(f"[Streaming Buffer] Salvaging partial file: {partial_path}")
                             # Save partial file with warning comment
-                            salvaged_content = f"// WARNING: This file may be incomplete due to stream interruption\n{partial_content}"
-                            await self.file_manager.create_file(
+                            cleaned_content = partial_content.strip('\n')
+                            salvaged_content = f"// WARNING: This file may be incomplete due to stream interruption\n{cleaned_content}"
+                            await self.save_file(
                                 project_id=context.project_id,
                                 file_path=partial_path,
-                                content=salvaged_content
+                                content=salvaged_content,
+                                user_id=context.user_id
                             )
                             context.files_created.append({
                                 'path': partial_path,
@@ -3020,6 +3413,24 @@ Stream code in chunks for real-time display.
             }
         )
 
+        # IMPORTANT: Create plan_json from generated files
+        # This allows the project to be loaded later from the dropdown
+        # Without this, plan_json is NULL and the project can't be restored
+        context.plan = {
+            "raw": f"<!-- Auto-generated from bolt_instant mode -->\n<project>\n  <name>{context.project_name or 'Project'}</name>\n  <files>{len(context.files_created)}</files>\n</project>",
+            "files": [
+                {
+                    "path": f,
+                    "type": "code",
+                    "description": f"Generated file: {f}"
+                }
+                for f in context.files_created
+            ],
+            "tasks": [],  # No tasks in bolt_instant mode
+            "features": []
+        }
+        logger.info(f"[Bolt Instant] Created plan_json with {len(context.files_created)} files for database storage")
+
         logger.info(f"[Bolt Instant] [OK] Fast generation complete, {len(context.files_created)} files created")
 
     async def _execute_verifier(
@@ -3111,17 +3522,33 @@ Stream code in chunks for real-time display.
                 max_tokens=8192,
                 temperature=0.3
             ):
+                # Check for token usage marker at end of stream
+                if chunk.startswith("__TOKEN_USAGE__:"):
+                    parts = chunk.split(":")
+                    if len(parts) >= 4:
+                        input_tokens = int(parts[1])
+                        output_tokens = int(parts[2])
+                        model_used = parts[3]
+                        context.track_tokens(
+                            input_tokens, output_tokens, model_used,
+                            agent_type="verifier",
+                            operation="regenerate_file"
+                        )
+                        logger.info(f"[Verifier] Token usage tracked: {input_tokens}+{output_tokens}={input_tokens+output_tokens} ({model_used})")
+                    continue  # Don't process marker as content
+
                 complete_files = streaming_buffer.feed_chunk(chunk)
 
                 for file_data in complete_files:
                     file_path = file_data['path']
                     file_content = file_data['content']
 
-                    # Save regenerated file
-                    await self.file_manager.create_file(
+                    # Save regenerated file to ALL 4 layers
+                    await self.save_file(
                         project_id=context.project_id,
                         file_path=file_path,
-                        content=file_content
+                        content=file_content,
+                        user_id=context.user_id
                     )
 
                     # Update context
@@ -3213,6 +3640,7 @@ Stream code in chunks for real-time display.
 
         # Initialize fixer
         fixer = FixerAgent(model=config.model)
+        fixer.reset_token_tracking()  # Reset token tracking for this fix session
         file_manager = FileManager()
 
         # Process each error
@@ -3400,6 +3828,18 @@ Stream code in chunks for real-time display.
                         data={"command": instruction}
                     )
 
+        # Track fixer token usage
+        fixer_tokens = fixer.get_token_usage()
+        if fixer_tokens.get("total_tokens", 0) > 0:
+            context.track_tokens(
+                fixer_tokens.get("input_tokens", 0),
+                fixer_tokens.get("output_tokens", 0),
+                fixer_tokens.get("model", "haiku"),
+                agent_type="fixer",
+                operation="fix_error"
+            )
+            logger.info(f"[Fixer] Token usage tracked: {fixer_tokens.get('total_tokens', 0)} tokens ({fixer_tokens.get('call_count', 0)} calls)")
+
         # Clear errors after fixing
         fixed_count = len(context.errors)
         context.errors = []
@@ -3500,6 +3940,7 @@ Stream code in chunks for real-time display.
 
         # Initialize fixer agent
         fixer = FixerAgent(model=config.model)
+        fixer.reset_token_tracking()  # Reset token tracking for this fix session
         file_manager = FileManager()
 
         # Build file context from collected files
@@ -3590,6 +4031,18 @@ Stream code in chunks for real-time display.
                     "files_fixed": [f["path"] for f in context.files_modified]
                 }
             )
+
+            # Track fixer token usage
+            fixer_tokens = fixer.get_token_usage()
+            if fixer_tokens.get("total_tokens", 0) > 0:
+                context.track_tokens(
+                    fixer_tokens.get("input_tokens", 0),
+                    fixer_tokens.get("output_tokens", 0),
+                    fixer_tokens.get("model", "haiku"),
+                    agent_type="fixer",
+                    operation="auto_fix"
+                )
+                logger.info(f"[AUTO-FIX] Token usage tracked: {fixer_tokens.get('total_tokens', 0)} tokens ({fixer_tokens.get('call_count', 0)} calls)")
 
             # Emit server restart/reload event if files were modified
             if context.files_modified:
@@ -4606,6 +5059,200 @@ Stream code in chunks for real-time display.
 
 💡 **Pro Tip:** Read the generated code to understand patterns - modify and experiment to learn faster."""
 
+
+    async def _get_user_details(self, user_id: str) -> Dict[str, Any]:
+        """
+        Fetch user details from database for document generation.
+        Returns student academic details like college name, roll number, etc.
+        """
+        if not user_id:
+            return {}
+
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.user import User
+            from sqlalchemy import select
+
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(User).where(User.id == user_id)
+                )
+                user = result.scalar_one_or_none()
+
+                if not user:
+                    logger.warning(f"[Orchestrator] User not found for document generation: {user_id}")
+                    return {}
+
+                return {
+                    "full_name": user.full_name or "Student Name",
+                    "roll_number": user.roll_number or "ROLL001",
+                    "college_name": user.college_name or "College Name",
+                    "university_name": user.university_name or "Autonomous Institution",
+                    "department": user.department or "Department of Computer Science and Engineering",
+                    "course": user.course or "B.Tech",
+                    "year_semester": user.year_semester or "4th Year",
+                    "batch": user.batch or "2024-2025",
+                    "guide_name": user.guide_name or "Dr. Guide Name",
+                    "guide_designation": user.guide_designation or "Assistant Professor",
+                    "hod_name": user.hod_name or "Dr. HOD Name",
+                }
+        except Exception as e:
+            logger.error(f"[Orchestrator] Failed to fetch user details: {e}")
+            return {}
+
+    def _extract_project_name_from_request(self, user_request: str) -> str:
+        """
+        Extract a human-readable project name from the user's request.
+        Examples:
+          'create an ecommerce application' -> 'Ecommerce Application'
+          'build a task management app' -> 'Task Management App'
+          'make a weather dashboard' -> 'Weather Dashboard'
+        """
+        import re
+        
+        # Common patterns for extracting project type
+        patterns = [
+            r'(?:create|build|make|develop|generate)\s+(?:an?\s+)?(.+?)\s*(?:app(?:lication)?|system|platform|website|dashboard|portal|project)?$',
+            r'(?:create|build|make|develop|generate)\s+(?:an?\s+)?(.+?)$',
+            r'^(.+?)\s*(?:app(?:lication)?|system|platform|website|dashboard|portal|project)$',
+        ]
+        
+        request_lower = user_request.lower().strip()
+        
+        for pattern in patterns:
+            match = re.search(pattern, request_lower, re.IGNORECASE)
+            if match:
+                project_name = match.group(1).strip()
+                # Title case and clean up
+                project_name = ' '.join(word.capitalize() for word in project_name.split())
+                # Remove common filler words
+                project_name = re.sub(r'^(?:A|An|The)\s+', '', project_name)
+                if len(project_name) > 3:  # Reasonable length
+                    return project_name
+        
+        # Fallback: Extract key words from request
+        words = re.findall(r'[a-zA-Z]{3,}', user_request)
+        # Filter out common verbs
+        stop_words = {'create', 'build', 'make', 'develop', 'generate', 'with', 'using', 'the', 'and', 'for'}
+        key_words = [w for w in words if w.lower() not in stop_words][:3]
+        if key_words:
+            return ' '.join(word.capitalize() for word in key_words) + ' Project'
+        
+        return 'My Project'
+
+    def _extract_api_endpoints_from_files(self, files_created: List) -> List[Dict]:
+        """
+        Extract API endpoints from generated code files.
+        Looks for route decorators like @app.get, @router.post, etc.
+        """
+        import re
+        endpoints = []
+
+        # Patterns for different frameworks
+        patterns = [
+            # FastAPI/Flask patterns
+            r'@(?:app|router|api)\.(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']',
+            # Express.js patterns
+            r'(?:app|router)\.(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']',
+            # Spring Boot patterns
+            r'@(?:Get|Post|Put|Delete|Patch)Mapping\s*\(\s*(?:value\s*=\s*)?["\']([^"\']+)["\']',
+            # Django patterns
+            r'path\s*\(\s*["\']([^"\']+)["\']',
+        ]
+
+        for file_info in files_created:
+            if isinstance(file_info, dict):
+                file_path = file_info.get('path', '')
+                content = file_info.get('content', '')
+            elif isinstance(file_info, str):
+                file_path = file_info
+                content = ''
+            else:
+                continue
+
+            # Only check relevant files
+            if not any(ext in file_path for ext in ['.py', '.js', '.ts', '.java', '.go']):
+                continue
+
+            for pattern in patterns:
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                for match in matches:
+                    if len(match) == 2:
+                        method, path = match
+                        endpoints.append({
+                            "method": method.upper(),
+                            "path": path,
+                            "file": file_path
+                        })
+                    elif len(match) == 1:
+                        endpoints.append({
+                            "method": "GET",
+                            "path": match[0],
+                            "file": file_path
+                        })
+
+        return endpoints[:20]  # Limit to 20 endpoints
+
+    def _extract_database_tables_from_files(self, files_created: List) -> List[Dict]:
+        """
+        Extract database table/model definitions from generated code files.
+        Looks for model classes, table definitions, etc.
+        """
+        import re
+        tables = []
+
+        # Patterns for different ORMs/frameworks
+        patterns = [
+            # SQLAlchemy
+            (r'class\s+(\w+)\s*\([^)]*(?:Base|Model)[^)]*\)', 'sqlalchemy'),
+            # Django
+            (r'class\s+(\w+)\s*\(models\.Model\)', 'django'),
+            # Prisma
+            (r'model\s+(\w+)\s*\{', 'prisma'),
+            # TypeORM
+            (r'@Entity\s*\([^)]*\)\s*(?:export\s+)?class\s+(\w+)', 'typeorm'),
+            # Mongoose
+            (r'const\s+(\w+)Schema\s*=\s*new\s+(?:mongoose\.)?Schema', 'mongoose'),
+            # SQL CREATE TABLE
+            (r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\']?(\w+)[`"\']?', 'sql'),
+        ]
+
+        for file_info in files_created:
+            if isinstance(file_info, dict):
+                file_path = file_info.get('path', '')
+                content = file_info.get('content', '')
+            elif isinstance(file_info, str):
+                file_path = file_info
+                content = ''
+            else:
+                continue
+
+            # Only check relevant files
+            if not any(ext in file_path for ext in ['.py', '.js', '.ts', '.java', '.prisma', '.sql']):
+                continue
+
+            for pattern, orm_type in patterns:
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                for table_name in matches:
+                    # Skip common base classes
+                    if table_name.lower() in ['base', 'model', 'basemodel', 'entity']:
+                        continue
+                    tables.append({
+                        "name": table_name,
+                        "type": orm_type,
+                        "file": file_path
+                    })
+
+        # Remove duplicates
+        seen = set()
+        unique_tables = []
+        for table in tables:
+            if table['name'] not in seen:
+                seen.add(table['name'])
+                unique_tables.append(table)
+
+        return unique_tables[:15]  # Limit to 15 tables
+
     async def _execute_documenter(
         self,
         config: AgentConfig,
@@ -4614,15 +5261,28 @@ Stream code in chunks for real-time display.
         """
         Execute documenter agent - Generate documentation for ALL projects
 
-        For Academic projects: Full docs using ChunkedDocumentAgent (Word, PDF, PPT)
+        For Academic projects (student/faculty users): Full docs using ChunkedDocumentAgent (Word, PDF, PPT)
         For Other projects: Basic docs (README, API docs if applicable)
         """
         import asyncio
 
-        # Determine documentation type based on project
-        is_academic = context.project_type == "Academic"
+        # Determine documentation type based on project OR user role
+        # PRIORITY 1: Check user_role from metadata (student/faculty = academic)
+        user_role = context.metadata.get("user_role", "").lower() if context.metadata else ""
+        is_student_or_faculty = user_role in ["student", "faculty"]
 
-        logger.info(f"[Documenter] Generating documentation for project type: {context.project_type}, is_academic={is_academic}")
+        # PRIORITY 2: Check project_type
+        is_academic_project = context.project_type == "Academic"
+
+        # Student/Faculty users ALWAYS get academic documentation
+        is_academic = is_student_or_faculty or is_academic_project
+
+        # Update context.project_type if user is student/faculty (for downstream use)
+        if is_student_or_faculty and not is_academic_project:
+            context.project_type = "Academic"
+            logger.info(f"[Documenter] Set project_type to Academic based on user_role: {user_role}")
+
+        logger.info(f"[Documenter] Generating documentation - user_role={user_role}, project_type={context.project_type}, is_academic={is_academic}")
 
         if is_academic:
             # Use ChunkedDocumentAgent for academic projects (Word, PDF, PPT)
@@ -5002,59 +5662,119 @@ htmlcov
         chunked_agent = ChunkedDocumentAgent()
 
         # Build agent context
+        # IMPORTANT: Include user_id for document storage to S3 and PostgreSQL
+        user_id = context.metadata.get("user_id") if context.metadata else None
         agent_context = AgentContext(
             user_request=context.user_request,
             project_id=context.project_id,
+            user_id=user_id,  # Required for saving documents to S3 and database
             metadata={
                 "plan": context.plan,
                 "files_created": context.files_created,
                 "tech_stack": context.tech_stack,
-                "project_type": context.project_type
+                "project_type": context.project_type,
+                "user_id": user_id  # Also pass in metadata for compatibility
             }
         )
 
         # Build project data for content generation
+        # Use context.project_name if available (from Planner), fallback to extracting from user_request
+        actual_project_name = context.project_name or self._extract_project_name_from_request(context.user_request)
+
+        # Extract API endpoints from generated files (look for route definitions)
+        api_endpoints = getattr(context, 'api_endpoints', []) or []
+        if not api_endpoints and context.files_created:
+            api_endpoints = self._extract_api_endpoints_from_files(context.files_created)
+
+        # Extract database tables from generated files (look for model definitions)
+        database_tables = getattr(context, 'database_tables', []) or []
+        if not database_tables and context.files_created:
+            database_tables = self._extract_database_tables_from_files(context.files_created)
+
         project_data = {
-            "project_name": context.project_id,
-            "description": context.user_request,
+            "project_name": actual_project_name,
+            "project_type": context.project_type or "web_application",
+            "description": context.project_description or context.user_request,
             "plan": context.plan.get("raw", "") if context.plan else "",
             "files": context.files_created,
-            "tech_stack": context.tech_stack or []
+            "tech_stack": context.tech_stack or {},
+            "technologies": context.tech_stack or {},  # Alias for compatibility
+            "features": context.features or [],
+            "api_endpoints": api_endpoints,
+            "database_tables": database_tables,
+            "code_files": context.files_created or []
         }
 
-        # Default college info (can be customized later via API)
+        # Fetch user details for document generation
+        user_details = await self._get_user_details(user_id)
+
+        # Create college info from user's registration details
         college_info = CollegeInfo(
-            project_title=context.project_id.replace("-", " ").title()
+            project_title=actual_project_name,
+            college_name=user_details.get("college_name", "College Name"),
+            affiliated_to=user_details.get("university_name", "Autonomous Institution"),
+            department=user_details.get("department", "Department of Computer Science and Engineering"),
+            academic_year=user_details.get("batch", "2024-2025"),
+            guide_name=user_details.get("guide_name", "Dr. Guide Name"),
+            hod_name=user_details.get("hod_name", "Dr. HOD Name"),
+            students=[{
+                "name": user_details.get("full_name", "Student Name"),
+                "roll_number": user_details.get("roll_number", "ROLL001")
+            }]
         )
 
         doc_count = 0
         docs_dir = f"docs"
 
         try:
-            # Generate Project Report (Word)
+            # ============================================================
+            # PARALLEL DOCUMENT GENERATION - All docs generated at once!
+            # ============================================================
             yield OrchestratorEvent(
                 type=EventType.STATUS,
-                data={"message": "Generating Project Report (Word)..."}
+                data={"message": "Generating all documents in PARALLEL (Project Report, SRS, PPT, Viva Q&A)..."}
             )
 
-            report_path = None
-            async for event in chunked_agent.generate_document(
-                context=agent_context,
-                document_type=DocumentType.PROJECT_REPORT,
-                project_data=project_data,
-                college_info=college_info,
-                parallel=True
-            ):
-                if event.get("type") == "complete":
-                    report_path = event.get("file_path")  # ChunkedDocumentAgent yields "file_path"
-                    logger.info(f"[Documenter] Project Report generated: {report_path}")
-                elif event.get("type") == "phase":
-                    yield OrchestratorEvent(
-                        type=EventType.STATUS,
-                        data={"message": f"Project Report: {event.get('message', '')}"}
-                    )
+            # Helper function to generate a single document and return its path
+            async def generate_single_doc(doc_type: DocumentType, doc_name: str) -> Optional[str]:
+                """Generate a single document and return its file path"""
+                try:
+                    file_path = None
+                    async for event in chunked_agent.generate_document(
+                        context=agent_context,
+                        document_type=doc_type,
+                        project_data=project_data,
+                        college_info=college_info,
+                        parallel=True
+                    ):
+                        if event.get("type") == "complete":
+                            file_path = event.get("file_path")
+                            logger.info(f"[Documenter] {doc_name} generated: {file_path}")
+                    return file_path
+                except Exception as e:
+                    logger.error(f"[Documenter] Failed to generate {doc_name}: {e}")
+                    return None
 
-            if report_path:
+            # Run ALL document generations in parallel
+            logger.info("[Documenter] Starting PARALLEL generation of all 4 documents...")
+            start_time = asyncio.get_event_loop().time()
+
+            results = await asyncio.gather(
+                generate_single_doc(DocumentType.PROJECT_REPORT, "Project Report"),
+                generate_single_doc(DocumentType.SRS, "SRS"),
+                generate_single_doc(DocumentType.PPT, "PPT"),
+                generate_single_doc(DocumentType.VIVA_QA, "Viva Q&A"),
+                return_exceptions=True
+            )
+
+            elapsed = asyncio.get_event_loop().time() - start_time
+            logger.info(f"[Documenter] PARALLEL generation completed in {elapsed:.1f}s")
+
+            # Unpack results
+            report_path, srs_path, ppt_path, viva_path = results
+
+            # Process Project Report
+            if report_path and not isinstance(report_path, Exception):
                 doc_count += 1
                 yield OrchestratorEvent(
                     type=EventType.FILE_OPERATION,
@@ -5062,49 +5782,8 @@ htmlcov
                 )
                 context.files_created.append({"path": report_path, "type": "documentation"})
 
-                # Generate PDF from Word
-                try:
-                    pdf_path = report_path.replace(".docx", ".pdf")
-                    pdf_gen = PDFGenerator()
-                    await asyncio.to_thread(
-                        pdf_gen.convert_docx_to_pdf,
-                        report_path,
-                        pdf_path
-                    )
-                    doc_count += 1
-                    yield OrchestratorEvent(
-                        type=EventType.FILE_OPERATION,
-                        data={"path": pdf_path, "operation": "documentation", "status": "complete"}
-                    )
-                    context.files_created.append({"path": pdf_path, "type": "documentation"})
-                    logger.info(f"[Documenter] Project Report PDF generated: {pdf_path}")
-                except Exception as pdf_err:
-                    logger.warning(f"[Documenter] PDF conversion failed: {pdf_err}")
-
-            # Generate SRS Document (Word)
-            yield OrchestratorEvent(
-                type=EventType.STATUS,
-                data={"message": "Generating SRS Document (Word)..."}
-            )
-
-            srs_path = None
-            async for event in chunked_agent.generate_document(
-                context=agent_context,
-                document_type=DocumentType.SRS,
-                project_data=project_data,
-                college_info=college_info,
-                parallel=True
-            ):
-                if event.get("type") == "complete":
-                    srs_path = event.get("file_path")  # ChunkedDocumentAgent yields "file_path"
-                    logger.info(f"[Documenter] SRS generated: {srs_path}")
-                elif event.get("type") == "phase":
-                    yield OrchestratorEvent(
-                        type=EventType.STATUS,
-                        data={"message": f"SRS: {event.get('message', '')}"}
-                    )
-
-            if srs_path:
+            # Process SRS
+            if srs_path and not isinstance(srs_path, Exception):
                 doc_count += 1
                 yield OrchestratorEvent(
                     type=EventType.FILE_OPERATION,
@@ -5112,49 +5791,8 @@ htmlcov
                 )
                 context.files_created.append({"path": srs_path, "type": "documentation"})
 
-                # Generate PDF from Word
-                try:
-                    pdf_path = srs_path.replace(".docx", ".pdf")
-                    pdf_gen = PDFGenerator()
-                    await asyncio.to_thread(
-                        pdf_gen.convert_docx_to_pdf,
-                        srs_path,
-                        pdf_path
-                    )
-                    doc_count += 1
-                    yield OrchestratorEvent(
-                        type=EventType.FILE_OPERATION,
-                        data={"path": pdf_path, "operation": "documentation", "status": "complete"}
-                    )
-                    context.files_created.append({"path": pdf_path, "type": "documentation"})
-                    logger.info(f"[Documenter] SRS PDF generated: {pdf_path}")
-                except Exception as pdf_err:
-                    logger.warning(f"[Documenter] SRS PDF conversion failed: {pdf_err}")
-
-            # Generate PPT
-            yield OrchestratorEvent(
-                type=EventType.STATUS,
-                data={"message": "Generating Presentation (PPT)..."}
-            )
-
-            ppt_path = None
-            async for event in chunked_agent.generate_document(
-                context=agent_context,
-                document_type=DocumentType.PPT,
-                project_data=project_data,
-                college_info=college_info,
-                parallel=True
-            ):
-                if event.get("type") == "complete":
-                    ppt_path = event.get("file_path")  # ChunkedDocumentAgent yields "file_path"
-                    logger.info(f"[Documenter] PPT generated: {ppt_path}")
-                elif event.get("type") == "phase":
-                    yield OrchestratorEvent(
-                        type=EventType.STATUS,
-                        data={"message": f"PPT: {event.get('message', '')}"}
-                    )
-
-            if ppt_path:
+            # Process PPT
+            if ppt_path and not isinstance(ppt_path, Exception):
                 doc_count += 1
                 yield OrchestratorEvent(
                     type=EventType.FILE_OPERATION,
@@ -5162,30 +5800,8 @@ htmlcov
                 )
                 context.files_created.append({"path": ppt_path, "type": "documentation"})
 
-            # Generate Viva Q&A Document (Word)
-            yield OrchestratorEvent(
-                type=EventType.STATUS,
-                data={"message": "Generating Viva Questions & Answers (Word)..."}
-            )
-
-            viva_path = None
-            async for event in chunked_agent.generate_document(
-                context=agent_context,
-                document_type=DocumentType.VIVA_QA,
-                project_data=project_data,
-                college_info=college_info,
-                parallel=True
-            ):
-                if event.get("type") == "complete":
-                    viva_path = event.get("file_path")  # ChunkedDocumentAgent yields "file_path"
-                    logger.info(f"[Documenter] Viva Q&A generated: {viva_path}")
-                elif event.get("type") == "phase":
-                    yield OrchestratorEvent(
-                        type=EventType.STATUS,
-                        data={"message": f"Viva Q&A: {event.get('message', '')}"}
-                    )
-
-            if viva_path:
+            # Process Viva Q&A
+            if viva_path and not isinstance(viva_path, Exception):
                 doc_count += 1
                 yield OrchestratorEvent(
                     type=EventType.FILE_OPERATION,
@@ -5195,7 +5811,7 @@ htmlcov
 
             yield OrchestratorEvent(
                 type=EventType.STATUS,
-                data={"message": f"Academic documentation complete ({doc_count} documents: Project Report, SRS, PPT, Viva Q&A)"}
+                data={"message": f"Academic documentation complete ({doc_count} documents in {elapsed:.0f}s - PARALLEL mode)"}
             )
 
         except asyncio.TimeoutError:
@@ -5282,11 +5898,12 @@ htmlcov
             if doc_path and doc_content:
                 logger.info(f"[Documenter] Saving document: {doc_path} ({len(doc_content)} chars)")
 
-                # Create document file
-                await self.file_manager.create_file(
+                # Create document file - save to ALL 4 layers for persistence
+                await self.save_file(
                     project_id=context.project_id,
                     file_path=doc_path,
-                    content=doc_content
+                    content=doc_content,
+                    user_id=context.user_id
                 )
 
                 doc_count += 1
@@ -5400,6 +6017,86 @@ htmlcov
     def _get_summarizer_prompt(self) -> str:
         """Get Summarizer prompt for context management (Bolt.new Agent 5)"""
         return SummarizerAgent.SYSTEM_PROMPT
+
+    # =========================================================================
+    # COLOR THEME SUPPORT - User-selectable colors for UI projects
+    # =========================================================================
+
+    # Color presets for user-selectable themes
+    COLOR_PRESETS = {
+        "ecommerce": {"primary": "orange", "secondary": "amber"},
+        "healthcare": {"primary": "teal", "secondary": "emerald"},
+        "finance": {"primary": "blue", "secondary": "indigo"},
+        "education": {"primary": "purple", "secondary": "violet"},
+        "social": {"primary": "pink", "secondary": "rose"},
+        "ai": {"primary": "cyan", "secondary": "sky"},
+        "blockchain": {"primary": "lime", "secondary": "green"},
+        "gaming": {"primary": "red", "secondary": "orange"},
+        "portfolio": {"primary": "purple", "secondary": "cyan"},
+        "food": {"primary": "orange", "secondary": "yellow"},
+        "travel": {"primary": "cyan", "secondary": "teal"},
+        "fitness": {"primary": "green", "secondary": "lime"},
+    }
+
+    def _build_color_instruction(self, context: ExecutionContext) -> str:
+        """
+        Build color theme instruction from context.metadata.color_theme.
+
+        Args:
+            context: ExecutionContext containing metadata with optional color_theme
+
+        Returns:
+            Color instruction string to include in prompts, or empty string
+        """
+        if not context.metadata:
+            return ""
+
+        color_theme = context.metadata.get("color_theme")
+        if not color_theme:
+            return ""
+
+        primary = None
+        secondary = None
+
+        # Check for preset first
+        preset = color_theme.get("preset") if isinstance(color_theme, dict) else None
+        if preset and preset.lower() in self.COLOR_PRESETS:
+            preset_colors = self.COLOR_PRESETS[preset.lower()]
+            primary = preset_colors["primary"]
+            secondary = preset_colors["secondary"]
+            logger.info(f"[ColorTheme] Using preset '{preset}': {primary}/{secondary}")
+
+        # Override with explicit colors if provided
+        if isinstance(color_theme, dict):
+            if color_theme.get("primary"):
+                primary = color_theme["primary"]
+            if color_theme.get("secondary"):
+                secondary = color_theme["secondary"]
+
+        if not primary and not secondary:
+            return ""
+
+        # Build the instruction
+        instruction = f"""
+🎨 USER-SELECTED COLOR THEME - USE THESE COLORS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PRIMARY COLOR: {primary}
+SECONDARY COLOR: {secondary or primary}
+
+Apply these colors to ALL UI elements:
+• Gradients: from-{primary}-600 to-{secondary or primary}-600
+• Buttons: bg-gradient-to-r from-{primary}-600 to-{secondary or primary}-600
+• Glows/Shadows: shadow-{primary}-500/25
+• Hover states: hover:border-{primary}-500/50
+• Focus rings: focus:ring-{primary}-500
+• Animated orbs: bg-{primary}-500 and bg-{secondary or primary}-500
+• Text accents: text-{primary}-400, text-{secondary or primary}-400
+
+⚠️ IMPORTANT: Use THESE colors instead of auto-detecting from project type!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+        logger.info(f"[ColorTheme] Color instruction built: primary={primary}, secondary={secondary}")
+        return instruction
 
 
 # Singleton instance

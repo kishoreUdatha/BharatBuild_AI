@@ -1,0 +1,22 @@
+{
+  "total_requests": 57,
+  "successful_requests": 0,
+  "failed_requests": 57,
+  "error_rate": 100.0,
+  "requests_per_second": 1.7613625780539675,
+  "avg_response_time": 4.231724822730349,
+  "p50_response_time": 3.996610641479492,
+  "p95_response_time": 6.487607955932617,
+  "p99_response_time": 8.601188659667969,
+  "max_response_time": 8.601188659667969,
+  "duration_seconds": 32.36130976676941,
+  "num_users": 3,
+  "mode": "auth",
+  "status_codes": {
+    "422": 57
+  },
+  "endpoints": {
+    "/auth/login": 57
+  },
+  "pass": false
+}

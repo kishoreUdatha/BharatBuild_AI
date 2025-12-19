@@ -1034,8 +1034,11 @@ Brief description of the project.
 
 ## Prerequisites
 
-- Docker Desktop installed ([Download](https://www.docker.com/products/docker-desktop))
-- Docker Compose (included with Docker Desktop)
+✅ **Only Docker Desktop required** - No need to install Python, Node.js, Java, Go, or any other runtime!
+
+- [Download Docker Desktop](https://www.docker.com/products/docker-desktop) (includes Docker Compose)
+
+> 💡 Docker containers include all necessary runtimes and dependencies. Just install Docker Desktop and you're ready to go!
 
 ## Quick Start
 
@@ -1143,6 +1146,102 @@ Before outputting, verify:
 [ ] File is properly formatted and readable
 [ ] All functions have complete implementations
 [ ] All classes have all required methods
+
+═══════════════════════════════════════════════════════════════════════════════
+              🚨 CRITICAL: ZERO SYNTAX ERRORS (ALL TECHNOLOGIES)
+═══════════════════════════════════════════════════════════════════════════════
+
+⚠️ YOUR CODE MUST HAVE ZERO SYNTAX ERRORS. THIS IS MANDATORY.
+
+UNIVERSAL VALIDATION (ALL LANGUAGES):
+[ ] ALL opening brackets (, [, { have matching closing brackets ), ], }
+[ ] ALL strings (', ", `, ''', """) are properly terminated
+[ ] ALL multi-line statements are complete (no truncation)
+[ ] ALL code blocks are properly closed
+
+PYTHON:
+[ ] Colons : after if/for/while/def/class/try/except/with/elif/else
+[ ] Consistent 4-space indentation (NO tabs)
+[ ] f-strings: f"{var}" with matching braces
+[ ] Triple quotes ''' or """ properly closed
+[ ] List comprehensions complete: [x for x in list if condition]
+
+JAVASCRIPT/TYPESCRIPT/JSX/TSX:
+[ ] Semicolons ; where needed (or consistent no-semicolon style)
+[ ] Template literals `` properly closed
+[ ] JSX tags properly closed: <div></div> or <Component />
+[ ] Arrow functions: () => {} or () => value
+[ ] Object destructuring: const { a, b } = obj
+
+JAVA/KOTLIN/SCALA:
+[ ] Semicolons ; at end of statements
+[ ] Class/method braces {} properly closed
+[ ] Generic types: List<String>, Map<K,V> properly closed
+[ ] Annotations @ properly formatted
+
+GO:
+[ ] Opening brace { on same line as statement
+[ ] No unused imports or variables (compiler error)
+[ ] All error returns handled: if err != nil
+
+RUST:
+[ ] Semicolons ; except for return expressions
+[ ] Lifetime annotations where needed
+[ ] All match arms covered
+[ ] Proper borrowing syntax: &, &mut
+
+C/C++:
+[ ] Semicolons ; at end of statements
+[ ] #include directives properly formatted
+[ ] Pointer syntax: int* ptr or int *ptr consistent
+[ ] All braces {} balanced
+
+C#/.NET:
+[ ] Semicolons ; at end of statements
+[ ] using directives at top
+[ ] Namespace/class braces balanced
+[ ] Generic types: List<T> properly closed
+
+RUBY:
+[ ] end keywords match do/def/class/module/if/unless/case/while
+[ ] String interpolation: "#{var}" properly closed
+[ ] Block syntax: { } or do...end consistent
+
+PHP:
+[ ] Semicolons ; at end of statements
+[ ] <?php opening tag present
+[ ] Variable $ prefix: $variable
+[ ] Array syntax: [] or array() consistent
+
+SWIFT:
+[ ] No semicolons (unless multiple statements on one line)
+[ ] Optional syntax: Type? and unwrapping !
+[ ] Closure syntax: { } properly closed
+
+DART/FLUTTER:
+[ ] Semicolons ; at end of statements
+[ ] Widget tree properly nested and closed
+[ ] Named parameters: parameter: value
+
+SQL:
+[ ] Semicolons ; at end of statements
+[ ] String quotes: 'single quotes' for values
+[ ] Keywords capitalized: SELECT, FROM, WHERE
+
+YAML/JSON/TOML:
+[ ] Proper indentation (YAML: 2 spaces)
+[ ] Quotes balanced in strings
+[ ] No trailing commas in JSON
+[ ] Colons : with space in YAML: key: value
+
+❌ COMMON FATAL ERRORS TO AVOID:
+- Unclosed string: title = "Dashboard   (missing closing ")
+- Unclosed bracket: data = [1, 2, 3   (missing ])
+- Missing colon: if x > 5    (Python needs :)
+- Unbalanced JSX: <div>content  (missing </div>)
+- Truncated code: function() {  (missing closing })
+
+✅ FINAL VALIDATION: Count all openers and closers. They MUST match.
 
 ═══════════════════════════════════════════════════════════════════════════════
                          🎯 FINAL REMINDER

@@ -10,7 +10,7 @@ This module provides Docker-based project execution with:
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from pydantic import BaseModel
 from typing import Optional, List
 from uuid import UUID
@@ -23,7 +23,8 @@ from app.core.database import get_db
 from app.core.logging_config import logger
 from app.models.user import User
 from app.models.project import Project
-from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import get_current_user, get_optional_user
+from app.modules.auth.feature_flags import require_feature
 from app.modules.orchestrator.dynamic_orchestrator import dynamic_orchestrator, ExecutionContext, OrchestratorEvent
 from app.modules.automation.file_manager import FileManager
 from app.modules.agents.production_fixer_agent import production_fixer_agent
@@ -31,6 +32,7 @@ from app.modules.agents.base_agent import AgentContext
 from app.modules.execution.docker_executor import docker_executor, docker_compose_executor, FrameworkType, DEFAULT_PORTS
 from app.services.unified_storage import unified_storage
 from app.services.sandbox_cleanup import touch_project
+from app.services.log_bus import get_log_bus
 
 # Store running processes by project_id for stop functionality
 _running_processes: dict[str, asyncio.subprocess.Process] = {}
@@ -79,14 +81,14 @@ def get_project_path(project_id: str, user_id: str = None):
 async def verify_project_ownership(project_id: str, current_user: User, db: AsyncSession) -> bool:
     """Helper function to verify project ownership"""
     try:
+        # GUID columns are String(36), so compare as strings (not UUID)
         result = await db.execute(
-            select(Project).where(
-                Project.id == UUID(project_id),
-                Project.user_id == current_user.id
-            )
+            text("SELECT id FROM projects WHERE id = :project_id AND user_id = :user_id"),
+            {"project_id": str(project_id), "user_id": str(current_user.id)}
         )
         return result.scalar_one_or_none() is not None
-    except ValueError:
+    except Exception as e:
+        logger.warning(f"[Execution] verify_project_ownership error: {e}")
         return False
 
 router = APIRouter()
@@ -98,19 +100,22 @@ class RunProjectRequest(BaseModel):
 
 
 class FixErrorRequest(BaseModel):
-    """Request model for auto-fixing runtime errors"""
+    """Request model for auto-fixing runtime errors (Bolt.new style)"""
     error_message: str
     stack_trace: Optional[str] = None
     error_type: Optional[str] = None  # syntax, runtime, import, type, logic
     affected_files: Optional[List[str]] = None  # Files mentioned in error
+    command: Optional[str] = None  # Command that failed (npm run dev, etc.)
+    error_logs: Optional[List[str]] = None  # Additional error logs from terminal
 
 
 @router.post("/run/{project_id}")
 async def run_project(
     project_id: str,
     request: Optional[RunProjectRequest] = None,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_feature("code_execution"))
 ):
     """
     Run/execute a generated project in Docker container
@@ -123,8 +128,8 @@ async def run_project(
     5. Detects running port from logs
     6. Returns preview URL for iframe embedding
     """
-    # Verify project ownership
-    if not await verify_project_ownership(project_id, current_user, db):
+    # Verify project ownership (skip if no auth in dev mode)
+    if current_user and not await verify_project_ownership(project_id, current_user, db):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found"
@@ -138,11 +143,41 @@ async def run_project(
         user_id = str(current_user.id) if current_user else None
         project_path = get_project_path(project_id, user_id)
 
+        # Check if sandbox needs restoration (files might have been cleaned up)
+        # Restore from database if sandbox is empty or missing key folders
+        needs_restore = False
+        if not project_path.exists():
+            needs_restore = True
+        else:
+            # Check if project has actual content (not just metadata)
+            has_frontend = (project_path / "frontend").exists()
+            has_backend = (project_path / "backend").exists()
+            has_src = (project_path / "src").exists()
+            has_package = (project_path / "package.json").exists()
+
+            # If it looks like a monorepo but missing folders, restore
+            if has_package and not has_frontend and not has_backend and not has_src:
+                # Check if this is supposed to be a monorepo by looking at DB file count
+                needs_restore = True
+                logger.info(f"[Execution] Sandbox appears incomplete, will restore from database")
+
+        if needs_restore:
+            logger.info(f"[Execution] Restoring project {project_id} from database...")
+            restored_files = await unified_storage.restore_project_from_database(project_id, user_id)
+            if restored_files:
+                logger.info(f"[Execution] Restored {len(restored_files)} files")
+                # Update project_path after restore
+                project_path = get_project_path(project_id, user_id)
+            else:
+                logger.warning(f"[Execution] No files restored from database")
+
         if not project_path.exists():
             logger.error(f"[Execution] Project not found: {project_id}")
             raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
 
         logger.info(f"[Execution] Running project from: {project_path}")
+        logger.info(f"[Execution] Path has frontend: {(project_path / 'frontend').exists()}")
+        logger.info(f"[Execution] Path has backend: {(project_path / 'backend').exists()}")
 
         # Stream Docker execution
         return StreamingResponse(
@@ -168,8 +203,8 @@ async def stop_project(
 
     This endpoint stops the Docker container for the specified project.
     """
-    # Verify project ownership
-    if not await verify_project_ownership(project_id, current_user, db):
+    # Verify project ownership (skip if no auth in dev mode)
+    if current_user and not await verify_project_ownership(project_id, current_user, db):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found"
@@ -212,8 +247,8 @@ async def fix_runtime_error(
     - instructions: Optional shell commands to run (e.g., npm install)
     - analysis: Error analysis details
     """
-    # Verify project ownership
-    if not await verify_project_ownership(project_id, current_user, db):
+    # Verify project ownership (skip if no auth in dev mode)
+    if current_user and not await verify_project_ownership(project_id, current_user, db):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found"
@@ -231,26 +266,55 @@ async def fix_runtime_error(
             raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
 
         logger.info(f"[Fixer] Auto-fixing error for project: {project_id}")
-        logger.info(f"Error message: {request.error_message[:200]}...")
+        logger.info(f"[Fixer] Error: {request.error_message[:200]}...")
+        logger.info(f"[Fixer] Command: {request.command}")
+
+        # ============= BOLT.NEW STYLE: Use LogBus for context =============
+        log_bus = get_log_bus(project_id)
+
+        # Add error to LogBus (for tracking)
+        log_bus.add_build_error(
+            message=request.error_message,
+            file=request.affected_files[0] if request.affected_files else None
+        )
+
+        # Add additional error logs if provided
+        if request.error_logs:
+            for error_log in request.error_logs:
+                log_bus.add_build_log(error_log, level="error")
+
+        # Get Bolt.new-style fixer payload with file context
+        fixer_payload = log_bus.get_bolt_fixer_payload(
+            project_path=str(project_path),
+            command=request.command or "unknown",
+            error_message=request.error_message
+        )
 
         # Get all project files for context
         project_files = []
         file_contents = {}
 
+        # Skip patterns - check BEFORE calling is_file() to avoid Windows file lock errors
+        skip_patterns = ['node_modules', '__pycache__', '.git', '.env', 'dist', 'build', '.bin']
+
         for file_path in project_path.rglob("*"):
-            if file_path.is_file():
+            try:
+                # Get relative path first to check skip patterns
                 rel_path = str(file_path.relative_to(project_path)).replace("\\", "/")
 
-                # Skip certain directories and files
-                skip_patterns = ['node_modules', '__pycache__', '.git', '.env', 'dist', 'build']
+                # Skip certain directories and files BEFORE checking is_file()
                 if any(pattern in rel_path for pattern in skip_patterns):
+                    continue
+
+                # Now safely check if it's a file (can fail with WinError 1920 on locked files)
+                if not file_path.is_file():
                     continue
 
                 project_files.append(rel_path)
 
                 # Read file content if it might be affected
                 # Only read source files to limit context size
-                if any(ext in rel_path for ext in ['.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.html', '.css']):
+                if any(ext in rel_path for ext in ['.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.html', '.css', '.yml', '.yaml']):
                     try:
                         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                             content = f.read()
@@ -260,18 +324,32 @@ async def fix_runtime_error(
                     except Exception as e:
                         logger.warning(f"Could not read file {rel_path}: {e}")
 
-        # Prepare context for fixer agent
+            except OSError as e:
+                # Handle WinError 1920 and other OS errors for locked files
+                # This is common on Windows when node_modules/.bin files are in use
+                continue
+
+        # Merge file contents from LogBus payload
+        file_contents.update(fixer_payload.get("fileContext", {}))
+
+        # Prepare context for fixer agent (Bolt.new style)
         context = AgentContext(
             project_id=project_id,
-            user_prompt=f"Fix this error: {request.error_message}",
+            user_request=f"Fix this error: {request.error_message}",
             metadata={
                 "error_message": request.error_message,
                 "stack_trace": request.stack_trace or "",
                 "error_type": request.error_type,
-                "affected_files": request.affected_files or [],
+                "affected_files": request.affected_files or fixer_payload.get("errorFiles", []),
                 "project_files": project_files,
                 "file_contents": file_contents,
-                "project_path": str(project_path)
+                "project_path": str(project_path),
+                # Bolt.new style additions
+                "command": request.command or "unknown",
+                "environment": fixer_payload.get("environment", {}),
+                "error_logs": fixer_payload.get("errorLogs", {}),
+                "package_json": fixer_payload.get("fileContext", {}).get("package.json"),
+                "dockerfile": fixer_payload.get("fileContext", {}).get("Dockerfile"),
             }
         )
 
@@ -295,6 +373,8 @@ async def fix_runtime_error(
             content = file_info.get("content")
 
             if file_path_str and content:
+                # Sanitize path: strip quotes and whitespace (defensive fix for quoted filenames)
+                file_path_str = file_path_str.strip().strip('"').strip("'")
                 # Ensure file path is within project
                 full_path = project_path / file_path_str
 
@@ -681,8 +761,8 @@ async def validate_project(
     Validate if a project is ready to run.
     Returns validation status, detected type, and suggested commands.
     """
-    # Verify project ownership
-    if not await verify_project_ownership(project_id, current_user, db):
+    # Verify project ownership (skip if no auth in dev mode)
+    if current_user and not await verify_project_ownership(project_id, current_user, db):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found"
@@ -729,8 +809,8 @@ async def get_project_status(
     db: AsyncSession = Depends(get_db)
 ):
     """Get current status of a project"""
-    # Verify project ownership
-    if not await verify_project_ownership(project_id, current_user, db):
+    # Verify project ownership (skip if no auth in dev mode)
+    if current_user and not await verify_project_ownership(project_id, current_user, db):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found"
@@ -746,10 +826,19 @@ async def get_project_status(
 
         # Check what's in the project
         files = []
+        # Skip patterns to avoid Windows file lock errors (WinError 1920)
+        skip_patterns = ['node_modules', '__pycache__', '.git', '.env', 'dist', 'build', '.bin']
         for file_path in project_path.rglob("*"):
-            if file_path.is_file() and not str(file_path).startswith('.'):
-                rel_path = file_path.relative_to(project_path)
-                files.append(str(rel_path))
+            try:
+                rel_path_str = str(file_path.relative_to(project_path)).replace("\\", "/")
+                # Skip system/locked directories before calling is_file()
+                if any(pattern in rel_path_str for pattern in skip_patterns):
+                    continue
+                if file_path.is_file() and not rel_path_str.startswith('.'):
+                    files.append(rel_path_str)
+            except OSError:
+                # Handle WinError 1920 and other OS errors for locked files
+                continue
 
         # Detect project type
         project_info = _detect_project_type(project_path)
@@ -779,11 +868,12 @@ async def get_project_status(
 async def export_project(
     project_id: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_feature("download_files"))
 ):
     """Export entire project as ZIP file"""
-    # Verify project ownership
-    if not await verify_project_ownership(project_id, current_user, db):
+    # Verify project ownership (skip if no auth in dev mode)
+    if current_user and not await verify_project_ownership(project_id, current_user, db):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found"
@@ -810,33 +900,43 @@ async def export_project(
         files_added = 0
 
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            # Skip certain files/folders - check BEFORE is_file() to avoid WinError 1920
+            skip_patterns = [
+                '.project_metadata.json',
+                '__pycache__',
+                'node_modules',
+                '.git',
+                '.DS_Store',
+                'Thumbs.db',
+                '.bin'
+            ]
+
             # Walk through all files in project
             for file_path in project_path.rglob("*"):
-                if file_path.is_file():
-                    # Get relative path
+                try:
+                    # Get relative path and check skip patterns FIRST (before is_file())
                     rel_path = file_path.relative_to(project_path)
+                    rel_path_str = str(rel_path)
 
-                    # Skip certain files/folders
-                    skip_patterns = [
-                        '.project_metadata.json',
-                        '__pycache__',
-                        'node_modules',
-                        '.git',
-                        '.DS_Store',
-                        'Thumbs.db'
-                    ]
-
-                    # Check if should skip
+                    # Check if should skip - do this BEFORE is_file() to avoid Windows file lock errors
                     should_skip = any(
-                        pattern in str(rel_path)
+                        pattern in rel_path_str
                         for pattern in skip_patterns
                     )
 
-                    if not should_skip:
+                    if should_skip:
+                        continue
+
+                    # Now safe to check is_file() after skip patterns
+                    if file_path.is_file():
                         # Add file to ZIP
                         zip_file.write(file_path, rel_path)
                         files_added += 1
                         logger.debug(f"[Export] Added to ZIP: {rel_path}")
+                except OSError as e:
+                    # Handle WinError 1920 and other OS errors for locked files
+                    logger.warning(f"[Export] Skipping locked file: {file_path} - {e}")
+                    continue
 
         # Get ZIP data
         zip_buffer.seek(0)

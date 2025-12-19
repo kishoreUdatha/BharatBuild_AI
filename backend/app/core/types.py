@@ -1,5 +1,6 @@
 """Custom SQLAlchemy types for cross-database compatibility"""
-from sqlalchemy import String
+from sqlalchemy import TypeDecorator, String
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 import uuid
 
 
@@ -8,6 +9,22 @@ def generate_uuid():
     return str(uuid.uuid4())
 
 
-# Simple String-based UUID - works with all databases
-# Just use String(36) and store UUIDs as strings
-GUID = String(36)
+class GUID(TypeDecorator):
+    """Platform-independent GUID type that works with PostgreSQL UUID columns"""
+    impl = String(36)
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == 'postgresql':
+            return dialect.type_descriptor(PG_UUID(as_uuid=False))
+        return dialect.type_descriptor(String(36))
+
+    def process_bind_param(self, value, dialect):
+        if value is not None:
+            return str(value)
+        return value
+
+    def process_result_value(self, value, dialect):
+        if value is not None:
+            return str(value)
+        return value

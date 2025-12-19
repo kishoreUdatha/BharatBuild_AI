@@ -11,6 +11,7 @@ from sqlalchemy import select, delete, func
 
 from app.models.project_message import ProjectMessage, MessageRole
 from app.core.logging_config import logger
+from app.core.config import settings
 
 
 def to_str(value: Union[UUID, str, None]) -> Optional[str]:
@@ -98,7 +99,7 @@ class MessageService:
         agent_type: str,
         content: str,
         tokens_used: int = 0,
-        model_used: str = "claude-3-5-sonnet-20241022",
+        model_used: Optional[str] = None,
         extra_data: Optional[str] = None
     ) -> ProjectMessage:
         """
@@ -106,6 +107,7 @@ class MessageService:
 
         Args:
             agent_type: One of 'planner', 'writer', 'fixer', 'runner', 'reviewer'
+            model_used: Model name (defaults to settings.CLAUDE_SONNET_MODEL if not provided)
         """
         role_map = {
             'planner': MessageRole.PLANNER,
@@ -119,13 +121,16 @@ class MessageService:
 
         role = role_map.get(agent_type.lower(), MessageRole.ASSISTANT)
 
+        # Use settings value if model_used not explicitly provided
+        actual_model = model_used if model_used is not None else settings.CLAUDE_SONNET_MODEL
+
         return await self.add_message(
             project_id=project_id,
             role=role,
             content=content,
             agent_type=agent_type,
             tokens_used=tokens_used,
-            model_used=model_used,
+            model_used=actual_model,
             extra_data=extra_data
         )
 

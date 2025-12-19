@@ -23,8 +23,10 @@ import os
 import asyncio
 import json
 import uuid
-import logging
+import platform
+import re
 from typing import Optional, Dict, Any, List
+from pathlib import Path
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from enum import Enum
@@ -32,7 +34,33 @@ from enum import Enum
 import docker
 from docker.errors import NotFound, APIError
 
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
+
+
+def _to_docker_path(path_str: str) -> str:
+    """
+    Convert a filesystem path to Docker-compatible format.
+
+    On Windows with Docker Desktop (Linux containers), paths need to be converted:
+    - C:\\tmp\\sandbox\\workspace -> /c/tmp/sandbox/workspace
+    - C:/tmp/sandbox/workspace -> /c/tmp/sandbox/workspace
+
+    On Linux/Mac, paths are passed through unchanged.
+    """
+    # Only convert on Windows
+    if platform.system() == "Windows":
+        # Match drive letter pattern (e.g., C:\ or C:/)
+        match = re.match(r'^([A-Za-z]):[/\\](.*)$', path_str)
+        if match:
+            drive = match.group(1).lower()
+            rest = match.group(2).replace('\\', '/')
+            docker_path = f"/{drive}/{rest}"
+            logger.debug(f"Converted Windows path '{path_str}' to Docker path '{docker_path}'")
+            return docker_path
+
+    # Non-Windows or no drive letter - return as-is with forward slashes
+    return path_str.replace('\\', '/')
+
 
 # Configuration
 SANDBOX_NETWORK = os.getenv("SANDBOX_NETWORK", "bharatbuild-sandbox")
@@ -41,6 +69,11 @@ SANDBOX_MEMORY_LIMIT = os.getenv("SANDBOX_MEMORY_LIMIT", "512m")
 SANDBOX_CPU_LIMIT = float(os.getenv("SANDBOX_CPU_LIMIT", "0.5"))
 SANDBOX_BASE_PORT = int(os.getenv("SANDBOX_BASE_PORT", "10000"))
 MAX_CONCURRENT_SANDBOXES = int(os.getenv("MAX_CONCURRENT_SANDBOXES", "100"))
+
+# Remote Docker Host (EC2 Sandbox Server)
+# When running on ECS Fargate, connect to remote EC2 instance running Docker
+SANDBOX_DOCKER_HOST = os.getenv("SANDBOX_DOCKER_HOST", "")  # e.g., "tcp://10.0.10.x:2375"
+SANDBOX_PREVIEW_BASE_URL = os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")  # e.g., "https://bharatbuild.com/sandbox"
 
 
 class SandboxStatus(str, Enum):
@@ -327,7 +360,14 @@ class DockerSandboxManager:
         """Lazy initialization of Docker client"""
         if self._client is None:
             try:
-                self._client = docker.from_env()
+                # Check if we should connect to remote Docker host (EC2 sandbox server)
+                if SANDBOX_DOCKER_HOST:
+                    logger.info(f"Connecting to remote Docker host: {SANDBOX_DOCKER_HOST}")
+                    self._client = docker.DockerClient(base_url=SANDBOX_DOCKER_HOST)
+                else:
+                    # Local Docker (for development)
+                    self._client = docker.from_env()
+
                 self._ensure_network()
                 self._initialized = True
                 logger.info("Docker client initialized successfully")
@@ -404,10 +444,11 @@ class DockerSandboxManager:
             image = BASE_IMAGES.get(project_type, BASE_IMAGES[ProjectType.NODEJS])
             command = custom_command or DEFAULT_COMMANDS.get(project_type)
 
-            # Volume mounts
+            # Volume mounts (convert Windows paths for Docker)
             volumes = {}
             if files_path:
-                volumes[files_path] = {"bind": "/app", "mode": "rw"}
+                docker_path = _to_docker_path(files_path)
+                volumes[docker_path] = {"bind": "/app", "mode": "rw"}
 
             # Environment
             env = {
@@ -441,7 +482,11 @@ class DockerSandboxManager:
 
             sandbox.container_id = container.id
             sandbox.status = SandboxStatus.RUNNING
-            sandbox.preview_url = f"http://localhost:{external_port}"
+            # Use configured preview URL base (for production with ALB routing)
+            if SANDBOX_PREVIEW_BASE_URL and SANDBOX_PREVIEW_BASE_URL != "http://localhost":
+                sandbox.preview_url = f"{SANDBOX_PREVIEW_BASE_URL}/{sandbox_id}"
+            else:
+                sandbox.preview_url = f"http://localhost:{external_port}"
 
             logger.info(f"Created sandbox {sandbox_id} for project {project_id}")
             return sandbox

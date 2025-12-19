@@ -13,8 +13,9 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
+!frontend/src/lib/
 parts/
 sdist/
 var/
@@ -32,6 +33,7 @@ yarn-error.log*
 .next/
 out/
 build/
+!frontend/src/app/build/
 
 # Environment
 .env
@@ -94,3 +96,22 @@ AUX
 com[1-9]
 lpt[1-9]
 ~$*
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform.lock.hcl
+errored.tfstate
+
+# Generated project files
+backend/checkpoints/
+backend/C:/
+
+
+# Accidental path folders
+backend/C:/
+
+# Generated academic documents
+academic_documents/

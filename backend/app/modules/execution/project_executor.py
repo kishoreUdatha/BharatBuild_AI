@@ -15,7 +15,6 @@ Flow:
 
 import asyncio
 import json
-import logging
 from typing import Dict, Any, AsyncGenerator, List, Optional
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,8 +30,7 @@ from app.modules.execution.command_validator import (
     get_command_validator,
     CommandRisk,
 )
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 
 @dataclass

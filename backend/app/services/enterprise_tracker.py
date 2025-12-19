@@ -21,6 +21,7 @@ from app.services.sandbox_db_service import SandboxDBService
 from app.services.snapshot_service import SnapshotService
 from app.services.file_version_service import FileVersionService
 from app.core.logging_config import logger
+from app.core.config import settings
 
 
 class EnterpriseTracker:
@@ -78,7 +79,7 @@ class EnterpriseTracker:
         agent_type: str,
         content: str,
         tokens_used: int = 0,
-        model_used: str = "claude-3-5-sonnet-20241022"
+        model_used: str = None
     ):
         """Track an agent's response"""
         try:
@@ -87,7 +88,7 @@ class EnterpriseTracker:
                 agent_type=agent_type,
                 content=content,
                 tokens_used=tokens_used,
-                model_used=model_used
+                model_used=model_used or settings.CLAUDE_SONNET_MODEL
             )
             logger.debug(f"Tracked {agent_type} response for project {project_id}")
         except Exception as e:

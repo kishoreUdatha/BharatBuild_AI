@@ -23,7 +23,7 @@ export default function ProjectsPage() {
   })
 
   const handleNewProject = () => {
-    router.push('/bolt')
+    router.push('/build')
   }
 
   const handleDelete = async (projectId: string) => {
@@ -59,7 +59,7 @@ export default function ProjectsPage() {
             {/* Nav */}
             <nav className="flex items-center gap-6">
               <button
-                onClick={() => router.push('/bolt')}
+                onClick={() => router.push('/build')}
                 className="text-gray-400 hover:text-white transition-colors text-sm"
               >
                 Workspace

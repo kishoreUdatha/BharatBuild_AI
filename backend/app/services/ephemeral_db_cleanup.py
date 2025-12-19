@@ -17,11 +17,9 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional, Set
 from dataclasses import dataclass, field
 from enum import Enum
-import logging
 
 from app.core.config import settings
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 
 class ProjectTier(Enum):

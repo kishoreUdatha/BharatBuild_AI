@@ -40,10 +40,8 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 from dataclasses import dataclass, field
 import threading
-import logging
 from app.core.config import settings
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 # Configuration - loaded from settings (can be overridden via .env)
 TEMP_BASE_DIR = Path("/tmp/bharatbuild_sessions")

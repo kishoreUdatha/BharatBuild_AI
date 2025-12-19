@@ -9,14 +9,12 @@ This module monitors container health and automatically:
 """
 
 import asyncio
-import logging
 from typing import Dict, Optional, List, Callable, Any
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from app.core.config import settings
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 
 class HealthStatus(Enum):

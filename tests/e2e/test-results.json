@@ -1,0 +1,2103 @@
+{
+  "config": {
+    "configFile": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\playwright.config.ts",
+    "rootDir": "C:/Users/KishoreUdatha/IdeaProjects/BharatBuild_AI/tests/e2e/tests",
+    "forbidOnly": false,
+    "fullyParallel": true,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 8
+    },
+    "preserveOutput": "always",
+    "reporter": [
+      [
+        "html",
+        {
+          "outputFolder": "playwright-report"
+        }
+      ],
+      [
+        "json",
+        {
+          "outputFile": "test-results.json"
+        }
+      ],
+      [
+        "list",
+        null
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "quiet": false,
+    "projects": [
+      {
+        "outputDir": "C:/Users/KishoreUdatha/IdeaProjects/BharatBuild_AI/tests/e2e/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 8
+        },
+        "id": "chromium",
+        "name": "chromium",
+        "testDir": "C:/Users/KishoreUdatha/IdeaProjects/BharatBuild_AI/tests/e2e/tests",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "C:/Users/KishoreUdatha/IdeaProjects/BharatBuild_AI/tests/e2e/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 8
+        },
+        "id": "firefox",
+        "name": "firefox",
+        "testDir": "C:/Users/KishoreUdatha/IdeaProjects/BharatBuild_AI/tests/e2e/tests",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "C:/Users/KishoreUdatha/IdeaProjects/BharatBuild_AI/tests/e2e/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 8
+        },
+        "id": "webkit",
+        "name": "webkit",
+        "testDir": "C:/Users/KishoreUdatha/IdeaProjects/BharatBuild_AI/tests/e2e/tests",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "C:/Users/KishoreUdatha/IdeaProjects/BharatBuild_AI/tests/e2e/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 8
+        },
+        "id": "Mobile Chrome",
+        "name": "Mobile Chrome",
+        "testDir": "C:/Users/KishoreUdatha/IdeaProjects/BharatBuild_AI/tests/e2e/tests",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.57.0",
+    "workers": 8,
+    "webServer": {
+      "command": "npm run dev",
+      "url": "http://localhost:3000",
+      "reuseExistingServer": true,
+      "timeout": 120000
+    }
+  },
+  "suites": [
+    {
+      "title": "auth.spec.ts",
+      "file": "auth.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Authentication",
+          "file": "auth.spec.ts",
+          "line": 7,
+          "column": 6,
+          "specs": [],
+          "suites": [
+            {
+              "title": "Registration",
+              "file": "auth.spec.ts",
+              "line": 9,
+              "column": 8,
+              "specs": [
+                {
+                  "title": "TC-AUTH-001: Should register new user successfully",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 0,
+                          "parallelIndex": 0,
+                          "status": "timedOut",
+                          "duration": 32185,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                          },
+                          "errors": [
+                            {
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\auth.spec.ts",
+                                "column": 18,
+                                "line": 16
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  14 |       // Fill registration form\n  15 |       const uniqueEmail = `test_${Date.now()}@example.com`;\n> 16 |       await page.fill('input[name=\"email\"]', uniqueEmail);\n     |                  ^\n  17 |       await page.fill('input[name=\"password\"]', 'TestPassword123!');\n  18 |       await page.fill('input[name=\"full_name\"]', 'Test User');\n  19 |\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\auth.spec.ts:16:18"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:19:48.777Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Regist-fe597-ister-new-user-successfully-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Regist-fe597-ister-new-user-successfully-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Regist-fe597-ister-new-user-successfully-chromium\\error-context.md"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "d748ac400d08b85935ef-d8f1e2f228c1333bf0e0",
+                  "file": "auth.spec.ts",
+                  "line": 11,
+                  "column": 9
+                },
+                {
+                  "title": "TC-AUTH-002: Should show error for invalid email",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 1,
+                          "parallelIndex": 1,
+                          "status": "timedOut",
+                          "duration": 32129,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                          },
+                          "errors": [
+                            {
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\auth.spec.ts",
+                                "column": 18,
+                                "line": 30
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  28 |       await page.goto('/register');\n  29 |\n> 30 |       await page.fill('input[name=\"email\"]', 'invalid-email');\n     |                  ^\n  31 |       await page.fill('input[name=\"password\"]', 'TestPassword123!');\n  32 |       await page.click('button[type=\"submit\"]');\n  33 |\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\auth.spec.ts:30:18"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:19:48.651Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Regist-f04fd-how-error-for-invalid-email-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Regist-f04fd-how-error-for-invalid-email-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Regist-f04fd-how-error-for-invalid-email-chromium\\error-context.md"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "d748ac400d08b85935ef-bdb60e0f0bd0b14a9486",
+                  "file": "auth.spec.ts",
+                  "line": 27,
+                  "column": 9
+                },
+                {
+                  "title": "TC-AUTH-003: Should show error for weak password",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 2,
+                          "parallelIndex": 2,
+                          "status": "timedOut",
+                          "duration": 32299,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                          },
+                          "errors": [
+                            {
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\auth.spec.ts",
+                                "column": 18,
+                                "line": 41
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  39 |       await page.goto('/register');\n  40 |\n> 41 |       await page.fill('input[name=\"email\"]', 'test@example.com');\n     |                  ^\n  42 |       await page.fill('input[name=\"password\"]', '123'); // Too short\n  43 |       await page.click('button[type=\"submit\"]');\n  44 |\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\auth.spec.ts:41:18"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:19:48.954Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Regist-a8fad-how-error-for-weak-password-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Regist-a8fad-how-error-for-weak-password-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Regist-a8fad-how-error-for-weak-password-chromium\\error-context.md"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "d748ac400d08b85935ef-da3837e87ce2b0d5d934",
+                  "file": "auth.spec.ts",
+                  "line": 38,
+                  "column": 9
+                }
+              ]
+            },
+            {
+              "title": "Login",
+              "file": "auth.spec.ts",
+              "line": 50,
+              "column": 8,
+              "specs": [
+                {
+                  "title": "TC-AUTH-004: Should login with valid credentials",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 3,
+                          "parallelIndex": 3,
+                          "status": "timedOut",
+                          "duration": 32323,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                          },
+                          "errors": [
+                            {
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\auth.spec.ts",
+                                "column": 18,
+                                "line": 55
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  53 |       await page.goto('/login');\n  54 |\n> 55 |       await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n     |                  ^\n  56 |       await page.fill('input[name=\"password\"]', process.env.TEST_USER_PASSWORD || 'TestPassword123!');\n  57 |\n  58 |       await page.click('button[type=\"submit\"]');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\auth.spec.ts:55:18"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:19:48.950Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Login--5c556-ogin-with-valid-credentials-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Login--5c556-ogin-with-valid-credentials-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Login--5c556-ogin-with-valid-credentials-chromium\\error-context.md"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "d748ac400d08b85935ef-4b3998b272e2d6f7bd07",
+                  "file": "auth.spec.ts",
+                  "line": 52,
+                  "column": 9
+                },
+                {
+                  "title": "TC-AUTH-005: Should show error for invalid credentials",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 4,
+                          "parallelIndex": 4,
+                          "status": "timedOut",
+                          "duration": 32294,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                          },
+                          "errors": [
+                            {
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\auth.spec.ts",
+                                "column": 18,
+                                "line": 71
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  69 |       await page.goto('/login');\n  70 |\n> 71 |       await page.fill('input[name=\"email\"]', 'test@example.com');\n     |                  ^\n  72 |       await page.fill('input[name=\"password\"]', 'wrongpassword');\n  73 |\n  74 |       await page.click('button[type=\"submit\"]');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\auth.spec.ts:71:18"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:19:48.971Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Login--18a84-ror-for-invalid-credentials-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Login--18a84-ror-for-invalid-credentials-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Login--18a84-ror-for-invalid-credentials-chromium\\error-context.md"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "d748ac400d08b85935ef-05d469c0be2e60612415",
+                  "file": "auth.spec.ts",
+                  "line": 68,
+                  "column": 9
+                }
+              ]
+            },
+            {
+              "title": "Logout",
+              "file": "auth.spec.ts",
+              "line": 84,
+              "column": 8,
+              "specs": [
+                {
+                  "title": "TC-AUTH-007: Should logout and clear session",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 5,
+                          "parallelIndex": 5,
+                          "status": "timedOut",
+                          "duration": 31576,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                          },
+                          "errors": [
+                            {
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\auth.spec.ts",
+                                "column": 18,
+                                "line": 89
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  87 |       // First login\n  88 |       await page.goto('/login');\n> 89 |       await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n     |                  ^\n  90 |       await page.fill('input[name=\"password\"]', process.env.TEST_USER_PASSWORD || 'TestPassword123!');\n  91 |       await page.click('button[type=\"submit\"]');\n  92 |       await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\auth.spec.ts:89:18"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:19:48.729Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Logout-4bda0-ld-logout-and-clear-session-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Logout-4bda0-ld-logout-and-clear-session-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Logout-4bda0-ld-logout-and-clear-session-chromium\\error-context.md"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "d748ac400d08b85935ef-6cf92a061e369ed87790",
+                  "file": "auth.spec.ts",
+                  "line": 86,
+                  "column": 9
+                },
+                {
+                  "title": "TC-AUTH-009: Session isolation on logout",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 6,
+                          "parallelIndex": 6,
+                          "status": "timedOut",
+                          "duration": 32086,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                          },
+                          "errors": [
+                            {
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\auth.spec.ts",
+                                "column": 18,
+                                "line": 109
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  107 |       // Login as User A\n  108 |       await page.goto('/login');\n> 109 |       await page.fill('input[name=\"email\"]', 'userA@example.com');\n      |                  ^\n  110 |       await page.fill('input[name=\"password\"]', 'TestPassword123!');\n  111 |       await page.click('button[type=\"submit\"]');\n  112 |\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\auth.spec.ts:109:18"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:19:48.994Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Logout-bb88f-Session-isolation-on-logout-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Logout-bb88f-Session-isolation-on-logout-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\auth-Authentication-Logout-bb88f-Session-isolation-on-logout-chromium\\error-context.md"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "d748ac400d08b85935ef-0933765393572a5f3380",
+                  "file": "auth.spec.ts",
+                  "line": 106,
+                  "column": 9
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "premium-features.spec.ts",
+      "file": "premium-features.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Premium Features - Free User",
+          "file": "premium-features.spec.ts",
+          "line": 8,
+          "column": 6,
+          "specs": [],
+          "suites": [
+            {
+              "title": "Run Button",
+              "file": "premium-features.spec.ts",
+              "line": 19,
+              "column": 8,
+              "specs": [
+                {
+                  "title": "TC-PAY-003: Run button should show Premium lock for free user",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 7,
+                          "parallelIndex": 7,
+                          "status": "timedOut",
+                          "duration": 32197,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8",
+                            "location": {
+                              "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                              "column": 8,
+                              "line": 10
+                            },
+                            "snippet": "\u001b[0m \u001b[90m  8 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Premium Features - Free User'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  9 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 10 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[90m// Login as FREE user\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 13 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mFREE_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'freeuser@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                          },
+                          "errors": [
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 8,
+                                "line": 10
+                              },
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   8 | test.describe('Premium Features - Free User', () => {\n   9 |\n> 10 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n  13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 16,
+                                "line": 13
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n> 13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n     |                ^\n  14 |     await page.fill('input[name=\"password\"]', process.env.FREE_USER_PASSWORD || 'TestPassword123!');\n  15 |     await page.click('button[type=\"submit\"]');\n  16 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:13:16"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:19:48.824Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-a2b76--Premium-lock-for-free-user-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-a2b76--Premium-lock-for-free-user-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-a2b76--Premium-lock-for-free-user-chromium\\error-context.md"
+                            }
+                          ],
+                          "errorLocation": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                            "column": 8,
+                            "line": 10
+                          }
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "c1eeeab208160f8a3d49-42daadb20d774e640abe",
+                  "file": "premium-features.spec.ts",
+                  "line": 21,
+                  "column": 9
+                },
+                {
+                  "title": "TC-PAY-003b: Clicking locked Run button should redirect to pricing",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 8,
+                          "parallelIndex": 1,
+                          "status": "timedOut",
+                          "duration": 32242,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8",
+                            "location": {
+                              "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                              "column": 8,
+                              "line": 10
+                            },
+                            "snippet": "\u001b[0m \u001b[90m  8 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Premium Features - Free User'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  9 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 10 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[90m// Login as FREE user\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 13 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mFREE_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'freeuser@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                          },
+                          "errors": [
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 8,
+                                "line": 10
+                              },
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   8 | test.describe('Premium Features - Free User', () => {\n   9 |\n> 10 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n  13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 16,
+                                "line": 13
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n> 13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n     |                ^\n  14 |     await page.fill('input[name=\"password\"]', process.env.FREE_USER_PASSWORD || 'TestPassword123!');\n  15 |     await page.click('button[type=\"submit\"]');\n  16 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:13:16"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:20:28.693Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-b0a1b--should-redirect-to-pricing-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-b0a1b--should-redirect-to-pricing-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-b0a1b--should-redirect-to-pricing-chromium\\error-context.md"
+                            }
+                          ],
+                          "errorLocation": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                            "column": 8,
+                            "line": 10
+                          }
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "c1eeeab208160f8a3d49-ea76b34d32fb813fec99",
+                  "file": "premium-features.spec.ts",
+                  "line": 36,
+                  "column": 9
+                }
+              ]
+            },
+            {
+              "title": "Export Button",
+              "file": "premium-features.spec.ts",
+              "line": 50,
+              "column": 8,
+              "specs": [
+                {
+                  "title": "TC-PAY-004: Export button should show Premium lock for free user",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 9,
+                          "parallelIndex": 2,
+                          "status": "timedOut",
+                          "duration": 32378,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8",
+                            "location": {
+                              "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                              "column": 8,
+                              "line": 10
+                            },
+                            "snippet": "\u001b[0m \u001b[90m  8 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Premium Features - Free User'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  9 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 10 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[90m// Login as FREE user\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 13 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mFREE_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'freeuser@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                          },
+                          "errors": [
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 8,
+                                "line": 10
+                              },
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   8 | test.describe('Premium Features - Free User', () => {\n   9 |\n> 10 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n  13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 16,
+                                "line": 13
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n> 13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n     |                ^\n  14 |     await page.fill('input[name=\"password\"]', process.env.FREE_USER_PASSWORD || 'TestPassword123!');\n  15 |     await page.click('button[type=\"submit\"]');\n  16 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:13:16"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:20:28.494Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-de1e4--Premium-lock-for-free-user-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-de1e4--Premium-lock-for-free-user-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-de1e4--Premium-lock-for-free-user-chromium\\error-context.md"
+                            }
+                          ],
+                          "errorLocation": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                            "column": 8,
+                            "line": 10
+                          }
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "c1eeeab208160f8a3d49-6aa4320e40801caba875",
+                  "file": "premium-features.spec.ts",
+                  "line": 52,
+                  "column": 9
+                }
+              ]
+            },
+            {
+              "title": "Code Copy Restriction",
+              "file": "premium-features.spec.ts",
+              "line": 65,
+              "column": 8,
+              "specs": [
+                {
+                  "title": "TC-PAY-005: Copy restriction banner should be visible",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 11,
+                          "parallelIndex": 0,
+                          "status": "timedOut",
+                          "duration": 32172,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8",
+                            "location": {
+                              "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                              "column": 8,
+                              "line": 10
+                            },
+                            "snippet": "\u001b[0m \u001b[90m  8 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Premium Features - Free User'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  9 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 10 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[90m// Login as FREE user\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 13 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mFREE_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'freeuser@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                          },
+                          "errors": [
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 8,
+                                "line": 10
+                              },
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   8 | test.describe('Premium Features - Free User', () => {\n   9 |\n> 10 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n  13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 16,
+                                "line": 13
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n> 13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n     |                ^\n  14 |     await page.fill('input[name=\"password\"]', process.env.FREE_USER_PASSWORD || 'TestPassword123!');\n  15 |     await page.click('button[type=\"submit\"]');\n  16 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:13:16"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:20:28.635Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-19773-on-banner-should-be-visible-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-19773-on-banner-should-be-visible-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-19773-on-banner-should-be-visible-chromium\\error-context.md"
+                            }
+                          ],
+                          "errorLocation": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                            "column": 8,
+                            "line": 10
+                          }
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "c1eeeab208160f8a3d49-7a94b8b59a800670d241",
+                  "file": "premium-features.spec.ts",
+                  "line": 67,
+                  "column": 9
+                },
+                {
+                  "title": "TC-PAY-005b: Ctrl+C should not copy code",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 10,
+                          "parallelIndex": 5,
+                          "status": "timedOut",
+                          "duration": 32460,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8",
+                            "location": {
+                              "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                              "column": 8,
+                              "line": 10
+                            },
+                            "snippet": "\u001b[0m \u001b[90m  8 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Premium Features - Free User'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  9 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 10 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[90m// Login as FREE user\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 13 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mFREE_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'freeuser@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                          },
+                          "errors": [
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 8,
+                                "line": 10
+                              },
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   8 | test.describe('Premium Features - Free User', () => {\n   9 |\n> 10 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n  13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 16,
+                                "line": 13
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n> 13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n     |                ^\n  14 |     await page.fill('input[name=\"password\"]', process.env.FREE_USER_PASSWORD || 'TestPassword123!');\n  15 |     await page.click('button[type=\"submit\"]');\n  16 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:13:16"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:20:28.843Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-a03df-Ctrl-C-should-not-copy-code-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-a03df-Ctrl-C-should-not-copy-code-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-a03df-Ctrl-C-should-not-copy-code-chromium\\error-context.md"
+                            }
+                          ],
+                          "errorLocation": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                            "column": 8,
+                            "line": 10
+                          }
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "c1eeeab208160f8a3d49-31e9dd5538282f4f913e",
+                  "file": "premium-features.spec.ts",
+                  "line": 76,
+                  "column": 9
+                },
+                {
+                  "title": "TC-PAY-007: Context menu should not show copy option",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 12,
+                          "parallelIndex": 7,
+                          "status": "timedOut",
+                          "duration": 32304,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8",
+                            "location": {
+                              "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                              "column": 8,
+                              "line": 10
+                            },
+                            "snippet": "\u001b[0m \u001b[90m  8 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Premium Features - Free User'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  9 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 10 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[90m// Login as FREE user\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 13 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mFREE_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'freeuser@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                          },
+                          "errors": [
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 8,
+                                "line": 10
+                              },
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   8 | test.describe('Premium Features - Free User', () => {\n   9 |\n> 10 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n  13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 16,
+                                "line": 13
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n> 13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n     |                ^\n  14 |     await page.fill('input[name=\"password\"]', process.env.FREE_USER_PASSWORD || 'TestPassword123!');\n  15 |     await page.click('button[type=\"submit\"]');\n  16 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:13:16"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:20:28.839Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-6c411-should-not-show-copy-option-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-6c411-should-not-show-copy-option-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-6c411-should-not-show-copy-option-chromium\\error-context.md"
+                            }
+                          ],
+                          "errorLocation": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                            "column": 8,
+                            "line": 10
+                          }
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "c1eeeab208160f8a3d49-2144f48e9a37b7d35a1a",
+                  "file": "premium-features.spec.ts",
+                  "line": 96,
+                  "column": 9
+                }
+              ]
+            },
+            {
+              "title": "Download Restrictions",
+              "file": "premium-features.spec.ts",
+              "line": 115,
+              "column": 8,
+              "specs": [
+                {
+                  "title": "TC-PAY-008: Project dropdown documents should show upgrade prompt",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 13,
+                          "parallelIndex": 4,
+                          "status": "timedOut",
+                          "duration": 32296,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8",
+                            "location": {
+                              "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                              "column": 8,
+                              "line": 10
+                            },
+                            "snippet": "\u001b[0m \u001b[90m  8 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Premium Features - Free User'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  9 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 10 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[90m// Login as FREE user\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 13 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mFREE_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'freeuser@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                          },
+                          "errors": [
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 8,
+                                "line": 10
+                              },
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   8 | test.describe('Premium Features - Free User', () => {\n   9 |\n> 10 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n  13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 16,
+                                "line": 13
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n> 13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n     |                ^\n  14 |     await page.fill('input[name=\"password\"]', process.env.FREE_USER_PASSWORD || 'TestPassword123!');\n  15 |     await page.click('button[type=\"submit\"]');\n  16 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:13:16"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:20:28.584Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-1a434--should-show-upgrade-prompt-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-1a434--should-show-upgrade-prompt-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-1a434--should-show-upgrade-prompt-chromium\\error-context.md"
+                            }
+                          ],
+                          "errorLocation": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                            "column": 8,
+                            "line": 10
+                          }
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "c1eeeab208160f8a3d49-c19cac60dff34200773d",
+                  "file": "premium-features.spec.ts",
+                  "line": 117,
+                  "column": 9
+                },
+                {
+                  "title": "TC-PAY-010: Download All button should show Premium lock",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 14,
+                          "parallelIndex": 6,
+                          "status": "timedOut",
+                          "duration": 32331,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8",
+                            "location": {
+                              "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                              "column": 8,
+                              "line": 10
+                            },
+                            "snippet": "\u001b[0m \u001b[90m  8 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Premium Features - Free User'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  9 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 10 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[90m// Login as FREE user\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 13 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mFREE_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'freeuser@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                          },
+                          "errors": [
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 8,
+                                "line": 10
+                              },
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   8 | test.describe('Premium Features - Free User', () => {\n   9 |\n> 10 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n  13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 16,
+                                "line": 13
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n> 13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n     |                ^\n  14 |     await page.fill('input[name=\"password\"]', process.env.FREE_USER_PASSWORD || 'TestPassword123!');\n  15 |     await page.click('button[type=\"submit\"]');\n  16 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:13:16"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:20:28.647Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-f850a-on-should-show-Premium-lock-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-f850a-on-should-show-Premium-lock-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-f850a-on-should-show-Premium-lock-chromium\\error-context.md"
+                            }
+                          ],
+                          "errorLocation": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                            "column": 8,
+                            "line": 10
+                          }
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "c1eeeab208160f8a3d49-9bfd8a427ea0e5e7d92d",
+                  "file": "premium-features.spec.ts",
+                  "line": 138,
+                  "column": 9
+                },
+                {
+                  "title": "TC-PAY-011: Dashboard download should show lock icon",
+                  "ok": false,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 30000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "chromium",
+                      "projectName": "chromium",
+                      "results": [
+                        {
+                          "workerIndex": 15,
+                          "parallelIndex": 3,
+                          "status": "timedOut",
+                          "duration": 32523,
+                          "error": {
+                            "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                            "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8",
+                            "location": {
+                              "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                              "column": 8,
+                              "line": 10
+                            },
+                            "snippet": "\u001b[0m \u001b[90m  8 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Premium Features - Free User'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  9 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 10 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[90m// Login as FREE user\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 13 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mFREE_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'freeuser@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                          },
+                          "errors": [
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 8,
+                                "line": 10
+                              },
+                              "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   8 | test.describe('Premium Features - Free User', () => {\n   9 |\n> 10 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n  13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:10:8"
+                            },
+                            {
+                              "location": {
+                                "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                                "column": 16,
+                                "line": 13
+                              },
+                              "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  11 |     // Login as FREE user\n  12 |     await page.goto('/login');\n> 13 |     await page.fill('input[name=\"email\"]', process.env.FREE_USER_EMAIL || 'freeuser@example.com');\n     |                ^\n  14 |     await page.fill('input[name=\"password\"]', process.env.FREE_USER_PASSWORD || 'TestPassword123!');\n  15 |     await page.click('button[type=\"submit\"]');\n  16 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:13:16"
+                            }
+                          ],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2025-12-18T19:20:29.394Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "screenshot",
+                              "contentType": "image/png",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-b1da8-nload-should-show-lock-icon-chromium\\test-failed-1.png"
+                            },
+                            {
+                              "name": "video",
+                              "contentType": "video/webm",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-b1da8-nload-should-show-lock-icon-chromium\\video.webm"
+                            },
+                            {
+                              "name": "error-context",
+                              "contentType": "text/markdown",
+                              "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-b1da8-nload-should-show-lock-icon-chromium\\error-context.md"
+                            }
+                          ],
+                          "errorLocation": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                            "column": 8,
+                            "line": 10
+                          }
+                        }
+                      ],
+                      "status": "unexpected"
+                    }
+                  ],
+                  "id": "c1eeeab208160f8a3d49-be23d6d183a6b5aff141",
+                  "file": "premium-features.spec.ts",
+                  "line": 153,
+                  "column": 9
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Premium Features - Premium User",
+          "file": "premium-features.spec.ts",
+          "line": 170,
+          "column": 6,
+          "specs": [
+            {
+              "title": "TC-PAY-012: All features should be enabled for premium user",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 16,
+                      "parallelIndex": 2,
+                      "status": "timedOut",
+                      "duration": 33423,
+                      "error": {
+                        "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                        "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:172:8",
+                        "location": {
+                          "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                          "column": 8,
+                          "line": 172
+                        },
+                        "snippet": "\u001b[0m \u001b[90m 170 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Premium Features - Premium User'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m 171 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 172 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m     |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 173 |\u001b[39m     \u001b[90m// Login as PREMIUM user\u001b[39m\n \u001b[90m 174 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 175 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mPREMIUM_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'premiumuser@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                            "column": 8,
+                            "line": 172
+                          },
+                          "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n  170 | test.describe('Premium Features - Premium User', () => {\n  171 |\n> 172 |   test.beforeEach(async ({ page }) => {\n      |        ^\n  173 |     // Login as PREMIUM user\n  174 |     await page.goto('/login');\n  175 |     await page.fill('input[name=\"email\"]', process.env.PREMIUM_USER_EMAIL || 'premiumuser@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:172:8"
+                        },
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                            "column": 16,
+                            "line": 175
+                          },
+                          "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  173 |     // Login as PREMIUM user\n  174 |     await page.goto('/login');\n> 175 |     await page.fill('input[name=\"email\"]', process.env.PREMIUM_USER_EMAIL || 'premiumuser@example.com');\n      |                ^\n  176 |     await page.fill('input[name=\"password\"]', process.env.PREMIUM_USER_PASSWORD || 'TestPassword123!');\n  177 |     await page.click('button[type=\"submit\"]');\n  178 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts:175:16"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2025-12-18T19:21:04.657Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-ef4bb-be-enabled-for-premium-user-chromium\\test-failed-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-ef4bb-be-enabled-for-premium-user-chromium\\video.webm"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\premium-features-Premium-F-ef4bb-be-enabled-for-premium-user-chromium\\error-context.md"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\premium-features.spec.ts",
+                        "column": 8,
+                        "line": 172
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "c1eeeab208160f8a3d49-26a513d4dbefe2f8237a",
+              "file": "premium-features.spec.ts",
+              "line": 181,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "project-generation.spec.ts",
+      "file": "project-generation.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Project Generation",
+          "file": "project-generation.spec.ts",
+          "line": 7,
+          "column": 6,
+          "specs": [
+            {
+              "title": "TC-PROJ-001: Should create new project with valid prompt",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 17,
+                      "parallelIndex": 1,
+                      "status": "timedOut",
+                      "duration": 33607,
+                      "error": {
+                        "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                        "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:9:8",
+                        "location": {
+                          "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                          "column": 8,
+                          "line": 9
+                        },
+                        "snippet": "\u001b[0m \u001b[90m  7 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Project Generation'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  8 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m  9 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 10 |\u001b[39m     \u001b[90m// Login\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mTEST_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'test@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                            "column": 8,
+                            "line": 9
+                          },
+                          "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   7 | test.describe('Project Generation', () => {\n   8 |\n>  9 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  10 |     // Login\n  11 |     await page.goto('/login');\n  12 |     await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:9:8"
+                        },
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                            "column": 16,
+                            "line": 12
+                          },
+                          "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  10 |     // Login\n  11 |     await page.goto('/login');\n> 12 |     await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n     |                ^\n  13 |     await page.fill('input[name=\"password\"]', process.env.TEST_USER_PASSWORD || 'TestPassword123!');\n  14 |     await page.click('button[type=\"submit\"]');\n  15 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:12:16"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2025-12-18T19:21:04.521Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-82ff5-w-project-with-valid-prompt-chromium\\test-failed-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-82ff5-w-project-with-valid-prompt-chromium\\video.webm"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-82ff5-w-project-with-valid-prompt-chromium\\error-context.md"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                        "column": 8,
+                        "line": 9
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "df684813061193034ebe-6751f036f14d8d8de601",
+              "file": "project-generation.spec.ts",
+              "line": 18,
+              "column": 7
+            },
+            {
+              "title": "TC-PROJ-003: User prompt should appear as right-aligned bubble",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 18,
+                      "parallelIndex": 6,
+                      "status": "timedOut",
+                      "duration": 32788,
+                      "error": {
+                        "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                        "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:9:8",
+                        "location": {
+                          "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                          "column": 8,
+                          "line": 9
+                        },
+                        "snippet": "\u001b[0m \u001b[90m  7 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Project Generation'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  8 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m  9 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 10 |\u001b[39m     \u001b[90m// Login\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mTEST_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'test@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                            "column": 8,
+                            "line": 9
+                          },
+                          "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   7 | test.describe('Project Generation', () => {\n   8 |\n>  9 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  10 |     // Login\n  11 |     await page.goto('/login');\n  12 |     await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:9:8"
+                        },
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                            "column": 16,
+                            "line": 12
+                          },
+                          "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  10 |     // Login\n  11 |     await page.goto('/login');\n> 12 |     await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n     |                ^\n  13 |     await page.fill('input[name=\"password\"]', process.env.TEST_USER_PASSWORD || 'TestPassword123!');\n  14 |     await page.click('button[type=\"submit\"]');\n  15 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:12:16"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2025-12-18T19:21:04.907Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-e253a-ear-as-right-aligned-bubble-chromium\\test-failed-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-e253a-ear-as-right-aligned-bubble-chromium\\video.webm"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-e253a-ear-as-right-aligned-bubble-chromium\\error-context.md"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                        "column": 8,
+                        "line": 9
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "df684813061193034ebe-b3d09dd1160619060136",
+              "file": "project-generation.spec.ts",
+              "line": 36,
+              "column": 7
+            },
+            {
+              "title": "TC-PROJ-002: Should show stage progress during generation",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 19,
+                      "parallelIndex": 7,
+                      "status": "timedOut",
+                      "duration": 33099,
+                      "error": {
+                        "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                        "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:9:8",
+                        "location": {
+                          "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                          "column": 8,
+                          "line": 9
+                        },
+                        "snippet": "\u001b[0m \u001b[90m  7 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Project Generation'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  8 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m  9 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 10 |\u001b[39m     \u001b[90m// Login\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mTEST_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'test@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                            "column": 8,
+                            "line": 9
+                          },
+                          "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   7 | test.describe('Project Generation', () => {\n   8 |\n>  9 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  10 |     // Login\n  11 |     await page.goto('/login');\n  12 |     await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:9:8"
+                        },
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                            "column": 16,
+                            "line": 12
+                          },
+                          "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  10 |     // Login\n  11 |     await page.goto('/login');\n> 12 |     await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n     |                ^\n  13 |     await page.fill('input[name=\"password\"]', process.env.TEST_USER_PASSWORD || 'TestPassword123!');\n  14 |     await page.click('button[type=\"submit\"]');\n  15 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:12:16"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2025-12-18T19:21:04.493Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-12313--progress-during-generation-chromium\\test-failed-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-12313--progress-during-generation-chromium\\video.webm"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-12313--progress-during-generation-chromium\\error-context.md"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                        "column": 8,
+                        "line": 9
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "df684813061193034ebe-e3d593599c172c846252",
+              "file": "project-generation.spec.ts",
+              "line": 53,
+              "column": 7
+            },
+            {
+              "title": "TC-PROJ-004: Should display generated files in explorer",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 20,
+                      "parallelIndex": 0,
+                      "status": "timedOut",
+                      "duration": 33252,
+                      "error": {
+                        "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                        "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:9:8",
+                        "location": {
+                          "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                          "column": 8,
+                          "line": 9
+                        },
+                        "snippet": "\u001b[0m \u001b[90m  7 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Project Generation'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  8 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m  9 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 10 |\u001b[39m     \u001b[90m// Login\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mTEST_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'test@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                            "column": 8,
+                            "line": 9
+                          },
+                          "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   7 | test.describe('Project Generation', () => {\n   8 |\n>  9 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  10 |     // Login\n  11 |     await page.goto('/login');\n  12 |     await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:9:8"
+                        },
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                            "column": 16,
+                            "line": 12
+                          },
+                          "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  10 |     // Login\n  11 |     await page.goto('/login');\n> 12 |     await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n     |                ^\n  13 |     await page.fill('input[name=\"password\"]', process.env.TEST_USER_PASSWORD || 'TestPassword123!');\n  14 |     await page.click('button[type=\"submit\"]');\n  15 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:12:16"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2025-12-18T19:21:04.863Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-0aea1-generated-files-in-explorer-chromium\\test-failed-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-0aea1-generated-files-in-explorer-chromium\\video.webm"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-0aea1-generated-files-in-explorer-chromium\\error-context.md"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                        "column": 8,
+                        "line": 9
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "df684813061193034ebe-39374e93f725062b4e07",
+              "file": "project-generation.spec.ts",
+              "line": 77,
+              "column": 7
+            },
+            {
+              "title": "TC-PROJ-005: Should open file in code editor when clicked",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 21,
+                      "parallelIndex": 4,
+                      "status": "timedOut",
+                      "duration": 33314,
+                      "error": {
+                        "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                        "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:9:8",
+                        "location": {
+                          "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                          "column": 8,
+                          "line": 9
+                        },
+                        "snippet": "\u001b[0m \u001b[90m  7 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Project Generation'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  8 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m  9 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 10 |\u001b[39m     \u001b[90m// Login\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mTEST_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'test@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                            "column": 8,
+                            "line": 9
+                          },
+                          "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   7 | test.describe('Project Generation', () => {\n   8 |\n>  9 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  10 |     // Login\n  11 |     await page.goto('/login');\n  12 |     await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:9:8"
+                        },
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                            "column": 16,
+                            "line": 12
+                          },
+                          "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  10 |     // Login\n  11 |     await page.goto('/login');\n> 12 |     await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n     |                ^\n  13 |     await page.fill('input[name=\"password\"]', process.env.TEST_USER_PASSWORD || 'TestPassword123!');\n  14 |     await page.click('button[type=\"submit\"]');\n  15 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:12:16"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2025-12-18T19:21:04.593Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-cb852-in-code-editor-when-clicked-chromium\\test-failed-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-cb852-in-code-editor-when-clicked-chromium\\video.webm"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-cb852-in-code-editor-when-clicked-chromium\\error-context.md"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                        "column": 8,
+                        "line": 9
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "df684813061193034ebe-302ef243bab13a20745d",
+              "file": "project-generation.spec.ts",
+              "line": 93,
+              "column": 7
+            },
+            {
+              "title": "TC-PROJ-006: Should switch between projects",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 22,
+                      "parallelIndex": 5,
+                      "status": "timedOut",
+                      "duration": 33482,
+                      "error": {
+                        "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                        "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:9:8",
+                        "location": {
+                          "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                          "column": 8,
+                          "line": 9
+                        },
+                        "snippet": "\u001b[0m \u001b[90m  7 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Project Generation'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  8 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m  9 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 10 |\u001b[39m     \u001b[90m// Login\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mTEST_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'test@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                            "column": 8,
+                            "line": 9
+                          },
+                          "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   7 | test.describe('Project Generation', () => {\n   8 |\n>  9 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  10 |     // Login\n  11 |     await page.goto('/login');\n  12 |     await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:9:8"
+                        },
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                            "column": 16,
+                            "line": 12
+                          },
+                          "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  10 |     // Login\n  11 |     await page.goto('/login');\n> 12 |     await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n     |                ^\n  13 |     await page.fill('input[name=\"password\"]', process.env.TEST_USER_PASSWORD || 'TestPassword123!');\n  14 |     await page.click('button[type=\"submit\"]');\n  15 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:12:16"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2025-12-18T19:21:04.867Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-8e322-uld-switch-between-projects-chromium\\test-failed-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-8e322-uld-switch-between-projects-chromium\\video.webm"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-8e322-uld-switch-between-projects-chromium\\error-context.md"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                        "column": 8,
+                        "line": 9
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "df684813061193034ebe-b263ef66c04b06450a6c",
+              "file": "project-generation.spec.ts",
+              "line": 113,
+              "column": 7
+            },
+            {
+              "title": "TC-PROJ-007: Auto-save should work",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 23,
+                      "parallelIndex": 3,
+                      "status": "timedOut",
+                      "duration": 33476,
+                      "error": {
+                        "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m",
+                        "stack": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:9:8",
+                        "location": {
+                          "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                          "column": 8,
+                          "line": 9
+                        },
+                        "snippet": "\u001b[0m \u001b[90m  7 |\u001b[39m test\u001b[33m.\u001b[39mdescribe(\u001b[32m'Project Generation'\u001b[39m\u001b[33m,\u001b[39m () \u001b[33m=>\u001b[39m {\n \u001b[90m  8 |\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m  9 |\u001b[39m   test\u001b[33m.\u001b[39mbeforeEach(\u001b[36masync\u001b[39m ({ page }) \u001b[33m=>\u001b[39m {\n \u001b[90m    |\u001b[39m        \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 10 |\u001b[39m     \u001b[90m// Login\u001b[39m\n \u001b[90m 11 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/login'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 12 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mfill(\u001b[32m'input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m process\u001b[33m.\u001b[39menv\u001b[33m.\u001b[39m\u001b[33mTEST_USER_EMAIL\u001b[39m \u001b[33m||\u001b[39m \u001b[32m'test@example.com'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                            "column": 8,
+                            "line": 9
+                          },
+                          "message": "\u001b[31mTest timeout of 30000ms exceeded while running \"beforeEach\" hook.\u001b[39m\n\n   7 | test.describe('Project Generation', () => {\n   8 |\n>  9 |   test.beforeEach(async ({ page }) => {\n     |        ^\n  10 |     // Login\n  11 |     await page.goto('/login');\n  12 |     await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:9:8"
+                        },
+                        {
+                          "location": {
+                            "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                            "column": 16,
+                            "line": 12
+                          },
+                          "message": "Error: page.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('input[name=\"email\"]')\u001b[22m\n\n\n  10 |     // Login\n  11 |     await page.goto('/login');\n> 12 |     await page.fill('input[name=\"email\"]', process.env.TEST_USER_EMAIL || 'test@example.com');\n     |                ^\n  13 |     await page.fill('input[name=\"password\"]', process.env.TEST_USER_PASSWORD || 'TestPassword123!');\n  14 |     await page.click('button[type=\"submit\"]');\n  15 |     await page.waitForURL(/\\/(dashboard|build)/);\n    at C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts:12:16"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2025-12-18T19:21:04.643Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-a61ff-J-007-Auto-save-should-work-chromium\\test-failed-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-a61ff-J-007-Auto-save-should-work-chromium\\video.webm"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\test-results\\project-generation-Project-a61ff-J-007-Auto-save-should-work-chromium\\error-context.md"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "C:\\Users\\KishoreUdatha\\IdeaProjects\\BharatBuild_AI\\tests\\e2e\\tests\\project-generation.spec.ts",
+                        "column": 8,
+                        "line": 9
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "df684813061193034ebe-7cd68d80b386e505688b",
+              "file": "project-generation.spec.ts",
+              "line": 140,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2025-12-18T19:19:46.945Z",
+    "duration": 112819.292,
+    "expected": 0,
+    "skipped": 0,
+    "unexpected": 24,
+    "flaky": 0
+  }
+}

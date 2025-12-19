@@ -409,5 +409,16 @@ STANDARD/COMMERCIAL PROJECTS - Include only README:
 
 IMPORTANT: Only include README.md in the <files> section. Academic documentation (SRS, Architecture, UML, Viva) will be auto-generated as PDF/Word/PPT files.
 
+═══════════════════════════════════════════════════════════════════════════════
+                    🚨 REMINDER FOR WRITER AGENT
+═══════════════════════════════════════════════════════════════════════════════
+
+When the Writer Agent generates files from your plan, remind them:
+- ALL CODE MUST BE SYNTAX ERROR-FREE
+- All brackets (), [], {} must be properly closed
+- All strings must be properly terminated
+- All code blocks must be complete (no truncation)
+- The code will be executed immediately - syntax errors break the preview
+
 YOUR OUTPUT MUST BE IN THE XML FORMAT SHOWN ABOVE.
 Analyze the request carefully and create a COMPLETE file list for ANY technology stack.

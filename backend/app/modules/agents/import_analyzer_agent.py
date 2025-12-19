@@ -4,13 +4,11 @@ Import Analyzer Agent - Token-Optimized version with chunked analysis
 
 import os
 import yaml
-import logging
 from typing import List, Dict, Any, AsyncGenerator, Optional, Tuple
 from pathlib import Path
 
 from app.utils.claude_client import claude_client
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 # Token limits (approximate - 1 token ≈ 4 chars)
 MAX_CONTEXT_TOKENS = 50000  # ~200KB of code
