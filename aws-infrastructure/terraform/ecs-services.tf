@@ -32,9 +32,9 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# HTTPS Listener (only when domain is configured)
+# HTTPS Listener (only when domain is configured AND certificate is validated)
 resource "aws_lb_listener" "https" {
-  count             = var.domain_name != "" ? 1 : 0
+  count             = var.domain_name != "" && var.route53_zone_exists ? 1 : 0
   load_balancer_arn = aws_lb.main.arn
   port              = "443"
   protocol          = "HTTPS"
@@ -46,7 +46,7 @@ resource "aws_lb_listener" "https" {
     target_group_arn = aws_lb_target_group.frontend.arn
   }
 
-  depends_on = [aws_acm_certificate_validation.main[0]]
+  depends_on = [aws_acm_certificate_validation.main]
 }
 
 # Backend API listener rule (HTTP)
@@ -66,9 +66,9 @@ resource "aws_lb_listener_rule" "backend_http" {
   }
 }
 
-# Backend API listener rule (HTTPS - only when domain configured)
+# Backend API listener rule (HTTPS - only when domain configured AND certificate validated)
 resource "aws_lb_listener_rule" "backend_https" {
-  count        = var.domain_name != "" ? 1 : 0
+  count        = var.domain_name != "" && var.route53_zone_exists ? 1 : 0
   listener_arn = aws_lb_listener.https[0].arn
   priority     = 100
 
@@ -143,23 +143,23 @@ resource "aws_acm_certificate" "main" {
 }
 
 resource "aws_acm_certificate_validation" "main" {
-  count                   = var.domain_name != "" ? 1 : 0
+  count                   = var.domain_name != "" && var.route53_zone_exists ? 1 : 0
   certificate_arn         = aws_acm_certificate.main[0].arn
   validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
 }
 
 # =============================================================================
-# Route 53 (only when domain is configured)
+# Route 53 (only when domain AND hosted zone exist)
 # =============================================================================
 
 data "aws_route53_zone" "main" {
-  count        = var.domain_name != "" ? 1 : 0
+  count        = var.domain_name != "" && var.route53_zone_exists ? 1 : 0
   name         = var.domain_name
   private_zone = false
 }
 
 resource "aws_route53_record" "cert_validation" {
-  for_each = var.domain_name != "" ? {
+  for_each = var.domain_name != "" && var.route53_zone_exists ? {
     for dvo in aws_acm_certificate.main[0].domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
       record = dvo.resource_record_value
@@ -176,7 +176,7 @@ resource "aws_route53_record" "cert_validation" {
 }
 
 resource "aws_route53_record" "app" {
-  count   = var.domain_name != "" ? 1 : 0
+  count   = var.domain_name != "" && var.route53_zone_exists ? 1 : 0
   zone_id = data.aws_route53_zone.main[0].zone_id
   name    = var.domain_name
   type    = "A"
@@ -189,7 +189,7 @@ resource "aws_route53_record" "app" {
 }
 
 resource "aws_route53_record" "app_www" {
-  count   = var.domain_name != "" ? 1 : 0
+  count   = var.domain_name != "" && var.route53_zone_exists ? 1 : 0
   zone_id = data.aws_route53_zone.main[0].zone_id
   name    = "www.${var.domain_name}"
   type    = "A"
@@ -216,7 +216,7 @@ resource "aws_ecs_task_definition" "backend" {
 
   container_definitions = jsonencode([{
     name      = "backend"
-    image     = "${aws_ecr_repository.backend.repository_url}:v24"
+    image     = "${aws_ecr_repository.backend.repository_url}:latest"
     essential = true
 
     portMappings = [{
@@ -230,22 +230,22 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "DEBUG", value = "true" },
       { name = "WORKERS", value = "4" },
       { name = "DATABASE_URL", value = "postgresql+asyncpg://bharatbuild_admin:${var.db_password}@${aws_db_instance.main.endpoint}/bharatbuild" },
-      { name = "REDIS_URL", value = "redis://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0" },
+      { name = "REDIS_URL", value = "rediss://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0" },
       { name = "S3_BUCKET", value = aws_s3_bucket.storage.id },
       { name = "AWS_REGION", value = var.aws_region },
       { name = "CORS_ORIGINS", value = var.domain_name != "" ? "https://${var.domain_name},https://www.${var.domain_name}" : "http://${aws_lb.main.dns_name}" },
       { name = "STORAGE_MODE", value = "s3" },
       { name = "USE_MINIO", value = "false" },
       # Celery Configuration
-      { name = "CELERY_BROKER_URL", value = "redis://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0" },
-      { name = "CELERY_RESULT_BACKEND", value = "redis://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/1" },
+      { name = "CELERY_BROKER_URL", value = "rediss://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0" },
+      { name = "CELERY_RESULT_BACKEND", value = "rediss://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/1" },
       # User Projects Path (S3 mode uses this as prefix)
       { name = "USER_PROJECTS_PATH", value = "/tmp/projects" },
       # Sandbox Server Configuration (EC2 Docker host)
       { name = "SANDBOX_DOCKER_HOST", value = var.sandbox_use_spot ? (length(aws_spot_instance_request.sandbox) > 0 ? "tcp://${aws_spot_instance_request.sandbox[0].private_ip}:2375" : "") : (length(aws_instance.sandbox) > 0 ? "tcp://${aws_instance.sandbox[0].private_ip}:2375" : "") },
       { name = "SANDBOX_PREVIEW_BASE_URL", value = var.domain_name != "" ? "https://${var.domain_name}/sandbox" : "http://${aws_lb.main.dns_name}/sandbox" },
       # RESET_DB - Set to true to drop and recreate all tables (one-time use)
-      { name = "RESET_DB", value = "true" },
+      { name = "RESET_DB", value = "false" },
     ]
 
     secrets = [
@@ -341,7 +341,7 @@ resource "aws_ecs_task_definition" "celery" {
 
   container_definitions = jsonencode([{
     name      = "celery"
-    image     = "${aws_ecr_repository.celery.repository_url}:latest"
+    image     = "${aws_ecr_repository.backend.repository_url}:latest"
     essential = true
 
     command = ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=4"]
