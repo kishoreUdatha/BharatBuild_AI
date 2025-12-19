@@ -367,10 +367,17 @@ class TestToolExecution:
     @pytest.mark.asyncio
     async def test_create_file(self, fixer, temp_project):
         """Test create_file tool"""
+        # Content must be at least 30 chars to avoid SimpleFixer's short content rejection
+        test_content = """// Test file content
+function test() {
+    console.log('Hello World');
+    return true;
+}
+"""
         result = await fixer._execute_tool(
             temp_project,
             "create_file",
-            {"path": "test.js", "content": "console.log('test');"}
+            {"path": "test.js", "content": test_content}
         )
 
         assert "Created" in result
