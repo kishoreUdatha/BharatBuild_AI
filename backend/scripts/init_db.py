@@ -108,10 +108,11 @@ async def create_tables() -> bool:
     print("\n[InitDB] Creating/verifying database tables...")
 
     try:
-        from app.core.database import Base, engine
+        from app.core.database import Base, get_engine
         # Import all models to register them
         from app import models  # noqa
 
+        engine = get_engine()
         async with engine.begin() as conn:
             # Create all tables
             await conn.run_sync(Base.metadata.create_all)
@@ -131,11 +132,12 @@ async def seed_data() -> bool:
     print("\n[InitDB] Seeding initial data...")
 
     try:
-        from app.core.database import async_session
+        from app.core.database import get_session_local
         from app.models.user import User
         from app.core.security import get_password_hash
         from sqlalchemy import select
 
+        async_session = get_session_local()
         async with async_session() as session:
             # Check if admin user exists
             result = await session.execute(
