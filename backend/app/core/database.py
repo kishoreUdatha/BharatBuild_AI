@@ -44,11 +44,13 @@ Base = declarative_base()
 
 # Dependency to get DB session
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """Get database session"""
+    """Get database session - only commits if there are pending changes"""
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            await session.commit()
+            # Only commit if there are pending changes (new, dirty, or deleted objects)
+            if session.new or session.dirty or session.deleted:
+                await session.commit()
         except Exception:
             await session.rollback()
             raise

@@ -70,12 +70,13 @@ class SnapshotService:
         total_size = 0
 
         for f in files:
-            # Get content
-            if f.is_inline and f.content_inline:
-                content = f.content_inline
-            elif f.s3_key:
+            # Get content - prioritize S3, fallback to inline for legacy data
+            if f.s3_key:
                 content_bytes = await storage_service.download_file(f.s3_key)
                 content = content_bytes.decode('utf-8') if content_bytes else ""
+            elif f.content_inline:
+                # Legacy fallback for old inline content
+                content = f.content_inline
             else:
                 content = ""
 
@@ -161,17 +162,29 @@ class SnapshotService:
             .where(ProjectFile.project_id == project_id)
         )
 
-        # Restore files from snapshot
+        # Restore files from snapshot - upload to S3, metadata to DB
         restored_count = 0
         for file_data in snapshot_data.get("files", []):
+            content = file_data.get("content", "")
+            content_bytes = content.encode('utf-8')
+
+            # Upload to S3
+            upload_result = await storage_service.upload_file(
+                str(project_id),
+                file_data["path"],
+                content_bytes
+            )
+            s3_key = upload_result.get('s3_key')
+
             file_record = ProjectFile(
                 project_id=project_id,
                 path=file_data["path"],
                 name=file_data["name"],
                 language=file_data.get("language"),
-                content_inline=file_data.get("content"),
-                is_inline=True,
-                size_bytes=file_data.get("size_bytes", len(file_data.get("content", ""))),
+                s3_key=s3_key,
+                content_inline=None,  # Never store content inline
+                is_inline=False,  # Always use S3
+                size_bytes=file_data.get("size_bytes", len(content_bytes)),
                 content_hash=file_data.get("content_hash"),
                 is_folder=False
             )

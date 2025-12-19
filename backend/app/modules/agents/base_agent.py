@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, InitVar
 from app.utils.claude_client import claude_client
 from app.core.logging_config import logger
 from app.core.config import settings
@@ -14,7 +14,13 @@ class AgentContext:
     """
     user_request: str
     project_id: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    user_id: Optional[str] = None  # User ID for isolation (diagrams, documents, etc.)
+    metadata: Optional[Dict[str, Any]] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Ensure metadata is never None - always use empty dict as fallback"""
+        if self.metadata is None:
+            self.metadata = {}
 
 
 class BaseAgent(ABC):
@@ -32,6 +38,26 @@ class BaseAgent(ABC):
         self.capabilities = capabilities
         self.model = model
         self.claude = claude_client
+        # Token tracking
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self._call_count = 0
+
+    def reset_token_tracking(self):
+        """Reset token tracking counters"""
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self._call_count = 0
+
+    def get_token_usage(self) -> Dict[str, Any]:
+        """Get accumulated token usage"""
+        return {
+            "input_tokens": self._total_input_tokens,
+            "output_tokens": self._total_output_tokens,
+            "total_tokens": self._total_input_tokens + self._total_output_tokens,
+            "call_count": self._call_count,
+            "model": self.model
+        }
 
     @abstractmethod
     async def process(self, context: AgentContext) -> Dict[str, Any]:
@@ -142,6 +168,13 @@ class BaseAgent(ABC):
                 max_tokens=max_tokens,
                 temperature=temperature
             )
+
+            # Track token usage
+            self._total_input_tokens += response.get("input_tokens", 0)
+            self._total_output_tokens += response.get("output_tokens", 0)
+            self._call_count += 1
+            logger.debug(f"[{self.name}] Token usage: +{response.get('input_tokens', 0)} in, +{response.get('output_tokens', 0)} out (call #{self._call_count})")
+
             return response.get("content", "")
         except Exception as e:
             logger.error(f"[{self.name}] Claude API error: {e}", exc_info=True)

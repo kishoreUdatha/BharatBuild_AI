@@ -4,6 +4,7 @@ Combines PostgreSQL, S3/MinIO, and Redis for optimal performance
 """
 
 import asyncio
+from pathlib import Path
 from typing import Optional, List
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -147,12 +148,13 @@ class ProjectService:
         if not file_record:
             return None
 
-        # 3. Get content based on storage location
-        if file_record.is_inline and file_record.content_inline:
-            content = file_record.content_inline
-        elif file_record.s3_key:
+        # 3. Get content - prioritize S3, fallback to inline for legacy data
+        if file_record.s3_key:
             content_bytes = await storage_service.download_file(file_record.s3_key)
             content = content_bytes.decode('utf-8') if content_bytes else None
+        elif file_record.content_inline:
+            # Legacy fallback for old inline content
+            content = file_record.content_inline
         else:
             return None
 
@@ -170,9 +172,8 @@ class ProjectService:
         language: Optional[str] = None
     ) -> dict:
         """
-        Save file with intelligent storage selection
-        - Small files (<10KB): Store inline in PostgreSQL
-        - Large files: Store in S3/MinIO
+        Save file to S3 with metadata in PostgreSQL.
+        All file content is stored in S3, only metadata in database.
         """
         project_id_str = str(project_id)
         content_bytes = content.encode('utf-8')
@@ -192,24 +193,16 @@ class ProjectService:
         )
         existing_file = result.scalar_one_or_none()
 
-        # Determine storage method
-        is_inline = size_bytes < INLINE_THRESHOLD
-
-        if is_inline:
-            # Store inline in PostgreSQL
-            s3_key = None
-            content_hash = storage_service.calculate_hash(content_bytes)
-            content_inline = content
-        else:
-            # Store in S3/MinIO
-            upload_result = await storage_service.upload_file(
-                project_id_str,
-                file_path,
-                content_bytes
-            )
-            s3_key = upload_result['s3_key']
-            content_hash = upload_result['content_hash']
-            content_inline = None
+        # Always store content in S3, metadata only in database
+        upload_result = await storage_service.upload_file(
+            project_id_str,
+            file_path,
+            content_bytes
+        )
+        s3_key = upload_result['s3_key']
+        content_hash = upload_result['content_hash']
+        content_inline = None  # Never store content inline
+        is_inline = False  # Always use S3
 
         if existing_file:
             # Update existing file
@@ -253,7 +246,7 @@ class ProjectService:
         # Invalidate cache
         await cache_service.invalidate_file(project_id_str, file_path)
 
-        logger.info(f"Saved file: {file_path} ({'inline' if is_inline else 'S3'}, {size_bytes} bytes)")
+        logger.info(f"Saved file: {file_path} (S3, {size_bytes} bytes)")
 
         return {
             'id': str(file_record.id),
@@ -261,7 +254,7 @@ class ProjectService:
             'name': file_record.name,
             'language': file_record.language,
             'size_bytes': file_record.size_bytes,
-            'storage': 'inline' if is_inline else 's3'
+            'storage': 's3'
         }
 
     async def delete_file(self, project_id: UUID, file_path: str) -> bool:

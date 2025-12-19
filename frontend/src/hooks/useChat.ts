@@ -5,7 +5,7 @@ import { useTokenStore } from '@/store/tokenStore'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useErrorStore } from '@/store/errorStore'
 import { parseFileOperationEvent } from '@/hooks/useFileChangeEvents'
-import { streamingClient } from '@/lib/streaming-client'
+import { streamingClient, StreamEvent } from '@/lib/streaming-client'
 import {
   classifyPromptAsync,
   getChatResponse,
@@ -15,6 +15,12 @@ import {
   type PromptIntent
 } from '@/services/promptClassifier'
 import { getAgentLabel } from './agentLabelMapping'
+import { sdkService } from '@/services/sdkService'
+import { detectPastedError, extractErrorDetails, sendChatMessage } from '@/services/chatService'
+
+// SDK Fixer configuration
+const USE_SDK_FIXER = true // Enable SDK-based fixing for better reliability
+const USE_REAL_CHAT = true // Enable real conversational AI for CHAT intent
 
 const generateId = () => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 
@@ -197,7 +203,55 @@ export const useChat = () => {
     // 4. Route based on intent
     switch (classification.intent) {
       case 'CHAT':
-        // Simple conversation - use AI-generated response if available, else fallback
+        // Check if the "chat" message is actually a pasted error
+        if (detectPastedError(content)) {
+          console.log('[useChat] Detected pasted error in CHAT intent, switching to FIX')
+          // Switch to FIX intent for pasted errors
+          classification.intent = 'FIX'
+          break // Fall through to FIX handling below
+        }
+
+        // Real conversational AI support
+        if (USE_REAL_CHAT) {
+          try {
+            appendToMessage(aiMessageId, '') // Start streaming indicator
+
+            const chatResult = await sendChatMessage({
+              message: content,
+              conversation_history: messages.slice(-10).map(m => ({
+                role: m.type as 'user' | 'assistant',
+                content: m.content
+              })),
+              context: {
+                project_id: projectStore.currentProject?.id,
+                has_project: (projectStore.currentProject?.files?.length || 0) > 0
+              }
+            })
+
+            if (chatResult.success) {
+              appendToMessage(aiMessageId, chatResult.response)
+            } else {
+              // Fallback to static response
+              const fallbackResponse = classification.chatResponse || getChatResponse(content)
+              appendToMessage(aiMessageId, fallbackResponse)
+            }
+
+            updateMessageStatus(aiMessageId, 'complete')
+            stopStreaming()
+            return
+
+          } catch (chatError) {
+            console.error('[useChat] Real chat error, using fallback:', chatError)
+            // Fallback to static response
+            const fallbackResponse = classification.chatResponse || getChatResponse(content)
+            appendToMessage(aiMessageId, fallbackResponse)
+            updateMessageStatus(aiMessageId, 'complete')
+            stopStreaming()
+            return
+          }
+        }
+
+        // Static fallback (when USE_REAL_CHAT is false)
         const chatResponse = classification.chatResponse || getChatResponse(content)
         appendToMessage(aiMessageId, chatResponse)
         updateMessageStatus(aiMessageId, 'complete')
@@ -205,7 +259,41 @@ export const useChat = () => {
         return
 
       case 'EXPLAIN':
-        // Explanation request - use AI response if available
+        // Check if the "explain" message is actually a pasted error
+        if (detectPastedError(content)) {
+          console.log('[useChat] Detected pasted error in EXPLAIN intent, switching to FIX')
+          classification.intent = 'FIX'
+          break // Fall through to FIX handling
+        }
+
+        // Real conversational AI for explanations
+        if (USE_REAL_CHAT) {
+          try {
+            const explainResult = await sendChatMessage({
+              message: `Please explain: ${content}`,
+              conversation_history: messages.slice(-5).map(m => ({
+                role: m.type as 'user' | 'assistant',
+                content: m.content
+              }))
+            })
+
+            if (explainResult.success) {
+              appendToMessage(aiMessageId, explainResult.response)
+            } else {
+              const fallbackResponse = classification.chatResponse || getExplainResponse(content)
+              appendToMessage(aiMessageId, fallbackResponse)
+            }
+
+            updateMessageStatus(aiMessageId, 'complete')
+            stopStreaming()
+            return
+
+          } catch (explainError) {
+            console.error('[useChat] Explain error, using fallback:', explainError)
+          }
+        }
+
+        // Static fallback
         const explainResponse = classification.chatResponse || getExplainResponse(content)
         appendToMessage(aiMessageId, explainResponse)
         updateMessageStatus(aiMessageId, 'complete')
@@ -243,7 +331,88 @@ Just describe your project or share the code that needs fixing!`)
           return
         }
 
-        // Continue with fix workflow - context will be attached in metadata below
+        // USE SDK FIXER for more reliable fixes (if enabled)
+        if (USE_SDK_FIXER) {
+          try {
+            appendToMessage(aiMessageId, '🔧 **Auto-Fix Started** (SDK Mode)\n\nAnalyzing errors and applying fixes...\n')
+
+            // Collect error context
+            const errorStoreState = useErrorStore.getState()
+            const terminalStoreState = useTerminalStore.getState()
+
+            // Get unresolved errors
+            const unresolvedErrors = errorStoreState.getUnresolvedErrors()
+            const errorMessage = unresolvedErrors.length > 0
+              ? unresolvedErrors.map(e => `${e.source}: ${e.message}${e.file ? ` (${e.file}:${e.line})` : ''}`).join('\n')
+              : content // Use user's description if no captured errors
+
+            // Get stack traces
+            const stackTrace = unresolvedErrors
+              .filter(e => e.stack)
+              .map(e => e.stack)
+              .join('\n---\n')
+
+            // Get recent terminal output for context
+            const recentLogs = terminalStoreState.logs.slice(-20)
+              .map(l => l.content)
+              .join('\n')
+
+            // Call SDK Fixer
+            const result = await sdkService.fixError({
+              project_id: projectStore.currentProject.id,
+              error_message: `User reported: ${content}\n\nCaptured errors:\n${errorMessage}\n\nRecent terminal output:\n${recentLogs}`,
+              stack_trace: stackTrace,
+              build_command: 'npm run build',
+              max_retries: 3
+            })
+
+            // Report result
+            if (result.success && result.error_fixed) {
+              appendToMessage(aiMessageId, `\n✅ **Fix Applied Successfully!**
+
+**Files Modified:**
+${result.files_modified.map(f => `• \`${f}\``).join('\n')}
+
+**Attempts:** ${result.attempts}
+
+The errors have been fixed. Your preview should update automatically.`)
+
+              // Clear errors from store
+              errorStoreState.clearErrors()
+
+              // Trigger file refresh for modified files
+              result.files_modified.forEach(filePath => {
+                parseFileOperationEvent({
+                  path: filePath,
+                  operation: 'fixed',
+                  status: 'complete'
+                }, projectStore.currentProject?.id || '')
+              })
+            } else {
+              appendToMessage(aiMessageId, `\n⚠️ **Could Not Auto-Fix**
+
+${result.message}
+
+**What you can try:**
+1. Check the error details in the Terminal
+2. Manually review the affected files
+3. Describe the issue in more detail
+
+I'll keep trying to help!`)
+            }
+
+            updateMessageStatus(aiMessageId, 'complete')
+            stopStreaming()
+            return
+
+          } catch (sdkError: any) {
+            console.error('[useChat] SDK Fixer error:', sdkError)
+            appendToMessage(aiMessageId, `\n❌ **SDK Fix Error:** ${sdkError.message}\n\nFalling back to standard fix workflow...`)
+            // Fall through to standard fix workflow
+          }
+        }
+
+        // Continue with standard fix workflow - context will be attached in metadata below
         break
 
       case 'GENERATE':
@@ -252,20 +421,19 @@ Just describe your project or share the code that needs fixing!`)
         if (projectStore.currentProject?.files && projectStore.currentProject.files.length > 0) {
           console.log('[useChat] GENERATE intent with existing project - creating NEW project (Bolt.new style)')
 
-          // Destroy old sandbox on server (fire and forget)
+          // Capture old project info before reset
           const oldProjectId = projectStore.currentProject.id
           const token = localStorage.getItem('access_token')
-          if (token && oldProjectId && oldProjectId !== 'default-project') {
-            fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/sync/sandbox/${oldProjectId}`, {
-              method: 'DELETE',
-              headers: { 'Authorization': `Bearer ${token}` }
-            }).catch(err => console.warn('[useChat] Failed to cleanup old sandbox:', err))
-          }
 
-          // Reset ALL stores for complete isolation
-          projectStore.resetProject()
-          useTerminalStore.getState().clearLogs()
-          useErrorStore.getState().clearErrors()
+          // ATOMIC STATE RESET: Clear all stores in a single synchronous batch
+          // This prevents race conditions where partial state could leak between projects
+          const resetAllStores = () => {
+            // Clear all stores atomically
+            projectStore.resetProject()
+            useTerminalStore.getState().clearLogs()
+            useErrorStore.getState().clearErrors()
+          }
+          resetAllStores()
 
           // Create new empty project with temporary ID (will be replaced by project_id_updated event)
           const newProjectId = `project-${Date.now()}`
@@ -278,6 +446,37 @@ Just describe your project or share the code that needs fixing!`)
             isSynced: false
           })
           console.log(`[useChat] Created fresh project: ${newProjectId}`)
+
+          // Destroy old sandbox on server with retry mechanism (non-blocking)
+          if (token && oldProjectId && oldProjectId !== 'default-project') {
+            const cleanupSandbox = async (retries = 3) => {
+              for (let attempt = 1; attempt <= retries; attempt++) {
+                try {
+                  const response = await fetch(
+                    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/sync/sandbox/${oldProjectId}`,
+                    {
+                      method: 'DELETE',
+                      headers: { 'Authorization': `Bearer ${token}` }
+                    }
+                  )
+                  if (response.ok || response.status === 404) {
+                    console.log(`[useChat] Successfully cleaned up old sandbox: ${oldProjectId}`)
+                    return
+                  }
+                  throw new Error(`HTTP ${response.status}`)
+                } catch (err) {
+                  console.warn(`[useChat] Sandbox cleanup attempt ${attempt}/${retries} failed:`, err)
+                  if (attempt < retries) {
+                    // Wait before retry with exponential backoff
+                    await new Promise(resolve => setTimeout(resolve, 1000 * attempt))
+                  }
+                }
+              }
+              console.error(`[useChat] Failed to cleanup old sandbox after ${retries} attempts: ${oldProjectId}`)
+            }
+            // Fire and forget, but with retries
+            cleanupSandbox()
+          }
         }
         // Continue to generation below
         break
@@ -299,13 +498,30 @@ Just describe your project or share the code that needs fixing!`)
         }
     }
 
-    // 5. Extract project name from prompt and update project (only for GENERATE intent)
+    // 5. Ensure project exists before streaming (CRITICAL for file tree to work)
+    // This handles the case where user has no existing project
+    if (!projectStore.currentProject) {
+      const newProjectId = `project-${Date.now()}`
+      const extractedName = extractProjectName(content) || 'New Project'
+      projectStore.setCurrentProject({
+        id: newProjectId,
+        name: extractedName,
+        files: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        isSynced: false
+      })
+      console.log(`[useChat] Created new project for generation: ${newProjectId} (${extractedName})`)
+    }
+
+    // 6. Extract project name from prompt and update project (only for GENERATE intent)
     if (classification.intent === 'GENERATE' &&
         projectStore.currentProject &&
         (projectStore.currentProject.name === 'My Project' ||
+         projectStore.currentProject.name === 'New Project' ||
          projectStore.currentProject.files.length === 0)) {
       const extractedName = extractProjectName(content)
-      if (extractedName && extractedName !== 'My Project') {
+      if (extractedName && extractedName !== 'My Project' && extractedName !== 'New Project') {
         updateProject({ name: extractedName })
         console.log('[useChat] Updated project name to:', extractedName)
       }
@@ -321,7 +537,11 @@ Just describe your project or share the code that needs fixing!`)
       const workflow = classification.suggestedWorkflow === 'bolt_instant' ? 'bolt_instant' : 'bolt_standard'
 
       // 8. Build metadata with auto-collected context for FIX intent
-      let workflowMetadata: Record<string, any> = {}
+      // IMPORTANT: Always include project_name in metadata so backend creates project with correct title
+      const freshProjectStore = useProjectStore.getState()
+      let workflowMetadata: Record<string, any> = {
+        project_name: freshProjectStore.currentProject?.name || extractProjectName(content)
+      }
 
       if (classification.intent === 'FIX') {
         // AUTO-FIX: Automatically collect ALL context (Bolt.new style)
@@ -373,7 +593,7 @@ Just describe your project or share the code that needs fixing!`)
       }
 
       // Get the CURRENT project ID (may have been reset in GENERATE case above)
-      const freshProjectStore = useProjectStore.getState()
+      // Note: freshProjectStore was already declared above for metadata
       const projectId = freshProjectStore.currentProject?.id || 'default-project'
 
       console.log(`[useChat] Starting orchestrator workflow (${workflow} - ${classification.intent} intent) for project: ${projectId}`)
@@ -382,7 +602,7 @@ Just describe your project or share the code that needs fixing!`)
         projectId,  // Use fresh project ID (not stale closure value)
         workflow,  // Use classifier-suggested workflow
         workflowMetadata,
-        (event) => {
+        (event: StreamEvent) => {
           // Log ALL events for debugging
           console.log('[useChat] Event received:', event.type, event)
 
@@ -576,15 +796,18 @@ Just describe your project or share the code that needs fixing!`)
 
             case 'file_start':
               // NOTE: Don't append to chat - file operations shown in PlanView sidebar only
-              if (event.path) {
-                updateFileOperation(aiMessageId, event.path, { status: 'in-progress' })
+              // NOTE: Backend sends data nested inside event.data
+              const startData = event.data || event
+              const startPath = startData.path || event.path
+              if (startPath) {
+                updateFileOperation(aiMessageId, startPath, { status: 'in-progress' })
 
                 // Create empty file in project store immediately
                 const projectStore = useProjectStore.getState()
-                const language = getLanguageFromPath(event.path)
+                const language = getLanguageFromPath(startPath)
 
                 projectStore.addFile({
-                  path: event.path,
+                  path: startPath,
                   content: '', // Start with empty content
                   language,
                   type: 'file'
@@ -592,8 +815,8 @@ Just describe your project or share the code that needs fixing!`)
 
                 // Auto-select this file to show in Monaco editor
                 const newFile = {
-                  name: event.path.split('/').pop() || event.path,
-                  path: event.path,
+                  name: startPath.split('/').pop() || startPath,
+                  path: startPath,
                   content: '',
                   language,
                   type: 'file' as const
@@ -603,15 +826,44 @@ Just describe your project or share the code that needs fixing!`)
               break
 
             case 'file_content':
-              if (event.content && event.path) {
+              // NOTE: Backend sends data nested inside event.data
+              const contentData = event.data || event
+              const contentPath = contentData.path || event.path
+              const contentChunk = contentData.content || event.content
+              const contentStatus = contentData.status || event.status
+              if (contentChunk && contentPath) {
                 // DON'T append to chat message - stream to Monaco editor instead!
                 const projectStore = useProjectStore.getState()
-                const currentFile = findFileInProject(projectStore.currentProject?.files || [], event.path)
+                const currentFile = findFileInProject(projectStore.currentProject?.files || [], contentPath)
+                const language = getLanguageFromPath(contentPath)
 
                 if (currentFile) {
-                  // Append chunk to file content (this creates the "typing" effect in Monaco)
-                  const newContent = (currentFile.content || '') + event.content
-                  projectStore.updateFile(event.path, newContent)
+                  // If status is "complete", replace content entirely (final file)
+                  // Otherwise, append chunk to file content (streaming "typing" effect)
+                  if (contentStatus === 'complete') {
+                    projectStore.updateFile(contentPath, contentChunk)
+                  } else {
+                    const newContent = (currentFile.content || '') + contentChunk
+                    projectStore.updateFile(contentPath, newContent)
+                  }
+                } else {
+                  // File doesn't exist yet - CREATE it with the content
+                  // This handles cases where file_start wasn't sent first
+                  console.log('[file_content] Creating new file:', contentPath)
+                  projectStore.addFile({
+                    path: contentPath,
+                    content: contentChunk,
+                    language,
+                    type: 'file'
+                  })
+
+                  // Auto-open newly created file in tab
+                  projectStore.openTab({
+                    path: contentPath,
+                    content: contentChunk,
+                    language,
+                    type: 'file'
+                  })
                 }
               }
               break
@@ -619,41 +871,68 @@ Just describe your project or share the code that needs fixing!`)
             case 'file_operation':
               // Handle file_operation events from backend
               // NOTE: Don't append to chat message - file operations are shown in PlanView sidebar only (Bolt.new style)
-              if (event.operation === 'create') {
-                if (event.operation_status === 'in_progress') {
-                  // Add file operation to list (shown in PlanView)
-                  addFileOperation(aiMessageId, {
-                    type: 'create',
-                    path: event.path || '',
-                    description: `Creating ${event.path}`,
-                    status: 'in-progress'
+              // NOTE: Backend sends data nested inside event.data, so we access it there
+              const fileOp = event.data || event  // Support both nested and flat event structures
+              const opType = fileOp.operation || event.operation
+              const opStatus = fileOp.operation_status || event.operation_status
+              const opPath = fileOp.path || event.path || ''
+              // Backend may send content as file_content OR content
+              const opContent = fileOp.file_content ?? fileOp.content ?? event.file_content ?? event.content
+
+              console.log('[file_operation] Received:', { opType, opStatus, opPath, hasContent: opContent !== undefined, contentLength: typeof opContent === 'string' ? opContent.length : 0 })
+
+              if (opType === 'create') {
+                if (opStatus === 'in_progress') {
+                  // Update file operation status to in-progress (file was already added by plan_created)
+                  // Use updateFileOperation to avoid duplicates (plan_created already added it as 'pending')
+                  updateFileOperation(aiMessageId, opPath, {
+                    status: 'in-progress',
+                    description: `Creating ${opPath}`
                   })
-                } else if (event.operation_status === 'complete' && event.file_content !== undefined) {
+
+                  // Also create empty file in store to show in file tree immediately
+                  const projectStoreForProgress = useProjectStore.getState()
+                  const langForProgress = getLanguageFromPath(opPath)
+                  const existingFileForProgress = findFileInProject(projectStoreForProgress.currentProject?.files || [], opPath)
+                  if (!existingFileForProgress) {
+                    console.log('[file_operation] Creating placeholder file for in-progress:', opPath)
+                    projectStoreForProgress.addFile({
+                      path: opPath,
+                      content: '', // Empty until content arrives
+                      language: langForProgress,
+                      type: 'file'
+                    })
+                  }
+                } else if (opStatus === 'complete') {
+                  // Accept both with content and without (empty files are valid)
+                  const fileContent = opContent ?? '' // Default to empty string if no content
                   // Mark file operation as complete
-                  updateFileOperation(aiMessageId, event.path || '', {
+                  updateFileOperation(aiMessageId, opPath, {
                     status: 'complete',
-                    content: event.file_content
+                    content: fileContent
                   })
 
                   // Add file to project store with actual content from backend
                   const projectStore = useProjectStore.getState()
-                  const language = getLanguageFromPath(event.path || '')
+                  const language = getLanguageFromPath(opPath)
 
                   // Check if file already exists
-                  const existingFile = findFileInProject(projectStore.currentProject?.files || [], event.path || '')
+                  const existingFile = findFileInProject(projectStore.currentProject?.files || [], opPath)
 
                   if (existingFile) {
                     // Update existing file with new content
-                    projectStore.updateFile(event.path || '', event.file_content)
+                    projectStore.updateFile(opPath, fileContent)
+                    console.log('[file_operation] Updated existing file:', opPath, 'length:', fileContent.length)
                   } else {
                     // Create new file with content from backend
                     const newFile = {
-                      path: event.path || '',
-                      content: event.file_content,
+                      path: opPath,
+                      content: fileContent,
                       language,
                       type: 'file' as const
                     }
                     projectStore.addFile(newFile)
+                    console.log('[file_operation] Created new file:', opPath, 'length:', fileContent.length)
 
                     // Auto-open newly created file in tab
                     projectStore.openTab(newFile)
@@ -661,71 +940,74 @@ Just describe your project or share the code that needs fixing!`)
 
                   // Emit file change event for auto-reload
                   parseFileOperationEvent({
-                    path: event.path,
+                    path: opPath,
                     operation: 'created',
                     status: 'complete'
                   }, projectId)
                 }
-              } else if (event.operation === 'modify') {
-                if (event.operation_status === 'in_progress') {
+              } else if (opType === 'modify') {
+                if (opStatus === 'in_progress') {
                   addFileOperation(aiMessageId, {
                     type: 'modify',
-                    path: event.path || '',
-                    description: `Modifying ${event.path}`,
+                    path: opPath,
+                    description: `Modifying ${opPath}`,
                     status: 'in-progress'
                   })
-                } else if (event.operation_status === 'complete') {
-                  updateFileOperation(aiMessageId, event.path || '', {
+                } else if (opStatus === 'complete') {
+                  updateFileOperation(aiMessageId, opPath, {
                     status: 'complete'
                   })
 
                   // Update file content in project store if provided
-                  if (event.file_content !== undefined) {
+                  if (opContent !== undefined) {
                     const projectStore = useProjectStore.getState()
-                    projectStore.updateFile(event.path || '', event.file_content)
+                    projectStore.updateFile(opPath, opContent)
                   }
 
                   // Emit file change event for auto-reload
                   parseFileOperationEvent({
-                    path: event.path,
+                    path: opPath,
                     operation: 'updated',
                     status: 'complete'
                   }, projectId)
                 }
-              } else if (event.operation === 'fixed') {
+              } else if (opType === 'fixed') {
                 // Handle file fixed by fixer agent
-                if (event.operation_status === 'in_progress' || event.status === 'in_progress') {
+                const fixStatus = opStatus || fileOp.status || event.status
+                if (fixStatus === 'in_progress') {
                   addFileOperation(aiMessageId, {
                     type: 'modify',
-                    path: event.path || '',
-                    description: `Fixing ${event.path}`,
+                    path: opPath,
+                    description: `Fixing ${opPath}`,
                     status: 'in-progress'
                   })
-                } else if (event.operation_status === 'complete' || event.status === 'complete') {
-                  updateFileOperation(aiMessageId, event.path || '', {
+                } else if (fixStatus === 'complete') {
+                  updateFileOperation(aiMessageId, opPath, {
                     status: 'complete'
                   })
 
                   // Update file content in project store if provided
-                  if (event.file_content !== undefined) {
+                  if (opContent !== undefined) {
                     const projectStore = useProjectStore.getState()
-                    projectStore.updateFile(event.path || '', event.file_content)
+                    projectStore.updateFile(opPath, opContent)
                   }
 
                   // Emit file change event to trigger auto-reload
                   parseFileOperationEvent({
-                    path: event.path,
+                    path: opPath,
                     operation: 'fixed',
                     status: 'complete'
                   }, projectId)
 
-                  console.log(`[useChat] File fixed: ${event.path} - triggering preview reload`)
+                  console.log(`[useChat] File fixed: ${opPath} - triggering preview reload`)
                 }
-              } else if (event.operation === 'documentation') {
+              } else if (opType === 'documentation') {
                 // Handle documentation file operations (from Documenter agent)
                 // Documentation files follow planner structure: docs/SRS.md, docs/ARCHITECTURE.md, etc.
                 // For academic projects: Word, PDF, PPT files (binary - stored on backend)
-                const docPath = event.path || ''
+                const docPath = opPath
+                const docStatus = opStatus || fileOp.status || event.status
+                const docContent = opContent || fileOp.content || event.content
 
                 // Check if this is a binary file (Word, PDF, PPT)
                 const isBinaryDoc = (path: string) => {
@@ -733,14 +1015,14 @@ Just describe your project or share the code that needs fixing!`)
                   return ['pdf', 'docx', 'doc', 'pptx', 'ppt'].includes(ext || '')
                 }
 
-                if (event.operation_status === 'in_progress' || event.status === 'in_progress') {
+                if (docStatus === 'in_progress') {
                   addFileOperation(aiMessageId, {
                     type: 'create',
                     path: docPath,
                     description: `Creating documentation: ${docPath}`,
                     status: 'in-progress'
                   })
-                } else if (event.operation_status === 'complete' || event.status === 'complete') {
+                } else if (docStatus === 'complete') {
                   updateFileOperation(aiMessageId, docPath, {
                     status: 'complete'
                   })
@@ -762,18 +1044,17 @@ Just describe your project or share the code that needs fixing!`)
                       projectStore.addFile(newFile)
                       console.log(`[useChat] Added binary documentation file: ${docPath}`)
                     }
-                  } else if (event.file_content || event.content) {
+                  } else if (docContent) {
                     // Text files (Markdown) - add with content
                     const language = getLanguageFromPath(docPath)
-                    const content = event.file_content || event.content || ''
 
                     if (existingFile) {
-                      projectStore.updateFile(docPath, content)
+                      projectStore.updateFile(docPath, docContent)
                     } else {
                       // Create new documentation file in docs/ folder structure
                       const newFile = {
                         path: docPath,
-                        content: content,
+                        content: docContent,
                         language,
                         type: 'file' as const
                       }
@@ -790,34 +1071,40 @@ Just describe your project or share the code that needs fixing!`)
 
             case 'file_complete':
               // NOTE: Don't append to chat - file operations shown in PlanView sidebar only
-              if (event.path && event.full_content) {
-                updateFileOperation(aiMessageId, event.path, {
+              // NOTE: Backend sends data nested inside event.data
+              const completeData = event.data || event
+              const completePath = completeData.path || event.path
+              // Backend may send content as full_content, file_content, or content
+              const completeContent = completeData.full_content || completeData.file_content || completeData.content || event.full_content || event.file_content || event.content
+              console.log('[file_complete] Received:', { completePath, hasContent: !!completeContent, contentLength: completeContent?.length || 0 })
+              if (completePath && completeContent) {
+                updateFileOperation(aiMessageId, completePath, {
                   status: 'complete',
-                  content: event.full_content
+                  content: completeContent
                 })
 
                 // Ensure final content is set (in case streaming missed chunks)
                 const projectStore = useProjectStore.getState()
-                const language = getLanguageFromPath(event.path)
+                const language = getLanguageFromPath(completePath)
 
-                const existingFile = findFileInProject(projectStore.currentProject?.files || [], event.path)
+                const existingFile = findFileInProject(projectStore.currentProject?.files || [], completePath)
 
                 if (existingFile) {
                   // Update to final content
-                  projectStore.updateFile(event.path, event.full_content)
+                  projectStore.updateFile(completePath, completeContent)
 
                   // Auto-open updated file in tab
                   projectStore.openTab({
-                    path: event.path,
-                    content: event.full_content,
+                    path: completePath,
+                    content: completeContent,
                     language,
                     type: 'file'
                   })
                 } else {
                   // Fallback: create file if it doesn't exist
                   const newFile = {
-                    path: event.path,
-                    content: event.full_content,
+                    path: completePath,
+                    content: completeContent,
                     language,
                     type: 'file' as const
                   }
@@ -829,6 +1116,25 @@ Just describe your project or share the code that needs fixing!`)
               }
               break
 
+            case 'upgrade_required':
+              // FREE plan limit reached - show upgrade prompt
+              console.log('[upgrade_required] FREE plan limit reached:', event.data)
+              const upgradeData = event.data || {}
+
+              // Update the message with upgrade info
+              updateMessage(aiMessageId, {
+                content: `🔒 **FREE Plan Limit Reached**\n\nYou've generated ${upgradeData.files_generated || 3} preview files.\n\n${upgradeData.upgrade_message || 'Upgrade to Premium to generate the complete project with all files, bug fixing, and documentation.'}\n\n[👉 Upgrade to Premium](/pricing)`,
+                status: 'complete'
+              })
+
+              // Show alert and redirect to pricing
+              setTimeout(() => {
+                if (confirm('FREE plan limit reached! Would you like to upgrade to Premium for the complete project?')) {
+                  window.open('/pricing', '_blank')
+                }
+              }, 500)
+              break
+
             case 'commands':
               if (event.commands) {
                 // Don't append commands to chat message - only show in terminal
@@ -836,7 +1142,7 @@ Just describe your project or share the code that needs fixing!`)
                 setTerminalVisible(true)
 
                 // Execute each command in the terminal with simulated output
-                event.commands.forEach((cmd, index) => {
+                event.commands.forEach((cmd: string, index: number) => {
                   setTimeout(() => {
                     // Add command to terminal
                     addLog({
@@ -880,6 +1186,23 @@ Just describe your project or share the code that needs fixing!`)
               }
               break
 
+            case 'server_started':
+            case 'preview_ready':
+            case 'docker_running':
+              // Handle server/preview ready events - update projectStore with server URL
+              // Backend may send: server_started, preview_ready, or docker_running
+              const serverUrl = event.data?.url || event.data?.preview_url || event.data?.server_url || event.url
+              const serverPort = event.data?.port || event.port
+              if (serverUrl) {
+                console.log(`[${event.type}] Dev server ready at:`, serverUrl, 'port:', serverPort)
+                // Update the projectStore with server info
+                useProjectStore.setState({
+                  serverUrl,
+                  isServerRunning: true
+                })
+              }
+              break
+
             case 'complete':
               // Mark any remaining active steps as complete
               const currentMessage = useChatStore.getState().messages.find(m => m.id === aiMessageId)
@@ -899,54 +1222,130 @@ Just describe your project or share the code that needs fixing!`)
                 useProjectStore.getState().setDownloadUrl(event.data.download_url)
               }
 
-              // Generate completion summary with bullet points
+              // Generate comprehensive completion summary for students
               const projectStore = useProjectStore.getState()
               const aiMessage = currentMessage?.type === 'assistant' ? currentMessage : null
               const completedFiles = aiMessage?.fileOperations?.filter(f => f.status === 'complete') || []
               const completedSteps = aiMessage?.thinkingSteps?.filter(s => s.status === 'complete') || []
 
               if (completedFiles.length > 0 || completedSteps.length > 0) {
-                let summary = '\n\n---\n\n✅ **Project Generated Successfully!**\n\n'
+                let summary = '\n\n---\n\n'
+                summary += '## Project Generation Complete\n\n'
 
-                // What was built
+                // Project Overview Section
+                const projectName = projectStore.currentProject?.name || 'Your Project'
+                summary += `### ${projectName}\n\n`
+
+                // What was accomplished
                 if (completedSteps.length > 0) {
-                  summary += '**What was built:**\n'
+                  summary += '#### What We Built\n'
                   completedSteps.forEach(step => {
-                    summary += `• ${step.label}\n`
+                    summary += `- ${step.label}\n`
                   })
                   summary += '\n'
                 }
 
-                // Files created
+                // Files breakdown with categories
                 if (completedFiles.length > 0) {
-                  summary += `**Files created:** ${completedFiles.length} files\n`
+                  summary += `#### Project Files (${completedFiles.length} files created)\n\n`
 
-                  // Group files by type
-                  const components = completedFiles.filter(f => f.path.includes('component') || f.path.endsWith('.tsx') || f.path.endsWith('.jsx'))
-                  const styles = completedFiles.filter(f => f.path.endsWith('.css') || f.path.endsWith('.scss'))
-                  const configs = completedFiles.filter(f => f.path.includes('config') || f.path.endsWith('.json') || f.path.endsWith('.ts') && f.path.includes('config'))
-                  const others = completedFiles.filter(f => !components.includes(f) && !styles.includes(f) && !configs.includes(f))
+                  // Categorize files
+                  const sourceFiles = completedFiles.filter(f =>
+                    f.path.endsWith('.tsx') || f.path.endsWith('.jsx') ||
+                    f.path.endsWith('.ts') || f.path.endsWith('.js') ||
+                    f.path.endsWith('.java') || f.path.endsWith('.py')
+                  )
+                  const styleFiles = completedFiles.filter(f =>
+                    f.path.endsWith('.css') || f.path.endsWith('.scss') || f.path.endsWith('.sass')
+                  )
+                  const configFiles = completedFiles.filter(f =>
+                    f.path.endsWith('.json') || f.path.endsWith('.yaml') || f.path.endsWith('.yml') ||
+                    f.path.includes('config') || f.path.endsWith('.xml') || f.path.endsWith('.properties')
+                  )
+                  const docFiles = completedFiles.filter(f =>
+                    f.path.endsWith('.md') || f.path.endsWith('.txt') ||
+                    f.path.endsWith('.docx') || f.path.endsWith('.pdf') || f.path.endsWith('.pptx')
+                  )
+                  const testFiles = completedFiles.filter(f =>
+                    f.path.includes('test') || f.path.includes('spec') || f.path.includes('__tests__')
+                  )
 
-                  if (components.length > 0) {
-                    summary += `• ${components.length} component${components.length > 1 ? 's' : ''}\n`
+                  if (sourceFiles.length > 0) {
+                    summary += `| Category | Count |\n|----------|-------|\n`
+                    summary += `| Source Code | ${sourceFiles.length} files |\n`
+                    if (styleFiles.length > 0) summary += `| Stylesheets | ${styleFiles.length} files |\n`
+                    if (configFiles.length > 0) summary += `| Configuration | ${configFiles.length} files |\n`
+                    if (testFiles.length > 0) summary += `| Tests | ${testFiles.length} files |\n`
+                    if (docFiles.length > 0) summary += `| Documentation | ${docFiles.length} files |\n`
+                    summary += '\n'
                   }
-                  if (styles.length > 0) {
-                    summary += `• ${styles.length} style file${styles.length > 1 ? 's' : ''}\n`
+
+                  // Key files to explore
+                  const keyFiles = completedFiles.slice(0, 5)
+                  if (keyFiles.length > 0) {
+                    summary += '**Key files to explore:**\n'
+                    keyFiles.forEach(f => {
+                      const fileName = f.path.split('/').pop() || f.path
+                      summary += `- \`${fileName}\`\n`
+                    })
+                    if (completedFiles.length > 5) {
+                      summary += `- ...and ${completedFiles.length - 5} more files\n`
+                    }
+                    summary += '\n'
                   }
-                  if (configs.length > 0) {
-                    summary += `• ${configs.length} config file${configs.length > 1 ? 's' : ''}\n`
-                  }
-                  if (others.length > 0) {
-                    summary += `• ${others.length} other file${others.length > 1 ? 's' : ''}\n`
-                  }
+                }
+
+                // Documents section (for academic projects)
+                const academicDocs = completedFiles.filter(f =>
+                  f.path.endsWith('.docx') || f.path.endsWith('.pdf') || f.path.endsWith('.pptx')
+                )
+                if (academicDocs.length > 0) {
+                  summary += '#### Academic Documents Generated\n'
+                  academicDocs.forEach(doc => {
+                    const docName = doc.path.split('/').pop() || doc.path
+                    if (docName.includes('project_report') || docName.includes('ProjectReport')) {
+                      summary += `- **Project Report** - Complete documentation with UML diagrams\n`
+                    } else if (docName.includes('srs') || docName.includes('SRS')) {
+                      summary += `- **SRS Document** - Software Requirements Specification\n`
+                    } else if (docName.includes('ppt') || docName.includes('presentation')) {
+                      summary += `- **Presentation** - Ready for project defense\n`
+                    } else if (docName.includes('viva') || docName.includes('qa')) {
+                      summary += `- **Viva Q&A** - Common questions and answers\n`
+                    } else {
+                      summary += `- \`${docName}\`\n`
+                    }
+                  })
                   summary += '\n'
                 }
 
-                // Next steps
-                summary += '**Next steps:**\n'
-                summary += '• Browse files in the editor on the right\n'
-                summary += '• Click "Preview" to see your app in action\n'
-                summary += '• Use "Export" to download as ZIP\n'
+                // Tech Stack (infer from files)
+                const techStack: string[] = []
+                const fileExts = completedFiles.map(f => f.path.split('.').pop()?.toLowerCase())
+                if (fileExts.includes('tsx') || fileExts.includes('jsx')) techStack.push('React')
+                if (fileExts.includes('vue')) techStack.push('Vue.js')
+                if (fileExts.includes('java')) techStack.push('Java')
+                if (fileExts.includes('py')) techStack.push('Python')
+                if (completedFiles.some(f => f.path.includes('spring') || f.path.includes('pom.xml'))) techStack.push('Spring Boot')
+                if (completedFiles.some(f => f.path.includes('next.config') || f.path.includes('_app'))) techStack.push('Next.js')
+                if (completedFiles.some(f => f.path.includes('vite.config'))) techStack.push('Vite')
+                if (fileExts.includes('ts') || fileExts.includes('tsx')) techStack.push('TypeScript')
+
+                if (techStack.length > 0) {
+                  summary += `**Tech Stack:** ${techStack.join(' • ')}\n\n`
+                }
+
+                // Next steps for students
+                summary += '#### What You Can Do Now\n'
+                summary += '1. **Explore Code** - Browse files in the editor panel on the right\n'
+                summary += '2. **Run Preview** - Click the "Run" button to see your app in action\n'
+                summary += '3. **Download Project** - Use "Export" to download everything as ZIP\n'
+                if (academicDocs.length > 0) {
+                  summary += '4. **Download Documents** - Go to Dashboard to download all academic documents\n'
+                }
+                summary += '\n'
+
+                // Tips
+                summary += '> **Tip:** Click on any file in the file explorer to view and edit the code.\n'
 
                 appendToMessage(aiMessageId, summary)
               }
@@ -957,6 +1356,13 @@ Just describe your project or share the code that needs fixing!`)
               const errorMsg = event.data?.error || event.data?.message || 'Unknown error'
               appendToMessage(aiMessageId, `\n\n⚠️ Error: ${errorMsg}`)
               break
+
+            case 'cancelled':
+              // Backend confirmed cancellation - update UI
+              console.log('[useChat] Generation cancelled by backend')
+              updateMessageStatus(aiMessageId, 'complete')
+              stopStreaming()
+              return  // Exit early - don't process more events
 
             case 'warning':
               // Don't show warnings in chat - only log them
@@ -970,7 +1376,7 @@ Just describe your project or share the code that needs fixing!`)
               break
           }
         },
-        (error) => {
+        (error: Error) => {
           console.error('Streaming error:', error)
           updateMessageStatus(aiMessageId, 'complete')
           appendToMessage(aiMessageId, `\n\n⚠️ Error: ${error.message}`)

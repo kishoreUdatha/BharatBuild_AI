@@ -18,13 +18,14 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 import asyncio
 import json
-import logging
 
 from app.utils.claude_client import claude_client
 from app.api.v1.endpoints.auth import get_current_user
 from app.models.user import User
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
+from app.core.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.modules.auth.feature_flags import require_agentic_mode
 
 router = APIRouter(prefix="/agentic", tags=["agentic"])
 
@@ -239,7 +240,8 @@ class AgenticResponse(BaseModel):
 @router.post("/chat", response_model=AgenticResponse)
 async def agentic_chat(
     request: AgenticRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    _: None = Depends(require_agentic_mode)
 ):
     """
     Handle an agentic conversation turn.
@@ -329,7 +331,8 @@ async def agentic_chat(
 @router.post("/chat/stream")
 async def agentic_chat_stream(
     request: AgenticRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    _: None = Depends(require_agentic_mode)
 ):
     """
     Stream an agentic conversation turn.

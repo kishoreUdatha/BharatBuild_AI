@@ -100,38 +100,44 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
     console.log('[XTerminal] Initializing terminal...')
     isInitializedRef.current = true
 
-    // Initialize xterm.js
+    // Initialize xterm.js with improved styling
     const terminal = new Terminal({
       cursorBlink: true,
-      cursorStyle: 'block',
-      fontSize: 14,
-      fontFamily: '"Fira Code", "Consolas", "Monaco", "Courier New", monospace',
+      cursorStyle: 'bar',
+      fontSize: 13,
+      fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", monospace',
+      fontWeight: '400',
+      fontWeightBold: '600',
+      letterSpacing: 0.5,
+      lineHeight: 1.4,
       theme: {
-        background: '#1a1d23',
-        foreground: '#e4e6eb',
-        cursor: '#0099ff',
-        cursorAccent: '#ffffff',
-        selectionBackground: 'rgba(0, 153, 255, 0.3)',
-        black: '#1a1d23',
-        red: '#f87171',
-        green: '#4ade80',
-        yellow: '#facc15',
-        blue: '#60a5fa',
-        magenta: '#c084fc',
-        cyan: '#22d3ee',
-        white: '#e4e6eb',
-        brightBlack: '#6b7280',
-        brightRed: '#fca5a5',
-        brightGreen: '#86efac',
-        brightYellow: '#fde047',
-        brightBlue: '#93c5fd',
-        brightMagenta: '#d8b4fe',
-        brightCyan: '#67e8f9',
-        brightWhite: '#f3f4f6',
+        background: '#0d1117',
+        foreground: '#c9d1d9',
+        cursor: '#58a6ff',
+        cursorAccent: '#0d1117',
+        selectionBackground: 'rgba(56, 139, 253, 0.4)',
+        selectionForeground: '#ffffff',
+        black: '#484f58',
+        red: '#ff7b72',
+        green: '#7ee787',
+        yellow: '#d29922',
+        blue: '#58a6ff',
+        magenta: '#bc8cff',
+        cyan: '#39c5cf',
+        white: '#b1bac4',
+        brightBlack: '#6e7681',
+        brightRed: '#ffa198',
+        brightGreen: '#a5d6a7',
+        brightYellow: '#e3b341',
+        brightBlue: '#79c0ff',
+        brightMagenta: '#d2a8ff',
+        brightCyan: '#56d4dd',
+        brightWhite: '#f0f6fc',
       },
-      scrollback: 1000,
+      scrollback: 5000,
       convertEol: true,
       allowProposedApi: true,
+      smoothScrollDuration: 150,
     })
 
     // Add addons
@@ -157,13 +163,22 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
       }
     }, 50)
 
-    // Welcome message
-    terminal.writeln('\x1b[1;36m╔═══════════════════════════════════════════════════╗\x1b[0m')
-    terminal.writeln('\x1b[1;36m║\x1b[0m  \x1b[1;33mBharatBuild AI Terminal\x1b[0m                        \x1b[1;36m║\x1b[0m')
-    terminal.writeln('\x1b[1;36m║\x1b[0m  Real-time command execution and output          \x1b[1;36m║\x1b[0m')
-    terminal.writeln('\x1b[1;36m╚═══════════════════════════════════════════════════╝\x1b[0m')
+    // Welcome message - Clean and modern
     terminal.writeln('')
-    terminal.write('\x1b[1;32m$\x1b[0m ')
+    terminal.writeln('\x1b[38;5;39m  ██████╗ ██╗  ██╗ █████╗ ██████╗  █████╗ ████████╗\x1b[0m')
+    terminal.writeln('\x1b[38;5;39m  ██╔══██╗██║  ██║██╔══██╗██╔══██╗██╔══██╗╚══██╔══╝\x1b[0m')
+    terminal.writeln('\x1b[38;5;45m  ██████╔╝███████║███████║██████╔╝███████║   ██║\x1b[0m')
+    terminal.writeln('\x1b[38;5;45m  ██╔══██╗██╔══██║██╔══██║██╔══██╗██╔══██║   ██║\x1b[0m')
+    terminal.writeln('\x1b[38;5;51m  ██████╔╝██║  ██║██║  ██║██║  ██║██║  ██║   ██║\x1b[0m')
+    terminal.writeln('\x1b[38;5;51m  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝\x1b[0m')
+    terminal.writeln('')
+    terminal.writeln('\x1b[38;5;245m  ─────────────────────────────────────────────────\x1b[0m')
+    terminal.writeln('\x1b[38;5;250m  BharatBuild AI Terminal\x1b[0m \x1b[38;5;239m│\x1b[0m \x1b[38;5;114mReady\x1b[0m')
+    terminal.writeln('\x1b[38;5;245m  ─────────────────────────────────────────────────\x1b[0m')
+    terminal.writeln('')
+    terminal.writeln('\x1b[38;5;239m  Tips: \x1b[38;5;250mCtrl+C\x1b[38;5;239m copy • \x1b[38;5;250mCtrl+L\x1b[38;5;239m clear • \x1b[38;5;250mRight-click\x1b[38;5;239m menu\x1b[0m')
+    terminal.writeln('')
+    terminal.write('\x1b[38;5;114m❯\x1b[0m ')
 
     // Handle input - use ref for onCommand to avoid re-initialization
     terminal.onData((data) => {
@@ -176,7 +191,7 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
           onCommandRef.current?.(currentLineRef.current)
         }
         currentLineRef.current = ''
-        terminal.write('\x1b[1;32m$\x1b[0m ')
+        terminal.write('\x1b[38;5;114m❯\x1b[0m ')
       }
       // Backspace
       else if (code === 127) {
@@ -195,15 +210,15 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
             console.error('[XTerminal] Copy failed:', err)
           })
         } else {
-          terminal.writeln('^C')
+          terminal.writeln('\x1b[38;5;245m^C\x1b[0m')
           currentLineRef.current = ''
-          terminal.write('\x1b[1;32m$\x1b[0m ')
+          terminal.write('\x1b[38;5;114m❯\x1b[0m ')
         }
       }
       // Ctrl+L (clear)
       else if (code === 12) {
         terminal.clear()
-        terminal.write('\x1b[1;32m$\x1b[0m ')
+        terminal.write('\x1b[38;5;114m❯\x1b[0m ')
       }
       // Printable characters
       else if (code >= 32) {
@@ -256,7 +271,7 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
     }
   }, []) // Empty dependency - initialize only once
 
-  // Handle new logs
+  // Handle new logs with improved formatting
   useEffect(() => {
     if (!xtermRef.current || logs.length === 0) return
 
@@ -266,36 +281,62 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
 
     newLogs.forEach((log) => {
       const terminal = xtermRef.current!
+      const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
       switch (log.type) {
         case 'command':
-          // Show command in green with $ prompt
-          terminal.writeln(`\x1b[1;32m$ ${log.content}\x1b[0m`)
+          // Show command with styled prompt and timestamp
+          terminal.writeln(`\x1b[38;5;239m${timestamp}\x1b[0m \x1b[38;5;114m❯\x1b[0m \x1b[38;5;79m${log.content}\x1b[0m`)
           break
 
         case 'error':
-          // Show errors in red
-          terminal.writeln(`\x1b[1;31m${log.content}\x1b[0m`)
+          // Show errors with red icon and styled text
+          terminal.writeln(`\x1b[38;5;239m${timestamp}\x1b[0m \x1b[38;5;196m✖\x1b[0m \x1b[38;5;210m${log.content}\x1b[0m`)
           break
 
         case 'info':
-          // Show info in cyan
-          terminal.writeln(`\x1b[1;36m${log.content}\x1b[0m`)
+          // Show info with blue icon
+          terminal.writeln(`\x1b[38;5;239m${timestamp}\x1b[0m \x1b[38;5;39mℹ\x1b[0m \x1b[38;5;153m${log.content}\x1b[0m`)
           break
 
         case 'output':
-          // Show output in default color
-          terminal.writeln(log.content)
+          // Show output with subtle styling
+          const lines = log.content.split('\n')
+          lines.forEach(line => {
+            if (line.trim()) {
+              // Detect success patterns
+              if (line.includes('✓') || line.toLowerCase().includes('success') || line.toLowerCase().includes('completed')) {
+                terminal.writeln(`  \x1b[38;5;114m${line}\x1b[0m`)
+              }
+              // Detect warning patterns
+              else if (line.toLowerCase().includes('warn') || line.includes('⚠')) {
+                terminal.writeln(`  \x1b[38;5;220m${line}\x1b[0m`)
+              }
+              // Detect error patterns in output
+              else if (line.toLowerCase().includes('error') || line.toLowerCase().includes('fail')) {
+                terminal.writeln(`  \x1b[38;5;210m${line}\x1b[0m`)
+              }
+              // URLs
+              else if (line.includes('http://') || line.includes('https://')) {
+                terminal.writeln(`  \x1b[38;5;75m${line}\x1b[0m`)
+              }
+              // Default output
+              else {
+                terminal.writeln(`  \x1b[38;5;250m${line}\x1b[0m`)
+              }
+            }
+          })
           break
 
         default:
-          terminal.writeln(log.content)
+          terminal.writeln(`  \x1b[38;5;245m${log.content}\x1b[0m`)
       }
     })
 
     // Add prompt after logs
-    if (newLogs.length > 0) {
-      xtermRef.current.write('\x1b[1;32m$\x1b[0m ')
+    if (newLogs.length > 0 && xtermRef.current) {
+      xtermRef.current.writeln('')
+      xtermRef.current.write('\x1b[38;5;114m❯\x1b[0m ')
     }
   }, [logs])
 
@@ -322,11 +363,11 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
   }, [debouncedFit])
 
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full w-full bg-[#0d1117]">
       <div
         ref={terminalRef}
         className="h-full w-full"
-        style={{ padding: '8px' }}
+        style={{ padding: '12px 16px' }}
         onContextMenu={handleContextMenu}
       />
 

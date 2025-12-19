@@ -48,11 +48,9 @@ from dataclasses import dataclass
 from enum import Enum
 import os
 import re
-import logging
 
 from app.core.config import settings
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 
 class DatabaseType(Enum):

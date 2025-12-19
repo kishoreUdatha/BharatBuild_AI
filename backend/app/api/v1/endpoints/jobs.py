@@ -9,7 +9,6 @@ Endpoints for:
 """
 
 import asyncio
-import logging
 from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 from fastapi.responses import FileResponse, StreamingResponse
@@ -19,8 +18,7 @@ from app.modules.storage import (
     get_job_storage,
     JobMetadata,
 )
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 router = APIRouter(prefix="/jobs", tags=["Job Storage"])
 

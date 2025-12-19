@@ -1,0 +1,55 @@
+{
+  "timestamp": "2025-12-19T00:25:33.429689",
+  "base_url": "http://localhost:8000/api/v1",
+  "duration_seconds": 0.8201384544372559,
+  "summary": {
+    "total": 7,
+    "passed": 7,
+    "failed": 0,
+    "errors": 0
+  },
+  "tests": [
+    {
+      "name": "API Health Check",
+      "status": "PASS",
+      "duration_ms": 16.28398895263672,
+      "error": null
+    },
+    {
+      "name": "Document Types Endpoint",
+      "status": "PASS",
+      "duration_ms": 4.944324493408203,
+      "error": null
+    },
+    {
+      "name": "User Registration",
+      "status": "PASS",
+      "duration_ms": 239.45021629333496,
+      "error": null
+    },
+    {
+      "name": "Invalid Login Rejection",
+      "status": "PASS",
+      "duration_ms": 11.649131774902344,
+      "error": null
+    },
+    {
+      "name": "Unauthenticated Rejection",
+      "status": "PASS",
+      "duration_ms": 6.7005157470703125,
+      "error": null
+    },
+    {
+      "name": "Authenticated Endpoints",
+      "status": "PASS",
+      "duration_ms": 486.4816665649414,
+      "error": null
+    },
+    {
+      "name": "Concurrent Requests",
+      "status": "PASS",
+      "duration_ms": 54.282188415527344,
+      "error": null
+    }
+  ]
+}

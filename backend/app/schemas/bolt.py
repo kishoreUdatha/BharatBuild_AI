@@ -15,6 +15,33 @@ class ProjectFileSchema(BaseModel):
     type: Literal["file", "folder"] = Field(default="file", description="File or folder")
 
 
+class ColorThemeSchema(BaseModel):
+    """User-defined color theme for project generation"""
+    primary: Optional[str] = Field(None, description="Primary color (e.g., 'orange', 'blue', '#3b82f6')")
+    secondary: Optional[str] = Field(None, description="Secondary color (e.g., 'amber', 'indigo', '#6366f1')")
+    preset: Optional[str] = Field(
+        None,
+        description="Preset theme name: 'ecommerce', 'healthcare', 'finance', 'education', 'social', 'ai', 'blockchain', 'gaming', 'portfolio', 'food', 'travel', 'fitness'"
+    )
+
+
+# Preset color themes mapping
+COLOR_PRESETS = {
+    "ecommerce": {"primary": "orange", "secondary": "amber"},
+    "healthcare": {"primary": "teal", "secondary": "emerald"},
+    "finance": {"primary": "blue", "secondary": "indigo"},
+    "education": {"primary": "purple", "secondary": "violet"},
+    "social": {"primary": "pink", "secondary": "rose"},
+    "ai": {"primary": "cyan", "secondary": "sky"},
+    "blockchain": {"primary": "lime", "secondary": "green"},
+    "gaming": {"primary": "red", "secondary": "orange"},
+    "portfolio": {"primary": "purple", "secondary": "cyan"},
+    "food": {"primary": "orange", "secondary": "yellow"},
+    "travel": {"primary": "cyan", "secondary": "teal"},
+    "fitness": {"primary": "green", "secondary": "lime"},
+}
+
+
 class BoltChatRequest(BaseModel):
     """Request for Bolt chat streaming"""
     message: str = Field(..., description="User message/prompt")
@@ -27,6 +54,7 @@ class BoltChatRequest(BaseModel):
     )
     max_tokens: int = Field(default=4000, description="Max tokens to generate")
     temperature: float = Field(default=0.7, description="Temperature for generation")
+    color_theme: Optional[ColorThemeSchema] = Field(None, description="Custom color theme for UI")
 
 
 class BoltChatResponse(BaseModel):
@@ -170,6 +198,7 @@ class GenerateProjectRequest(BaseModel):
     description: str = Field(..., description="Project description/request")
     project_name: Optional[str] = Field(None, description="Optional project name")
     metadata: Optional[Dict] = Field(default_factory=dict, description="Additional metadata")
+    color_theme: Optional[ColorThemeSchema] = Field(None, description="Custom color theme for UI")
 
 
 class GenerateProjectResponse(BaseModel):

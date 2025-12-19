@@ -41,7 +41,7 @@ export function useProjects(initialPage: number = 1, initialPageSize: number = 1
     setError(null)
 
     try {
-      const response: ProjectsResponse = await apiClient.getProjects(pageNum, size)
+      const response: ProjectsResponse = await apiClient.getProjects({ page: pageNum, limit: size })
       setProjects(response.projects || [])
       setTotal(response.total || 0)
 

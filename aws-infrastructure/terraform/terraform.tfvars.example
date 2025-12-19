@@ -1,0 +1,26 @@
+# =============================================================================
+# BharatBuild AI - Terraform Variables Configuration
+# =============================================================================
+# Copy this file to terraform.tfvars and fill in your values
+# NEVER commit terraform.tfvars to version control!
+# =============================================================================
+
+# AWS Region (ap-south-1 = Mumbai, recommended for India)
+aws_region = "ap-south-1"
+
+# Environment name
+environment = "production"
+
+# Application name (used for resource naming)
+app_name = "bharatbuild"
+
+# Your domain name (must be registered in Route 53)
+domain_name = "your-domain.com"
+
+# Database password (use a strong password!)
+# Generate with: openssl rand -base64 32
+db_password = "CHANGE_ME_USE_STRONG_PASSWORD_32_CHARS"
+
+# Redis auth token (must be at least 16 characters)
+# Generate with: openssl rand -base64 24
+redis_auth_token = "CHANGE_ME_USE_STRONG_TOKEN_24_CHARS"

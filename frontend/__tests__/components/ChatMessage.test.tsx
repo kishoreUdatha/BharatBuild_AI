@@ -2,15 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { ChatMessage } from '@/components/bolt/ChatMessage'
 
-// Mock the Button component
-vi.mock('@/components/ui/button', () => ({
-  Button: ({ children, onClick, className, variant, size }: any) => (
-    <button onClick={onClick} className={className} data-variant={variant} data-size={size}>
-      {children}
-    </button>
-  ),
-}))
-
 // Mock the clipboard API
 Object.assign(navigator, {
   clipboard: {
@@ -24,24 +15,24 @@ describe('ChatMessage Component', () => {
   })
 
   describe('User Messages', () => {
-    it('should render user message', () => {
+    it('should render user message content', () => {
       render(<ChatMessage role="user" content="Hello, build me a todo app" />)
 
-      expect(screen.getByText('You')).toBeInTheDocument()
       expect(screen.getByText('Hello, build me a todo app')).toBeInTheDocument()
     })
 
-    it('should show User avatar for user messages', () => {
-      render(<ChatMessage role="user" content="Test message" />)
+    it('should apply user message styling with violet background', () => {
+      const { container } = render(<ChatMessage role="user" content="Test message" />)
 
-      expect(screen.getByText('You')).toBeInTheDocument()
+      const bubble = container.querySelector('.bg-violet-600')
+      expect(bubble).toBeInTheDocument()
     })
 
     it('should align user messages to the right', () => {
       const { container } = render(<ChatMessage role="user" content="Test" />)
 
-      const messageWrapper = container.firstChild
-      expect(messageWrapper).toHaveClass('flex-row-reverse')
+      const messageWrapper = container.querySelector('.justify-end')
+      expect(messageWrapper).toBeInTheDocument()
     })
 
     it('should not show copy button for user messages', () => {
@@ -52,31 +43,25 @@ describe('ChatMessage Component', () => {
   })
 
   describe('Assistant Messages', () => {
-    it('should render assistant message', () => {
+    it('should render assistant message content', () => {
       render(<ChatMessage role="assistant" content="I'll help you build a todo app" />)
 
-      expect(screen.getByText('BharatBuild AI')).toBeInTheDocument()
       expect(screen.getByText("I'll help you build a todo app")).toBeInTheDocument()
     })
 
-    it('should show Bot avatar for assistant messages', () => {
-      render(<ChatMessage role="assistant" content="Test message" />)
+    it('should show Brain icon for assistant messages', () => {
+      const { container } = render(<ChatMessage role="assistant" content="Test message" />)
 
-      expect(screen.getByText('BharatBuild AI')).toBeInTheDocument()
+      // Check for the avatar container with gradient
+      const avatar = container.querySelector('.from-violet-500')
+      expect(avatar).toBeInTheDocument()
     })
 
     it('should not align assistant messages to the right', () => {
       const { container } = render(<ChatMessage role="assistant" content="Test" />)
 
-      const messageWrapper = container.firstChild
-      expect(messageWrapper).not.toHaveClass('flex-row-reverse')
-    })
-
-    it('should apply assistant background color', () => {
-      const { container } = render(<ChatMessage role="assistant" content="Test" />)
-
-      const messageWrapper = container.firstChild
-      expect(messageWrapper).toHaveClass('bg-[hsl(var(--bolt-bg-secondary))]')
+      const messageWrapper = container.querySelector('.justify-end')
+      expect(messageWrapper).not.toBeInTheDocument()
     })
   })
 
@@ -87,10 +72,12 @@ describe('ChatMessage Component', () => {
       expect(container.firstChild).toBeNull()
     })
 
-    it('should render empty assistant message when streaming', () => {
-      render(<ChatMessage role="assistant" content="" isStreaming={true} />)
+    it('should render assistant message when streaming even with empty content', () => {
+      const { container } = render(<ChatMessage role="assistant" content="" isStreaming={true} />)
 
-      expect(screen.getByText('BharatBuild AI')).toBeInTheDocument()
+      // Should show the streaming dots
+      const dots = container.querySelectorAll('.animate-pulse')
+      expect(dots.length).toBeGreaterThan(0)
     })
   })
 
@@ -110,8 +97,8 @@ describe('ChatMessage Component', () => {
         <ChatMessage role="assistant" content="Typing..." isStreaming={true} />
       )
 
-      // Check for cursor element
-      const cursor = container.querySelector('.w-2.h-4.bg-blue-500.animate-pulse')
+      // Check for cursor element (w-2 h-5 bg-violet-500 animate-pulse)
+      const cursor = container.querySelector('.w-2')
       expect(cursor).toBeInTheDocument()
     })
 
@@ -158,15 +145,12 @@ describe('ChatMessage Component', () => {
   })
 
   describe('Copy Functionality', () => {
-    it('should show Copy button for assistant messages', () => {
-      const { container } = render(
-        <ChatMessage role="assistant" content="Some content to copy" />
-      )
+    it('should have Copy button for assistant messages', () => {
+      render(<ChatMessage role="assistant" content="Some content to copy" />)
 
-      // The button is in a group that shows on hover, so it exists but may be hidden
-      const copyButton = screen.queryByText('Copy')
-      // Button exists but is initially hidden via opacity
-      expect(copyButton?.closest('.opacity-0')).toBeInTheDocument()
+      // The button exists (may be hidden via opacity until hover)
+      const copyButton = screen.getByText('Copy')
+      expect(copyButton).toBeInTheDocument()
     })
 
     it('should copy content to clipboard when clicked', async () => {

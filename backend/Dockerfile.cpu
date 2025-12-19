@@ -44,7 +44,7 @@ RUN apt-get update && apt-get install -y \
     portaudio19-dev \
     # OpenCV dependencies
     libopencv-dev \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     # HDF5 for Keras
     libhdf5-dev \

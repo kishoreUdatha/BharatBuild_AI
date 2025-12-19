@@ -17,6 +17,7 @@ The Enhancer Agent:
 
 from typing import Dict, Any, List
 from app.utils.claude_client import ClaudeClient
+from app.core.config import settings
 import json
 import re
 
@@ -28,7 +29,7 @@ class EnhancerAgent:
 
     def __init__(self):
         self.claude_client = ClaudeClient()
-        self.model = "claude-3-5-sonnet-20241022"
+        self.model = settings.CLAUDE_SONNET_MODEL
 
     async def create_enhancement_plan(
         self,

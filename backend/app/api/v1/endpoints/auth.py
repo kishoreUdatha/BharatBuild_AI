@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from datetime import datetime, timedelta
@@ -16,11 +16,13 @@ from app.core.security import (
     create_refresh_token,
     decode_token
 )
+from app.core.logging_config import logger, set_user_id
 from app.models.user import User, UserRole
 from app.schemas.auth import (
     UserRegister,
     UserLogin,
     Token,
+    LoginResponse,
     UserResponse,
     GoogleAuthRequest,
     OAuthCallbackRequest,
@@ -30,32 +32,73 @@ from app.schemas.auth import (
 from app.modules.auth.dependencies import get_current_user
 from app.modules.oauth.google_provider import google_oauth
 from app.modules.oauth.github_provider import github_oauth
+from app.services.email_service import email_service
+from app.core.rate_limiter import limiter, auth_rate_limit, strict_rate_limit
 
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
+
+class ResendVerificationRequest(BaseModel):
+    email: str
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
 router = APIRouter()
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("3/minute")
 async def register(
+    request: Request,
     user_data: UserRegister,
     db: AsyncSession = Depends(get_db)
 ):
-    """Register new user"""
+    """Register new user (rate limited: 3/min)"""
+    client_ip = request.client.host if request.client else "unknown"
 
-    # Check if user exists
+    # Check if email already exists
     result = await db.execute(
         select(User).where(User.email == user_data.email)
     )
     existing_user = result.scalar_one_or_none()
 
     if existing_user:
+        logger.log_auth_event(
+            event="register",
+            success=False,
+            user_email=user_data.email,
+            reason="Email already registered",
+            client_ip=client_ip
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
+
+    # Check if phone number already exists (if provided)
+    if user_data.phone:
+        result = await db.execute(
+            select(User).where(User.phone == user_data.phone)
+        )
+        existing_phone_user = result.scalar_one_or_none()
+
+        if existing_phone_user:
+            logger.log_auth_event(
+                event="register",
+                success=False,
+                user_email=user_data.email,
+                reason="Phone number already registered",
+                client_ip=client_ip
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Phone number already registered"
+            )
 
     # Create user - convert role string to UserRole enum
     try:
@@ -67,22 +110,232 @@ async def register(
         email=user_data.email,
         hashed_password=get_password_hash(user_data.password),
         full_name=user_data.full_name,
-        role=user_role
+        phone=user_data.phone,
+        role=user_role,
+        # Student Academic Details
+        roll_number=user_data.roll_number,
+        college_name=user_data.college_name,
+        university_name=user_data.university_name,
+        department=user_data.department,
+        course=user_data.course,
+        year_semester=user_data.year_semester,
+        batch=user_data.batch,
+        # Guide/Mentor Details
+        guide_name=user_data.guide_name,
+        guide_designation=user_data.guide_designation,
+        hod_name=user_data.hod_name
     )
 
     db.add(user)
     await db.commit()
     await db.refresh(user)
 
+    logger.log_auth_event(
+        event="register",
+        success=True,
+        user_email=user_data.email,
+        client_ip=client_ip,
+        user_role=user_role.value
+    )
+
+    # Send verification email (async, don't block registration)
+    try:
+        from jose import jwt
+        verification_token_data = {
+            "sub": str(user.id),
+            "email": user.email,
+            "type": "email_verification",
+            "exp": datetime.utcnow() + timedelta(hours=24)
+        }
+        verification_token = jwt.encode(
+            verification_token_data,
+            settings.JWT_SECRET_KEY,
+            algorithm=settings.JWT_ALGORITHM
+        )
+
+        # Send email in background (don't wait)
+        import asyncio
+        asyncio.create_task(
+            email_service.send_verification_email(
+                to_email=user.email,
+                user_name=user.full_name,
+                verification_token=verification_token
+            )
+        )
+        logger.info(f"[Auth] Verification email queued for {user.email}")
+    except Exception as e:
+        # Don't fail registration if email fails
+        logger.warning(f"[Auth] Failed to send verification email: {e}")
+
     return user
 
 
-@router.post("/login", response_model=Token)
+@router.post("/verify-email")
+async def verify_email(
+    request: VerifyEmailRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Verify email address using token from email.
+
+    Token is valid for 24 hours.
+    """
+    try:
+        from jose import jwt, JWTError
+
+        payload = jwt.decode(
+            request.token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM]
+        )
+
+        # Verify token type
+        if payload.get("type") != "email_verification":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid verification token"
+            )
+
+        user_id = payload.get("sub")
+        email = payload.get("email")
+
+        # Get user
+        result = await db.execute(
+            select(User).where(User.id == user_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+
+        # Check if email matches (security check)
+        if user.email != email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Token email mismatch"
+            )
+
+        # Already verified?
+        if user.is_verified:
+            return {
+                "success": True,
+                "message": "Email already verified",
+                "already_verified": True
+            }
+
+        # Mark as verified
+        user.is_verified = True
+        await db.commit()
+
+        logger.log_auth_event(
+            event="email_verified",
+            success=True,
+            user_email=user.email
+        )
+
+        # Send welcome email
+        try:
+            import asyncio
+            asyncio.create_task(
+                email_service.send_welcome_email(
+                    to_email=user.email,
+                    user_name=user.full_name
+                )
+            )
+        except Exception:
+            pass  # Don't fail verification if welcome email fails
+
+        return {
+            "success": True,
+            "message": "Email verified successfully! You can now log in.",
+            "already_verified": False
+        }
+
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification token"
+        )
+
+
+@router.post("/resend-verification")
+async def resend_verification_email(
+    request: ResendVerificationRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Resend verification email.
+
+    Rate limited to prevent abuse.
+    """
+    # Find user by email
+    result = await db.execute(
+        select(User).where(User.email == request.email)
+    )
+    user = result.scalar_one_or_none()
+
+    # Always return success to prevent email enumeration
+    if not user:
+        return {
+            "success": True,
+            "message": "If an account with that email exists, a verification email has been sent."
+        }
+
+    # Already verified?
+    if user.is_verified:
+        return {
+            "success": True,
+            "message": "This email is already verified. You can log in."
+        }
+
+    # Generate new verification token
+    try:
+        from jose import jwt
+        verification_token_data = {
+            "sub": str(user.id),
+            "email": user.email,
+            "type": "email_verification",
+            "exp": datetime.utcnow() + timedelta(hours=24)
+        }
+        verification_token = jwt.encode(
+            verification_token_data,
+            settings.JWT_SECRET_KEY,
+            algorithm=settings.JWT_ALGORITHM
+        )
+
+        # Send verification email
+        email_sent = await email_service.send_verification_email(
+            to_email=user.email,
+            user_name=user.full_name,
+            verification_token=verification_token
+        )
+
+        if email_sent:
+            logger.info(f"[Auth] Verification email resent to {user.email}")
+        else:
+            logger.warning(f"[Auth] Failed to resend verification email to {user.email}")
+
+    except Exception as e:
+        logger.error(f"[Auth] Error resending verification email: {e}")
+
+    return {
+        "success": True,
+        "message": "If an account with that email exists, a verification email has been sent."
+    }
+
+
+@router.post("/login", response_model=LoginResponse)
+@limiter.limit("5/minute")
 async def login(
+    request: Request,
     credentials: UserLogin,
     db: AsyncSession = Depends(get_db)
 ):
-    """Login user"""
+    """Login user (rate limited: 5/min)"""
+    client_ip = request.client.host if request.client else "unknown"
 
     # Get user
     result = await db.execute(
@@ -91,12 +344,26 @@ async def login(
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(credentials.password, user.hashed_password):
+        logger.log_auth_event(
+            event="login",
+            success=False,
+            user_email=credentials.email,
+            reason="Invalid credentials",
+            client_ip=client_ip
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password"
         )
 
     if not user.is_active:
+        logger.log_auth_event(
+            event="login",
+            success=False,
+            user_email=credentials.email,
+            reason="Account inactive",
+            client_ip=client_ip
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is inactive"
@@ -105,6 +372,9 @@ async def login(
     # Update last login
     user.last_login = datetime.utcnow()
     await db.commit()
+
+    # Set user context for downstream logging
+    set_user_id(str(user.id))
 
     # Create tokens
     token_data = {
@@ -116,10 +386,43 @@ async def login(
     access_token = create_access_token(token_data)
     refresh_token = create_refresh_token(token_data)
 
+    logger.log_auth_event(
+        event="login",
+        success=True,
+        user_email=user.email,
+        client_ip=client_ip,
+        user_role=user.role.value
+    )
+
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
-        "token_type": "bearer"
+        "token_type": "bearer",
+        "user": UserResponse(
+            id=user.id,
+            email=user.email,
+            username=user.username,
+            full_name=user.full_name,
+            phone=user.phone,
+            role=user.role.value,
+            is_active=user.is_active,
+            is_verified=user.is_verified,
+            created_at=user.created_at,
+            avatar_url=user.avatar_url,
+            oauth_provider=user.oauth_provider,
+            # Student Academic Details
+            roll_number=user.roll_number,
+            college_name=user.college_name,
+            university_name=user.university_name,
+            department=user.department,
+            course=user.course,
+            year_semester=user.year_semester,
+            batch=user.batch,
+            # Guide/Mentor Details
+            guide_name=user.guide_name,
+            guide_designation=user.guide_designation,
+            hod_name=user.hod_name
+        )
     }
 
 
@@ -133,16 +436,25 @@ async def get_current_user_info(
 
 @router.post("/refresh", response_model=Token)
 async def refresh_token(
-    request: RefreshTokenRequest,
+    token_request: RefreshTokenRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """Refresh access token using refresh token"""
+    client_ip = request.client.host if request.client else "unknown"
+
     try:
         # Decode the refresh token
-        payload = decode_token(request.refresh_token)
+        payload = decode_token(token_request.refresh_token)
 
         # Verify it's a refresh token
         if payload.get("type") != "refresh":
+            logger.log_auth_event(
+                event="token_refresh",
+                success=False,
+                reason="Invalid token type",
+                client_ip=client_ip
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token type - expected refresh token"
@@ -153,6 +465,12 @@ async def refresh_token(
         try:
             uuid.UUID(user_id)  # Just validate format
         except ValueError:
+            logger.log_auth_event(
+                event="token_refresh",
+                success=False,
+                reason="Invalid user ID format",
+                client_ip=client_ip
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid user ID format"
@@ -163,12 +481,25 @@ async def refresh_token(
         user = result.scalar_one_or_none()
 
         if not user:
+            logger.log_auth_event(
+                event="token_refresh",
+                success=False,
+                reason="User not found",
+                client_ip=client_ip
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="User not found"
             )
 
         if not user.is_active:
+            logger.log_auth_event(
+                event="token_refresh",
+                success=False,
+                user_email=user.email,
+                reason="Account inactive",
+                client_ip=client_ip
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Account is inactive"
@@ -184,6 +515,13 @@ async def refresh_token(
         access_token = create_access_token(token_data)
         new_refresh_token = create_refresh_token(token_data)
 
+        logger.log_auth_event(
+            event="token_refresh",
+            success=True,
+            user_email=user.email,
+            client_ip=client_ip
+        )
+
         return {
             "access_token": access_token,
             "refresh_token": new_refresh_token,
@@ -193,6 +531,12 @@ async def refresh_token(
     except HTTPException:
         raise
     except Exception as e:
+        logger.log_auth_event(
+            event="token_refresh",
+            success=False,
+            reason=f"Token error: {str(e)}",
+            client_ip=client_ip
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token"
@@ -247,20 +591,35 @@ async def get_google_auth_url():
 
 @router.post("/google/callback", response_model=OAuthTokenResponse)
 async def google_oauth_callback(
-    request: OAuthCallbackRequest,
+    oauth_request: OAuthCallbackRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """Handle Google OAuth callback with authorization code."""
+    client_ip = request.client.host if request.client else "unknown"
+
     if not settings.GOOGLE_CLIENT_ID:
+        logger.log_auth_event(
+            event="google_oauth",
+            success=False,
+            reason="Google OAuth not configured",
+            client_ip=client_ip
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Google OAuth is not configured"
         )
 
     # Authenticate with Google
-    user_data = await google_oauth.authenticate(request.code)
+    user_data = await google_oauth.authenticate(oauth_request.code)
 
     if not user_data:
+        logger.log_auth_event(
+            event="google_oauth",
+            success=False,
+            reason="Google authentication failed",
+            client_ip=client_ip
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Failed to authenticate with Google"
@@ -270,6 +629,12 @@ async def google_oauth_callback(
     email = user_data.get("email")
 
     if not email:
+        logger.log_auth_event(
+            event="google_oauth",
+            success=False,
+            reason="Email not provided by Google",
+            client_ip=client_ip
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email not provided by Google"
@@ -305,7 +670,7 @@ async def google_oauth_callback(
             avatar_url=user_data.get("avatar_url", ""),
             oauth_provider="google",
             is_verified=user_data.get("email_verified", False),
-            role=request.role,
+            role=oauth_request.role,
             hashed_password="",  # No password for OAuth users
         )
         db.add(user)
@@ -321,6 +686,14 @@ async def google_oauth_callback(
 
     access_token = create_access_token(token_data)
     refresh_token = create_refresh_token(token_data)
+
+    logger.log_auth_event(
+        event="google_oauth",
+        success=True,
+        user_email=email,
+        client_ip=client_ip,
+        is_new_user=is_new_user
+    )
 
     return OAuthTokenResponse(
         access_token=access_token,
@@ -587,20 +960,35 @@ async def reset_password(
 
 @router.post("/github/callback", response_model=OAuthTokenResponse)
 async def github_oauth_callback(
-    request: OAuthCallbackRequest,
+    oauth_request: OAuthCallbackRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """Handle GitHub OAuth callback with authorization code."""
+    client_ip = request.client.host if request.client else "unknown"
+
     if not settings.GITHUB_CLIENT_ID:
+        logger.log_auth_event(
+            event="github_oauth",
+            success=False,
+            reason="GitHub OAuth not configured",
+            client_ip=client_ip
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="GitHub OAuth is not configured"
         )
 
     # Authenticate with GitHub
-    user_data = await github_oauth.authenticate(request.code)
+    user_data = await github_oauth.authenticate(oauth_request.code)
 
     if not user_data:
+        logger.log_auth_event(
+            event="github_oauth",
+            success=False,
+            reason="GitHub authentication failed",
+            client_ip=client_ip
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Failed to authenticate with GitHub"
@@ -610,6 +998,12 @@ async def github_oauth_callback(
     email = user_data.get("email")
 
     if not email:
+        logger.log_auth_event(
+            event="github_oauth",
+            success=False,
+            reason="Email not provided by GitHub",
+            client_ip=client_ip
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email not provided by GitHub. Please make sure your email is public or verified on GitHub."
@@ -647,7 +1041,7 @@ async def github_oauth_callback(
             bio=user_data.get("bio", ""),
             oauth_provider="github",
             is_verified=True,  # GitHub emails are verified
-            role=request.role,
+            role=oauth_request.role,
             hashed_password="",  # No password for OAuth users
         )
         db.add(user)
@@ -663,6 +1057,14 @@ async def github_oauth_callback(
 
     access_token = create_access_token(token_data)
     refresh_token = create_refresh_token(token_data)
+
+    logger.log_auth_event(
+        event="github_oauth",
+        success=True,
+        user_email=email,
+        client_ip=client_ip,
+        is_new_user=is_new_user
+    )
 
     return OAuthTokenResponse(
         access_token=access_token,

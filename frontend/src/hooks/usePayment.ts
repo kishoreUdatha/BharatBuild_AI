@@ -14,7 +14,8 @@ interface PaymentOrder {
 }
 
 interface PaymentResult {
-  success: boolean
+  success?: boolean
+  status?: string  // Backend returns "success" or "failed"
   message: string
   tokens_credited?: number
   new_balance?: number
@@ -157,7 +158,8 @@ export function usePayment() {
             response.razorpay_signature
           )
 
-          if (result.success) {
+          // Check for success - backend returns status: "success" not success: true
+          if (result.success || result.status === 'success') {
             onSuccess?.(result)
           } else {
             onFailure?.(result.message)

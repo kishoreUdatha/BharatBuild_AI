@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { AlertCircle, RefreshCw, ExternalLink, Play, AlertTriangle } from 'lucide-react'
 import { useErrorStore } from '@/store/errorStore'
 import { useFileChangeEvents } from '@/hooks/useFileChangeEvents'
+import { useErrorCollector } from '@/hooks/useErrorCollector'
 
 interface LivePreviewProps {
   files: Record<string, string>
@@ -37,6 +38,55 @@ export function LivePreview({
   const { addBrowserError, addNetworkError, getErrorCount, clearErrors } = useErrorStore()
   const errorCount = getErrorCount()
 
+  // Connect to centralized error collector for auto-fix (Bolt.new style!)
+  const {
+    reportError,
+    isConnected: errorCollectorConnected,
+    isFixing
+  } = useErrorCollector({
+    projectId,
+    enabled: !!projectId,
+    onFixStarted: (reason) => {
+      console.log('[LivePreview] Auto-fix started:', reason)
+      setAutoFixStatus('fixing')
+      setAutoFixMessage(reason || 'Fixing errors...')
+    },
+    onFixCompleted: (patchesApplied, filesModified) => {
+      console.log('[LivePreview] Auto-fix completed!', patchesApplied, 'patches')
+      setAutoFixStatus('completed')
+      setAutoFixMessage(`Fixed! ${patchesApplied || 0} patches applied`)
+      clearErrors()
+      // Auto-reload preview after fix
+      setTimeout(() => {
+        setIsLoading(true)
+        setRefreshKey(prev => prev + 1)
+        onReload?.()
+        setTimeout(() => {
+          setAutoFixStatus('idle')
+          setAutoFixMessage(null)
+        }, 2000)
+      }, 500)
+    },
+    onFixFailed: (error) => {
+      console.log('[LivePreview] Auto-fix failed:', error)
+      setAutoFixStatus('failed')
+      setAutoFixMessage(error || 'Fix failed')
+      setTimeout(() => {
+        setAutoFixStatus('idle')
+        setAutoFixMessage(null)
+      }, 5000)
+    }
+  })
+
+  // Wrapper functions for backward compatibility with iframe message handling
+  const forwardBrowserError = useCallback((message: string, file?: string, line?: number, column?: number, stack?: string) => {
+    reportError('browser', message, { file, line, column, stack })
+  }, [reportError])
+
+  const forwardNetworkError = useCallback((message: string, url?: string, status?: number, method?: string) => {
+    reportError('network', message, { file: url })
+  }, [reportError])
+
   // File change events for auto-reload
   const { hasRecentFix, setReloadCallback, lastChange } = useFileChangeEvents({
     projectId,
@@ -64,9 +114,13 @@ export function LivePreview({
 
   // Switch to server mode when server is running
   useEffect(() => {
+    console.log('[LivePreview] State update:', { isServerRunning, serverUrl, previewMode })
     if (isServerRunning && serverUrl) {
+      console.log('[LivePreview] Switching to server mode with URL:', serverUrl)
       setPreviewMode('server')
+      setIsLoading(true) // Reset loading state when switching to server mode
     } else {
+      console.log('[LivePreview] Switching to static mode')
       setPreviewMode('static')
     }
   }, [isServerRunning, serverUrl])
@@ -76,10 +130,22 @@ export function LivePreview({
     // Validate message origin and structure
     if (event.data && event.data.type === 'bharatbuild-error') {
       const { message, filename, lineno, colno, stack } = event.data
-      console.log('[LivePreview] Captured browser error:', message)
+      console.log('[LivePreview] 🔴 CAPTURED BROWSER ERROR from iframe:', {
+        message: message?.substring(0, 150),
+        filename,
+        lineno,
+        colno,
+        hasStack: !!stack,
+        projectId,
+        errorCollectorConnected
+      })
 
-      // Add to error store
+      // Add to error store (local)
       addBrowserError(message, filename, lineno, colno, stack)
+
+      // Forward to backend for auto-fix! (This is the key fix)
+      console.log('[LivePreview] 📤 Forwarding to backend via forwardBrowserError...')
+      forwardBrowserError(message, filename, lineno, colno, stack)
 
       // Call optional callback
       onError?.({ message, file: filename, line: lineno, column: colno, stack })
@@ -87,20 +153,99 @@ export function LivePreview({
       // Also capture console.error calls
       if (event.data.level === 'error') {
         const message = event.data.args?.join(' ') || 'Unknown error'
-        console.log('[LivePreview] Captured console.error:', message)
+        console.log('[LivePreview] 🔴 CAPTURED console.error from iframe:', message?.substring(0, 100))
         addBrowserError(message)
+
+        // Forward to backend for auto-fix!
+        console.log('[LivePreview] 📤 Forwarding console.error to backend...')
+        forwardBrowserError(message)
+
         onError?.({ message })
       }
     } else if (event.data && event.data.type === 'bharatbuild-network') {
       // Network errors (fetch/XHR failures, CORS, timeouts, HTTP errors)
       const { url, method, status, message } = event.data
-      console.log('[LivePreview] Captured network error:', message, 'URL:', url)
+      console.log('[LivePreview] 🌐 CAPTURED NETWORK ERROR from iframe:', {
+        message,
+        url,
+        status,
+        method,
+        projectId,
+        errorCollectorConnected
+      })
 
       // Add to error store with network-specific info
       addNetworkError(message, url, status, method)
 
+      // Forward to backend for auto-fix!
+      console.log('[LivePreview] 📤 Forwarding network error to backend...')
+      forwardNetworkError(message, url, status, method)
+
       // Call optional callback
       onError?.({ message, file: url })
+    }
+    // ===== RESOURCE ERRORS =====
+    else if (event.data && event.data.type === 'bharatbuild-resource-error') {
+      console.log('[LivePreview] 📦 CAPTURED RESOURCE ERROR:', event.data)
+      const { tagName, src, message } = event.data
+      addBrowserError(`Resource load failed: ${tagName} - ${src}`, src)
+      forwardBrowserError(message || `Failed to load ${tagName}: ${src}`, src)
+    }
+    // ===== HMR ERRORS =====
+    else if (event.data && event.data.type === 'bharatbuild-hmr-error') {
+      console.log('[LivePreview] 🔥 CAPTURED HMR ERROR:', event.data)
+      const { message, file, line, column, stack } = event.data
+      addBrowserError(`HMR Error: ${message}`, file, line, column, stack)
+      forwardBrowserError(message, file, line, column, stack)
+    }
+    // ===== HMR UPDATES =====
+    else if (event.data && event.data.type === 'bharatbuild-hmr-update') {
+      console.log('[LivePreview] 🔄 HMR update detected, preview will refresh')
+      // Optionally trigger a visual indicator
+      setAutoReloadIndicator(true)
+      setTimeout(() => setAutoReloadIndicator(false), 1500)
+    }
+    // ===== REACT RENDER ERRORS =====
+    else if (event.data && event.data.type === 'bharatbuild-react-error') {
+      console.log('[LivePreview] ⚛️ CAPTURED REACT ERROR:', event.data)
+      const { message, stack, componentStack } = event.data
+      const fullStack = stack + (componentStack ? '\n\nComponent Stack:' + componentStack : '')
+      addBrowserError(`React Error: ${message}`, undefined, undefined, undefined, fullStack)
+      forwardBrowserError(message, undefined, undefined, undefined, fullStack)
+    }
+    // ===== CSP VIOLATIONS =====
+    else if (event.data && event.data.type === 'bharatbuild-csp-error') {
+      console.log('[LivePreview] 🔒 CAPTURED CSP VIOLATION:', event.data)
+      const { blockedURI, violatedDirective, sourceFile, lineNumber } = event.data
+      const message = `CSP Violation: ${violatedDirective} blocked ${blockedURI}`
+      addBrowserError(message, sourceFile, lineNumber)
+      forwardBrowserError(message, sourceFile, lineNumber)
+    }
+    // ===== PROMISE REJECTIONS =====
+    else if (event.data && event.data.type === 'bharatbuild-promise-rejection') {
+      console.log('[LivePreview] 💥 CAPTURED PROMISE REJECTION:', event.data)
+      const { message, stack } = event.data
+      addBrowserError(`Unhandled Promise: ${message}`, undefined, undefined, undefined, stack)
+      forwardBrowserError(message, undefined, undefined, undefined, stack)
+    }
+    // ===== MODULE LOADER ERRORS (Bolt-style) =====
+    else if (event.data && event.data.type === 'bharatbuild-module-error') {
+      console.log('[LivePreview] 📦 CAPTURED MODULE ERROR:', event.data)
+      const { message, file, line, column, stack } = event.data
+      addBrowserError(`Module Error: ${message}`, file, line, column, stack)
+      forwardBrowserError(message, file, line, column, stack)
+    }
+    // ===== RUNTIME ERRORS =====
+    else if (event.data && event.data.type === 'bharatbuild-runtime-error') {
+      console.log('[LivePreview] 🔴 CAPTURED RUNTIME ERROR:', event.data)
+      const { message, file, line, column, stack } = event.data
+      addBrowserError(message, file, line, column, stack)
+      forwardBrowserError(message, file, line, column, stack)
+      onError?.({ message, file, line, column, stack })
+    }
+    // Also handle other bharatbuild message types for logging
+    else if (event.data && event.data.type?.startsWith('bharatbuild-')) {
+      console.log('[LivePreview] 📨 Received iframe message:', event.data.type, event.data)
     }
     // ===== AUTO-FIX EVENTS (Bolt.new Magic!) =====
     else if (event.data && event.data.type === 'bharatbuild-fix-started') {
@@ -137,7 +282,7 @@ export function LivePreview({
         setAutoFixMessage(null)
       }, 5000)
     }
-  }, [addBrowserError, addNetworkError, onError, clearErrors, onReload])
+  }, [addBrowserError, addNetworkError, onError, clearErrors, onReload, forwardBrowserError, forwardNetworkError])
 
   // Set up message listener
   useEffect(() => {
@@ -165,6 +310,54 @@ export function LivePreview({
   const handleIframeLoad = () => {
     setIsLoading(false)
   }
+
+  // Handle iframe crash/sandbox errors (Bolt.new style - Layer 12)
+  const handleIframeError = useCallback((event: React.SyntheticEvent<HTMLIFrameElement, Event>) => {
+    console.log('[LivePreview] 💀 IFRAME CRASH/ERROR detected:', event)
+    const message = 'Preview iframe crashed or failed to load'
+    setError(message)
+    addBrowserError(message)
+    forwardBrowserError(message)
+  }, [addBrowserError, forwardBrowserError])
+
+  // Monitor iframe for unresponsive state
+  useEffect(() => {
+    if (!iframeRef.current || previewMode !== 'server') return
+
+    const iframe = iframeRef.current
+    let checkInterval: NodeJS.Timeout | null = null
+
+    // Check if iframe is responsive by trying to access contentWindow
+    const checkIframeHealth = () => {
+      try {
+        // This will throw if iframe crashed or has security issues
+        const doc = iframe.contentDocument || iframe.contentWindow?.document
+        if (!doc && isServerRunning) {
+          console.log('[LivePreview] Iframe may be unresponsive')
+        }
+      } catch (e) {
+        // Cross-origin is expected for server mode, ignore
+      }
+    }
+
+    // Check every 10 seconds
+    checkInterval = setInterval(checkIframeHealth, 10000)
+
+    return () => {
+      if (checkInterval) clearInterval(checkInterval)
+    }
+  }, [previewMode, isServerRunning])
+
+  // Timeout to hide loading indicator if iframe doesn't fire onLoad (CORS/X-Frame-Options block)
+  useEffect(() => {
+    if (previewMode === 'server' && isLoading) {
+      const timeout = setTimeout(() => {
+        setIsLoading(false)
+        console.log('[LivePreview] Loading timeout - iframe may be blocked by CORS/X-Frame-Options')
+      }, 5000) // 5 second timeout
+      return () => clearTimeout(timeout)
+    }
+  }, [previewMode, isLoading, serverUrl])
 
   const handleRefresh = () => {
     setIsLoading(true)
@@ -284,6 +477,16 @@ export function LivePreview({
           // Server mode - point to running server
           // Note: Cross-origin issues may occur. User can click "Open in new tab" to view
           <>
+            {/* Loading overlay */}
+            {isLoading && (
+              <div className="absolute inset-0 bg-[hsl(var(--bolt-bg-primary))] flex items-center justify-center z-10">
+                <div className="text-center">
+                  <div className="w-12 h-12 border-4 border-[hsl(var(--bolt-accent))] border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                  <p className="text-[hsl(var(--bolt-text-secondary))] text-sm">Loading preview...</p>
+                  <p className="text-[hsl(var(--bolt-text-tertiary))] text-xs mt-2">{serverUrl}</p>
+                </div>
+              </div>
+            )}
             <iframe
               ref={iframeRef}
               src={serverUrl}
@@ -291,14 +494,11 @@ export function LivePreview({
               sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
               title="Live Preview"
               onLoad={handleIframeLoad}
-              onError={() => setError('Failed to load server preview. Try opening in new tab.')}
+              onError={(e) => {
+                handleIframeError(e)
+                setError('Failed to load server preview. Try opening in new tab.')
+              }}
             />
-            {/* Fallback message for CORS issues */}
-            <div className="absolute bottom-0 left-0 right-0 bg-yellow-50 border-t border-yellow-200 p-2 text-center">
-              <p className="text-xs text-yellow-700">
-                If preview doesn't load, click <button onClick={handleOpenExternal} className="underline font-medium">Open in new tab</button>
-              </p>
-            </div>
           </>
         ) : Object.keys(files).length === 0 ? (
           // No files yet
@@ -318,6 +518,7 @@ export function LivePreview({
             sandbox="allow-scripts allow-forms allow-modals allow-popups"
             title="Static Preview"
             onLoad={handleIframeLoad}
+            onError={handleIframeError}
           />
         )}
       </div>
@@ -325,7 +526,9 @@ export function LivePreview({
   )
 }
 
-// Error capture script to inject into preview iframe (Bolt.new style with WebSocket)
+// Error capture script to inject into preview iframe (Bolt.new style - ALL 11 LAYERS)
+// Captures: JS errors, Promise rejections, Console errors, Network errors, React errors,
+// Vite HMR errors, Resource load errors, and more
 // NOTE: WebSocket is disabled in srcdoc iframes (origin is null) - using postMessage only
 const ERROR_CAPTURE_SCRIPT = `
 <script>
@@ -334,6 +537,9 @@ const ERROR_CAPTURE_SCRIPT = `
   // srcdoc iframes have origin 'null' which breaks WebSocket URLs
   // We use postMessage to communicate with parent instead
   const projectId = window.__BHARATBUILD_PROJECT_ID__ || 'unknown';
+
+  // Track captured errors to avoid duplicates
+  const capturedErrors = new Set();
 
   // Skip WebSocket connection in srcdoc (origin is null)
   // Parent window handles the WebSocket connection instead
@@ -469,8 +675,31 @@ const ERROR_CAPTURE_SCRIPT = `
 
   // ===== 1. GLOBAL JS ERRORS =====
   window.onerror = function(message, filename, lineno, colno, error) {
+    const msgStr = String(message);
+
+    // ===== 1b. MODULE LOADER ERROR DETECTION (Bolt-style) =====
+    // Specific detection for dynamic import failures
+    if (msgStr.includes('Failed to fetch dynamically imported module') ||
+        msgStr.includes('Failed to load module script') ||
+        msgStr.includes('Loading module') ||
+        msgStr.includes('Cannot find module') ||
+        msgStr.includes('Module not found')) {
+      sendLog('module_error', {
+        source: 'module-loader',
+        message: msgStr,
+        file: filename,
+        line: lineno,
+        column: colno,
+        stack: error ? error.stack : null,
+        errorType: 'module_resolution'
+      });
+      return false;
+    }
+
+    // Regular runtime error
     sendLog('runtime_error', {
-      message: String(message),
+      source: 'runtime',
+      message: msgStr,
       file: filename,
       line: lineno,
       column: colno,
@@ -634,6 +863,346 @@ const ERROR_CAPTURE_SCRIPT = `
 
     return originalXHRSend.apply(this, arguments);
   };
+
+  // ===== 7. RESOURCE LOAD ERRORS (images, scripts, stylesheets) =====
+  window.addEventListener('error', function(event) {
+    // Only handle resource errors (not JS errors - those go through window.onerror)
+    if (event.target && event.target !== window) {
+      const target = event.target;
+      const tagName = target.tagName ? target.tagName.toLowerCase() : '';
+
+      if (['img', 'script', 'link', 'video', 'audio', 'source', 'iframe'].includes(tagName)) {
+        const src = target.src || target.href || 'unknown';
+        const errorKey = 'resource:' + src;
+
+        // Deduplicate
+        if (capturedErrors.has(errorKey)) return;
+        capturedErrors.add(errorKey);
+
+        sendLog('resource_error', {
+          tagName: tagName,
+          src: src,
+          message: 'Failed to load ' + tagName + ': ' + src
+        });
+      }
+    }
+  }, true); // Use capture phase to catch before bubbling
+
+  // ===== 8. VITE HMR ERROR CAPTURE =====
+  // Vite sends custom events for HMR errors
+  if (typeof window !== 'undefined') {
+    // Vite error overlay events
+    window.addEventListener('vite:error', function(event) {
+      const err = event.detail?.err || event.detail || event;
+      sendLog('hmr_error', {
+        source: 'vite',
+        message: err.message || 'Vite HMR Error',
+        stack: err.stack,
+        file: err.loc?.file || err.id,
+        line: err.loc?.line,
+        column: err.loc?.column,
+        plugin: err.plugin,
+        frame: err.frame
+      });
+    });
+
+    // Vite beforeUpdate - track HMR updates
+    window.addEventListener('vite:beforeUpdate', function(event) {
+      console.log('[BharatBuild] HMR update incoming:', event.detail);
+    });
+
+    // Vite afterUpdate - HMR completed
+    window.addEventListener('vite:afterUpdate', function(event) {
+      console.log('[BharatBuild] HMR update completed');
+      // Notify parent that code was hot-reloaded
+      window.parent.postMessage({
+        type: 'bharatbuild-hmr-update',
+        timestamp: Date.now()
+      }, '*');
+    });
+
+    // Webpack HMR errors (for projects using webpack)
+    if (typeof module !== 'undefined' && module.hot) {
+      module.hot.addStatusHandler(function(status) {
+        if (status === 'fail' || status === 'abort') {
+          sendLog('hmr_error', {
+            source: 'webpack',
+            message: 'Webpack HMR ' + status,
+            status: status
+          });
+        }
+      });
+    }
+
+    // ===== VITE ERROR OVERLAY OBSERVER =====
+    // Vite's "Failed to resolve import" errors appear in a custom web component
+    // called "vite-error-overlay" BEFORE HMR is established. We need to observe
+    // the DOM for this element and extract the error message.
+    (function observeViteErrorOverlay() {
+      const capturedViteErrors = new Set();
+
+      function extractViteErrorFromOverlay(overlay) {
+        try {
+          // Vite error overlay uses shadow DOM
+          const shadowRoot = overlay.shadowRoot;
+          if (!shadowRoot) return null;
+
+          // Try to find error message in shadow DOM
+          const messageEl = shadowRoot.querySelector('.message') ||
+                           shadowRoot.querySelector('.error') ||
+                           shadowRoot.querySelector('[class*="message"]') ||
+                           shadowRoot.querySelector('pre');
+
+          if (messageEl) {
+            return messageEl.textContent || messageEl.innerText;
+          }
+
+          // Fallback: get all text content
+          return shadowRoot.textContent || overlay.textContent;
+        } catch (e) {
+          console.log('[BharatBuild] Error extracting Vite error:', e);
+          return overlay.textContent || overlay.innerText;
+        }
+      }
+
+      function handleViteOverlay(overlay) {
+        const errorText = extractViteErrorFromOverlay(overlay);
+        if (!errorText) return;
+
+        // Extract relevant error info
+        const errorKey = errorText.substring(0, 200);
+        if (capturedViteErrors.has(errorKey)) return;
+        capturedViteErrors.add(errorKey);
+
+        console.log('[BharatBuild] 🔴 CAPTURED VITE ERROR OVERLAY:', errorText.substring(0, 200));
+
+        // Parse error message to extract file and line info
+        let file = null;
+        let line = null;
+        let column = null;
+
+        // Pattern: Failed to resolve import "./pages/LoginPage" from "src/App.tsx"
+        const importMatch = errorText.match(/Failed to resolve import [\"']([^\"']+)[\"'] from [\"']([^\"']+)[\"']/);
+        if (importMatch) {
+          file = importMatch[2]; // The file trying to import
+        }
+
+        // Pattern: file:line:column
+        const locMatch = errorText.match(/([\\w/.]+\\.tsx?):(\\d+):(\\d+)/);
+        if (locMatch) {
+          file = file || locMatch[1];
+          line = parseInt(locMatch[2]);
+          column = parseInt(locMatch[3]);
+        }
+
+        sendLog('hmr_error', {
+          source: 'vite-overlay',
+          message: errorText.substring(0, 2000),
+          file: file,
+          line: line,
+          column: column,
+          errorType: 'import_resolution'
+        });
+      }
+
+      // Observer callback
+      function observerCallback(mutations) {
+        mutations.forEach(function(mutation) {
+          mutation.addedNodes.forEach(function(node) {
+            if (node.nodeType === 1) {
+              // Check if it's a Vite error overlay
+              if (node.tagName && node.tagName.toLowerCase() === 'vite-error-overlay') {
+                console.log('[BharatBuild] Vite error overlay detected!');
+                // Wait a tick for shadow DOM to be populated
+                setTimeout(function() { handleViteOverlay(node); }, 100);
+              }
+              // Also check for id-based overlays
+              if (node.id === 'vite-error-overlay') {
+                setTimeout(function() { handleViteOverlay(node); }, 100);
+              }
+            }
+          });
+        });
+      }
+
+      // Create observer
+      const viteErrorObserver = new MutationObserver(observerCallback);
+
+      // Start observing when DOM is ready
+      function startObserving() {
+        if (document.body) {
+          viteErrorObserver.observe(document.body, { childList: true, subtree: true });
+          console.log('[BharatBuild] Vite error overlay observer started');
+
+          // Also check for existing overlay (in case it appeared before observer started)
+          const existingOverlay = document.querySelector('vite-error-overlay');
+          if (existingOverlay) {
+            handleViteOverlay(existingOverlay);
+          }
+        } else {
+          document.addEventListener('DOMContentLoaded', function() {
+            viteErrorObserver.observe(document.body, { childList: true, subtree: true });
+          });
+        }
+      }
+
+      startObserving();
+    })();
+
+    // ===== NEXT.JS FAST REFRESH ERROR CAPTURE =====
+    // Next.js uses a special global function for dev hot messages
+    window.__NEXT_HMR_CB = window.__NEXT_HMR_CB || [];
+    window.__NEXTDevHotMessage = function(msg) {
+      sendLog('hmr_error', {
+        source: 'nextjs',
+        message: typeof msg === 'string' ? msg : JSON.stringify(msg),
+        errorType: 'fast_refresh'
+      });
+    };
+
+    // Next.js also uses custom events
+    window.addEventListener('next-route-announcer', function() {
+      console.log('[BharatBuild] Next.js route change detected');
+    });
+
+    // Capture Next.js hydration errors via MutationObserver on error overlay
+    const nextErrorObserver = new MutationObserver(function(mutations) {
+      mutations.forEach(function(mutation) {
+        mutation.addedNodes.forEach(function(node) {
+          if (node.nodeType === 1) {
+            // Check for Next.js error overlay
+            if (node.id === '__next-build-watcher' ||
+                node.id === 'nextjs__container_errors_label' ||
+                node.className?.includes('nextjs-toast') ||
+                node.getAttribute?.('data-nextjs-dialog')) {
+              const errorText = node.textContent || node.innerText || '';
+              if (errorText) {
+                sendLog('hmr_error', {
+                  source: 'nextjs-overlay',
+                  message: errorText.substring(0, 1000),
+                  errorType: 'build_error'
+                });
+              }
+            }
+          }
+        });
+      });
+    });
+
+    // Start observing when DOM is ready
+    if (document.body) {
+      nextErrorObserver.observe(document.body, { childList: true, subtree: true });
+    } else {
+      document.addEventListener('DOMContentLoaded', function() {
+        nextErrorObserver.observe(document.body, { childList: true, subtree: true });
+      });
+    }
+  }
+
+  // ===== 9. REACT ERROR BOUNDARY INJECTION =====
+  // Wrap React's createElement to catch render errors
+  // This catches errors that window.onerror cannot
+  (function injectReactErrorCapture() {
+    // Wait for React to be available
+    function tryInjectReact() {
+      if (typeof React !== 'undefined' && React.createElement) {
+        const originalCreateElement = React.createElement;
+
+        // Create a global error boundary component
+        window.__BharatBuildErrorBoundary = class extends React.Component {
+          constructor(props) {
+            super(props);
+            this.state = { hasError: false, error: null };
+          }
+
+          static getDerivedStateFromError(error) {
+            return { hasError: true, error: error };
+          }
+
+          componentDidCatch(error, errorInfo) {
+            sendLog('react_error', {
+              message: error.message || String(error),
+              stack: error.stack,
+              componentStack: errorInfo.componentStack,
+              errorType: 'render_error'
+            });
+          }
+
+          render() {
+            if (this.state.hasError) {
+              return React.createElement('div', {
+                style: {
+                  padding: '20px',
+                  background: '#fee2e2',
+                  border: '1px solid #ef4444',
+                  borderRadius: '8px',
+                  margin: '10px',
+                  fontFamily: 'monospace'
+                }
+              }, [
+                React.createElement('h3', {
+                  key: 'title',
+                  style: { color: '#dc2626', marginBottom: '10px' }
+                }, '⚠️ React Component Error'),
+                React.createElement('pre', {
+                  key: 'error',
+                  style: {
+                    whiteSpace: 'pre-wrap',
+                    fontSize: '12px',
+                    color: '#7f1d1d'
+                  }
+                }, this.state.error?.message || 'Unknown error')
+              ]);
+            }
+            return this.props.children;
+          }
+        };
+
+        console.log('[BharatBuild] React error boundary injected');
+        return true;
+      }
+      return false;
+    }
+
+    // Try immediately, then retry after DOM is ready
+    if (!tryInjectReact()) {
+      document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(tryInjectReact, 100);
+      });
+      // Also try after a delay for async React loading
+      setTimeout(tryInjectReact, 500);
+      setTimeout(tryInjectReact, 1500);
+    }
+  })();
+
+  // ===== 10. NAVIGATION/HISTORY ERRORS =====
+  window.addEventListener('popstate', function(event) {
+    // Track navigation for debugging
+    console.log('[BharatBuild] Navigation:', window.location.href);
+  });
+
+  // Catch navigation errors
+  window.addEventListener('pagehide', function(event) {
+    if (!event.persisted) {
+      // Page is being unloaded (not bfcache)
+      console.log('[BharatBuild] Page unloading');
+    }
+  });
+
+  // ===== 11. SECURITY/CSP ERRORS =====
+  document.addEventListener('securitypolicyviolation', function(event) {
+    sendLog('csp_error', {
+      message: 'Content Security Policy violation',
+      blockedURI: event.blockedURI,
+      violatedDirective: event.violatedDirective,
+      originalPolicy: event.originalPolicy,
+      sourceFile: event.sourceFile,
+      lineNumber: event.lineNumber,
+      columnNumber: event.columnNumber
+    });
+  });
+
+  console.log('[BharatBuild] Error capture initialized (11 layers active)');
 })();
 </script>
 `;

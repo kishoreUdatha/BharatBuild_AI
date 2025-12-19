@@ -31,12 +31,10 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from dataclasses import dataclass, field
 from uuid import UUID
-import logging
 
 from app.services.storage_service import storage_service
 from app.core.config import settings
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 # Configuration - Use Windows-compatible path on Windows
 # NOTE: Must match SANDBOX_PATH in config.py for consistency
@@ -89,6 +87,75 @@ class UnifiedStorageService:
         self.sandbox_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"UnifiedStorageService initialized. Sandbox: {self.sandbox_path}")
 
+    def _sanitize_xml_content(self, content: str) -> str:
+        """
+        Sanitize XML content to ensure proper formatting.
+
+        CRITICAL: XML files MUST have <?xml declaration on line 1.
+        No whitespace or empty lines are allowed before the XML declaration.
+        This fixes Maven "Non-parseable POM" errors caused by:
+        - Empty lines before <?xml
+        - BOM (Byte Order Mark) characters
+        - Leading whitespace
+        """
+        import re
+
+        # Remove BOM if present
+        if content.startswith('\ufeff'):
+            content = content[1:]
+
+        # Check if content has XML declaration
+        xml_decl_match = re.search(r'<\?xml[^?]*\?>', content)
+        if xml_decl_match:
+            # Strip everything before the XML declaration
+            xml_decl_start = xml_decl_match.start()
+            if xml_decl_start > 0:
+                # There's content before <?xml - remove leading whitespace/empty lines
+                leading_content = content[:xml_decl_start]
+                if leading_content.strip() == '':
+                    # Only whitespace before <?xml - safe to remove
+                    content = content[xml_decl_start:]
+                    logger.debug(f"[XMLSanitize] Removed {xml_decl_start} chars of leading whitespace before <?xml")
+        else:
+            # No XML declaration - just strip leading whitespace for safety
+            content = content.lstrip()
+
+        return content
+
+    def _sanitize_source_content(self, content: str, file_path: str) -> str:
+        """
+        Sanitize source code content to ensure proper formatting.
+
+        Fixes:
+        - Empty first line (AI often generates files with leading newlines)
+        - Missing trailing newline (POSIX convention)
+        - BOM characters
+        """
+        # Remove BOM if present
+        if content.startswith('﻿'):
+            content = content[1:]
+
+        # Source file extensions that should start with code on line 1
+        source_extensions = {
+            '.py', '.js', '.ts', '.tsx', '.jsx', '.java', '.go', '.rs', '.c', '.cpp',
+            '.h', '.hpp', '.cs', '.rb', '.php', '.swift', '.kt', '.scala', '.vue',
+            '.svelte', '.css', '.scss', '.less', '.html', '.json', '.yaml', '.yml',
+            '.toml', '.ini', '.cfg', '.properties', '.env', '.sh', '.bash', '.sql',
+            '.md', '.txt', '.gradle'
+        }
+
+        # Get file extension
+        ext = '.' + file_path.rsplit('.', 1)[-1].lower() if '.' in file_path else ''
+
+        # Only sanitize known source files
+        if ext in source_extensions or file_path.lower() in {'dockerfile', 'makefile', '.gitignore', '.dockerignore'}:
+            # Remove leading empty lines (content should start from line 1)
+            content = content.lstrip('\n')
+            # Ensure file ends with exactly one newline (POSIX convention)
+            content = content.rstrip() + '\n'
+
+        return content
+
     # ==================== LAYER 1: SANDBOX ====================
 
     def get_sandbox_path(self, project_id: str, user_id: Optional[str] = None) -> Path:
@@ -97,24 +164,37 @@ class UnifiedStorageService:
 
         Path structure: /workspaces/{user_id}/{project_id}/
 
+        IMPORTANT: user_id MUST be provided for proper isolation.
+        Projects without user_id will be created at root level which is NOT recommended.
+
         Args:
             project_id: Project UUID
-            user_id: User UUID (optional for backward compatibility)
+            user_id: User UUID (REQUIRED for proper isolation)
 
         Returns:
             Path to sandbox workspace
         """
         if user_id:
             return self.sandbox_path / user_id / project_id
-        # Fallback for backward compatibility
+        # WARNING: This creates project at root level - not isolated per user!
+        logger.warning(f"[Sandbox] DEPRECATED: Creating project {project_id} WITHOUT user_id - project will NOT be in user folder!")
         return self.sandbox_path / project_id
 
     async def create_sandbox(self, project_id: str, user_id: Optional[str] = None) -> Path:
-        """Create a sandbox workspace for runtime execution"""
+        """
+        Create a sandbox workspace for runtime execution.
+
+        IMPORTANT: user_id MUST be provided for proper project isolation.
+        All projects should be under: /workspace/{user_id}/{project_id}/
+        """
+        if not user_id:
+            logger.error(f"[Sandbox] CRITICAL: Creating sandbox WITHOUT user_id for project {project_id}! "
+                        f"This will create project at root level, breaking user isolation!")
+
         sandbox = self.get_sandbox_path(project_id, user_id)
         sandbox.mkdir(parents=True, exist_ok=True)
         # Log the actual path being created for debugging
-        logger.info(f"[Sandbox] Created at: {sandbox} (user_id={user_id}, project_id={project_id})")
+        logger.info(f"[Sandbox] Created at: {sandbox} (user_id={user_id or 'MISSING!'}, project_id={project_id})")
         return sandbox
 
     async def write_to_sandbox(
@@ -134,6 +214,15 @@ class UnifiedStorageService:
                 raise ValueError("Path traversal detected")
 
             full_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # SANITIZE XML FILES: Ensure <?xml declaration is on line 1
+            # XML files MUST NOT have whitespace before the XML declaration
+            if file_path.endswith('.xml') or file_path.endswith('.pom'):
+                content = self._sanitize_xml_content(content)
+            else:
+                # SANITIZE ALL SOURCE FILES: Remove leading empty lines
+                # AI often generates files with empty first line - content should start from line 1
+                content = self._sanitize_source_content(content, file_path)
 
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
@@ -177,6 +266,9 @@ class UnifiedStorageService:
 
         return self._build_file_tree(sandbox, sandbox)
 
+    # Directories to skip when building file tree (large/binary/generated)
+    SKIP_DIRS = {'node_modules', '__pycache__', '.git', 'dist', 'build', '.next', 'venv', '.venv', 'target'}
+
     def _build_file_tree(self, base_path: Path, current_path: Path) -> List[FileInfo]:
         """Recursively build file tree structure"""
         items = []
@@ -185,6 +277,10 @@ class UnifiedStorageService:
             for item in sorted(current_path.iterdir()):
                 # Skip hidden files
                 if item.name.startswith('.'):
+                    continue
+
+                # Skip large/binary directories
+                if item.is_dir() and item.name in self.SKIP_DIRS:
                     continue
 
                 relative_path = str(item.relative_to(base_path)).replace("\\", "/")
@@ -199,14 +295,21 @@ class UnifiedStorageService:
                     ))
                 else:
                     language = self._detect_language(item.name)
+                    try:
+                        size = item.stat().st_size
+                    except OSError:
+                        # Skip files that can't be accessed (locked by other process)
+                        continue
                     items.append(FileInfo(
                         path=relative_path,
                         name=item.name,
                         type='file',
                         language=language,
-                        size_bytes=item.stat().st_size
+                        size_bytes=size
                     ))
-        except PermissionError:
+        except (PermissionError, OSError) as e:
+            # OSError includes WinError 1920 (file locked by another process)
+            # This commonly happens with node_modules/.bin files on Windows
             pass
 
         return items
@@ -521,11 +624,11 @@ class UnifiedStorageService:
         language: Optional[str] = None
     ) -> bool:
         """
-        Save file to PostgreSQL database (Layer 3).
+        Save file metadata to PostgreSQL database, content to S3 (Layer 3).
 
         This enables project recovery after sandbox cleanup.
-        - Small files (<10KB): Stored inline in PostgreSQL
-        - Large files: Stored in S3, reference kept in DB
+        - Content: Always stored in S3
+        - Metadata: Stored in PostgreSQL (path, name, size, hash, s3_key)
 
         Args:
             project_id: Project UUID string
@@ -562,32 +665,26 @@ class UnifiedStorageService:
             if not language:
                 language = self._detect_language(file_name)
 
-            # Determine storage method (inline if < 10KB)
-            inline_threshold = getattr(settings, 'FILE_INLINE_THRESHOLD', 10240)
-            is_inline = size_bytes < inline_threshold
-
+            # Always store content in S3, only metadata in database
             async with AsyncSessionLocal() as session:
-                # Check if file already exists
+                # Check if file already exists - cast to string to handle UUID/VARCHAR mismatch
+                from sqlalchemy import cast, String as SQLString
                 result = await session.execute(
                     select(ProjectFile)
-                    .where(ProjectFile.project_id == project_uuid)
+                    .where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid)
                     .where(ProjectFile.path == file_path)
                 )
                 existing_file = result.scalar_one_or_none()
 
-                if is_inline:
-                    # Store inline in PostgreSQL
-                    s3_key = None
-                    content_inline = content
-                else:
-                    # Store in S3
-                    upload_result = await storage_service.upload_file(
-                        project_id,
-                        file_path,
-                        content_bytes
-                    )
-                    s3_key = upload_result.get('s3_key')
-                    content_inline = None
+                # Always upload to S3
+                upload_result = await storage_service.upload_file(
+                    project_id,
+                    file_path,
+                    content_bytes
+                )
+                s3_key = upload_result.get('s3_key')
+                content_inline = None  # Never store content inline
+                is_inline = False  # Always use S3
 
                 if existing_file:
                     # Update existing file
@@ -627,7 +724,7 @@ class UnifiedStorageService:
                     await self._ensure_parent_folders_db(session, project_uuid, file_path)
 
                 await session.commit()
-                logger.debug(f"[Layer3-DB] Saved: {project_id}/{file_path} ({'inline' if is_inline else 'S3'}, {size_bytes}b)")
+                logger.debug(f"[Layer3-DB] Saved: {project_id}/{file_path} (S3, {size_bytes}b)")
                 return True
 
         except Exception as e:
@@ -647,10 +744,11 @@ class UnifiedStorageService:
         for part in parts[:-1]:  # Exclude the file itself
             current_path = f"{current_path}/{part}" if current_path else part
 
-            # Check if folder exists
+            # Check if folder exists - cast to string to handle UUID/VARCHAR mismatch
+            from sqlalchemy import cast, String as SQLString
             result = await session.execute(
                 select(ProjectFile)
-                .where(ProjectFile.project_id == project_uuid)
+                .where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid)
                 .where(ProjectFile.path == current_path)
             )
             existing = result.scalar_one_or_none()
@@ -688,9 +786,11 @@ class UnifiedStorageService:
             project_uuid = str(UUID(project_id))
 
             async with AsyncSessionLocal() as session:
+                # Cast to string to handle UUID/VARCHAR mismatch
+                from sqlalchemy import cast, String as SQLString
                 result = await session.execute(
                     select(ProjectFile)
-                    .where(ProjectFile.project_id == project_uuid)
+                    .where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid)
                     .where(ProjectFile.path == file_path)
                 )
                 file_record = result.scalar_one_or_none()
@@ -698,12 +798,14 @@ class UnifiedStorageService:
                 if not file_record:
                     return None
 
-                # Get content based on storage location
-                if file_record.is_inline and file_record.content_inline:
-                    return file_record.content_inline
-                elif file_record.s3_key:
+                # All content is stored in S3
+                if file_record.s3_key:
                     content_bytes = await storage_service.download_file(file_record.s3_key)
                     return content_bytes.decode('utf-8') if content_bytes else None
+
+                # Fallback for legacy inline content (migration support)
+                if file_record.content_inline:
+                    return file_record.content_inline
 
                 return None
 
@@ -734,10 +836,11 @@ class UnifiedStorageService:
             restored_files = []
 
             async with AsyncSessionLocal() as session:
-                # Get all files for project
+                # Get all files for project - cast to string to handle UUID/VARCHAR mismatch
+                from sqlalchemy import cast, String as SQLString
                 result = await session.execute(
                     select(ProjectFile)
-                    .where(ProjectFile.project_id == project_uuid)
+                    .where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid)
                     .where(ProjectFile.is_folder == False)
                     .order_by(ProjectFile.path)
                 )
@@ -754,11 +857,13 @@ class UnifiedStorageService:
                 for file_record in files:
                     content = None
 
-                    if file_record.is_inline and file_record.content_inline:
-                        content = file_record.content_inline
-                    elif file_record.s3_key:
+                    # All content is stored in S3
+                    if file_record.s3_key:
                         content_bytes = await storage_service.download_file(file_record.s3_key)
                         content = content_bytes.decode('utf-8') if content_bytes else None
+                    # Fallback for legacy inline content (migration support)
+                    elif file_record.content_inline:
+                        content = file_record.content_inline
 
                     if content:
                         await self.write_to_sandbox(project_id, file_record.path, content, user_id)

@@ -237,6 +237,20 @@ BE STRICT: If a file looks incomplete, mark it as incomplete.
             result["critical_issues"].append(f"Missing critical files: {', '.join(missing_critical)}")
             result["statistics"]["missing_files"] = len(missing_critical)
 
+        # Step 2.5: IMPORT VALIDATION (PRODUCTION FIX)
+        # Check if all local imports in source files resolve to actual files
+        import_issues = self._validate_imports(files_created)
+        if import_issues["missing_imports"]:
+            logger.warning(f"[Verification Agent] Found {len(import_issues['missing_imports'])} missing import targets!")
+            for mi in import_issues["missing_imports"]:
+                logger.warning(f"  - {mi['source_file']} imports '{mi['import_path']}' which doesn't exist")
+                if mi["suggested_path"] not in result["missing_files"]:
+                    result["missing_files"].append(mi["suggested_path"])
+            result["critical_issues"].append(
+                f"Missing {len(import_issues['missing_imports'])} imported files - will cause build errors"
+            )
+            result["statistics"]["missing_files"] = len(result["missing_files"])
+
         # Step 3: Use LLM for deeper verification if there are issues
         if basic_issues["empty_files"] or basic_issues["incomplete_files"] or missing_critical:
             llm_result = await self._verify_with_llm(
@@ -674,6 +688,140 @@ Focus on:
                 "critical_issues": [],
                 "missing_files": []
             }
+
+    def _validate_imports(self, files_created: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        PRODUCTION FIX: Validate that all local imports resolve to actual files.
+
+        This catches "Failed to resolve import" errors BEFORE running the build.
+
+        Args:
+            files_created: List of file dictionaries with 'path' and 'content'
+
+        Returns:
+            Dictionary with 'missing_imports' list
+        """
+        result = {
+            "missing_imports": [],
+            "valid_imports": []
+        }
+
+        # Build set of existing file paths (normalized)
+        existing_paths = set()
+        for file_info in files_created:
+            path = file_info.get("path", "")
+            # Add the path as-is
+            existing_paths.add(path)
+            # Also add normalized versions
+            existing_paths.add(path.replace("\\", "/"))
+            # Add without extension for import resolution
+            for ext in ['.tsx', '.ts', '.jsx', '.js']:
+                if path.endswith(ext):
+                    existing_paths.add(path[:-len(ext)])
+
+        logger.info(f"[Verification Agent] Validating imports across {len(files_created)} files")
+        logger.debug(f"[Verification Agent] Existing paths: {existing_paths}")
+
+        # Import patterns for different languages
+        import_patterns = {
+            'typescript': [
+                # import X from './path' or './path/file'
+                r"import\s+(?:[\w*{},\s]+)\s+from\s+['\"](\./[^'\"]+|\.\.\/[^'\"]+)['\"]",
+                # import './path'
+                r"import\s+['\"](\./[^'\"]+|\.\.\/[^'\"]+)['\"]",
+            ],
+            'python': [
+                # from .module import X
+                r"from\s+(\.[.\w]+)\s+import",
+                # import .module
+                r"import\s+(\.[.\w]+)",
+            ]
+        }
+
+        for file_info in files_created:
+            file_path = file_info.get("path", "")
+            content = file_info.get("content", "")
+
+            if not content:
+                continue
+
+            # Determine file type
+            ext = self._get_extension(file_path)
+            if ext in ['.tsx', '.ts', '.jsx', '.js']:
+                patterns = import_patterns['typescript']
+            elif ext == '.py':
+                patterns = import_patterns['python']
+            else:
+                continue  # Skip non-source files
+
+            # Get directory of current file for relative path resolution
+            file_dir = '/'.join(file_path.split('/')[:-1]) if '/' in file_path else ''
+
+            for pattern in patterns:
+                matches = re.findall(pattern, content)
+                for import_path in matches:
+                    # Skip package imports (react, axios, etc.)
+                    if not import_path.startswith('.'):
+                        continue
+
+                    # Resolve relative path
+                    if import_path.startswith('./'):
+                        resolved = file_dir + '/' + import_path[2:] if file_dir else import_path[2:]
+                    elif import_path.startswith('../'):
+                        # Handle parent directory imports
+                        parts = file_dir.split('/')
+                        import_parts = import_path.split('/')
+                        up_count = 0
+                        for p in import_parts:
+                            if p == '..':
+                                up_count += 1
+                            else:
+                                break
+                        remaining = import_parts[up_count:]
+                        parent_parts = parts[:-up_count] if up_count <= len(parts) else []
+                        resolved = '/'.join(parent_parts + remaining)
+                    else:
+                        resolved = import_path
+
+                    # Normalize path
+                    resolved = re.sub(r'/+', '/', resolved).strip('/')
+
+                    # Check if import target exists (try various extensions)
+                    found = False
+                    possible_paths = [resolved]
+
+                    # Add possible extensions if not already present
+                    if not any(resolved.endswith(e) for e in ['.tsx', '.ts', '.jsx', '.js', '.css', '.json', '.py']):
+                        for try_ext in ['.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts', '/index.jsx', '/index.js']:
+                            possible_paths.append(resolved + try_ext)
+
+                    for try_path in possible_paths:
+                        if try_path in existing_paths:
+                            found = True
+                            result["valid_imports"].append({
+                                "source_file": file_path,
+                                "import_path": import_path,
+                                "resolved_to": try_path
+                            })
+                            break
+
+                    if not found:
+                        # Suggest the most likely path
+                        suggested = resolved + '.tsx' if ext in ['.tsx', '.ts'] else resolved + '.js'
+
+                        result["missing_imports"].append({
+                            "source_file": file_path,
+                            "import_path": import_path,
+                            "resolved_path": resolved,
+                            "suggested_path": suggested,
+                            "tried_paths": possible_paths[:3]  # First 3 attempts
+                        })
+
+                        logger.warning(f"[Verification Agent] Missing import: {file_path} -> {import_path} (resolved: {resolved})")
+
+        logger.info(f"[Verification Agent] Import validation complete: {len(result['valid_imports'])} valid, {len(result['missing_imports'])} missing")
+
+        return result
 
     def _get_extension(self, file_path: str) -> str:
         """Get file extension"""

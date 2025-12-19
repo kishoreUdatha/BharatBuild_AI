@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
-import { ArrowRight, Code2, Zap, Globe, Upload, Bug, FileText } from 'lucide-react'
+import { ArrowRight, Code2, Zap, Globe, Upload, Bug, FileText, LogOut, User } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useWorkspaceStore } from '@/store/workspaceStore'
@@ -10,7 +10,7 @@ import { useAuth } from '@/hooks/useAuth'
 
 export default function Home() {
   const { createWorkspaceWithProject } = useWorkspaceStore()
-  const { isAuthenticated, checkAuth } = useAuth()
+  const { isAuthenticated, isLoading, checkAuth, user, logout } = useAuth()
   const router = useRouter()
   const [placeholderIndex, setPlaceholderIndex] = useState(0)
   const placeholders = [
@@ -23,6 +23,8 @@ export default function Home() {
     'Build a GraphQL API with Apollo Server and Prisma',
     'Create a microservices architecture with Docker and Kubernetes'
   ]
+
+  // Don't auto-redirect - let users view landing page even if logged in
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -39,7 +41,7 @@ export default function Home() {
     if (!checkAuth()) {
       // Store prompt for after login
       sessionStorage.setItem('pendingPrompt', prompt)
-      sessionStorage.setItem('redirectAfterLogin', '/bolt')
+      sessionStorage.setItem('redirectAfterLogin', '/build')
       // Redirect to login
       router.push('/login')
       return
@@ -56,7 +58,7 @@ export default function Home() {
     sessionStorage.setItem('initialPrompt', prompt)
     sessionStorage.setItem('workspaceId', workspace.id)
     sessionStorage.setItem('projectId', project.id)
-    router.push('/bolt')
+    router.push('/build')
   }
 
   return (
@@ -78,7 +80,7 @@ export default function Home() {
             <Link href="/projects" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors">
               My Projects
             </Link>
-            <Link href="/bolt" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors">
+            <Link href="/build" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors">
               Build
             </Link>
             <Link href="/paper" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors">
@@ -90,16 +92,49 @@ export default function Home() {
           </nav>
 
           <div className="flex items-center gap-4">
-            <Link href="/login">
-              <Button variant="ghost" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))]">
-                Sign In
-              </Button>
-            </Link>
-            <Link href="/register">
-              <Button className="bolt-gradient hover:opacity-90 transition-opacity">
-                Get Started
-              </Button>
-            </Link>
+            {isAuthenticated ? (
+              <>
+                {/* User info - Clickable to Profile */}
+                <Link
+                  href="/profile"
+                  className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[hsl(var(--bolt-bg-tertiary))] border border-[hsl(var(--bolt-border))] hover:bg-[hsl(var(--bolt-bg-quaternary))] transition-colors"
+                  title="Edit Profile"
+                >
+                  <User className="w-4 h-4 text-[hsl(var(--bolt-accent))]" />
+                  <span className="text-sm text-[hsl(var(--bolt-text-primary))]">
+                    {user?.name || user?.email?.split('@')[0] || 'User'}
+                  </span>
+                </Link>
+                {/* Go to Build */}
+                <Link href="/build">
+                  <Button className="bolt-gradient hover:opacity-90 transition-opacity">
+                    Go to Build
+                  </Button>
+                </Link>
+                {/* Logout */}
+                <button
+                  onClick={logout}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg text-[hsl(var(--bolt-text-secondary))] hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                  title="Logout"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span className="hidden sm:inline text-sm">Logout</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <Link href="/login">
+                  <Button variant="ghost" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))]">
+                    Sign In
+                  </Button>
+                </Link>
+                <Link href="/register">
+                  <Button className="bolt-gradient hover:opacity-90 transition-opacity">
+                    Get Started
+                  </Button>
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -321,7 +356,7 @@ export default function Home() {
               <h4 className="font-semibold text-[hsl(var(--bolt-text-primary))] mb-4">Product</h4>
               <ul className="space-y-2 text-[hsl(var(--bolt-text-secondary))] text-sm">
                 <li><Link href="/projects" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">My Projects</Link></li>
-                <li><Link href="/bolt" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Build App</Link></li>
+                <li><Link href="/build" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Build App</Link></li>
                 <li><Link href="/paper" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Research Paper</Link></li>
                 <li><Link href="/pricing" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Pricing</Link></li>
               </ul>
@@ -332,7 +367,7 @@ export default function Home() {
               <ul className="space-y-2 text-[hsl(var(--bolt-text-secondary))] text-sm">
                 <li><Link href="/import" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Import Project</Link></li>
                 <li><Link href="/adventure" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Adventure Mode</Link></li>
-                <li><Link href="/dashboard" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Dashboard</Link></li>
+                <li><Link href="/build" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Build</Link></li>
               </ul>
             </div>
 

@@ -1,3 +1,4 @@
+# Container port config updated + Bolt.new-style reverse proxy (preview_proxy.py replaces preview.py)
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -10,7 +11,15 @@ import time
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.core.logging_config import logger
+from app.core.middleware import (
+    RequestLoggingMiddleware,
+    SecurityHeadersMiddleware,
+    RequestSizeLimitMiddleware,
+)
+from app.core.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.api.v1.router import api_router
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from app.services.temp_session_storage import temp_storage
 from app.services.sandbox_cleanup import sandbox_cleanup
 from app.services.fix_executor import execute_fix
@@ -26,10 +35,9 @@ async def lifespan(app: FastAPI):
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"API Version: {settings.API_VERSION}")
 
-    # Create database tables
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables created successfully")
+    # Skip automatic table creation on startup - use /api/v1/create-tables endpoint instead
+    # This avoids race conditions between workers when multiple uvicorn workers try to create tables
+    logger.info("Skipping automatic table creation - use /api/v1/create-tables endpoint if tables don't exist")
 
     # Clean up any leftover temp sessions from previous runs
     temp_storage.cleanup_all()
@@ -93,22 +101,32 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add middleware
+# Add rate limiter state and exception handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
+# Add middleware (order matters - last added runs first)
+# 1. Request logging (runs first for all requests)
+app.add_middleware(RequestLoggingMiddleware)
+
+# 2. Security headers
+app.add_middleware(SecurityHeadersMiddleware)
+
+# 3. Request size limit (10MB default)
+app.add_middleware(RequestSizeLimitMiddleware, max_size=10 * 1024 * 1024)
+
+# 4. CORS - Origins from CORS_ORIGINS_STR in .env
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*", "X-Request-ID", "X-Response-Time"],
 )
 
 # GZipMiddleware - but we need to skip it for SSE endpoints
 # app.add_middleware(GZipMiddleware, minimum_size=1000)
-
-
-# Note: We don't use @app.middleware("http") here because it buffers
-# streaming responses. The timing headers are added in individual endpoints
-# or we skip timing for SSE endpoints.
 
 
 # Exception handlers
@@ -134,6 +152,65 @@ async def health_check():
         "version": "1.0.0",
         "environment": settings.ENVIRONMENT
     }
+
+
+# TEMPORARY: One-time database fix endpoint - DELETE AFTER USE
+@app.get("/fix-db-indexes", tags=["Admin"])
+async def fix_db_indexes():
+    """Drop orphaned indexes and recreate tables - ONE TIME USE"""
+    import asyncpg
+    from urllib.parse import urlparse
+
+    db_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+    parsed = urlparse(db_url)
+
+    conn = await asyncpg.connect(
+        host=parsed.hostname,
+        port=parsed.port or 5432,
+        user=parsed.username,
+        password=parsed.password,
+        database=parsed.path.lstrip("/")
+    )
+
+    results = []
+    try:
+        # Drop all indexes
+        await conn.execute('DROP INDEX IF EXISTS "ix_workspaces_user_id" CASCADE')
+        results.append("Dropped ix_workspaces_user_id")
+
+        await conn.execute('DROP INDEX IF EXISTS "ix_workspaces_name" CASCADE')
+        results.append("Dropped ix_workspaces_name")
+
+        await conn.execute('DROP INDEX IF EXISTS "ix_projects_user_id" CASCADE')
+        results.append("Dropped ix_projects_user_id")
+
+        await conn.execute('DROP INDEX IF EXISTS "ix_users_email" CASCADE')
+        results.append("Dropped ix_users_email")
+
+        # Drop all tables
+        await conn.execute('DROP TABLE IF EXISTS workspaces CASCADE')
+        results.append("Dropped workspaces table")
+
+        await conn.execute('DROP TABLE IF EXISTS projects CASCADE')
+        results.append("Dropped projects table")
+
+        await conn.execute('DROP TABLE IF EXISTS chat_messages CASCADE')
+        results.append("Dropped chat_messages table")
+
+        await conn.execute('DROP TABLE IF EXISTS users CASCADE')
+        results.append("Dropped users table")
+
+        # List remaining objects
+        remaining = await conn.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+        results.append(f"Remaining tables: {[r['tablename'] for r in remaining]}")
+
+        remaining_idx = await conn.fetch("SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND indexname NOT LIKE 'pg_%'")
+        results.append(f"Remaining indexes: {[r['indexname'] for r in remaining_idx]}")
+
+    finally:
+        await conn.close()
+
+    return {"status": "done", "results": results}
 
 
 # Root endpoint

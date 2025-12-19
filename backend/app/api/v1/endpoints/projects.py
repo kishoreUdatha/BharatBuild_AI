@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from typing import List, Optional
 from pydantic import BaseModel
 
@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.models.user import User
 from app.models.project import Project, ProjectStatus
 from app.models.workspace import Workspace
+from app.models.document import Document
 from app.schemas.project import (
     ProjectCreate,
     ProjectUpdate,
@@ -15,6 +16,7 @@ from app.schemas.project import (
     ProjectListResponse
 )
 from app.modules.auth.dependencies import get_current_user, get_user_project, get_user_project_with_db
+from app.modules.auth.usage_limits import check_project_limit, check_project_generation_allowed
 from app.services.project_service import ProjectService
 from app.core.logging_config import logger
 
@@ -87,7 +89,14 @@ async def create_project(
 
     Projects are automatically assigned to the user's default workspace.
     Storage structure: workspaces/{user_id}/{project_id}/
+
+    Note: This endpoint enforces project limits based on user's subscription plan.
+    - Free: 0 projects (demo only)
+    - Premium: 2 projects
     """
+    # Check project generation limits
+    limit_check = await check_project_generation_allowed(current_user, db)
+    logger.info(f"Project limit check passed: {limit_check.message}")
 
     # Get or create default workspace for user
     workspace = await get_or_create_default_workspace(current_user.id, db)
@@ -134,7 +143,7 @@ async def list_projects(
     user_id_str = str(current_user.id)
     logger.info(f"[Projects] Listing projects for user: {current_user.email} (ID: {user_id_str})")
 
-    # Count total
+    # Count total with explicit string comparison
     count_query = select(func.count(Project.id)).where(Project.user_id == user_id_str)
     total = await db.scalar(count_query)
     logger.info(f"[Projects] Found {total} projects for user {current_user.email}")
@@ -160,12 +169,405 @@ async def list_projects(
     }
 
 
+@router.get("/search")
+async def search_projects(
+    q: str = Query(..., min_length=1, description="Search query"),
+    status_filter: Optional[str] = Query(None, description="Filter by status"),
+    tech_stack: Optional[str] = Query(None, description="Filter by tech stack"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Search user's projects by title, description, or tech stack.
+
+    Search is case-insensitive and matches partial text.
+
+    Parameters:
+    - q: Search query (required, searches in title and description)
+    - status_filter: Filter by project status (draft, generating, ready, error)
+    - tech_stack: Filter by tech stack (e.g., "react", "python")
+    - page: Page number (default: 1)
+    - page_size: Results per page (default: 10, max: 50)
+    """
+    user_id_str = str(current_user.id)
+    search_term = f"%{q.lower()}%"
+
+    logger.info(f"[Projects] Search for '{q}' by user {current_user.email}")
+
+    # Base query with user filter and search
+    base_conditions = [
+        Project.user_id == user_id_str,
+        or_(
+            func.lower(Project.title).like(search_term),
+            func.lower(Project.description).like(search_term),
+            func.lower(func.coalesce(Project.tech_stack, '')).like(search_term)
+        )
+    ]
+
+    # Add status filter if provided
+    if status_filter:
+        try:
+            status_enum = ProjectStatus(status_filter.lower())
+            base_conditions.append(Project.status == status_enum)
+        except ValueError:
+            pass  # Invalid status, ignore filter
+
+    # Add tech stack filter if provided
+    if tech_stack:
+        tech_filter = f"%{tech_stack.lower()}%"
+        base_conditions.append(func.lower(func.coalesce(Project.tech_stack, '')).like(tech_filter))
+
+    # Count total matching
+    count_query = select(func.count(Project.id)).where(*base_conditions)
+    total = await db.scalar(count_query)
+
+    # Get matching projects
+    offset = (page - 1) * page_size
+    query = (
+        select(Project)
+        .where(*base_conditions)
+        .order_by(Project.updated_at.desc())
+        .limit(page_size)
+        .offset(offset)
+    )
+
+    result = await db.execute(query)
+    projects = result.scalars().all()
+
+    logger.info(f"[Projects] Search found {total} results for '{q}'")
+
+    return {
+        "query": q,
+        "projects": [
+            {
+                "id": str(p.id),
+                "title": p.title,
+                "description": p.description,
+                "status": p.status.value if p.status else "draft",
+                "tech_stack": p.tech_stack,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+                "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+            }
+            for p in projects
+        ],
+        "total": total or 0,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size if total else 0
+    }
+
+
+@router.get("/list")
+async def list_projects_with_documents(
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    sort_by: str = Query("created_at"),
+    sort_order: str = Query("desc"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    List user's projects with document counts.
+    Used by dashboard to show projects with their document stats.
+    """
+    user_id_str = str(current_user.id)
+    logger.info(f"[Projects] Listing projects with documents for user: {current_user.email}")
+
+    # Count total projects
+    count_query = select(func.count(Project.id)).where(Project.user_id == user_id_str)
+    total = await db.scalar(count_query)
+
+    # Get projects with sorting
+    order_column = getattr(Project, sort_by, Project.created_at)
+    if sort_order.lower() == "desc":
+        order_column = order_column.desc()
+    else:
+        order_column = order_column.asc()
+
+    query = (
+        select(Project)
+        .where(Project.user_id == user_id_str)
+        .order_by(order_column)
+        .limit(limit)
+        .offset(offset)
+    )
+
+    result = await db.execute(query)
+    projects = result.scalars().all()
+
+    # Get document counts for each project
+    items = []
+    for project in projects:
+        # Count documents for this project
+        doc_count_result = await db.execute(
+            select(func.count(Document.id)).where(Document.project_id == project.id)
+        )
+        doc_count = doc_count_result.scalar() or 0
+
+        # Also check file system for documents (legacy)
+        from app.core.config import settings
+        project_docs_dir = settings.get_project_docs_dir(str(project.id))
+        fs_doc_count = 0
+        if project_docs_dir.exists():
+            fs_doc_count = len([f for f in project_docs_dir.iterdir()
+                               if f.is_file() and f.suffix in ['.docx', '.pptx', '.pdf']])
+
+        items.append({
+            "id": str(project.id),
+            "title": project.title,
+            "description": project.description,
+            "status": project.status.value if project.status else "draft",
+            "progress": project.progress,
+            "created_at": project.created_at.isoformat() if project.created_at else None,
+            "updated_at": project.updated_at.isoformat() if project.updated_at else None,
+            "documents_count": doc_count + fs_doc_count
+        })
+
+    return {
+        "items": items,
+        "total": total or 0,
+        "limit": limit,
+        "offset": offset
+    }
+
+
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
     project: Project = Depends(get_user_project)
 ):
     """Get project details"""
     return project
+
+
+# ========== Bolt-style Metadata Endpoint ==========
+
+class FileTreeItem(BaseModel):
+    """File tree item with hash for change detection (Bolt.new style)"""
+    path: str
+    name: str
+    type: str  # 'file' or 'folder'
+    hash: Optional[str] = None  # MD5 hash for change detection
+    language: Optional[str] = None
+    size_bytes: Optional[int] = None
+    children: Optional[List['FileTreeItem']] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ProjectMetadataResponse(BaseModel):
+    """
+    Bolt.new-style project metadata response.
+
+    Returns:
+    - Project info (title, description, status)
+    - File tree (paths + hashes, NO content)
+    - Chat messages count
+
+    Files are NOT loaded here - they're lazy-loaded when user clicks.
+    """
+    success: bool
+    project_id: str
+    project_title: str
+    project_description: Optional[str] = None
+    status: str
+    technology: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    file_tree: List[FileTreeItem]
+    total_files: int
+    messages_count: int
+
+
+@router.get("/{project_id}/metadata", response_model=ProjectMetadataResponse)
+async def get_project_metadata(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Bolt.new-style project metadata endpoint.
+
+    STEP 1 of project loading:
+    - Returns project info + file tree (NO content)
+    - File tree includes hash for change detection
+    - Frontend shows file tree immediately
+    - Content is lazy-loaded when user clicks a file
+
+    This is much faster than loading all files at once!
+    """
+    from app.models.project_file import ProjectFile
+    from sqlalchemy import cast, String
+    import hashlib
+
+    # Get project - cast IDs to string for comparison (handles UUID/VARCHAR mismatch)
+    result = await db.execute(
+        select(Project).where(
+            cast(Project.id, String(36)) == str(project_id),
+            cast(Project.user_id, String(36)) == str(current_user.id)
+        )
+    )
+    project = result.scalar_one_or_none()
+
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+
+    # Get files from database (ProjectFile table) - METADATA ONLY, NO CONTENT
+    db_result = await db.execute(
+        select(ProjectFile).where(ProjectFile.project_id == cast(project_id, String(36)))
+    )
+    project_files = db_result.scalars().all()
+
+    # Build hierarchical file tree with hashes
+    def build_file_tree(files) -> List[FileTreeItem]:
+        """Convert flat file list to hierarchical tree with hashes"""
+        root = []
+        folder_registry = {}
+
+        for pf in files:
+            if pf.is_folder:
+                continue  # Folders are created from file paths
+
+            file_path = pf.path
+
+            # Use stored content hash (for change detection)
+            # Short hash for file tree (first 12 chars of SHA-256)
+            content_hash = pf.content_hash[:12] if pf.content_hash else None
+
+            # Detect language from extension
+            ext = file_path.rsplit(".", 1)[-1] if "." in file_path else ""
+            lang_map = {
+                "ts": "typescript", "tsx": "typescript",
+                "js": "javascript", "jsx": "javascript",
+                "py": "python", "json": "json",
+                "html": "html", "css": "css",
+                "md": "markdown", "yaml": "yaml", "yml": "yaml"
+            }
+            language = lang_map.get(ext, "plaintext")
+
+            # Split path into parts
+            parts = file_path.split("/")
+
+            if len(parts) == 1:
+                # Root level file
+                root.append(FileTreeItem(
+                    path=file_path,
+                    name=file_path,
+                    type="file",
+                    hash=content_hash,
+                    language=language,
+                    size_bytes=pf.size_bytes
+                ))
+            else:
+                # Nested file - create folder structure
+                current_level = root
+                current_path = ""
+
+                for i, part in enumerate(parts[:-1]):
+                    current_path = f"{current_path}/{part}" if current_path else part
+
+                    if current_path in folder_registry:
+                        folder = folder_registry[current_path]
+                    else:
+                        # Find or create folder
+                        folder = None
+                        for item in current_level:
+                            if item.type == "folder" and item.path == current_path:
+                                folder = item
+                                break
+
+                        if not folder:
+                            folder = FileTreeItem(
+                                path=current_path,
+                                name=part,
+                                type="folder",
+                                children=[]
+                            )
+                            current_level.append(folder)
+                            folder_registry[current_path] = folder
+
+                    # Ensure folder has a children list and get reference to it
+                    if folder.children is None:
+                        folder.children = []
+                    current_level = folder.children
+
+                # Add file to current folder
+                current_level.append(FileTreeItem(
+                    path=file_path,
+                    name=parts[-1],
+                    type="file",
+                    hash=content_hash,
+                    language=language,
+                    size_bytes=pf.size_bytes
+                ))
+
+        return root
+
+    file_tree = build_file_tree(project_files)
+    total_files = len([f for f in project_files if not f.is_folder])
+
+    # FALLBACK: If database has no files, try loading from sandbox (disk)
+    # This handles cases where files were written to disk but failed to save to DB
+    if total_files == 0:
+        try:
+            from app.services.unified_storage import unified_storage
+            user_id = str(current_user.id)
+            logger.info(f"[Metadata] DB has 0 files, trying sandbox fallback for {project_id}")
+
+            sandbox_files = await unified_storage.list_sandbox_files(project_id, user_id)
+            if sandbox_files:
+                # Convert sandbox files to FileTreeItem format
+                def convert_sandbox_to_tree(files) -> List[FileTreeItem]:
+                    result = []
+                    for f in files:
+                        item = FileTreeItem(
+                            path=f.path,
+                            name=f.name or f.path.split('/')[-1],
+                            type=f.type,
+                            hash=None,  # FileInfo doesn't have hash
+                            language=f.language or 'plaintext',
+                            size_bytes=f.size_bytes if f.type == 'file' else None,
+                            children=convert_sandbox_to_tree(f.children) if f.children else None
+                        )
+                        result.append(item)
+                    return result
+
+                file_tree = convert_sandbox_to_tree(sandbox_files)
+                flat_files = unified_storage._flatten_tree(sandbox_files)
+                total_files = len([f for f in flat_files if f.type == 'file'])
+                logger.info(f"[Metadata] Fallback to sandbox: loaded {total_files} files from disk for project {project_id}")
+        except Exception as e:
+            logger.warning(f"[Metadata] Sandbox fallback failed for project {project_id}: {e}")
+
+    # Count messages
+    from app.models.project_message import ProjectMessage
+    msg_result = await db.execute(
+        select(func.count(ProjectMessage.id)).where(
+            ProjectMessage.project_id == project_id
+        )
+    )
+    messages_count = msg_result.scalar() or 0
+
+    logger.info(f"[Metadata] Loaded metadata for project {project_id}: {len(project_files)} files, {messages_count} messages")
+
+    return ProjectMetadataResponse(
+        success=True,
+        project_id=project_id,
+        project_title=project.title,
+        project_description=project.description,
+        status=project.status.value if project.status else "draft",
+        technology=project.technology,
+        created_at=project.created_at.isoformat() if project.created_at else None,
+        updated_at=project.updated_at.isoformat() if project.updated_at else None,
+        file_tree=file_tree,
+        total_files=total_files,
+        messages_count=messages_count
+    )
 
 
 @router.post("/{project_id}/execute")
@@ -429,6 +831,37 @@ async def delete_file(
         )
 
     return {"message": f"File deleted: {file_path}"}
+
+
+@router.post("/{project_id}/sanitize-files")
+async def sanitize_project_files(
+    project_db: tuple = Depends(get_user_project_with_db)
+):
+    """
+    Sanitize all files in a project by removing empty first lines.
+    """
+    project, db = project_db
+    service = ProjectService(db)
+    files = await service.get_project_files(project.id)
+
+    fixed_count = 0
+    for file_meta in files:
+        if file_meta.get('is_folder', False):
+            continue
+
+        file_path = file_meta['path']
+        content = await service.get_file_content(project.id, file_path)
+
+        if content:
+            original = content
+            sanitized = content.lstrip('\n').rstrip() + '\n'
+
+            if sanitized != original:
+                await service.save_file(project.id, file_path, sanitized)
+                fixed_count += 1
+                logger.info(f"Sanitized: {file_path}")
+
+    return {"success": True, "files_fixed": fixed_count}
 
 
 @router.get("/{project_id}/load")
@@ -1037,4 +1470,104 @@ async def fix_multiple_errors(
         return FixErrorResponse(
             success=False,
             message=str(e)
+        )
+
+
+# ========== Project Messages Endpoints ==========
+
+class ProjectMessageResponse(BaseModel):
+    """Response for a single project message"""
+    id: str
+    role: str
+    agent_type: Optional[str]
+    content: str
+    tokens_used: int
+    model_used: Optional[str]
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
+
+class ProjectMessagesResponse(BaseModel):
+    """Response for listing project messages"""
+    success: bool
+    project_id: str
+    messages: List[ProjectMessageResponse]
+    total: int
+
+
+@router.get("/{project_id}/messages", response_model=ProjectMessagesResponse)
+async def get_project_messages(
+    project_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get chat history (user prompts and Claude responses) for a project.
+
+    Returns messages in chronological order with pagination support.
+
+    This is used to restore conversation context when loading a project.
+    """
+    from app.services.message_service import MessageService
+    from uuid import UUID
+
+    try:
+        # Verify project belongs to user - cast IDs to string for comparison
+        from sqlalchemy import cast, String
+        result = await db.execute(
+            select(Project).where(
+                cast(Project.id, String(36)) == str(project_id),
+                cast(Project.user_id, String(36)) == str(current_user.id)
+            )
+        )
+        project = result.scalar_one_or_none()
+
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found"
+            )
+
+        # Get messages
+        message_service = MessageService(db)
+        messages = await message_service.get_messages(
+            project_id=UUID(project_id),
+            limit=limit,
+            offset=offset
+        )
+
+        # Convert to response format
+        message_responses = [
+            ProjectMessageResponse(
+                id=str(msg.id),
+                role=msg.role,
+                agent_type=msg.agent_type,
+                content=msg.content,
+                tokens_used=msg.tokens_used or 0,
+                model_used=msg.model_used,
+                created_at=msg.created_at.isoformat() if msg.created_at else ""
+            )
+            for msg in messages
+        ]
+
+        logger.info(f"[Messages] Loaded {len(message_responses)} messages for project {project_id}")
+
+        return ProjectMessagesResponse(
+            success=True,
+            project_id=project_id,
+            messages=message_responses,
+            total=len(message_responses)
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting project messages: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
         )

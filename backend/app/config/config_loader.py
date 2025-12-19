@@ -8,11 +8,9 @@ This allows dynamic prompt/model updates without code changes.
 from typing import Dict, Optional, List
 from pathlib import Path
 import yaml
-import logging
 
 from app.modules.orchestrator.dynamic_orchestrator import AgentType, AgentConfig, WorkflowStep
-
-logger = logging.getLogger(__name__)
+from app.core.logging_config import logger
 
 
 class ConfigLoader:

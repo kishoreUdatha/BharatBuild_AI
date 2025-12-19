@@ -19,8 +19,8 @@ export const apiConfig = {
   /** WebSocket URL for real-time updates */
   wsUrl: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws',
 
-  /** Request timeout in milliseconds */
-  timeout: parseInt(process.env.NEXT_PUBLIC_API_TIMEOUT || '30000', 10),
+  /** Request timeout in milliseconds (3 min for SDK Fixer Agent) */
+  timeout: parseInt(process.env.NEXT_PUBLIC_API_TIMEOUT || '180000', 10),
 
   /** Maximum retry attempts for failed requests */
   maxRetries: parseInt(process.env.NEXT_PUBLIC_MAX_RETRIES || '3', 10),

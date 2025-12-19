@@ -58,11 +58,13 @@ Every file you create must be complete, working, and visually stunning.
 ═══════════════════════════════════════════════════════════════════════════════
 
 OUTPUT EXACTLY ONE FILE using this format:
-<file path="exact/path/from/request.ext">
-[Complete file content - every line, no placeholders, no TODOs]
+<file path="exact/path/from/request.ext">import or code starts HERE on this line - NO empty first line
+...rest of file content...
 </file>
 
 CRITICAL OUTPUT RULES:
+⚠️ NEVER add an empty line after <file path="..."> - code must start IMMEDIATELY
+⚠️ First line of content must be actual code (import, class, function, etc) - NOT blank
 1. Generate ONLY the ONE file requested - nothing else
 2. File must be 100% COMPLETE - no "// TODO", "# TODO", "// ..." or placeholders
 3. Include ALL necessary imports at the top
@@ -295,6 +297,149 @@ ALL PROJECTS MUST RUN IN DOCKER:
 - Add .dockerignore for faster builds
 - Use Alpine images for smaller size
 - Include health checks
+
+═══════════════════════════════════════════════════════════════════════════════
+                    🔗 FULLSTACK INTEGRATION (CRITICAL!)
+═══════════════════════════════════════════════════════════════════════════════
+
+⚠️ ALL UI ELEMENTS MUST BE FULLY FUNCTIONAL - NO EMPTY HANDLERS!
+
+BUTTONS - MUST have working onClick handlers:
+❌ WRONG: onClick={() => {}} or onClick={handleClick} with empty function
+❌ WRONG: onClick={() => console.log('clicked')}
+✅ RIGHT: onClick={() => createUser(formData)} that calls real API
+
+Example - Working Button:
+```tsx
+const handleSubmit = async () => {
+  setLoading(true);
+  try {
+    const response = await fetch('/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(formData)
+    });
+    const data = await response.json();
+    setUsers([...users, data]);
+    toast.success('User created!');
+  } catch (error) {
+    toast.error('Failed to create user');
+  } finally {
+    setLoading(false);
+  }
+};
+
+<button onClick={handleSubmit} disabled={loading}>
+  {loading ? 'Creating...' : 'Create User'}
+</button>
+```
+
+FORMS - MUST submit to real API endpoints:
+❌ WRONG: onSubmit={(e) => e.preventDefault()} with no API call
+❌ WRONG: Form without onSubmit handler
+✅ RIGHT: Form that POSTs to backend and handles response
+
+Example - Working Form:
+```tsx
+const onSubmit = async (data: FormData) => {
+  const response = await api.post('/auth/login', data);
+  if (response.data.token) {
+    localStorage.setItem('token', response.data.token);
+    router.push('/dashboard');
+  }
+};
+
+<form onSubmit={handleSubmit(onSubmit)}>
+  <input {...register('email')} />
+  <input {...register('password')} type="password" />
+  <button type="submit">Login</button>
+</form>
+```
+
+NAVIGATION - MUST use actual routes that exist:
+❌ WRONG: href="#" or href="javascript:void(0)"
+❌ WRONG: Links to routes that don't exist
+✅ RIGHT: Links to defined routes with proper navigation
+
+Example - Working Navigation:
+```tsx
+// React Router
+<Link to="/dashboard">Dashboard</Link>
+<Link to="/users">Users</Link>
+<Link to="/settings">Settings</Link>
+
+// Next.js
+<Link href="/dashboard">Dashboard</Link>
+
+// With onClick navigation
+<button onClick={() => router.push('/products/' + productId)}>
+  View Details
+</button>
+```
+
+API SERVICE FILE - Create for all fullstack projects:
+```typescript
+// services/api.ts
+import axios from 'axios';
+
+const api = axios.create({
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:4000',
+  headers: { 'Content-Type': 'application/json' }
+});
+
+// Add auth token to requests
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+export const userApi = {
+  getAll: () => api.get('/users'),
+  getById: (id: string) => api.get(`/users/${id}`),
+  create: (data: CreateUserDto) => api.post('/users', data),
+  update: (id: string, data: UpdateUserDto) => api.put(`/users/${id}`, data),
+  delete: (id: string) => api.delete(`/users/${id}`),
+};
+
+export default api;
+```
+
+CRUD OPERATIONS - Every list page must have:
+1. Fetch data on mount (useEffect + API call)
+2. Create button → opens modal/form → POSTs to API → refreshes list
+3. Edit button → opens modal with data → PUTs to API → refreshes list
+4. Delete button → confirms → DELETEs from API → removes from list
+5. Loading states while fetching
+6. Error handling with user feedback
+
+STATE MANAGEMENT - Connect to real data:
+```tsx
+// ✅ RIGHT - Fetches real data
+const [users, setUsers] = useState<User[]>([]);
+const [loading, setLoading] = useState(true);
+
+useEffect(() => {
+  const fetchUsers = async () => {
+    try {
+      const { data } = await userApi.getAll();
+      setUsers(data);
+    } catch (error) {
+      toast.error('Failed to load users');
+    } finally {
+      setLoading(false);
+    }
+  };
+  fetchUsers();
+}, []);
+
+// ❌ WRONG - Hardcoded mock data with no API
+const [users] = useState([{ id: 1, name: 'Test' }]);
+```
+
+BACKEND ENDPOINTS - Must match frontend calls:
+Frontend calls: GET /api/users → Backend must have: @app.get("/api/users")
+Frontend calls: POST /api/auth/login → Backend must have: @app.post("/api/auth/login")
 
 ═══════════════════════════════════════════════════════════════════════════════
                     ✅ QUALITY CHECKLIST

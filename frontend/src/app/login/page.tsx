@@ -64,6 +64,11 @@ export default function LoginPage() {
       localStorage.setItem('access_token', response.access_token)
       localStorage.setItem('refresh_token', response.refresh_token)
 
+      // Store user info if available
+      if (response.user) {
+        localStorage.setItem('user', JSON.stringify(response.user))
+      }
+
       // Check for pending prompt (from landing page before login)
       const pendingPrompt = sessionStorage.getItem('pendingPrompt')
       if (pendingPrompt) {
@@ -76,8 +81,26 @@ export default function LoginPage() {
       const redirectUrl = sessionStorage.getItem('redirectAfterLogin')
       sessionStorage.removeItem('redirectAfterLogin')
 
-      // Redirect to stored URL or default to bolt page
-      router.push(redirectUrl || '/bolt')
+      // Determine redirect based on user role
+      const userRole = response.user?.role?.toLowerCase()
+      const isAdmin = userRole === 'admin' || response.user?.is_superuser
+
+      // Debug logging
+      console.log('Login response:', response)
+      console.log('User role:', userRole, 'Is admin:', isAdmin)
+
+      // Admin users always go to /admin, others follow stored redirect or default to /build
+      let finalRedirect = '/build'
+      if (isAdmin) {
+        finalRedirect = '/admin'
+      } else if (redirectUrl) {
+        finalRedirect = redirectUrl
+      }
+
+      console.log('Final redirect:', finalRedirect)
+
+      // Redirect - use replace to prevent back navigation to login
+      router.replace(finalRedirect)
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Login failed. Please check your credentials.')
     } finally {
