@@ -27,6 +27,38 @@ from app.api.v1.endpoints.log_stream import log_stream_manager
 import app.models  # Import models so metadata knows about them
 
 
+async def ensure_database_ready():
+    """Ensure database tables exist - critical for registration to work"""
+    from sqlalchemy import text
+    from app.core.database import get_session_local, Base, get_engine
+    import app.models  # Import all models so metadata knows about them
+
+    try:
+        # First, check if users table exists (quick check)
+        session_factory = get_session_local()
+        async with session_factory() as session:
+            try:
+                await session.execute(text("SELECT 1 FROM users LIMIT 1"))
+                logger.info("[Startup] Database tables already exist")
+                return True
+            except Exception:
+                # Tables don't exist, need to create them
+                logger.warning("[Startup] Database tables not found, creating...")
+
+        # Create tables using fresh engine
+        engine = get_engine()
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        logger.info("[Startup] Database tables created successfully")
+        return True
+
+    except Exception as e:
+        logger.error(f"[Startup] Failed to ensure database ready: {e}")
+        logger.error("[Startup] Registration and other features may not work!")
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event handler for startup and shutdown"""
@@ -35,9 +67,10 @@ async def lifespan(app: FastAPI):
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"API Version: {settings.API_VERSION}")
 
-    # Skip automatic table creation on startup - use /api/v1/create-tables endpoint instead
-    # This avoids race conditions between workers when multiple uvicorn workers try to create tables
-    logger.info("Skipping automatic table creation - use /api/v1/create-tables endpoint if tables don't exist")
+    # Ensure database tables exist (prevents registration failures after deployment)
+    db_ready = await ensure_database_ready()
+    if not db_ready:
+        logger.warning("[Startup] Database not ready - some features may fail")
 
     # Clean up any leftover temp sessions from previous runs
     temp_storage.cleanup_all()
