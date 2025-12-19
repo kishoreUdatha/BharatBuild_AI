@@ -47,3 +47,6 @@ bcrypt==4.1.2
 
 # Rate Limiting
 slowapi==0.1.9
+
+# OAuth
+google-auth==2.27.0
