@@ -552,10 +552,12 @@ app.use(cors({{
         api_service_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Create API service based on frontend type
+        # Use relative URL /api - works with Vite proxy in dev and nginx in production
         api_service_content = f'''// Auto-generated API Service
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:{self.backend_port}';
+// Use relative URL for API calls - Vite proxy forwards /api/* to backend
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 const api = axios.create({{
   baseURL: API_BASE_URL,

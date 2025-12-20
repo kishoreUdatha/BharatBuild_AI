@@ -1,6 +1,16 @@
 version: '3.8'
 
 services:
+  # Multi-Technology Sandbox Runtime Image
+  # Build this first: docker-compose build runtime
+  runtime:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.sandbox
+    image: bharatbuild/runtime:latest
+    profiles:
+      - build-only  # Only build, don't run as a service
+
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine

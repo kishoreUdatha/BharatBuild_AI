@@ -382,8 +382,11 @@ API SERVICE FILE - Create for all fullstack projects:
 // services/api.ts
 import axios from 'axios';
 
+// Use relative URL for API calls - works in both dev and production
+// In dev: Vite proxy forwards /api/* to backend
+// In production: Nginx/reverse proxy handles /api/* routing
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:4000',
+  baseURL: import.meta.env.VITE_API_URL || '/api',
   headers: { 'Content-Type': 'application/json' }
 });
 

@@ -5266,34 +5266,46 @@ Stream code in chunks for real-time display.
         """
         import asyncio
 
-        # Determine documentation type based on project OR user role
-        # PRIORITY 1: Check user_role from metadata (student/faculty = academic)
+        # Determine documentation type based on subscription tier AND user role
+        # Documents are ONLY generated for PRO plan students
         user_role = context.metadata.get("user_role", "").lower() if context.metadata else ""
-        is_student_or_faculty = user_role in ["student", "faculty"]
+        subscription_tier = context.metadata.get("subscription_tier", "FREE").upper() if context.metadata else "FREE"
 
-        # PRIORITY 2: Check project_type
-        is_academic_project = context.project_type == "Academic"
+        # Check if user is a student with PRO plan
+        is_student = user_role == "student"
+        is_pro_plan = subscription_tier in ["PRO", "PREMIUM", "ENTERPRISE"]
 
-        # Student/Faculty users ALWAYS get academic documentation
-        is_academic = is_student_or_faculty or is_academic_project
+        # Academic documents only for PRO plan students
+        is_academic = is_student and is_pro_plan
 
-        # Update context.project_type if user is student/faculty (for downstream use)
-        if is_student_or_faculty and not is_academic_project:
+        logger.info(f"[Documenter] Subscription check - tier={subscription_tier}, role={user_role}, is_pro={is_pro_plan}, is_student={is_student}")
+
+        # Update context.project_type if generating academic docs
+        if is_academic:
             context.project_type = "Academic"
-            logger.info(f"[Documenter] Set project_type to Academic based on user_role: {user_role}")
+            logger.info(f"[Documenter] Set project_type to Academic (PRO student)")
 
-        logger.info(f"[Documenter] Generating documentation - user_role={user_role}, project_type={context.project_type}, is_academic={is_academic}")
+        logger.info(f"[Documenter] Generating documentation - is_academic={is_academic}, tier={subscription_tier}, role={user_role}")
 
         if is_academic:
-            # Use ChunkedDocumentAgent for academic projects (Word, PDF, PPT)
+            # Use ChunkedDocumentAgent for PRO plan students (Word, PDF, PPT)
             async for event in self._execute_academic_documenter(config, context):
                 yield event
         else:
-            # Generate basic documentation for non-academic projects
-            # Includes: README.md, ARCHITECTURE.md, Dockerfile, docker-compose.yml
-            logger.info(f"[Documenter] Generating basic documentation for {context.project_type} project")
-            async for event in self._execute_basic_documenter(config, context):
-                yield event
+            # FREE users and non-students: Skip document generation entirely
+            logger.info(f"[Documenter] Skipping document generation - not a PRO student (tier={subscription_tier}, role={user_role})")
+            yield OrchestratorEvent(
+                type=EventType.STATUS,
+                data={"message": "Document generation skipped (PRO plan required for students)"}
+            )
+            yield OrchestratorEvent(
+                type=EventType.AGENT_COMPLETE,
+                data={
+                    "agent": "documenter",
+                    "status": "skipped",
+                    "reason": "Documents only available for PRO plan students"
+                }
+            )
 
     async def _execute_basic_documenter(
         self,

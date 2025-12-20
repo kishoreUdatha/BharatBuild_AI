@@ -430,11 +430,17 @@ async def get_project_metadata(
         root = []
         folder_registry = {}
 
+        # Debug: Log all file paths received
+        logger.info(f"[build_file_tree] Processing {len(files)} files from database")
+        for pf in files:
+            logger.debug(f"[build_file_tree] DB file: path='{pf.path}', is_folder={pf.is_folder}")
+
         for pf in files:
             if pf.is_folder:
                 continue  # Folders are created from file paths
 
             file_path = pf.path
+            logger.debug(f"[build_file_tree] Processing file: '{file_path}', parts={file_path.split('/')}")
 
             # Use stored content hash (for change detection)
             # Short hash for file tree (first 12 chars of SHA-256)
@@ -512,6 +518,19 @@ async def get_project_metadata(
     file_tree = build_file_tree(project_files)
     total_files = len([f for f in project_files if not f.is_folder])
 
+    # Debug: Log resulting tree structure
+    def log_tree(items, level=0):
+        for item in items:
+            prefix = "  " * level
+            if item.type == "folder":
+                logger.info(f"[build_file_tree] {prefix}📁 {item.name}/ ({len(item.children or [])} children)")
+                if item.children:
+                    log_tree(item.children, level + 1)
+            else:
+                logger.info(f"[build_file_tree] {prefix}📄 {item.name}")
+    logger.info(f"[build_file_tree] Final tree has {len(file_tree)} root items:")
+    log_tree(file_tree)
+
     # FALLBACK: If database has no files, try loading from sandbox (disk)
     # This handles cases where files were written to disk but failed to save to DB
     if total_files == 0:
@@ -555,6 +574,18 @@ async def get_project_metadata(
     messages_count = msg_result.scalar() or 0
 
     logger.info(f"[Metadata] Loaded metadata for project {project_id}: {len(project_files)} files, {messages_count} messages")
+
+    # Debug: Verify file_tree has proper structure with children
+    def count_tree_items(items, depth=0):
+        total = 0
+        for item in items:
+            total += 1
+            if item.children:
+                total += count_tree_items(item.children, depth + 1)
+        return total
+    tree_item_count = count_tree_items(file_tree)
+    folder_count = sum(1 for item in file_tree if item.type == "folder")
+    logger.info(f"[Metadata] File tree stats: {len(file_tree)} root items, {folder_count} root folders, {tree_item_count} total nodes")
 
     return ProjectMetadataResponse(
         success=True,
@@ -1018,15 +1049,16 @@ async def restore_project_from_database(
     """
     project, db = project_db
     project_id_str = str(project.id)
+    user_id_str = str(project.user_id)  # CRITICAL: Get user_id for proper sandbox isolation
 
     from app.services.unified_storage import unified_storage
 
     # Check if sandbox already exists
-    sandbox_exists = await unified_storage.sandbox_exists(project_id_str)
+    sandbox_exists = await unified_storage.sandbox_exists(project_id_str, user_id_str)
 
     if sandbox_exists:
         # Sandbox exists, return current file list
-        files = await unified_storage.list_sandbox_files(project_id_str)
+        files = await unified_storage.list_sandbox_files(project_id_str, user_id_str)
         return {
             "success": True,
             "project_id": project_id_str,
@@ -1037,8 +1069,8 @@ async def restore_project_from_database(
         }
 
     # Restore from database
-    logger.info(f"Restoring project {project_id_str} from database")
-    restored_files = await unified_storage.restore_project_from_database(project_id_str)
+    logger.info(f"Restoring project {project_id_str} from database for user {user_id_str}")
+    restored_files = await unified_storage.restore_project_from_database(project_id_str, user_id_str)
 
     if not restored_files:
         return {
@@ -1077,25 +1109,26 @@ async def get_project_files_with_contents(
     """
     project, db = project_db
     project_id_str = str(project.id)
+    user_id_str = str(project.user_id)  # CRITICAL: Get user_id for proper sandbox isolation
 
     from app.services.unified_storage import unified_storage
 
     # Check if sandbox exists
-    sandbox_exists = await unified_storage.sandbox_exists(project_id_str)
+    sandbox_exists = await unified_storage.sandbox_exists(project_id_str, user_id_str)
 
     if not sandbox_exists:
         # Restore from database first
-        logger.info(f"Sandbox not found for {project_id_str}, restoring from database")
-        await unified_storage.restore_project_from_database(project_id_str)
+        logger.info(f"Sandbox not found for {project_id_str}, restoring from database for user {user_id_str}")
+        await unified_storage.restore_project_from_database(project_id_str, user_id_str)
 
     # Get files from sandbox (now should exist)
-    files = await unified_storage.list_sandbox_files(project_id_str)
+    files = await unified_storage.list_sandbox_files(project_id_str, user_id_str)
 
     # Build response with content
     files_with_content = []
     for file_info in unified_storage._flatten_tree(files):
         if file_info.type == 'file':
-            content = await unified_storage.read_from_sandbox(project_id_str, file_info.path)
+            content = await unified_storage.read_from_sandbox(project_id_str, file_info.path, user_id_str)
             files_with_content.append({
                 'path': file_info.path,
                 'name': file_info.name,

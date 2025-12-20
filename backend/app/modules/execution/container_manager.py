@@ -541,8 +541,10 @@ class ContainerManager:
         logger.info(f"Project path for {user_id}/{project_id}: {project_path}")
         logger.info(f"Docker mount path: {docker_mount_path}")
 
-        # Select runtime image
-        image = self.RUNTIME_IMAGES.get(project_type, self.RUNTIME_IMAGES["node"])
+        # Always use multi-technology base image (supports Node.js, Java, Maven, Python, Go, etc.)
+        # This ensures fullstack projects (e.g., Spring Boot + React) work correctly
+        image = self.BASE_IMAGE
+        logger.info(f"Using multi-technology sandbox image: {image}")
 
         # Allocate unique ports for this project (multi-user safe)
         port_mappings = {}
@@ -633,10 +635,19 @@ class ContainerManager:
             return project_container
 
         except docker.errors.ImageNotFound:
-            # Pull image and retry
-            logger.info(f"Pulling image {image}...")
-            self.docker.images.pull(image)
-            return await self.create_container(project_id, user_id, project_type, config)
+            # Base image not found - try to pull or fallback to node image
+            logger.warning(f"Image {image} not found, attempting to pull...")
+            try:
+                self.docker.images.pull(image)
+                return await self.create_container(project_id, user_id, project_type, config)
+            except Exception as pull_error:
+                # Fallback to node:20 which has npm for most projects
+                logger.warning(f"Failed to pull {image}: {pull_error}. Falling back to node:20")
+                fallback_image = self.RUNTIME_IMAGES.get(project_type, "node:20")
+                self.docker.images.pull(fallback_image)
+                # Update BASE_IMAGE for future containers in this session
+                self.__class__.BASE_IMAGE = fallback_image
+                return await self.create_container(project_id, user_id, project_type, config)
 
         except Exception as e:
             logger.error(f"Failed to create container: {e}")
@@ -1087,6 +1098,7 @@ class ContainerManager:
 
         # Patterns to detect server startup with port
         port_patterns = [
+            # JavaScript/Node.js
             r'Local:\s*http://localhost:(\d+)',           # Vite, CRA
             r'localhost:(\d+)',                            # Generic localhost:port
             r'127\.0\.0\.1:(\d+)',                         # 127.0.0.1:port
@@ -1096,6 +1108,27 @@ class ContainerManager:
             r'Server running on port (\d+)',               # Generic
             r'App running at.*:(\d+)',                     # Vue CLI
             r'Compiled successfully.*localhost:(\d+)',     # Webpack
+            # Java/Spring Boot
+            r'Tomcat started on port\(s\):\s*(\d+)',       # Spring Boot Tomcat
+            r'Tomcat initialized with port\(s\):\s*(\d+)', # Tomcat initialization
+            r'Netty started on port\(s\):\s*(\d+)',        # Spring WebFlux Netty
+            r'Started \w+ in .* seconds.*:(\d+)',          # Spring Boot startup
+            r'Undertow started on port\(s\)\s*(\d+)',      # Spring Boot Undertow
+            # Python
+            r'Uvicorn running on.*:(\d+)',                 # FastAPI/Uvicorn
+            r'Running on http://.*:(\d+)',                 # Flask
+            r'Starting development server at.*:(\d+)',     # Django
+            r'Streamlit.*running.*:(\d+)',                 # Streamlit
+            # Go
+            r'Listening on.*:(\d+)',                       # Go HTTP server
+            r'Starting server on.*:(\d+)',                 # Go server
+            # .NET
+            r'Now listening on.*:(\d+)',                   # ASP.NET Core
+            # Ruby
+            r'Listening on.*:(\d+)',                       # Rails/Puma
+            # PHP
+            r'Development Server.*started.*:(\d+)',        # PHP built-in server
+            r'Laravel development server started.*:(\d+)', # Laravel
         ]
 
         for pattern in port_patterns:

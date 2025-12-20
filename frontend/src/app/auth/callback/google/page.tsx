@@ -53,6 +53,11 @@ function GoogleCallbackContent() {
         // Exchange code for tokens
         const response = await apiClient.googleCallback(code, role)
 
+        // CRITICAL: Clear previous user's project data BEFORE storing new user's tokens
+        // This prevents user isolation issues where user B sees user A's projects
+        localStorage.removeItem('bharatbuild-project-storage')
+        localStorage.removeItem('bharatbuild-chat-storage')
+
         // Store tokens
         localStorage.setItem('access_token', response.access_token)
         localStorage.setItem('refresh_token', response.refresh_token)

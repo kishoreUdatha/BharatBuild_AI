@@ -6,6 +6,16 @@ version: '3.8'
 # ============================================
 
 services:
+  # Multi-Technology Sandbox Runtime Image
+  # Build this first: docker-compose -f docker-compose.prod.yml build runtime
+  runtime:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.sandbox
+    image: bharatbuild/runtime:latest
+    profiles:
+      - build-only  # Only build, don't run as a service
+
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
@@ -84,6 +94,7 @@ services:
       - backend_uploads_prod:/app/uploads
       - user_projects_prod:/app/user_projects
       - sandbox_workspace:/tmp/sandbox/workspace
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker-in-Docker for sandbox containers
     depends_on:
       postgres:
         condition: service_healthy

@@ -233,7 +233,7 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "REDIS_URL", value = "rediss://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0" },
       { name = "S3_BUCKET", value = aws_s3_bucket.storage.id },
       { name = "AWS_REGION", value = var.aws_region },
-      { name = "CORS_ORIGINS", value = var.domain_name != "" ? "https://${var.domain_name},https://www.${var.domain_name}" : "http://${aws_lb.main.dns_name}" },
+      { name = "CORS_ORIGINS_STR", value = var.domain_name != "" ? "https://${var.domain_name},https://www.${var.domain_name}" : "http://${aws_lb.main.dns_name}" },
       { name = "STORAGE_MODE", value = "s3" },
       { name = "USE_MINIO", value = "false" },
       # Celery Configuration
