@@ -19,6 +19,11 @@ variable "sandbox_use_spot" {
   default     = true
 }
 
+variable "sandbox_key_name" {
+  description = "SSH key pair name for sandbox EC2 instance"
+  default     = ""  # Set to your key pair name for SSH access
+}
+
 # =============================================================================
 # AMI - Amazon Linux 2023 (latest)
 # =============================================================================
@@ -211,6 +216,7 @@ resource "aws_instance" "sandbox" {
   vpc_security_group_ids      = [aws_security_group.sandbox.id]
   iam_instance_profile        = aws_iam_instance_profile.sandbox.name
   associate_public_ip_address = true
+  key_name                    = var.sandbox_key_name != "" ? var.sandbox_key_name : null
 
   root_block_device {
     volume_size = 100  # 100 GB for Docker images
@@ -221,7 +227,10 @@ resource "aws_instance" "sandbox" {
   user_data = base64encode(local.sandbox_user_data)
 
   tags = {
-    Name = "${var.app_name}-sandbox-server"
+    Name        = "${var.app_name}-sandbox-server"
+    Environment = "production"
+    Project     = var.app_name
+    ManagedBy   = "terraform"
   }
 
   lifecycle {
@@ -242,6 +251,7 @@ resource "aws_spot_instance_request" "sandbox" {
   vpc_security_group_ids      = [aws_security_group.sandbox.id]
   iam_instance_profile        = aws_iam_instance_profile.sandbox.name
   associate_public_ip_address = true
+  key_name                    = var.sandbox_key_name != "" ? var.sandbox_key_name : null
 
   spot_type            = "persistent"
   wait_for_fulfillment = true
@@ -261,6 +271,35 @@ resource "aws_spot_instance_request" "sandbox" {
   lifecycle {
     ignore_changes = [ami]
   }
+}
+
+# Tags for the actual spot instance (must be applied separately)
+resource "aws_ec2_tag" "sandbox_spot_name" {
+  count       = var.sandbox_use_spot ? 1 : 0
+  resource_id = aws_spot_instance_request.sandbox[0].spot_instance_id
+  key         = "Name"
+  value       = "${var.app_name}-sandbox-server"
+}
+
+resource "aws_ec2_tag" "sandbox_spot_environment" {
+  count       = var.sandbox_use_spot ? 1 : 0
+  resource_id = aws_spot_instance_request.sandbox[0].spot_instance_id
+  key         = "Environment"
+  value       = "production"
+}
+
+resource "aws_ec2_tag" "sandbox_spot_project" {
+  count       = var.sandbox_use_spot ? 1 : 0
+  resource_id = aws_spot_instance_request.sandbox[0].spot_instance_id
+  key         = "Project"
+  value       = var.app_name
+}
+
+resource "aws_ec2_tag" "sandbox_spot_managed_by" {
+  count       = var.sandbox_use_spot ? 1 : 0
+  resource_id = aws_spot_instance_request.sandbox[0].spot_instance_id
+  key         = "ManagedBy"
+  value       = "terraform"
 }
 
 # =============================================================================
