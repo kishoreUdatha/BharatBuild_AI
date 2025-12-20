@@ -98,6 +98,13 @@ DETECTION LOGIC:
 
 2. TECH STACK SELECTION (Dynamic - Choose based on requirements):
 
+   ⚠️ FULLSTACK DEFAULT RULE:
+   When user requests "app", "application", "website", "platform", "system", "dashboard", "portal":
+   - ALWAYS include BOTH frontend AND backend unless user explicitly says "API only" or "backend only"
+   - Frontend folder should have UI components, pages, routing
+   - Backend folder should have API endpoints, database, authentication
+   - This is what users expect when they say "build me an application"
+
    WEB APPS:
    - Simple static → HTML, CSS, JavaScript
    - Interactive frontend → React + Vite
