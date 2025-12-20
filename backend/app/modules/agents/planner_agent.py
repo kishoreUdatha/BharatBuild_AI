@@ -551,6 +551,220 @@ project-name/
 └── README.md
 ```
 
+KOTLIN/ANDROID (Mobile App - MVVM):
+```
+project-name/
+├── app/
+│   ├── src/
+│   │   ├── main/
+│   │   │   ├── java/com/company/app/
+│   │   │   │   ├── data/
+│   │   │   │   │   ├── local/
+│   │   │   │   │   │   └── AppDatabase.kt
+│   │   │   │   │   ├── remote/
+│   │   │   │   │   │   ├── ApiService.kt
+│   │   │   │   │   │   └── RetrofitClient.kt
+│   │   │   │   │   ├── repository/
+│   │   │   │   │   │   └── ItemRepository.kt
+│   │   │   │   │   └── model/
+│   │   │   │   │       └── Item.kt
+│   │   │   │   ├── di/
+│   │   │   │   │   └── AppModule.kt
+│   │   │   │   ├── ui/
+│   │   │   │   │   ├── components/
+│   │   │   │   │   ├── screens/
+│   │   │   │   │   │   ├── home/
+│   │   │   │   │   │   │   ├── HomeScreen.kt
+│   │   │   │   │   │   │   └── HomeViewModel.kt
+│   │   │   │   │   │   └── detail/
+│   │   │   │   │   ├── navigation/
+│   │   │   │   │   │   └── NavGraph.kt
+│   │   │   │   │   └── theme/
+│   │   │   │   │       ├── Color.kt
+│   │   │   │   │       ├── Theme.kt
+│   │   │   │   │       └── Type.kt
+│   │   │   │   ├── util/
+│   │   │   │   │   └── Constants.kt
+│   │   │   │   └── MainActivity.kt
+│   │   │   ├── res/
+│   │   │   │   ├── values/
+│   │   │   │   └── layout/
+│   │   │   └── AndroidManifest.xml
+│   │   └── test/
+│   └── build.gradle.kts
+├── gradle/
+├── build.gradle.kts
+├── settings.gradle.kts
+├── Dockerfile
+├── docker-compose.yml
+└── README.md
+```
+
+SWIFT/iOS (SwiftUI App - MVVM):
+```
+project-name/
+├── project-name/
+│   ├── App/
+│   │   └── ProjectNameApp.swift
+│   ├── Features/
+│   │   ├── Home/
+│   │   │   ├── Views/
+│   │   │   │   └── HomeView.swift
+│   │   │   ├── ViewModels/
+│   │   │   │   └── HomeViewModel.swift
+│   │   │   └── Models/
+│   │   └── Detail/
+│   │       ├── Views/
+│   │       └── ViewModels/
+│   ├── Core/
+│   │   ├── Network/
+│   │   │   ├── APIService.swift
+│   │   │   └── NetworkManager.swift
+│   │   ├── Storage/
+│   │   │   └── UserDefaults+Extensions.swift
+│   │   └── Extensions/
+│   ├── Shared/
+│   │   ├── Components/
+│   │   ├── Styles/
+│   │   └── Models/
+│   │       └── Item.swift
+│   ├── Resources/
+│   │   ├── Assets.xcassets
+│   │   └── Info.plist
+│   └── Preview Content/
+├── project-nameTests/
+├── project-nameUITests/
+├── project-name.xcodeproj/
+├── Dockerfile
+├── docker-compose.yml
+└── README.md
+```
+
+PHP/LARAVEL (Web Application):
+```
+project-name/
+├── app/
+│   ├── Console/
+│   ├── Exceptions/
+│   ├── Http/
+│   │   ├── Controllers/
+│   │   │   ├── Api/
+│   │   │   │   └── ItemController.php
+│   │   │   └── Controller.php
+│   │   ├── Middleware/
+│   │   └── Requests/
+│   │       └── StoreItemRequest.php
+│   ├── Models/
+│   │   ├── User.php
+│   │   └── Item.php
+│   ├── Providers/
+│   └── Services/
+├── bootstrap/
+├── config/
+├── database/
+│   ├── factories/
+│   ├── migrations/
+│   │   └── 2024_01_01_create_items_table.php
+│   └── seeders/
+│       └── DatabaseSeeder.php
+├── public/
+│   └── index.php
+├── resources/
+│   ├── views/
+│   └── js/
+├── routes/
+│   ├── api.php
+│   └── web.php
+├── storage/
+├── tests/
+├── artisan
+├── composer.json
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+C#/.NET CORE (ASP.NET Web API):
+```
+project-name/
+├── src/
+│   ├── ProjectName.Api/
+│   │   ├── Controllers/
+│   │   │   └── ItemsController.cs
+│   │   ├── Program.cs
+│   │   ├── appsettings.json
+│   │   └── ProjectName.Api.csproj
+│   ├── ProjectName.Core/
+│   │   ├── Entities/
+│   │   │   └── Item.cs
+│   │   ├── Interfaces/
+│   │   │   └── IItemRepository.cs
+│   │   ├── DTOs/
+│   │   │   ├── ItemCreateDto.cs
+│   │   │   └── ItemResponseDto.cs
+│   │   └── ProjectName.Core.csproj
+│   ├── ProjectName.Infrastructure/
+│   │   ├── Data/
+│   │   │   ├── AppDbContext.cs
+│   │   │   └── Configurations/
+│   │   ├── Repositories/
+│   │   │   └── ItemRepository.cs
+│   │   └── ProjectName.Infrastructure.csproj
+│   └── ProjectName.Application/
+│       ├── Services/
+│       │   └── ItemService.cs
+│       └── ProjectName.Application.csproj
+├── tests/
+│   └── ProjectName.Tests/
+├── ProjectName.sln
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+RUBY ON RAILS (Web Application):
+```
+project-name/
+├── app/
+│   ├── controllers/
+│   │   ├── api/
+│   │   │   └── v1/
+│   │   │       └── items_controller.rb
+│   │   └── application_controller.rb
+│   ├── models/
+│   │   ├── item.rb
+│   │   └── user.rb
+│   ├── serializers/
+│   │   └── item_serializer.rb
+│   ├── services/
+│   │   └── item_service.rb
+│   ├── views/
+│   └── jobs/
+├── config/
+│   ├── routes.rb
+│   ├── database.yml
+│   └── initializers/
+├── db/
+│   ├── migrate/
+│   │   └── 20240101_create_items.rb
+│   ├── seeds.rb
+│   └── schema.rb
+├── lib/
+├── spec/                    # RSpec tests
+│   ├── controllers/
+│   ├── models/
+│   └── rails_helper.rb
+├── Gemfile
+├── Gemfile.lock
+├── Rakefile
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
 MONOREPO (Full-Stack with Shared Code):
 ```
 project-name/

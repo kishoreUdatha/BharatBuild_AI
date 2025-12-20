@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y \
     libffi-dev \
     libssl-dev \
     curl \
+    wget \
     git \
     && rm -rf /var/lib/apt/lists/*
 
@@ -32,6 +33,33 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
     npm install -g npm@latest typescript ts-node yarn pnpm && \
     rm -rf /var/lib/apt/lists/*
+
+# Install Java & Maven (for Spring Boot projects)
+RUN apt-get update && apt-get install -y \
+    default-jdk \
+    maven \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Go (for Go projects)
+RUN wget -q https://go.dev/dl/go1.21.5.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go1.21.5.linux-amd64.tar.gz && \
+    rm go1.21.5.linux-amd64.tar.gz
+
+ENV JAVA_HOME=/usr/lib/jvm/default-java
+ENV GOPATH=/go
+ENV PATH="${PATH}:/usr/local/go/bin:${GOPATH}/bin:${JAVA_HOME}/bin"
+
+# Install Docker CLI (for sandbox containers)
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for caching
 COPY requirements.prod.txt .

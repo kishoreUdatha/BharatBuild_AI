@@ -60,6 +60,15 @@ class FrameworkType(Enum):
     # ===== RUST =====
     RUST = "rust"
 
+    # ===== RUBY =====
+    RUBY_RAILS = "ruby-rails"
+
+    # ===== PHP =====
+    PHP_LARAVEL = "php-laravel"
+
+    # ===== .NET =====
+    DOTNET = "dotnet"
+
     # ===== iOS =====
     IOS_SWIFT = "ios-swift"
 
@@ -1352,6 +1361,39 @@ class DockerExecutor:
         if go_mod_path.exists():
             return FrameworkType.GO
 
+        # ===== RUBY ON RAILS =====
+        gemfile_path = project_path / "Gemfile"
+        if gemfile_path.exists():
+            try:
+                with open(gemfile_path, 'r') as f:
+                    gemfile_content = f.read().lower()
+                    if "rails" in gemfile_content:
+                        return FrameworkType.RUBY_RAILS
+            except:
+                pass
+
+        # ===== PHP LARAVEL =====
+        composer_json = project_path / "composer.json"
+        artisan_file = project_path / "artisan"
+        if artisan_file.exists():
+            return FrameworkType.PHP_LARAVEL
+        if composer_json.exists():
+            try:
+                with open(composer_json, 'r') as f:
+                    composer = json.load(f)
+                    deps = {**composer.get("require", {}), **composer.get("require-dev", {})}
+                    if "laravel/framework" in deps:
+                        return FrameworkType.PHP_LARAVEL
+            except:
+                pass
+
+        # ===== .NET CORE =====
+        # Check for .csproj or .sln files
+        csproj_files = list(project_path.glob("*.csproj")) + list(project_path.glob("**/*.csproj"))
+        sln_files = list(project_path.glob("*.sln"))
+        if csproj_files or sln_files:
+            return FrameworkType.DOTNET
+
         # ===== STATIC HTML =====
         index_html_path = project_path / "index.html"
         if index_html_path.exists():
@@ -1976,6 +2018,50 @@ class DockerExecutor:
                 f"PORT={port} ./target/release/*"
             ]
 
+        elif framework == FrameworkType.RUBY_RAILS:
+            # Ruby on Rails project
+            has_gemfile = (project_path / "Gemfile").exists()
+            if has_gemfile:
+                commands = [
+                    "bundle install",
+                    "bundle exec rails db:migrate || true",  # Migrate if DB exists
+                    f"bundle exec rails server -b 0.0.0.0 -p {port}"
+                ]
+            else:
+                commands = [f"ruby main.rb"]
+
+        elif framework == FrameworkType.PHP_LARAVEL:
+            # PHP Laravel project
+            has_composer = (project_path / "composer.json").exists()
+            has_artisan = (project_path / "artisan").exists()
+            if has_artisan:
+                commands = [
+                    "composer install --no-dev --optimize-autoloader",
+                    "php artisan key:generate --force || true",
+                    "php artisan migrate --force || true",
+                    f"php artisan serve --host=0.0.0.0 --port={port}"
+                ]
+            elif has_composer:
+                commands = [
+                    "composer install",
+                    f"php -S 0.0.0.0:{port} -t public"
+                ]
+            else:
+                commands = [f"php -S 0.0.0.0:{port}"]
+
+        elif framework == FrameworkType.DOTNET:
+            # .NET Core project
+            has_csproj = any(project_path.glob("*.csproj")) or any(project_path.glob("**/*.csproj"))
+            has_sln = any(project_path.glob("*.sln"))
+            if has_sln or has_csproj:
+                commands = [
+                    "dotnet restore",
+                    "dotnet build --configuration Release",
+                    f"dotnet run --urls http://0.0.0.0:{port}"
+                ]
+            else:
+                commands = [f"dotnet run --urls http://0.0.0.0:{port}"]
+
         elif framework == FrameworkType.ANDROID:
             # Android project: build APK (can't really run directly)
             has_gradle_wrapper = (project_path / "gradlew").exists()
@@ -2206,6 +2292,52 @@ class DockerExecutor:
 
         # ===== FALLBACK: Direct execution on host =====
         yield "Running project directly on host...\n"
+
+        # Check if required runtimes are available for this project type
+        import shutil
+        missing_runtimes = []
+
+        if framework == FrameworkType.SPRING_BOOT:
+            if not shutil.which("mvn") and not shutil.which("gradle"):
+                missing_runtimes.append("Maven/Gradle (Java build tools)")
+            if not shutil.which("java"):
+                missing_runtimes.append("Java JDK")
+        elif framework in [FrameworkType.GO, FrameworkType.FULLSTACK_GO_REACT]:
+            if not shutil.which("go"):
+                missing_runtimes.append("Go runtime")
+        elif framework in [FrameworkType.PYTHON_FASTAPI, FrameworkType.PYTHON_FLASK, FrameworkType.PYTHON_DJANGO, FrameworkType.PYTHON_STREAMLIT, FrameworkType.PYTHON_ML]:
+            if not shutil.which("python3") and not shutil.which("python"):
+                missing_runtimes.append("Python runtime")
+        elif framework in [FrameworkType.REACT_VITE, FrameworkType.NEXTJS, FrameworkType.NODE_EXPRESS]:
+            if not shutil.which("node"):
+                missing_runtimes.append("Node.js runtime")
+        elif framework == FrameworkType.RUBY_RAILS:
+            if not shutil.which("ruby"):
+                missing_runtimes.append("Ruby runtime")
+            if not shutil.which("bundle"):
+                missing_runtimes.append("Bundler (gem install bundler)")
+        elif framework == FrameworkType.PHP_LARAVEL:
+            if not shutil.which("php"):
+                missing_runtimes.append("PHP runtime")
+            if not shutil.which("composer"):
+                missing_runtimes.append("Composer (PHP package manager)")
+        elif framework == FrameworkType.DOTNET:
+            if not shutil.which("dotnet"):
+                missing_runtimes.append(".NET SDK")
+        elif framework == FrameworkType.RUST:
+            if not shutil.which("cargo"):
+                missing_runtimes.append("Rust/Cargo")
+
+        if missing_runtimes:
+            yield "\n❌ RUNTIME ERROR: Required tools not found on this server:\n"
+            for runtime in missing_runtimes:
+                yield f"   • {runtime}\n"
+            yield "\n💡 SOLUTION OPTIONS:\n"
+            yield "   1. Enable Docker containers (preferred) - Set DOCKER_AVAILABLE=true\n"
+            yield "   2. Install the missing runtimes on the server\n"
+            yield "   3. Use the Docker-based sandbox with bharatbuild/runtime:latest image\n"
+            yield "\n📦 To build the runtime image: docker-compose -f docker-compose.prod.yml build runtime\n"
+            return
 
         # Store user_id for auto-fix
         self._current_user_id = user_id

@@ -1,6 +1,6 @@
 # ============================================
 # BharatBuild AI - Multi-Technology Sandbox
-# Supports: Node.js, Java, Python, Go, Rust
+# Supports: Node.js, Java, Python, Go, Rust, Ruby, PHP, .NET
 # ============================================
 
 FROM ubuntu:22.04
@@ -68,9 +68,38 @@ RUN wget https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz \
 ENV GOPATH=/go
 ENV PATH="${PATH}:/usr/local/go/bin:${GOPATH}/bin"
 
-# ==================== RUST (Optional) ====================
-# RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-# ENV PATH="${PATH}:/root/.cargo/bin"
+# ==================== RUST ====================
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="${PATH}:/root/.cargo/bin"
+
+# ==================== RUBY 3.2 (for Rails) ====================
+RUN apt-get update && apt-get install -y \
+    ruby-full \
+    ruby-dev \
+    && gem install bundler rails \
+    && rm -rf /var/lib/apt/lists/*
+
+# ==================== PHP 8.2 (for Laravel) ====================
+RUN apt-get update && apt-get install -y \
+    php \
+    php-cli \
+    php-fpm \
+    php-mbstring \
+    php-xml \
+    php-curl \
+    php-zip \
+    php-mysql \
+    php-pgsql \
+    && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer \
+    && rm -rf /var/lib/apt/lists/*
+
+# ==================== .NET 8 SDK (for C#/ASP.NET) ====================
+RUN wget https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb \
+    && dpkg -i packages-microsoft-prod.deb \
+    && rm packages-microsoft-prod.deb \
+    && apt-get update \
+    && apt-get install -y dotnet-sdk-8.0 \
+    && rm -rf /var/lib/apt/lists/*
 
 # ==================== DOCKER CLI (for Docker-in-Docker) ====================
 RUN curl -fsSL https://get.docker.com | sh
@@ -91,6 +120,11 @@ RUN echo "=== Installed Versions ===" \
     && gradle --version \
     && python3 --version \
     && go version \
+    && rustc --version \
+    && ruby --version \
+    && php --version \
+    && composer --version \
+    && dotnet --version \
     && echo "=== All technologies ready ==="
 
 # Default command - keep container running
