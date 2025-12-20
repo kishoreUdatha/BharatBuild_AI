@@ -358,7 +358,10 @@ async def event_generator(
 
             # Log plan_created events and save planned files to DB
             if event_type == "plan_created":
-                logger.info(f"[SSE] Sending plan_created event to client with {len(event.data.get('tasks', []))} tasks")
+                # Get files from plan.files (the actual file list to generate)
+                plan_data = event.data.get('plan', {})
+                plan_files = plan_data.get('files', [])
+                logger.info(f"[SSE] Sending plan_created event with {len(plan_files)} files and {len(event.data.get('tasks', []))} workflow tasks")
 
                 # Save planned files to database for resume capability
                 try:
@@ -366,12 +369,15 @@ async def event_generator(
                     from app.core.database import AsyncSessionLocal
 
                     async with AsyncSessionLocal() as db_session:
-                        tasks = event.data.get('tasks', [])
                         order = 1
-                        for task in tasks:
-                            # Extract file path from task
-                            file_path = task.get('file') or task.get('path') or task.get('name', '')
-                            if file_path and not file_path.startswith('Run ') and '.' in file_path:
+                        for file_item in plan_files:
+                            # Extract file path - can be string or dict with 'path' key
+                            if isinstance(file_item, str):
+                                file_path = file_item
+                            else:
+                                file_path = file_item.get('path') or file_item.get('file') or file_item.get('name', '')
+
+                            if file_path and '.' in file_path:
                                 # Check if file already exists
                                 existing = await db_session.execute(
                                     select(ProjectFile).where(
