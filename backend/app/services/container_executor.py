@@ -101,22 +101,34 @@ class ContainerExecutor:
     async def initialize(self):
         """Initialize Docker client"""
         try:
-            # Try Unix socket first (Linux/Docker Desktop), then Windows named pipe
-            socket_paths = [
-                "unix:///var/run/docker.sock",  # Linux / Docker in container
-                "unix://var/run/docker.sock",   # Alternative format
-                "npipe:////./pipe/docker_engine",  # Windows
-            ]
-
-            for socket_path in socket_paths:
+            # First, try SANDBOX_DOCKER_HOST env var (for ECS -> EC2 sandbox connection)
+            sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
+            if sandbox_docker_host:
                 try:
-                    self.docker_client = docker.DockerClient(base_url=socket_path)
+                    self.docker_client = docker.DockerClient(base_url=sandbox_docker_host)
                     self.docker_client.ping()
-                    logger.info(f"[ContainerExecutor] Docker client initialized via {socket_path}")
-                    break
-                except Exception as socket_err:
-                    logger.debug(f"[ContainerExecutor] Socket {socket_path} failed: {socket_err}")
-                    continue
+                    logger.info(f"[ContainerExecutor] Docker client initialized via SANDBOX_DOCKER_HOST: {sandbox_docker_host}")
+                except Exception as remote_err:
+                    logger.warning(f"[ContainerExecutor] Remote Docker {sandbox_docker_host} failed: {remote_err}")
+                    self.docker_client = None
+
+            # Try Unix socket first (Linux/Docker Desktop), then Windows named pipe
+            if not self.docker_client:
+                socket_paths = [
+                    "unix:///var/run/docker.sock",  # Linux / Docker in container
+                    "unix://var/run/docker.sock",   # Alternative format
+                    "npipe:////./pipe/docker_engine",  # Windows
+                ]
+
+                for socket_path in socket_paths:
+                    try:
+                        self.docker_client = docker.DockerClient(base_url=socket_path)
+                        self.docker_client.ping()
+                        logger.info(f"[ContainerExecutor] Docker client initialized via {socket_path}")
+                        break
+                    except Exception as socket_err:
+                        logger.debug(f"[ContainerExecutor] Socket {socket_path} failed: {socket_err}")
+                        continue
 
             # Fallback to from_env if explicit paths fail
             if not self.docker_client:

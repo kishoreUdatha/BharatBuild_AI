@@ -367,6 +367,53 @@ class UnifiedStorageService:
             return content_bytes.decode('utf-8')
         return None
 
+    async def upload_content(
+        self,
+        content: bytes,
+        key: str,
+        content_type: str = 'text/plain'
+    ) -> Dict[str, Any]:
+        """
+        Upload raw content directly to S3.
+
+        Used by SimpleFixer to sync fixed files back to S3.
+
+        Args:
+            content: Raw bytes to upload
+            key: S3 key (e.g., 'projects/{project_id}/{file_path}')
+            content_type: MIME type of the content
+
+        Returns:
+            Dict with upload details
+        """
+        try:
+            # Extract project_id and file_path from key
+            # Expected format: projects/{project_id}/{file_path}
+            parts = key.split('/', 2)
+            if len(parts) >= 3:
+                project_id = parts[1]
+                file_path = parts[2]
+            else:
+                project_id = "unknown"
+                file_path = key
+
+            # Use storage_service to upload
+            result = await storage_service.upload_file(
+                project_id=project_id,
+                file_path=file_path,
+                content=content
+            )
+
+            logger.info(f"[UnifiedStorage] Uploaded content to S3: {key}")
+            return {
+                's3_key': result.get('s3_key', key),
+                'content_hash': result.get('content_hash'),
+                'size_bytes': len(content)
+            }
+        except Exception as e:
+            logger.error(f"[UnifiedStorage] Failed to upload content to S3: {e}")
+            raise
+
     async def upload_project_to_s3(
         self,
         user_id: str,

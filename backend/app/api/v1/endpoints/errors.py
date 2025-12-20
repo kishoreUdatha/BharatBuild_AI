@@ -644,7 +644,7 @@ async def approve_fix(
     project_path = Path(settings.USER_PROJECTS_PATH) / project_id
 
     if not project_path.exists():
-        sandbox_base = Path(settings.SANDBOX_PATH) if hasattr(settings, 'SANDBOX_PATH') else Path("C:/tmp/sandbox/workspace")
+        sandbox_base = Path(settings.SANDBOX_PATH) if hasattr(settings, 'SANDBOX_PATH') else Path("/tmp/sandbox/workspace")
         for user_dir in sandbox_base.iterdir():
             if user_dir.is_dir():
                 potential_path = user_dir / project_id
