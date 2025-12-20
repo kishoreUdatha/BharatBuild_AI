@@ -20,6 +20,19 @@ from enum import Enum
 from app.core.logging_config import logger
 from app.services.log_bus import get_log_bus
 
+# Sandbox public URL for preview (use sandbox EC2 public IP/domain in production)
+SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
+
+
+def get_preview_url(port: int) -> str:
+    """Generate preview URL using sandbox public URL or localhost fallback"""
+    if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
+        base = SANDBOX_PUBLIC_URL.rstrip('/')
+        if ':' in base.split('/')[-1]:
+            base = ':'.join(base.rsplit(':', 1)[:-1])
+        return f"{base}:{port}"
+    return f"http://localhost:{port}"
+
 
 class FrameworkType(Enum):
     REACT_VITE = "react-vite"
@@ -704,7 +717,7 @@ class DockerExecutor:
             self._assigned_ports[project_id] = host_port
 
             port_detected = False
-            preview_url = f"http://localhost:{host_port}"
+            preview_url = get_preview_url(host_port)
 
             # Stream output and detect server ready
             async for line in process.stdout:
@@ -803,7 +816,9 @@ class DockerExecutor:
         """Get the preview URL for a running project"""
         if project_id in self._assigned_ports:
             port = self._assigned_ports[project_id]
-            return f"http://localhost:{port}"
+            # Use module-level get_preview_url function
+            from app.modules.execution.docker_executor_new import get_preview_url as get_url
+            return get_url(port)
         return None
 
     async def get_container_status(self, project_id: str) -> dict:

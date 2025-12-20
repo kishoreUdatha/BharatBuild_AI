@@ -29,6 +29,23 @@ from app.modules.sdk_agents.sdk_fixer_agent import SDKFixerAgent
 from app.services.simple_fixer import simple_fixer
 from app.services.container_executor import container_executor, Technology as ContainerTech
 
+# Sandbox public URL for preview (use sandbox EC2 public IP/domain in production)
+SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
+
+
+def get_preview_url(port: int) -> str:
+    """Generate preview URL using sandbox public URL or localhost fallback"""
+    if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
+        # Production: Use sandbox public URL with port
+        # Format: http://sandbox.bharatbuild.in:10000 or http://IP:10000
+        base = SANDBOX_PUBLIC_URL.rstrip('/')
+        # If base already has a port, replace it; otherwise append
+        if ':' in base.split('/')[-1]:
+            # Has port, replace it
+            base = ':'.join(base.rsplit(':', 1)[:-1])
+        return f"{base}:{port}"
+    return f"http://localhost:{port}"
+
 
 class FrameworkType(Enum):
     # ===== FRONTEND =====
@@ -1746,7 +1763,7 @@ class DockerExecutor:
             self._assigned_ports[project_id] = host_port
 
             port_detected = False
-            preview_url = f"http://localhost:{host_port}"
+            preview_url = get_preview_url(host_port)
 
             # Stream output and detect server ready
             async for line in process.stdout:
@@ -1768,7 +1785,7 @@ class DockerExecutor:
                             port_detected = True
                             # For FULLSTACK projects, ALWAYS use the frontend port for preview
                             if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
-                                preview_url = f"http://localhost:{host_port}"
+                                preview_url = get_preview_url(host_port)
                                 backend_port = host_port + 1000
                                 yield f"\n{'='*50}\n"
                                 yield f"FULLSTACK SERVERS STARTED!\n"
@@ -1797,7 +1814,7 @@ class DockerExecutor:
                         port_detected = True
                         # For FULLSTACK projects, ALWAYS use the frontend port for preview
                         if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
-                            preview_url = f"http://localhost:{host_port}"
+                            preview_url = get_preview_url(host_port)
                             backend_port = host_port + 1000
                             yield f"\n{'='*50}\n"
                             yield f"FULLSTACK SERVERS STARTED!\n"
@@ -1865,7 +1882,9 @@ class DockerExecutor:
         """Get the preview URL for a running project"""
         if project_id in self._assigned_ports:
             port = self._assigned_ports[project_id]
-            return f"http://localhost:{port}"
+            # Use module-level get_preview_url function
+            from app.modules.execution.docker_executor import get_preview_url as get_url
+            return get_url(port)
         return None
 
     async def get_container_status(self, project_id: str) -> dict:
@@ -2723,11 +2742,11 @@ class DockerExecutor:
                                 # (backend port may be detected first but users want to see the UI)
                                 if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
                                     # host_port is the frontend port, backend is +1000
-                                    preview_url = f"http://localhost:{host_port}"
+                                    preview_url = get_preview_url(host_port)
                                     backend_port = host_port + 1000
                                     yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
                                 else:
-                                    preview_url = f"http://localhost:{detected_port}"
+                                    preview_url = get_preview_url(detected_port)
                                     yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
 
                     # NOTE: Background error monitoring is now handled by the reader thread itself
@@ -2795,11 +2814,11 @@ class DockerExecutor:
                                     server_started = True
                                     # For FULLSTACK projects, ALWAYS use the frontend port for preview
                                     if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
-                                        preview_url = f"http://localhost:{host_port}"
+                                        preview_url = get_preview_url(host_port)
                                         backend_port = host_port + 1000
                                         yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
                                     else:
-                                        preview_url = f"http://localhost:{detected_port}"
+                                        preview_url = get_preview_url(detected_port)
                                         yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
 
                     # ============================================================
@@ -2875,11 +2894,11 @@ class DockerExecutor:
                                         server_started = True
                                         # For FULLSTACK projects, ALWAYS use the frontend port for preview
                                         if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
-                                            preview_url = f"http://localhost:{host_port}"
+                                            preview_url = get_preview_url(host_port)
                                             backend_port = host_port + 1000
                                             yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
                                         else:
-                                            preview_url = f"http://localhost:{detected_port}"
+                                            preview_url = get_preview_url(detected_port)
                                             yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
 
                     await process.wait()
@@ -2924,11 +2943,11 @@ class DockerExecutor:
                                             server_started = True
                                             # For FULLSTACK projects, ALWAYS use the frontend port for preview
                                             if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
-                                                preview_url = f"http://localhost:{host_port}"
+                                                preview_url = get_preview_url(host_port)
                                                 backend_port = host_port + 1000
                                                 yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
                                             else:
-                                                preview_url = f"http://localhost:{detected_port}"
+                                                preview_url = get_preview_url(detected_port)
                                                 yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n__SERVER_STARTED__:{preview_url}\n"
                         await process.wait()
 
@@ -4639,7 +4658,7 @@ class DockerComposeExecutor:
                                     # Use frontend port for preview (user wants to see UI, not API)
                                     frontend_port = allocated.get("frontend", detected_port)
                                     backend_port_val = allocated.get("backend", detected_port + 1000)
-                                    preview_url = f"http://localhost:{frontend_port}"
+                                    preview_url = get_preview_url(frontend_port)
                                     yield f"\n{'='*50}\n"
                                     yield f"FULLSTACK SERVERS STARTED!\n"
                                     yield f"Frontend (Preview): {preview_url}\n"
@@ -4647,7 +4666,7 @@ class DockerComposeExecutor:
                                     yield f"{'='*50}\n"
                                     yield f"__SERVER_STARTED__:{preview_url}\n"
                                 else:
-                                    preview_url = f"http://localhost:{detected_port}"
+                                    preview_url = get_preview_url(detected_port)
                                     yield f"\n{'='*50}\n"
                                     yield f"SERVER STARTED!\n"
                                     yield f"Preview URL: {preview_url}\n"
