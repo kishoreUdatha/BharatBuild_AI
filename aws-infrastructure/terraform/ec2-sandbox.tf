@@ -205,11 +205,12 @@ resource "aws_cloudwatch_log_group" "sandbox" {
 resource "aws_instance" "sandbox" {
   count = var.sandbox_use_spot ? 0 : 1
 
-  ami                    = data.aws_ami.amazon_linux_2023.id
-  instance_type          = var.sandbox_instance_type
-  subnet_id              = aws_subnet.private[0].id
-  vpc_security_group_ids = [aws_security_group.sandbox.id]
-  iam_instance_profile   = aws_iam_instance_profile.sandbox.name
+  ami                         = data.aws_ami.amazon_linux_2023.id
+  instance_type               = var.sandbox_instance_type
+  subnet_id                   = aws_subnet.public[0].id  # Public subnet for Elastic IP
+  vpc_security_group_ids      = [aws_security_group.sandbox.id]
+  iam_instance_profile        = aws_iam_instance_profile.sandbox.name
+  associate_public_ip_address = true
 
   root_block_device {
     volume_size = 100  # 100 GB for Docker images
@@ -235,11 +236,12 @@ resource "aws_instance" "sandbox" {
 resource "aws_spot_instance_request" "sandbox" {
   count = var.sandbox_use_spot ? 1 : 0
 
-  ami                    = data.aws_ami.amazon_linux_2023.id
-  instance_type          = var.sandbox_instance_type
-  subnet_id              = aws_subnet.private[0].id
-  vpc_security_group_ids = [aws_security_group.sandbox.id]
-  iam_instance_profile   = aws_iam_instance_profile.sandbox.name
+  ami                         = data.aws_ami.amazon_linux_2023.id
+  instance_type               = var.sandbox_instance_type
+  subnet_id                   = aws_subnet.public[0].id  # Public subnet for Elastic IP
+  vpc_security_group_ids      = [aws_security_group.sandbox.id]
+  iam_instance_profile        = aws_iam_instance_profile.sandbox.name
+  associate_public_ip_address = true
 
   spot_type            = "persistent"
   wait_for_fulfillment = true
@@ -449,6 +451,30 @@ resource "aws_lb_listener_rule" "sandbox_https" {
 }
 
 # =============================================================================
+# Elastic IP for SSH Access (Debug/Admin)
+# =============================================================================
+
+resource "aws_eip" "sandbox" {
+  domain = "vpc"
+
+  tags = {
+    Name = "${var.app_name}-sandbox-eip"
+  }
+}
+
+resource "aws_eip_association" "sandbox" {
+  count         = var.sandbox_use_spot ? 0 : 1
+  instance_id   = aws_instance.sandbox[0].id
+  allocation_id = aws_eip.sandbox.id
+}
+
+resource "aws_eip_association" "sandbox_spot" {
+  count         = var.sandbox_use_spot ? 1 : 0
+  instance_id   = aws_spot_instance_request.sandbox[0].spot_instance_id
+  allocation_id = aws_eip.sandbox.id
+}
+
+# =============================================================================
 # Outputs
 # =============================================================================
 
@@ -470,4 +496,14 @@ output "sandbox_docker_url" {
 output "sandbox_preview_url" {
   description = "Base URL for sandbox previews"
   value       = var.domain_name != "" ? "https://${var.domain_name}/sandbox" : "http://${aws_lb.main.dns_name}/sandbox"
+}
+
+output "sandbox_public_ip" {
+  description = "Sandbox server public IP (for SSH access)"
+  value       = aws_eip.sandbox.public_ip
+}
+
+output "sandbox_ssh_command" {
+  description = "SSH command to connect to sandbox"
+  value       = "ssh -i your-key.pem ec2-user@${aws_eip.sandbox.public_ip}"
 }
