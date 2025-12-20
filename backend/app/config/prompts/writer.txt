@@ -830,6 +830,737 @@ if __name__ == "__main__":
 ```
 
 ═══════════════════════════════════════════════════════════════════════════════
+                         🤖 KOTLIN/ANDROID GUIDELINES
+═══════════════════════════════════════════════════════════════════════════════
+
+ANDROID ACTIVITY (Kotlin):
+```kotlin
+package com.example.app
+
+import android.os.Bundle
+import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import com.example.app.databinding.ActivityMainBinding
+import kotlinx.coroutines.launch
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
+import retrofit2.http.GET
+import retrofit2.http.POST
+import retrofit2.http.Body
+
+data class Item(
+    val id: String,
+    val name: String,
+    val completed: Boolean = false
+)
+
+interface ApiService {
+    @GET("api/items")
+    suspend fun getItems(): List<Item>
+
+    @POST("api/items")
+    suspend fun createItem(@Body item: Item): Item
+}
+
+class MainActivity : AppCompatActivity() {
+    private lateinit var binding: ActivityMainBinding
+    private lateinit var adapter: ItemAdapter
+    private val items = mutableListOf<Item>()
+
+    private val retrofit = Retrofit.Builder()
+        .baseUrl("https://api.example.com/")
+        .addConverterFactory(GsonConverterFactory.create())
+        .build()
+
+    private val apiService = retrofit.create(ApiService::class.java)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        setupRecyclerView()
+        fetchItems()
+    }
+
+    private fun setupRecyclerView() {
+        adapter = ItemAdapter(items) { item ->
+            Toast.makeText(this, "Clicked: ${item.name}", Toast.LENGTH_SHORT).show()
+        }
+        binding.recyclerView.layoutManager = LinearLayoutManager(this)
+        binding.recyclerView.adapter = adapter
+    }
+
+    private fun fetchItems() {
+        lifecycleScope.launch {
+            try {
+                val fetchedItems = apiService.getItems()
+                items.clear()
+                items.addAll(fetchedItems)
+                adapter.notifyDataSetChanged()
+            } catch (e: Exception) {
+                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+}
+```
+
+ANDROID VIEWMODEL (Kotlin + MVVM):
+```kotlin
+package com.example.app.viewmodel
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+
+data class UiState(
+    val items: List<Item> = emptyList(),
+    val isLoading: Boolean = false,
+    val error: String? = null
+)
+
+class ItemViewModel(private val repository: ItemRepository) : ViewModel() {
+    private val _uiState = MutableStateFlow(UiState())
+    val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    init {
+        loadItems()
+    }
+
+    fun loadItems() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+            try {
+                val items = repository.getItems()
+                _uiState.value = _uiState.value.copy(items = items, isLoading = false)
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(error = e.message, isLoading = false)
+            }
+        }
+    }
+
+    fun addItem(name: String) {
+        viewModelScope.launch {
+            try {
+                val newItem = repository.createItem(Item(id = "", name = name))
+                _uiState.value = _uiState.value.copy(
+                    items = _uiState.value.items + newItem
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(error = e.message)
+            }
+        }
+    }
+}
+```
+
+JETPACK COMPOSE UI:
+```kotlin
+package com.example.app.ui
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ItemListScreen(viewModel: ItemViewModel = viewModel()) {
+    val uiState by viewModel.uiState.collectAsState()
+    var newItemName by remember { mutableStateOf("") }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text("Items") })
+        },
+        floatingActionButton = {
+            FloatingActionButton(onClick = { /* show dialog */ }) {
+                Icon(Icons.Default.Add, contentDescription = "Add")
+            }
+        }
+    ) { padding ->
+        Column(modifier = Modifier.padding(padding)) {
+            if (uiState.isLoading) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            } else if (uiState.error != null) {
+                Text(text = "Error: ${uiState.error}", color = MaterialTheme.colorScheme.error)
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(uiState.items) { item ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = item.completed,
+                                    onCheckedChange = { }
+                                )
+                                Text(text = item.name, modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+                         🍎 SWIFT/iOS GUIDELINES
+═══════════════════════════════════════════════════════════════════════════════
+
+SWIFTUI VIEW:
+```swift
+import SwiftUI
+
+struct Item: Identifiable, Codable {
+    let id: String
+    let name: String
+    var completed: Bool = false
+}
+
+struct ItemListView: View {
+    @StateObject private var viewModel = ItemViewModel()
+    @State private var showingAddSheet = false
+    @State private var newItemName = ""
+
+    var body: some View {
+        NavigationView {
+            Group {
+                if viewModel.isLoading {
+                    ProgressView("Loading...")
+                } else if let error = viewModel.error {
+                    VStack {
+                        Text("Error: \(error)")
+                            .foregroundColor(.red)
+                        Button("Retry") {
+                            viewModel.fetchItems()
+                        }
+                    }
+                } else {
+                    List {
+                        ForEach(viewModel.items) { item in
+                            HStack {
+                                Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
+                                    .foregroundColor(item.completed ? .green : .gray)
+                                Text(item.name)
+                                Spacer()
+                            }
+                        }
+                        .onDelete(perform: viewModel.deleteItems)
+                    }
+                }
+            }
+            .navigationTitle("Items")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { showingAddSheet = true }) {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+            .sheet(isPresented: $showingAddSheet) {
+                AddItemView(viewModel: viewModel)
+            }
+        }
+        .onAppear {
+            viewModel.fetchItems()
+        }
+    }
+}
+
+struct AddItemView: View {
+    @Environment(\.dismiss) var dismiss
+    @ObservedObject var viewModel: ItemViewModel
+    @State private var name = ""
+
+    var body: some View {
+        NavigationView {
+            Form {
+                TextField("Item name", text: $name)
+            }
+            .navigationTitle("New Item")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        viewModel.addItem(name: name)
+                        dismiss()
+                    }
+                    .disabled(name.isEmpty)
+                }
+            }
+        }
+    }
+}
+```
+
+iOS VIEWMODEL:
+```swift
+import Foundation
+import Combine
+
+@MainActor
+class ItemViewModel: ObservableObject {
+    @Published var items: [Item] = []
+    @Published var isLoading = false
+    @Published var error: String?
+
+    private let apiService = APIService()
+    private var cancellables = Set<AnyCancellable>()
+
+    func fetchItems() {
+        isLoading = true
+        error = nil
+
+        Task {
+            do {
+                items = try await apiService.getItems()
+                isLoading = false
+            } catch {
+                self.error = error.localizedDescription
+                isLoading = false
+            }
+        }
+    }
+
+    func addItem(name: String) {
+        let newItem = Item(id: UUID().uuidString, name: name)
+
+        Task {
+            do {
+                let savedItem = try await apiService.createItem(newItem)
+                items.append(savedItem)
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func deleteItems(at offsets: IndexSet) {
+        items.remove(atOffsets: offsets)
+    }
+}
+
+class APIService {
+    private let baseURL = URL(string: "https://api.example.com")!
+
+    func getItems() async throws -> [Item] {
+        let url = baseURL.appendingPathComponent("api/items")
+        let (data, _) = try await URLSession.shared.data(from: url)
+        return try JSONDecoder().decode([Item].self, from: data)
+    }
+
+    func createItem(_ item: Item) async throws -> Item {
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/items"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(item)
+
+        let (data, _) = try await URLSession.shared.data(for: request)
+        return try JSONDecoder().decode(Item.self, from: data)
+    }
+}
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+                         🐘 PHP/LARAVEL GUIDELINES
+═══════════════════════════════════════════════════════════════════════════════
+
+LARAVEL CONTROLLER:
+```php
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Item;
+use Illuminate\Http\Request;
+use Illuminate\Http\JsonResponse;
+
+class ItemController extends Controller
+{
+    public function index(): JsonResponse
+    {
+        $items = Item::orderBy('created_at', 'desc')->get();
+        return response()->json($items);
+    }
+
+    public function store(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'completed' => 'boolean'
+        ]);
+
+        $item = Item::create($validated);
+        return response()->json($item, 201);
+    }
+
+    public function show(Item $item): JsonResponse
+    {
+        return response()->json($item);
+    }
+
+    public function update(Request $request, Item $item): JsonResponse
+    {
+        $validated = $request->validate([
+            'name' => 'sometimes|string|max:255',
+            'completed' => 'sometimes|boolean'
+        ]);
+
+        $item->update($validated);
+        return response()->json($item);
+    }
+
+    public function destroy(Item $item): JsonResponse
+    {
+        $item->delete();
+        return response()->json(null, 204);
+    }
+}
+```
+
+LARAVEL MODEL:
+```php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class Item extends Model
+{
+    use HasFactory;
+
+    protected $fillable = [
+        'name',
+        'completed',
+    ];
+
+    protected $casts = [
+        'completed' => 'boolean',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+    ];
+}
+```
+
+LARAVEL MIGRATION:
+```php
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('items', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->boolean('completed')->default(false);
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('items');
+    }
+};
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+                         💎 C#/.NET CORE GUIDELINES
+═══════════════════════════════════════════════════════════════════════════════
+
+ASP.NET CORE WEB API CONTROLLER:
+```csharp
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+
+namespace MyApp.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+public class ItemsController : ControllerBase
+{
+    private readonly AppDbContext _context;
+    private readonly ILogger<ItemsController> _logger;
+
+    public ItemsController(AppDbContext context, ILogger<ItemsController> logger)
+    {
+        _context = context;
+        _logger = logger;
+    }
+
+    [HttpGet]
+    public async Task<ActionResult<IEnumerable<Item>>> GetItems()
+    {
+        return await _context.Items.OrderByDescending(i => i.CreatedAt).ToListAsync();
+    }
+
+    [HttpGet("{id}")]
+    public async Task<ActionResult<Item>> GetItem(int id)
+    {
+        var item = await _context.Items.FindAsync(id);
+        if (item == null)
+        {
+            return NotFound();
+        }
+        return item;
+    }
+
+    [HttpPost]
+    public async Task<ActionResult<Item>> CreateItem(ItemCreateDto dto)
+    {
+        var item = new Item
+        {
+            Name = dto.Name,
+            Completed = dto.Completed,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        _context.Items.Add(item);
+        await _context.SaveChangesAsync();
+
+        return CreatedAtAction(nameof(GetItem), new { id = item.Id }, item);
+    }
+
+    [HttpPut("{id}")]
+    public async Task<IActionResult> UpdateItem(int id, ItemUpdateDto dto)
+    {
+        var item = await _context.Items.FindAsync(id);
+        if (item == null)
+        {
+            return NotFound();
+        }
+
+        item.Name = dto.Name ?? item.Name;
+        item.Completed = dto.Completed ?? item.Completed;
+
+        await _context.SaveChangesAsync();
+        return NoContent();
+    }
+
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> DeleteItem(int id)
+    {
+        var item = await _context.Items.FindAsync(id);
+        if (item == null)
+        {
+            return NotFound();
+        }
+
+        _context.Items.Remove(item);
+        await _context.SaveChangesAsync();
+        return NoContent();
+    }
+}
+```
+
+ASP.NET CORE MODEL & DBCONTEXT:
+```csharp
+using Microsoft.EntityFrameworkCore;
+using System.ComponentModel.DataAnnotations;
+
+namespace MyApp;
+
+public class Item
+{
+    public int Id { get; set; }
+
+    [Required]
+    [MaxLength(255)]
+    public string Name { get; set; } = string.Empty;
+
+    public bool Completed { get; set; }
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+public class ItemCreateDto
+{
+    [Required]
+    public string Name { get; set; } = string.Empty;
+    public bool Completed { get; set; }
+}
+
+public class ItemUpdateDto
+{
+    public string? Name { get; set; }
+    public bool? Completed { get; set; }
+}
+
+public class AppDbContext : DbContext
+{
+    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+
+    public DbSet<Item> Items { get; set; } = null!;
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Item>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
+        });
+    }
+}
+```
+
+ASP.NET CORE PROGRAM.CS:
+```csharp
+using Microsoft.EntityFrameworkCore;
+using MyApp;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// Database
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// CORS
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+    {
+        policy.AllowAnyOrigin()
+              .AllowAnyMethod()
+              .AllowAnyHeader();
+    });
+});
+
+var app = builder.Build();
+
+// Configure pipeline
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseCors();
+app.UseAuthorization();
+app.MapControllers();
+
+app.Run();
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+                         💎 RUBY ON RAILS GUIDELINES
+═══════════════════════════════════════════════════════════════════════════════
+
+RAILS CONTROLLER:
+```ruby
+class Api::ItemsController < ApplicationController
+  before_action :set_item, only: [:show, :update, :destroy]
+
+  def index
+    @items = Item.order(created_at: :desc)
+    render json: @items
+  end
+
+  def show
+    render json: @item
+  end
+
+  def create
+    @item = Item.new(item_params)
+
+    if @item.save
+      render json: @item, status: :created
+    else
+      render json: { errors: @item.errors.full_messages }, status: :unprocessable_entity
+    end
+  end
+
+  def update
+    if @item.update(item_params)
+      render json: @item
+    else
+      render json: { errors: @item.errors.full_messages }, status: :unprocessable_entity
+    end
+  end
+
+  def destroy
+    @item.destroy
+    head :no_content
+  end
+
+  private
+
+  def set_item
+    @item = Item.find(params[:id])
+  rescue ActiveRecord::RecordNotFound
+    render json: { error: 'Item not found' }, status: :not_found
+  end
+
+  def item_params
+    params.require(:item).permit(:name, :completed)
+  end
+end
+```
+
+RAILS MODEL:
+```ruby
+class Item < ApplicationRecord
+  validates :name, presence: true, length: { maximum: 255 }
+
+  scope :completed, -> { where(completed: true) }
+  scope :pending, -> { where(completed: false) }
+  scope :recent, -> { order(created_at: :desc) }
+end
+```
+
+RAILS MIGRATION:
+```ruby
+class CreateItems < ActiveRecord::Migration[7.0]
+  def change
+    create_table :items do |t|
+      t.string :name, null: false
+      t.boolean :completed, default: false
+
+      t.timestamps
+    end
+
+    add_index :items, :completed
+    add_index :items, :created_at
+  end
+end
+```
+
+═══════════════════════════════════════════════════════════════════════════════
                          🐳 DOCKER GUIDELINES
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1012,6 +1743,79 @@ WORKDIR /app
 COPY --from=build /app/main .
 EXPOSE 8080
 CMD ["./main"]
+```
+
+PHP/LARAVEL:
+```dockerfile
+FROM php:8.2-fpm-alpine AS base
+WORKDIR /var/www/html
+
+RUN apk add --no-cache \
+    zip unzip curl git \
+    libpng-dev libjpeg-turbo-dev freetype-dev \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install gd pdo pdo_mysql
+
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+
+FROM base AS deps
+COPY composer.json composer.lock ./
+RUN composer install --no-dev --optimize-autoloader --no-scripts
+
+FROM base AS production
+COPY --from=deps /var/www/html/vendor ./vendor
+COPY . .
+RUN chown -R www-data:www-data storage bootstrap/cache
+
+EXPOSE 9000
+CMD ["php-fpm"]
+```
+
+C#/.NET CORE:
+```dockerfile
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+COPY ["src/ProjectName.Api/ProjectName.Api.csproj", "ProjectName.Api/"]
+COPY ["src/ProjectName.Core/ProjectName.Core.csproj", "ProjectName.Core/"]
+COPY ["src/ProjectName.Infrastructure/ProjectName.Infrastructure.csproj", "ProjectName.Infrastructure/"]
+RUN dotnet restore "ProjectName.Api/ProjectName.Api.csproj"
+COPY src/ .
+WORKDIR /src/ProjectName.Api
+RUN dotnet build -c Release -o /app/build
+RUN dotnet publish -c Release -o /app/publish
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+WORKDIR /app
+COPY --from=build /app/publish .
+EXPOSE 8080
+ENV ASPNETCORE_URLS=http://+:8080
+ENTRYPOINT ["dotnet", "ProjectName.Api.dll"]
+```
+
+RUBY ON RAILS:
+```dockerfile
+FROM ruby:3.2-alpine AS base
+WORKDIR /app
+
+RUN apk add --no-cache \
+    build-base postgresql-dev nodejs npm yarn tzdata
+
+FROM base AS deps
+COPY Gemfile Gemfile.lock ./
+RUN bundle config set --local deployment true \
+    && bundle config set --local without 'development test' \
+    && bundle install
+
+FROM base AS production
+COPY --from=deps /app/vendor/bundle ./vendor/bundle
+COPY . .
+
+RUN bundle config set --local deployment true \
+    && bundle config set --local without 'development test' \
+    && bundle exec rails assets:precompile
+
+EXPOSE 3000
+CMD ["bundle", "exec", "rails", "server", "-b", "0.0.0.0"]
 ```
 
 DOCKER-COMPOSE.YML (Works for BOTH local and production):
