@@ -90,6 +90,12 @@ variable "route53_zone_exists" {
   default     = false
 }
 
+variable "acm_certificate_arn" {
+  description = "ARN of existing ACM certificate in us-east-1 (for external DNS like Hostinger)"
+  type        = string
+  default     = ""
+}
+
 # =============================================================================
 # Data Sources
 # =============================================================================
