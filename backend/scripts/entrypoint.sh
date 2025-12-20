@@ -111,11 +111,11 @@ main() {
         # Wait for database
         wait_for_db
 
-        # Run migrations
-        run_migrations
-
-        # Ensure tables exist (fallback)
+        # First ensure base tables exist (SQLAlchemy create_all is idempotent)
         init_tables
+
+        # Then run migrations to add columns/indexes
+        run_migrations
     fi
 
     echo ""
