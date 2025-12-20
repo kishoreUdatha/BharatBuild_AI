@@ -341,8 +341,12 @@ jobs:
         id: build
         working-directory: ./frontend
         env:
-          NEXT_PUBLIC_API_URL: https://api.bharatbuild.ai/api/v1
-          NEXT_PUBLIC_WS_URL: wss://api.bharatbuild.ai/ws
+          NEXT_PUBLIC_API_URL: https://bharatbuild.ai/api/v1
+          NEXT_PUBLIC_WS_URL: wss://bharatbuild.ai/ws
+          NEXT_PUBLIC_APP_URL: https://bharatbuild.ai
+          NEXT_PUBLIC_APP_DOMAIN: bharatbuild.ai
+          NEXT_PUBLIC_GOOGLE_CLIENT_ID: 248732150405-onocm8nddrfi6khku4pc867b0g163o11.apps.googleusercontent.com
+          NEXT_PUBLIC_GITHUB_CLIENT_ID: Ov23liss1u8xfp1732Xd
         run: |
           npm run build
           if [ $? -eq 0 ]; then
@@ -711,6 +715,10 @@ jobs:
           build-args: |
             NEXT_PUBLIC_API_URL=https://bharatbuild.ai/api/v1
             NEXT_PUBLIC_WS_URL=wss://bharatbuild.ai/ws
+            NEXT_PUBLIC_APP_URL=https://bharatbuild.ai
+            NEXT_PUBLIC_APP_DOMAIN=bharatbuild.ai
+            NEXT_PUBLIC_GOOGLE_CLIENT_ID=248732150405-onocm8nddrfi6khku4pc867b0g163o11.apps.googleusercontent.com
+            NEXT_PUBLIC_GITHUB_CLIENT_ID=Ov23liss1u8xfp1732Xd
             BUILD_DATE=${{ steps.vars.outputs.timestamp }}
             GIT_SHA=${{ github.sha }}
             VERSION=${{ steps.vars.outputs.version_tag }}

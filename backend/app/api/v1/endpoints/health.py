@@ -235,12 +235,13 @@ async def readiness_check():
     If this returns unhealthy, registration and other features will fail.
     """
     # Run all checks in parallel
-    db_check, redis_check, env_check = await asyncio.gather(
+    db_check, redis_check = await asyncio.gather(
         check_database(),
         check_redis(),
-        asyncio.coroutine(lambda: check_critical_env_vars())(),
         return_exceptions=True
     )
+    # Sync function - call directly
+    env_check = check_critical_env_vars()
 
     # Handle exceptions
     if isinstance(db_check, Exception):

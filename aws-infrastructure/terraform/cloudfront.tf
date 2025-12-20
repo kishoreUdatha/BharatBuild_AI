@@ -21,7 +21,7 @@ resource "aws_cloudfront_distribution" "main" {
     custom_origin_config {
       http_port              = 80
       https_port             = 443
-      origin_protocol_policy = "https-only"
+      origin_protocol_policy = "http-only"
       origin_ssl_protocols   = ["TLSv1.2"]
     }
 
@@ -151,9 +151,9 @@ resource "aws_cloudfront_distribution" "main" {
     compress               = true
   }
 
-  # SSL Certificate
+  # SSL Certificate - use external cert if provided, otherwise use terraform-managed cert
   viewer_certificate {
-    acm_certificate_arn      = aws_acm_certificate.cloudfront[0].arn
+    acm_certificate_arn      = var.acm_certificate_arn != "" ? var.acm_certificate_arn : aws_acm_certificate.cloudfront[0].arn
     ssl_support_method       = "sni-only"
     minimum_protocol_version = "TLSv1.2_2021"
   }

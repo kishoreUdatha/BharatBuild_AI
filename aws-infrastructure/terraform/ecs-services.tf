@@ -237,8 +237,8 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "STORAGE_MODE", value = "s3" },
       { name = "USE_MINIO", value = "false" },
       # Celery Configuration
-      { name = "CELERY_BROKER_URL", value = "rediss://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0" },
-      { name = "CELERY_RESULT_BACKEND", value = "rediss://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/1" },
+      { name = "CELERY_BROKER_URL", value = "rediss://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0?ssl_cert_reqs=CERT_NONE" },
+      { name = "CELERY_RESULT_BACKEND", value = "rediss://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/1?ssl_cert_reqs=CERT_NONE" },
       # User Projects Path (S3 mode uses this as prefix)
       { name = "USER_PROJECTS_PATH", value = "/tmp/projects" },
       # Sandbox Server Configuration (EC2 Docker host)
@@ -246,6 +246,9 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "SANDBOX_PREVIEW_BASE_URL", value = var.domain_name != "" ? "https://${var.domain_name}/sandbox" : "http://${aws_lb.main.dns_name}/sandbox" },
       # RESET_DB - Set to true to drop and recreate all tables (one-time use)
       { name = "RESET_DB", value = "false" },
+      # OAuth Redirect URIs (must match frontend callback pages)
+      { name = "GITHUB_REDIRECT_URI", value = var.domain_name != "" ? "https://${var.domain_name}/auth/callback/github" : "http://${aws_lb.main.dns_name}/auth/callback/github" },
+      { name = "GOOGLE_REDIRECT_URI", value = var.domain_name != "" ? "https://${var.domain_name}/auth/callback/google" : "http://${aws_lb.main.dns_name}/auth/callback/google" },
     ]
 
     secrets = [
@@ -254,6 +257,8 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "ANTHROPIC_API_KEY", valueFrom = "${aws_secretsmanager_secret.app_secrets.arn}:ANTHROPIC_API_KEY::" },
       { name = "GOOGLE_CLIENT_ID", valueFrom = "${aws_secretsmanager_secret.app_secrets.arn}:GOOGLE_CLIENT_ID::" },
       { name = "GOOGLE_CLIENT_SECRET", valueFrom = "${aws_secretsmanager_secret.app_secrets.arn}:GOOGLE_CLIENT_SECRET::" },
+      { name = "GITHUB_CLIENT_ID", valueFrom = "${aws_secretsmanager_secret.app_secrets.arn}:GITHUB_CLIENT_ID::" },
+      { name = "GITHUB_CLIENT_SECRET", valueFrom = "${aws_secretsmanager_secret.app_secrets.arn}:GITHUB_CLIENT_SECRET::" },
       { name = "RAZORPAY_KEY_ID", valueFrom = "${aws_secretsmanager_secret.app_secrets.arn}:RAZORPAY_KEY_ID::" },
       { name = "RAZORPAY_KEY_SECRET", valueFrom = "${aws_secretsmanager_secret.app_secrets.arn}:RAZORPAY_KEY_SECRET::" },
     ]
@@ -305,6 +310,10 @@ resource "aws_ecs_task_definition" "frontend" {
       { name = "NODE_ENV", value = "production" },
       { name = "NEXT_PUBLIC_API_URL", value = var.domain_name != "" ? "https://${var.domain_name}/api/v1" : "http://${aws_lb.main.dns_name}/api/v1" },
       { name = "NEXT_PUBLIC_WS_URL", value = var.domain_name != "" ? "wss://${var.domain_name}/ws" : "ws://${aws_lb.main.dns_name}/ws" },
+      { name = "NEXT_PUBLIC_APP_DOMAIN", value = var.domain_name != "" ? var.domain_name : aws_lb.main.dns_name },
+      { name = "NEXT_PUBLIC_APP_URL", value = var.domain_name != "" ? "https://${var.domain_name}" : "http://${aws_lb.main.dns_name}" },
+      { name = "NEXT_PUBLIC_GOOGLE_CLIENT_ID", value = "248732150405-onocm8nddrfi6khku4pc867b0g163o11.apps.googleusercontent.com" },
+      { name = "NEXT_PUBLIC_GITHUB_CLIENT_ID", value = "Ov23liss1u8xfp1732Xd" },
     ]
 
     logConfiguration = {
@@ -344,18 +353,23 @@ resource "aws_ecs_task_definition" "celery" {
     image     = "${aws_ecr_repository.backend.repository_url}:latest"
     essential = true
 
-    command = ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=4"]
+    command = ["celery", "-A", "app.core.celery_app", "worker", "--loglevel=info", "--concurrency=4"]
 
     environment = [
       { name = "ENVIRONMENT", value = "production" },
-      { name = "DATABASE_URL", value = "postgresql://bharatbuild_admin:${var.db_password}@${aws_db_instance.main.endpoint}/bharatbuild" },
+      { name = "SKIP_DB_INIT", value = "true" },
+      { name = "DATABASE_URL", value = "postgresql+asyncpg://bharatbuild_admin:${var.db_password}@${aws_db_instance.main.endpoint}/bharatbuild" },
       { name = "REDIS_URL", value = "rediss://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0" },
+      { name = "CELERY_BROKER_URL", value = "rediss://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0?ssl_cert_reqs=CERT_NONE" },
+      { name = "CELERY_RESULT_BACKEND", value = "rediss://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/1?ssl_cert_reqs=CERT_NONE" },
+      { name = "USER_PROJECTS_PATH", value = "/tmp/projects" },
       { name = "S3_BUCKET", value = aws_s3_bucket.storage.id },
       { name = "AWS_REGION", value = var.aws_region },
     ]
 
     secrets = [
       { name = "SECRET_KEY", valueFrom = "${aws_secretsmanager_secret.app_secrets.arn}:SECRET_KEY::" },
+      { name = "JWT_SECRET_KEY", valueFrom = "${aws_secretsmanager_secret.app_secrets.arn}:JWT_SECRET_KEY::" },
       { name = "ANTHROPIC_API_KEY", valueFrom = "${aws_secretsmanager_secret.app_secrets.arn}:ANTHROPIC_API_KEY::" },
     ]
 
