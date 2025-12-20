@@ -851,6 +851,51 @@ EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 ```
 
+NGINX.CONF (For fullstack projects - proxy /api to backend):
+```nginx
+server {
+    listen 80;
+    server_name _;  # Accept any domain (works for both dev and production)
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Frontend routes - serve index.html for SPA
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # API proxy - forward /api/* requests to backend container
+    # In Docker: backend:8000 (service name)
+    # The backend service is on the same Docker network
+    location /api/ {
+        proxy_pass http://backend:8000/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        proxy_read_timeout 86400;
+    }
+
+    # WebSocket support (for real-time features)
+    location /ws/ {
+        proxy_pass http://backend:8000/ws/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 86400;
+    }
+
+    # Gzip compression
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml;
+}
+```
+
 NEXT.JS FRONTEND:
 ```dockerfile
 FROM node:20-alpine AS builder
@@ -969,29 +1014,92 @@ EXPOSE 8080
 CMD ["./main"]
 ```
 
-DOCKER-COMPOSE (Full Stack):
+DOCKER-COMPOSE.YML (Works for BOTH local and production):
 ```yaml
 version: '3.8'
 services:
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     ports:
-      - "3000:80"
+      - "${FRONTEND_PORT:-3000}:80"
     depends_on:
       - backend
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      - db
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-user}:${DB_PASSWORD:-password}@db:5432/${DB_NAME:-appdb}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:-user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+      POSTGRES_DB: ${DB_NAME:-appdb}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  app-network:
+    driver: bridge
+```
+
+DOCKER-COMPOSE.DEV.YML (Local development with hot reload):
+```yaml
+version: '3.8'
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - app-network
     environment:
       - VITE_API_URL=http://backend:8000
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
+    volumes:
+      - ./backend:/app
     depends_on:
       - db
     environment:
       - DATABASE_URL=postgresql://user:password@db:5432/appdb
-    volumes:
-      - ./backend:/app
+      - ENVIRONMENT=development
+    networks:
+      - app-network
 
   db:
     image: postgres:15-alpine
@@ -1003,9 +1111,26 @@ services:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    networks:
+      - app-network
 
 volumes:
   postgres_data:
+
+networks:
+  app-network:
+    driver: bridge
+```
+
+DOCKERFILE.DEV (Frontend - for local development with hot reload):
+```dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 5173
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
 ```
 
 .dockerignore (ALWAYS include):

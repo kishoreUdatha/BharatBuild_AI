@@ -17,8 +17,8 @@ type MarkdownViewMode = 'editor' | 'split' | 'preview'
 export function CodeEditor() {
   // Theme state
   const [editorTheme, setEditorTheme] = useState<'bharatbuild-dark' | 'bharatbuild-light'>('bharatbuild-dark')
-  // Markdown preview mode (like IntelliJ)
-  const [markdownViewMode, setMarkdownViewMode] = useState<MarkdownViewMode>('split')
+  // Markdown preview mode - default to full preview for better readability
+  const [markdownViewMode, setMarkdownViewMode] = useState<MarkdownViewMode>('preview')
 
   // Direct store access (like your example)
   const {

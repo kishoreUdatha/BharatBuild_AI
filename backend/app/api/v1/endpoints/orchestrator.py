@@ -686,6 +686,9 @@ async def execute_workflow(
             # If user role is "student" or "faculty", project will be treated as academic
             enhanced_metadata["user_role"] = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
             logger.info(f"[Execute Workflow] User role: {enhanced_metadata['user_role']}")
+            # Add subscription tier - documents only generated for PRO plan students
+            enhanced_metadata["subscription_tier"] = user_limits.plan_name if user_limits else "FREE"
+            logger.info(f"[Execute Workflow] Subscription tier: {enhanced_metadata['subscription_tier']}")
             logger.info(f"[Execute Workflow] Added user_id={enhanced_metadata['user_id']} to metadata")
             # Add file limit for FREE users (3 files only)
             if max_files_limit:
@@ -815,14 +818,23 @@ async def resume_generation(
             raise HTTPException(status_code=404, detail="Project not found")
 
         # Get existing files for this project
+        # CRITICAL: Only consider files WITH CONTENT as "existing" (not empty placeholder entries)
+        # This fixes the bug where resume skips files that were planned but never generated
         from app.models.project_file import ProjectFile
         files_result = await db.execute(
             select(ProjectFile).where(ProjectFile.project_id == request.project_id)
         )
-        existing_files = files_result.scalars().all()
+        all_files = files_result.scalars().all()
+
+        # Only count files that actually have content (content_inline or s3_key)
+        existing_files = [f for f in all_files if f.content_inline or f.s3_key]
         existing_file_paths = [f.path for f in existing_files if f.path]
 
-        logger.info(f"[Resume] Project {request.project_id} has {len(existing_file_paths)} existing files")
+        # Count files that need to be generated (no content yet)
+        pending_files = [f for f in all_files if not f.content_inline and not f.s3_key and f.path]
+        pending_file_paths = [f.path for f in pending_files]
+
+        logger.info(f"[Resume] Project {request.project_id}: {len(existing_file_paths)} completed files, {len(pending_file_paths)} pending files")
 
         # Build resume context
         resume_context = f"""Continue generating this project.
@@ -830,12 +842,15 @@ async def resume_generation(
 Already generated files (DO NOT regenerate these):
 {chr(10).join(['- ' + p for p in existing_file_paths]) if existing_file_paths else '(none yet)'}
 
+Files that STILL NEED to be generated:
+{chr(10).join(['- ' + p for p in pending_file_paths]) if pending_file_paths else '(all files completed)'}
+
 Original project: {project.title}
 Description: {project.description or 'N/A'}
 
 {request.continue_message}
 
-Generate the remaining files needed to complete this project. Skip any files that already exist."""
+Generate the remaining {len(pending_file_paths)} files needed to complete this project. Focus on creating the files listed above that still need to be generated."""
 
         # Update project status
         project.status = ProjectStatus.PROCESSING
@@ -852,7 +867,9 @@ Generate the remaining files needed to complete this project. Skip any files tha
             "db_project_id": request.project_id,
             "is_resume": True,
             "existing_files": existing_file_paths,
-            "existing_file_count": len(existing_file_paths)
+            "existing_file_count": len(existing_file_paths),
+            "pending_files": pending_file_paths,
+            "pending_file_count": len(pending_file_paths)
         }
 
         # Add file limit if applicable (for FREE users)
@@ -1019,6 +1036,8 @@ async def get_generation_progress(
     files = files_result.scalars().all()
 
     # Count by status
+    # IMPORTANT: For backward compatibility, determine status based on ACTUAL CONTENT
+    # not just generation_status field (which defaults to "completed")
     status_counts = {
         "planned": 0,
         "generating": 0,
@@ -1029,15 +1048,34 @@ async def get_generation_progress(
 
     file_list = []
     for f in files:
-        status = f.generation_status.value if f.generation_status else "completed"
-        status_counts[status] = status_counts.get(status, 0) + 1
+        has_content = bool(f.content_inline or f.s3_key)
+
+        # Determine actual status based on content presence
+        # This fixes backward compatibility for projects created before status tracking
+        if has_content:
+            # File has content = completed
+            actual_status = "completed"
+        elif f.generation_status and f.generation_status.value == "generating":
+            # File is currently being generated
+            actual_status = "generating"
+        elif f.generation_status and f.generation_status.value == "failed":
+            # File generation failed
+            actual_status = "failed"
+        elif f.generation_status and f.generation_status.value == "skipped":
+            # File was skipped
+            actual_status = "skipped"
+        else:
+            # No content and not generating/failed/skipped = pending (needs generation)
+            actual_status = "planned"
+
+        status_counts[actual_status] = status_counts.get(actual_status, 0) + 1
 
         file_list.append({
             "path": f.path,
             "name": f.name,
-            "status": status,
+            "status": actual_status,
             "order": f.generation_order,
-            "has_content": bool(f.content_inline or f.s3_key),
+            "has_content": has_content,
             "updated_at": f.updated_at.isoformat() if f.updated_at else None
         })
 

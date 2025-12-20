@@ -95,6 +95,10 @@ export function useAuth(): UseAuthReturn {
 
       if (response.ok) {
         const data = await response.json()
+        // CRITICAL: Clear previous user's project data BEFORE storing new user's tokens
+        // This prevents user isolation issues where user B sees user A's projects
+        localStorage.removeItem('bharatbuild-project-storage')
+        localStorage.removeItem('bharatbuild-chat-storage')
         localStorage.setItem('access_token', data.access_token)
         if (data.refresh_token) {
           localStorage.setItem('refresh_token', data.refresh_token)

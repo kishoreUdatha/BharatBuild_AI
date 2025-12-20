@@ -333,10 +333,12 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
       }
     })
 
-    // Add prompt after logs
+    // Add prompt after logs and scroll to bottom
     if (newLogs.length > 0 && xtermRef.current) {
       xtermRef.current.writeln('')
       xtermRef.current.write('\x1b[38;5;114m❯\x1b[0m ')
+      // Auto-scroll to bottom after new logs
+      xtermRef.current.scrollToBottom()
     }
   }, [logs])
 
