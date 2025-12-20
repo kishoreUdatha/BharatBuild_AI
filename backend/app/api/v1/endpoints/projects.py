@@ -130,7 +130,8 @@ async def create_project(
     return project
 
 
-@router.get("/", response_model=ProjectListResponse)
+@router.get("", response_model=ProjectListResponse)
+@router.get("/", response_model=ProjectListResponse, include_in_schema=False)
 async def list_projects(
     page: int = 1,
     page_size: int = 10,
