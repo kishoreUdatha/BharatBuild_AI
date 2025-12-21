@@ -32,6 +32,9 @@ from app.services.container_executor import container_executor, Technology as Co
 # Sandbox public URL for preview (use sandbox EC2 public IP/domain in production)
 SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
 
+# Log the value at startup for debugging
+logger.info(f"[DockerExecutor] SANDBOX_PUBLIC_URL configured as: {SANDBOX_PUBLIC_URL}")
+
 
 def get_preview_url(port: int) -> str:
     """Generate preview URL using sandbox public URL or localhost fallback"""
@@ -43,8 +46,12 @@ def get_preview_url(port: int) -> str:
         if ':' in base.split('/')[-1]:
             # Has port, replace it
             base = ':'.join(base.rsplit(':', 1)[:-1])
-        return f"{base}:{port}"
-    return f"http://localhost:{port}"
+        result = f"{base}:{port}"
+        logger.info(f"[DockerExecutor] get_preview_url({port}) -> {result} (using SANDBOX_PUBLIC_URL={SANDBOX_PUBLIC_URL})")
+        return result
+    result = f"http://localhost:{port}"
+    logger.info(f"[DockerExecutor] get_preview_url({port}) -> {result} (SANDBOX_PUBLIC_URL not set or is localhost)")
+    return result
 
 
 class FrameworkType(Enum):
