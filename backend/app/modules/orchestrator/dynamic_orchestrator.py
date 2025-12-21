@@ -3335,6 +3335,10 @@ Stream code in chunks for real-time display.
         # Initialize Bolt streaming buffer (EXACT Bolt.new technique)
         streaming_buffer = BoltStreamingBuffer(tag='file')
 
+        # Capture full response to extract plan block (project_name, description)
+        full_response_buffer = ""
+        plan_extracted = False
+
         logger.info("[Writer] Starting streaming with Bolt buffer...")
 
         async for chunk in self.claude_client.generate_stream(
@@ -3358,6 +3362,41 @@ Stream code in chunks for real-time display.
                     )
                     logger.info(f"[Writer] Token usage tracked: {input_tokens}+{output_tokens}={input_tokens+output_tokens} ({model_used})")
                 continue  # Don't process marker as content
+
+            # Accumulate full response for plan extraction
+            full_response_buffer += chunk
+
+            # Extract plan block (project_name, description) as soon as it's complete
+            # This runs only once when </plan> is found
+            if not plan_extracted and "</plan>" in full_response_buffer:
+                try:
+                    plan_start = full_response_buffer.find("<plan>")
+                    plan_end = full_response_buffer.find("</plan>") + len("</plan>")
+                    if plan_start >= 0 and plan_end > plan_start:
+                        plan_block = full_response_buffer[plan_start:plan_end]
+
+                        # Extract project_name
+                        name_match = re.search(r'<project_name>([^<]+)</project_name>', plan_block)
+                        if name_match:
+                            context.project_name = name_match.group(1).strip()
+                            logger.info(f"[Writer] Extracted project_name from plan: {context.project_name}")
+
+                        # Extract description
+                        desc_match = re.search(r'<description>([^<]+)</description>', plan_block)
+                        if desc_match:
+                            context.project_description = desc_match.group(1).strip()
+                            logger.info(f"[Writer] Extracted description from plan: {context.project_description[:50]}...")
+
+                        # Extract tech_stack
+                        tech_match = re.search(r'<tech_stack>([^<]+)</tech_stack>', plan_block)
+                        if tech_match:
+                            context.tech_stack = {"stack": tech_match.group(1).strip()}
+                            logger.info(f"[Writer] Extracted tech_stack from plan: {context.tech_stack}")
+
+                        plan_extracted = True
+                except Exception as e:
+                    logger.warning(f"[Writer] Failed to extract plan block: {e}")
+                    plan_extracted = True  # Don't retry on error
 
             # EXACT Bolt.new technique:
             # buffer += chunk
@@ -3458,6 +3497,13 @@ Stream code in chunks for real-time display.
             )
         else:
             logger.info(f"[Validation] [OK] All files created successfully for task")
+
+        # Fallback: If no project_name was extracted from plan block, extract from user request
+        if not plan_extracted or not getattr(context, 'project_name', None):
+            fallback_name = self._extract_project_name_from_request(context.user_request)
+            if fallback_name and fallback_name != "My Project":
+                context.project_name = fallback_name
+                logger.info(f"[Writer] Fallback project_name from request: {context.project_name}")
 
         logger.info(f"[Streaming Buffer] [OK] Streaming complete, {len(context.files_created)} files created")
 
@@ -5384,7 +5430,13 @@ Stream code in chunks for real-time display.
 
         # Check if user is a student with PRO plan
         is_student = user_role == "student"
-        is_pro_plan = subscription_tier in ["PRO", "PREMIUM", "ENTERPRISE"]
+        # Check for PRO/Premium plan - handle various plan name formats
+        # "PRO", "PREMIUM", "Premium (Token Purchase)", etc.
+        is_pro_plan = (
+            subscription_tier in ["PRO", "PREMIUM", "ENTERPRISE"] or
+            "PREMIUM" in subscription_tier.upper() or
+            "PRO" in subscription_tier.upper()
+        )
 
         # Academic documents only for PRO plan students
         is_academic = is_student and is_pro_plan
@@ -5403,19 +5455,15 @@ Stream code in chunks for real-time display.
             async for event in self._execute_academic_documenter(config, context):
                 yield event
         else:
-            # FREE users and non-students: Skip document generation entirely
-            logger.info(f"[Documenter] Skipping document generation - not a PRO student (tier={subscription_tier}, role={user_role})")
+            # Non-PRO users: Generate basic documentation (Dockerfile, docker-compose)
+            logger.info(f"[Documenter] Generating basic docs for non-PRO user (tier={subscription_tier}, role={user_role})")
+            async for event in self._execute_basic_documenter(config, context):
+                yield event
+
+            # Also notify about PRO features
             yield OrchestratorEvent(
                 type=EventType.STATUS,
-                data={"message": "Document generation skipped (PRO plan required for students)"}
-            )
-            yield OrchestratorEvent(
-                type=EventType.AGENT_COMPLETE,
-                data={
-                    "agent": "documenter",
-                    "status": "skipped",
-                    "reason": "Documents only available for PRO plan students"
-                }
+                data={"message": "Upgrade to PRO for academic documents (SRS, PPT, VIVA Q&A)"}
             )
 
     async def _execute_basic_documenter(

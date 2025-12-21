@@ -419,8 +419,9 @@ async def get_project_metadata(
         )
 
     # Get files from database (ProjectFile table) - METADATA ONLY, NO CONTENT
+    # Cast column to String(36) to handle UUID/VARCHAR mismatch
     db_result = await db.execute(
-        select(ProjectFile).where(ProjectFile.project_id == cast(project_id, String(36)))
+        select(ProjectFile).where(cast(ProjectFile.project_id, String(36)) == str(project_id))
     )
     project_files = db_result.scalars().all()
 

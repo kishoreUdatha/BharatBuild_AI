@@ -402,9 +402,9 @@ class WorkspaceRestoreService:
         """Get project from database"""
         try:
             # projects.id is stored as String(36) not UUID
-            # Use cast() to prevent asyncpg from converting UUID-like strings to UUID type
+            # Cast column to String(36) to handle UUID/VARCHAR mismatch
             result = await db.execute(
-                select(Project).where(Project.id == cast(project_id, String(36)))
+                select(Project).where(cast(Project.id, String(36)) == str(project_id))
             )
             return result.scalar_one_or_none()
         except Exception as e:
@@ -415,9 +415,9 @@ class WorkspaceRestoreService:
         """Get all files for a project from database"""
         try:
             # project_id in project_files table is stored as varchar, not UUID
-            # Use cast() to prevent asyncpg from converting UUID-like strings to UUID type
+            # Cast column to String(36) to handle UUID/VARCHAR mismatch
             result = await db.execute(
-                select(ProjectFile).where(ProjectFile.project_id == cast(project_id, String(36)))
+                select(ProjectFile).where(cast(ProjectFile.project_id, String(36)) == str(project_id))
             )
             return result.scalars().all()
         except Exception as e:
