@@ -20,6 +20,7 @@ from datetime import datetime
 from enum import Enum
 import asyncio
 import json
+import os
 import re
 import xml.etree.ElementTree as ET
 from lxml import etree
@@ -28,6 +29,21 @@ from pathlib import Path
 from collections import deque
 
 from app.core.logging_config import logger
+
+# Sandbox public URL for preview (use sandbox EC2 public IP/domain in production)
+SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
+
+
+def _get_preview_url(port: int) -> str:
+    """Generate preview URL using sandbox public URL or localhost fallback"""
+    if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
+        base = SANDBOX_PUBLIC_URL.rstrip('/')
+        if ':' in base.split('/')[-1]:
+            base = ':'.join(base.rsplit(':', 1)[:-1])
+        return f"{base}:{port}"
+    return f"http://localhost:{port}"
+
+
 from app.utils.claude_client import ClaudeClient
 from app.modules.automation.file_manager import FileManager
 from app.modules.agents.base_agent import AgentContext
@@ -4364,12 +4380,17 @@ Stream code in chunks for real-time display.
             match = re.search(pattern, terminal_output, re.IGNORECASE)
             if match:
                 if match.groups():
-                    # If port number matched
-                    port = match.group(1)
-                    return f"http://localhost:{port}"
+                    # If port number matched, convert to public URL
+                    port = int(match.group(1))
+                    return _get_preview_url(port)
                 else:
-                    # Full URL matched
-                    return match.group(0)
+                    # Full URL matched - check if it's localhost and convert
+                    url = match.group(0)
+                    localhost_match = re.search(r"https?://(?:localhost|127\.0\.0\.1):(\d+)", url)
+                    if localhost_match:
+                        port = int(localhost_match.group(1))
+                        return _get_preview_url(port)
+                    return url
 
         return None
 

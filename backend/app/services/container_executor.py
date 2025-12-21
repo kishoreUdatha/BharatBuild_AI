@@ -26,6 +26,19 @@ from datetime import datetime, timedelta
 
 from app.core.logging_config import logger
 
+# Sandbox public URL for preview (use sandbox EC2 public IP/domain in production)
+SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
+
+
+def _get_preview_url(port: int) -> str:
+    """Generate preview URL using sandbox public URL or localhost fallback"""
+    if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
+        base = SANDBOX_PUBLIC_URL.rstrip('/')
+        if ':' in base.split('/')[-1]:
+            base = ':'.join(base.rsplit(':', 1)[:-1])
+        return f"{base}:{port}"
+    return f"http://localhost:{port}"
+
 
 class Technology(Enum):
     """Supported technology stacks"""
@@ -343,7 +356,7 @@ class ContainerExecutor:
                 "technology": container_info["technology"],
                 "created_at": container_info["created_at"].isoformat(),
                 "expires_at": container_info["expires_at"].isoformat(),
-                "url": f"http://localhost:{container_info['port']}"
+                "url": _get_preview_url(container_info['port'])
             }
         except NotFound:
             del self.active_containers[project_id]

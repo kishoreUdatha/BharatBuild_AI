@@ -43,6 +43,19 @@ from threading import Lock
 from app.core.config import settings
 from app.core.logging_config import logger
 
+# Sandbox public URL for preview (use sandbox EC2 public IP/domain in production)
+SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
+
+
+def _get_preview_url(port: int) -> str:
+    """Generate preview URL using sandbox public URL or localhost fallback"""
+    if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
+        base = SANDBOX_PUBLIC_URL.rstrip('/')
+        if ':' in base.split('/')[-1]:
+            base = ':'.join(base.rsplit(':', 1)[:-1])
+        return f"{base}:{port}"
+    return f"http://localhost:{port}"
+
 
 def _to_docker_path(path: Path) -> str:
     """
@@ -920,18 +933,18 @@ class ContainerManager:
             host_port = container.port_mappings.get(container.active_port)
             if host_port:
                 logger.info(f"[Preview] Using detected active port {container.active_port} -> {host_port}")
-                return f"http://localhost:{host_port}"
+                return _get_preview_url(host_port)
 
         # Priority 2: Use requested container_port
         host_port = container.port_mappings.get(container_port)
         if host_port:
-            return f"http://localhost:{host_port}"
+            return _get_preview_url(host_port)
 
         # Priority 3: Try first available mapped port
         if container.port_mappings:
             first_port = next(iter(container.port_mappings.values()))
             logger.info(f"[Preview] Falling back to first available port: {first_port}")
-            return f"http://localhost:{first_port}"
+            return _get_preview_url(first_port)
 
         return None
 
@@ -949,7 +962,7 @@ class ContainerManager:
         urls = {}
 
         for container_port, host_port in container.port_mappings.items():
-            urls[container_port] = f"http://localhost:{host_port}"
+            urls[container_port] = _get_preview_url(host_port)
 
         return urls
 

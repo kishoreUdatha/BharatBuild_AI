@@ -74,6 +74,17 @@ MAX_CONCURRENT_SANDBOXES = int(os.getenv("MAX_CONCURRENT_SANDBOXES", "100"))
 # When running on ECS Fargate, connect to remote EC2 instance running Docker
 SANDBOX_DOCKER_HOST = os.getenv("SANDBOX_DOCKER_HOST", "")  # e.g., "tcp://10.0.10.x:2375"
 SANDBOX_PREVIEW_BASE_URL = os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")  # e.g., "https://bharatbuild.com/sandbox"
+SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL", "http://localhost")  # e.g., "http://13.202.228.249" (direct port access)
+
+
+def _get_preview_url(port: int) -> str:
+    """Generate preview URL using sandbox public URL or localhost fallback"""
+    if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
+        base = SANDBOX_PUBLIC_URL.rstrip('/')
+        if ':' in base.split('/')[-1]:
+            base = ':'.join(base.rsplit(':', 1)[:-1])
+        return f"{base}:{port}"
+    return f"http://localhost:{port}"
 
 
 class SandboxStatus(str, Enum):
@@ -486,7 +497,8 @@ class DockerSandboxManager:
             if SANDBOX_PREVIEW_BASE_URL and SANDBOX_PREVIEW_BASE_URL != "http://localhost":
                 sandbox.preview_url = f"{SANDBOX_PREVIEW_BASE_URL}/{sandbox_id}"
             else:
-                sandbox.preview_url = f"http://localhost:{external_port}"
+                # Use direct port access via SANDBOX_PUBLIC_URL
+                sandbox.preview_url = _get_preview_url(external_port)
 
             logger.info(f"Created sandbox {sandbox_id} for project {project_id}")
             return sandbox

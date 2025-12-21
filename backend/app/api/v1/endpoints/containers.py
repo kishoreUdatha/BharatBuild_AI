@@ -16,12 +16,26 @@ Frontend calls these endpoints to:
 
 import asyncio
 import json
+import os
 from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Query, Request, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from sqlalchemy.ext.asyncio import AsyncSession
+
+# Sandbox public URL for preview (use sandbox EC2 public IP/domain in production)
+SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
+
+
+def _get_preview_url(port: int) -> str:
+    """Generate preview URL using sandbox public URL or localhost fallback"""
+    if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
+        base = SANDBOX_PUBLIC_URL.rstrip('/')
+        if ':' in base.split('/')[-1]:
+            base = ':'.join(base.rsplit(':', 1)[:-1])
+        return f"{base}:{port}"
+    return f"http://localhost:{port}"
 
 from app.modules.execution import (
     get_container_manager,
@@ -213,7 +227,7 @@ async def create_container(
         priority_ports = [3000, 5173, 5174, 4173, 8080, 8000, 5000]
 
         for container_port, host_port in container.port_mappings.items():
-            direct_url = f"http://localhost:{host_port}"
+            direct_url = _get_preview_url(host_port)
             preview_urls[str(container_port)] = direct_url
 
             # Set primary URL from first matching priority port
@@ -223,7 +237,7 @@ async def create_container(
         # Fallback to first available port if no priority port found
         if primary_url is None and container.port_mappings:
             first_host_port = list(container.port_mappings.values())[0]
-            primary_url = f"http://localhost:{first_host_port}"
+            primary_url = _get_preview_url(first_host_port)
 
         # Also include reverse proxy as fallback (may work in some setups)
         bolt_style_preview_url = f"/api/v1/preview/{project_id}/"
