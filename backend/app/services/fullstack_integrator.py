@@ -2,12 +2,13 @@
 Fullstack Integration Service - Automatic Frontend-Backend Integration
 
 This service automatically configures frontend-backend communication for fullstack projects:
-1. Detects API endpoints in backend
-2. Configures frontend API base URL
-3. Sets up proxy configuration (Vite/CRA/Next.js)
-4. Creates/updates .env files
-5. Configures CORS on backend
-6. Creates API service files if missing
+1. Detects API endpoints in backend (using EndpointDetector)
+2. Generates typed frontend API service from detected endpoints (using APIServiceGenerator)
+3. Validates frontend-backend integration (using IntegrationValidator)
+4. Configures frontend API base URL
+5. Sets up proxy configuration (Vite/CRA/Next.js)
+6. Creates/updates .env files
+7. Configures CORS on backend
 
 Supports:
 - React + Spring Boot
@@ -24,6 +25,9 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
 from app.core.logging_config import logger
+from app.services.endpoint_detector import EndpointDetector, detect_endpoints
+from app.services.api_service_generator import APIServiceGenerator, generate_api_service
+from app.services.integration_validator import IntegrationValidator, validate_integration
 
 
 class FullstackIntegrator:
@@ -106,52 +110,146 @@ class FullstackIntegrator:
 
         return "unknown"
 
-    async def integrate(self) -> Dict[str, Any]:
+    async def integrate(self, smart_integration: bool = True) -> Dict[str, Any]:
         """
         Perform full integration of frontend and backend.
-        Returns dict with integration results.
+
+        Args:
+            smart_integration: If True, detect endpoints and generate typed API service.
+                             If False, just configure basic settings (legacy behavior).
+
+        Returns:
+            Dict with integration results.
         """
         results = {
             "success": True,
             "frontend_type": self.frontend_type,
             "backend_type": self.backend_type,
-            "actions": []
+            "actions": [],
+            "endpoints_detected": 0,
+            "api_files_generated": [],
+            "validation": None,
         }
 
         try:
-            # 1. Configure frontend API URL
+            # ============================================
+            # PHASE 1: Smart Integration (NEW)
+            # ============================================
+            if smart_integration:
+                # 1. Detect backend API endpoints
+                logger.info("[FullstackIntegrator] Phase 1: Detecting backend endpoints...")
+                endpoint_result = await self._detect_backend_endpoints()
+                if endpoint_result["endpoints"]:
+                    results["endpoints_detected"] = len(endpoint_result["endpoints"])
+                    results["actions"].append(f"Detected {len(endpoint_result['endpoints'])} backend endpoints")
+                    results["detected_endpoints"] = endpoint_result["endpoints"]
+
+                    # 2. Generate typed frontend API service
+                    logger.info("[FullstackIntegrator] Phase 2: Generating typed API service...")
+                    api_gen_result = await self._generate_typed_api_service(
+                        endpoints=endpoint_result["endpoints"],
+                        schemas=endpoint_result.get("schemas", {}),
+                    )
+                    if api_gen_result["success"]:
+                        results["api_files_generated"] = api_gen_result["files_created"]
+                        results["actions"].append(f"Generated {len(api_gen_result['files_created'])} typed API files")
+
+                    # 3. Validate integration
+                    logger.info("[FullstackIntegrator] Phase 3: Validating integration...")
+                    validation_result = await self._validate_integration(endpoint_result["endpoints"])
+                    results["validation"] = validation_result
+                    if validation_result["success"]:
+                        matched = len(validation_result.get("matched_endpoints", []))
+                        unmatched = len(validation_result.get("unmatched_calls", []))
+                        results["actions"].append(f"Validation: {matched} matched, {unmatched} unmatched endpoints")
+                else:
+                    logger.warning("[FullstackIntegrator] No backend endpoints detected, skipping smart integration")
+
+            # ============================================
+            # PHASE 2: Basic Configuration (EXISTING)
+            # ============================================
+            logger.info("[FullstackIntegrator] Phase 4: Configuring basic settings...")
+
+            # 4. Configure frontend API URL
             api_configured = await self._configure_frontend_api()
             if api_configured:
                 results["actions"].append("Configured frontend API base URL")
 
-            # 2. Setup proxy configuration
+            # 5. Setup proxy configuration
             proxy_configured = await self._setup_proxy()
             if proxy_configured:
                 results["actions"].append("Setup development proxy")
 
-            # 3. Create/update .env files
+            # 6. Create/update .env files
             env_configured = await self._configure_env_files()
             if env_configured:
                 results["actions"].append("Created/updated .env files")
 
-            # 4. Configure CORS on backend
+            # 7. Configure CORS on backend
             cors_configured = await self._configure_cors()
             if cors_configured:
                 results["actions"].append("Configured CORS on backend")
 
-            # 5. Create API service if missing
-            api_service_created = await self._ensure_api_service()
-            if api_service_created:
-                results["actions"].append("Created API service file")
+            # 8. Create API service if missing (fallback if smart integration didn't generate one)
+            if not results["api_files_generated"]:
+                api_service_created = await self._ensure_api_service()
+                if api_service_created:
+                    results["actions"].append("Created fallback API service file")
 
-            logger.info(f"[FullstackIntegrator] Integration complete: {results['actions']}")
+            logger.info(f"[FullstackIntegrator] Integration complete: {len(results['actions'])} actions performed")
 
         except Exception as e:
-            logger.error(f"[FullstackIntegrator] Integration error: {e}")
+            logger.error(f"[FullstackIntegrator] Integration error: {e}", exc_info=True)
             results["success"] = False
             results["error"] = str(e)
 
         return results
+
+    async def _detect_backend_endpoints(self) -> Dict[str, Any]:
+        """Detect API endpoints from backend code"""
+        try:
+            detector = EndpointDetector(self.project_path)
+            result = await detector.detect()
+            logger.info(f"[FullstackIntegrator] Detected {len(result.get('endpoints', []))} endpoints")
+            return result
+        except Exception as e:
+            logger.error(f"[FullstackIntegrator] Endpoint detection failed: {e}")
+            return {"endpoints": [], "schemas": {}}
+
+    async def _generate_typed_api_service(
+        self,
+        endpoints: List[Dict[str, Any]],
+        schemas: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Generate typed frontend API service from detected endpoints"""
+        try:
+            generator = APIServiceGenerator(
+                frontend_path=self.frontend_path,
+                endpoints=endpoints,
+                schemas=schemas,
+                backend_port=self.backend_port,
+                frontend_type=self.frontend_type,
+            )
+            result = await generator.generate()
+            logger.info(f"[FullstackIntegrator] Generated {len(result.get('files_created', []))} API files")
+            return result
+        except Exception as e:
+            logger.error(f"[FullstackIntegrator] API service generation failed: {e}")
+            return {"success": False, "files_created": [], "errors": [str(e)]}
+
+    async def _validate_integration(self, backend_endpoints: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Validate that frontend API calls match backend endpoints"""
+        try:
+            validator = IntegrationValidator(
+                project_path=self.project_path,
+                backend_endpoints=backend_endpoints,
+            )
+            result = await validator.validate()
+            logger.info(f"[FullstackIntegrator] Validation: {result.get('statistics', {})}")
+            return result
+        except Exception as e:
+            logger.error(f"[FullstackIntegrator] Integration validation failed: {e}")
+            return {"success": False, "error": str(e)}
 
     async def _configure_frontend_api(self) -> bool:
         """Configure the API base URL in frontend"""

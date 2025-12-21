@@ -43,17 +43,37 @@ from threading import Lock
 from app.core.config import settings
 from app.core.logging_config import logger
 
-# Sandbox public URL for preview (use sandbox EC2 public IP/domain in production)
+# Preview URL Configuration
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip('/')
 SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
 
 
-def _get_preview_url(port: int) -> str:
-    """Generate preview URL using sandbox public URL or localhost fallback"""
+def _get_preview_url(port: int, project_id: str = None) -> str:
+    """
+    Generate preview URL - works in both local and production.
+
+    Args:
+        port: The container port
+        project_id: Optional project ID for API-based preview URL (production)
+    """
+    # Check if we're in production
+    is_production = (
+        ENVIRONMENT == "production" or
+        (FRONTEND_URL and "localhost" not in FRONTEND_URL and "127.0.0.1" not in FRONTEND_URL)
+    )
+
+    # Production with project_id: Use domain-based API preview proxy
+    if is_production and project_id:
+        return f"{FRONTEND_URL}/api/v1/preview/{project_id}/"
+
+    # Fallback to IP:port
     if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
         base = SANDBOX_PUBLIC_URL.rstrip('/')
         if ':' in base.split('/')[-1]:
             base = ':'.join(base.rsplit(':', 1)[:-1])
         return f"{base}:{port}"
+
     return f"http://localhost:{port}"
 
 
