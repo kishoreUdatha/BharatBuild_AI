@@ -246,6 +246,8 @@ resource "aws_ecs_task_definition" "backend" {
       # Sandbox Server Configuration (EC2 Docker host)
       { name = "SANDBOX_DOCKER_HOST", value = var.sandbox_use_spot ? (length(aws_spot_instance_request.sandbox) > 0 ? "tcp://${aws_spot_instance_request.sandbox[0].private_ip}:2375" : "") : (length(aws_instance.sandbox) > 0 ? "tcp://${aws_instance.sandbox[0].private_ip}:2375" : "") },
       { name = "SANDBOX_PREVIEW_BASE_URL", value = var.domain_name != "" ? "https://${var.domain_name}/sandbox" : "http://${aws_lb.main.dns_name}/sandbox" },
+      # Sandbox workspace path (Linux path for ECS)
+      { name = "SANDBOX_PATH", value = "/tmp/sandbox/workspace" },
       # RESET_DB - Set to true to drop and recreate all tables (one-time use)
       { name = "RESET_DB", value = "false" },
       # OAuth Redirect URIs (must match frontend callback pages)

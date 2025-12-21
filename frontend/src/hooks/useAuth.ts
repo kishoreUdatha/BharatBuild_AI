@@ -113,15 +113,23 @@ export function useAuth(): UseAuthReturn {
     }
   }, [loadUser])
 
-  // Logout function
+  // Logout function - clears ALL user-specific localStorage data
   const logout = useCallback(() => {
+    // Auth tokens
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
     localStorage.removeItem('user')
+    // Theme preferences
     localStorage.removeItem('theme')
-    // Clear project store to prevent showing previous user's projects
+    localStorage.removeItem('admin-theme')
+    // Project & chat stores (Zustand persisted state)
     localStorage.removeItem('bharatbuild-project-storage')
     localStorage.removeItem('bharatbuild-chat-storage')
+    // Current project ID
+    localStorage.removeItem('bharatbuild_current_project_id')
+    // Other user data
+    localStorage.removeItem('paper_prompt')
+    localStorage.removeItem('offline_queue_bharatbuild')
     setIsAuthenticated(false)
     setUser(null)
     router.push('/')

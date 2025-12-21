@@ -418,6 +418,18 @@ async def get_project_metadata(
             detail="Project not found"
         )
 
+    # RESTORE FILES TO EC2 SANDBOX IF NEEDED
+    # When user selects project from dropdown, ensure files exist on EC2 sandbox for "Run"
+    from app.services.unified_storage import unified_storage
+    user_id_str = str(current_user.id)
+    if not await unified_storage.sandbox_exists(project_id, user_id_str):
+        logger.info(f"[Metadata] Sandbox missing for {project_id}, restoring to EC2 from DB+S3")
+        try:
+            restored = await unified_storage.restore_project_from_database(project_id, user_id_str)
+            logger.info(f"[Metadata] Restored {len(restored)} files to EC2 sandbox")
+        except Exception as e:
+            logger.warning(f"[Metadata] Restore to EC2 failed: {e}")
+
     # Get files from database (ProjectFile table) - METADATA ONLY, NO CONTENT
     # Cast column to String(36) to handle UUID/VARCHAR mismatch
     db_result = await db.execute(
