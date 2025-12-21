@@ -489,7 +489,7 @@ NGINXCONFIG
 # =============================================================================
 
 resource "aws_lb_target_group" "sandbox" {
-  name        = "${var.app_name}-sandbox-tg"
+  name_prefix = "sbox-"  # Use prefix for create_before_destroy compatibility
   port        = 8080  # Nginx reverse proxy port
   protocol    = "HTTP"
   vpc_id      = aws_vpc.main.id
@@ -509,6 +509,10 @@ resource "aws_lb_target_group" "sandbox" {
 
   tags = {
     Name = "${var.app_name}-sandbox-tg"
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 

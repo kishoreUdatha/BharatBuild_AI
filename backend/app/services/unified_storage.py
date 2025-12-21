@@ -204,25 +204,29 @@ class UnifiedStorageService:
         content: str,
         user_id: Optional[str] = None
     ) -> bool:
-        """Write a file to the sandbox workspace"""
+        """Write a file to the sandbox workspace (EC2 sandbox if SANDBOX_DOCKER_HOST is set)"""
         try:
-            sandbox = self.get_sandbox_path(project_id, user_id)
-            full_path = sandbox / file_path
-
             # Prevent path traversal
             if '..' in file_path:
                 raise ValueError("Path traversal detected")
 
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-
             # SANITIZE XML FILES: Ensure <?xml declaration is on line 1
-            # XML files MUST NOT have whitespace before the XML declaration
             if file_path.endswith('.xml') or file_path.endswith('.pom'):
                 content = self._sanitize_xml_content(content)
             else:
                 # SANITIZE ALL SOURCE FILES: Remove leading empty lines
-                # AI often generates files with empty first line - content should start from line 1
                 content = self._sanitize_source_content(content, file_path)
+
+            # Check if using remote EC2 sandbox
+            sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+            if sandbox_docker_host:
+                # Write to REMOTE EC2 sandbox using Docker
+                return await self._write_to_remote_sandbox(project_id, file_path, content, user_id)
+
+            # Local sandbox (ECS or development)
+            sandbox = self.get_sandbox_path(project_id, user_id)
+            full_path = sandbox / file_path
+            full_path.parent.mkdir(parents=True, exist_ok=True)
 
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
@@ -231,6 +235,53 @@ class UnifiedStorageService:
             return True
         except Exception as e:
             logger.error(f"Failed to write to sandbox: {e}")
+            return False
+
+    async def _write_to_remote_sandbox(
+        self,
+        project_id: str,
+        file_path: str,
+        content: str,
+        user_id: Optional[str] = None
+    ) -> bool:
+        """Write a file to REMOTE EC2 sandbox using Docker container"""
+        import docker
+        import base64
+
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+
+        # Build workspace path on EC2
+        if user_id:
+            workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}"
+        else:
+            workspace_path = f"/tmp/sandbox/workspace/{project_id}"
+
+        full_path = f"{workspace_path}/{file_path}"
+        dir_path = "/".join(full_path.rsplit("/", 1)[:-1]) if "/" in file_path else workspace_path
+
+        try:
+            # Connect to remote Docker on EC2
+            docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+
+            # Encode content as base64 to handle special characters
+            content_b64 = base64.b64encode(content.encode('utf-8')).decode('ascii')
+
+            # Create directory and write file using alpine container
+            write_script = f"mkdir -p {dir_path} && echo '{content_b64}' | base64 -d > {full_path}"
+
+            docker_client.containers.run(
+                image="alpine:latest",
+                command=f"sh -c \"{write_script}\"",
+                volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                remove=True,
+                detach=False,
+            )
+
+            logger.debug(f"[RemoteWrite] Wrote to EC2 sandbox: {project_id}/{file_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"[RemoteWrite] Failed to write to EC2 sandbox: {e}")
             return False
 
     async def read_from_sandbox(
@@ -327,8 +378,29 @@ class UnifiedStorageService:
             return False
 
     async def sandbox_exists(self, project_id: str, user_id: Optional[str] = None) -> bool:
-        """Check if sandbox exists for a project"""
+        """Check if sandbox exists for a project (on EC2 if SANDBOX_DOCKER_HOST is set)"""
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+        if sandbox_docker_host:
+            return await self._sandbox_exists_remote(project_id, user_id)
         return self.get_sandbox_path(project_id, user_id).exists()
+
+    async def _sandbox_exists_remote(self, project_id: str, user_id: Optional[str] = None) -> bool:
+        """Check if sandbox exists on REMOTE EC2"""
+        import docker
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+        workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}" if user_id else f"/tmp/sandbox/workspace/{project_id}"
+        try:
+            docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+            result = docker_client.containers.run(
+                image="alpine:latest",
+                command=f"sh -c '[ -d {workspace_path} ] && [ \"$(ls -A {workspace_path})\" ] && echo EXISTS || echo MISSING'",
+                volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                remove=True, detach=False,
+            )
+            return result.decode().strip() == "EXISTS" if result else False
+        except Exception as e:
+            logger.warning(f"[RemoteCheck] Failed to check EC2 sandbox: {e}")
+            return False
 
     # ==================== LAYER 2: S3/MINIO ====================
 
@@ -874,6 +946,12 @@ class UnifiedStorageService:
             List of restored files
         """
         try:
+            # Check if using remote sandbox - files must be restored ON the sandbox EC2
+            sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+            if sandbox_docker_host:
+                logger.info(f"[Layer3-DB] Remote sandbox detected, restoring to remote sandbox for {project_id}")
+                return await self._restore_to_remote_sandbox(project_id, user_id)
+
             from app.core.database import AsyncSessionLocal
             from app.models.project_file import ProjectFile
             from sqlalchemy import select
@@ -927,6 +1005,48 @@ class UnifiedStorageService:
 
         except Exception as e:
             logger.error(f"[Layer3-DB] Failed to restore project {project_id}: {e}")
+            return []
+
+    async def _restore_to_remote_sandbox(self, project_id: str, user_id: Optional[str] = None) -> List[FileInfo]:
+        """Restore files to REMOTE sandbox EC2 using Docker container with AWS CLI."""
+        import docker
+        from app.core.database import AsyncSessionLocal
+        from app.models.project_file import ProjectFile
+        from sqlalchemy import select, cast, String as SQLString
+
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+        s3_bucket = os.environ.get("AWS_S3_BUCKET", "bharatbuild-storage-930030325663")
+        aws_region = os.environ.get("AWS_REGION", "ap-south-1")
+        workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}" if user_id else f"/tmp/sandbox/workspace/{project_id}"
+
+        try:
+            project_uuid = str(UUID(project_id))
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(ProjectFile).where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid).where(ProjectFile.is_folder == False)
+                )
+                file_records = result.scalars().all()
+
+            if not file_records:
+                return []
+
+            docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+            restore_commands = [f"mkdir -p {workspace_path}"]
+            for f in file_records:
+                if f.s3_key:
+                    fp = f"{workspace_path}/{f.path}"
+                    dp = "/".join(fp.rsplit("/", 1)[:-1]) if "/" in f.path else workspace_path
+                    restore_commands.extend([f"mkdir -p {dp}", f"aws s3 cp s3://{s3_bucket}/{f.s3_key} {fp}"])
+
+            logger.info(f"[RemoteRestore] Restoring {len(file_records)} files to {workspace_path}")
+            docker_client.containers.run(
+                "amazon/aws-cli:latest", f"sh -c '{' && '.join(restore_commands)}'",
+                volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                environment={"AWS_REGION": aws_region}, remove=True, detach=False, network_mode="host"
+            )
+            return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in file_records if f.s3_key]
+        except Exception as e:
+            logger.error(f"[RemoteRestore] Failed: {e}", exc_info=True)
             return []
 
 
