@@ -543,9 +543,14 @@ export const useProjectStore = create<ProjectState>()(
 
               const files = convertTree(data.tree)
 
-              // Check if project title is a placeholder
+              // Check if project title is a placeholder (e.g., "New Project", "Project abc123-uuid...")
               const isPlaceholderTitle = (title: string | null | undefined): boolean => {
                 if (!title) return true
+                const trimmed = title.trim().toLowerCase()
+                // Check for common placeholder names
+                if (trimmed === 'new project' || trimmed === 'untitled' || trimmed === 'untitled project') {
+                  return true
+                }
                 return /^Project\s+(?:[a-f0-9-]{8,}|project-\d+)/i.test(title)
               }
 

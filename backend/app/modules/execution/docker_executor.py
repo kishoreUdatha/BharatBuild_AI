@@ -3221,12 +3221,42 @@ class DockerExecutor:
 
         This is the PERMANENT solution that automatically fixes ALL errors.
         """
+        # VERSION MARKER - used to verify deployment
+        yield "🚀 BharatBuild Executor v2.1 (Remote Docker Support)\n"
+
+        # Check if using remote Docker (EC2 sandbox) - files are on EC2, not local ECS
+        sandbox_docker_host = os.getenv("SANDBOX_DOCKER_HOST")
+        is_remote_docker = bool(sandbox_docker_host)
+
+        # Debug: Log environment status
+        logger.info(f"[SmartRun:{project_id}] SANDBOX_DOCKER_HOST={sandbox_docker_host}, is_remote={is_remote_docker}")
+        yield f"  🔧 Environment: {'EC2 Sandbox' if is_remote_docker else 'Local Docker'}\n"
+
+        if is_remote_docker:
+            logger.info(f"[SmartRun:{project_id}] Using remote Docker: {sandbox_docker_host}")
+            yield "🐳 Running on remote Docker sandbox...\n"
+
         # ===== SMART PROJECT ANALYSIS: Proactive detection & auto-fix =====
         # This runs BEFORE anything else to understand the project and prevent errors
         yield "🧠 Analyzing project structure...\n"
 
         try:
-            # Analyze project proactively
+            # Skip local file analysis when using remote Docker (files are on EC2)
+            if is_remote_docker:
+                # Use container_executor for remote execution
+                logger.info(f"[SmartRun:{project_id}] Skipping local analysis (files on remote EC2)")
+                yield "  📁 Remote sandbox mode - using container executor\n"
+
+                # Delegate to container_executor which handles remote Docker
+                async for output in container_executor.run_project(
+                    project_id=project_id,
+                    project_path=str(project_path),
+                    user_id=user_id
+                ):
+                    yield output
+                return
+
+            # Analyze project proactively (only for local Docker)
             project_structure = await smart_analyzer.analyze_project(
                 project_id=project_id,
                 user_id=user_id or "anonymous",

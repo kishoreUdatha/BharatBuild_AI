@@ -376,15 +376,52 @@ class DockerSandboxManager:
                     logger.info(f"Connecting to remote Docker host: {SANDBOX_DOCKER_HOST}")
                     self._client = docker.DockerClient(base_url=SANDBOX_DOCKER_HOST)
                 else:
-                    # Local Docker (for development)
-                    self._client = docker.from_env()
+                    # Local Docker - try multiple connection methods
+                    import platform
+                    system = platform.system()
+
+                    # Try explicit paths first to avoid DOCKER_HOST env issues
+                    docker_urls = []
+                    if system == "Windows":
+                        docker_urls = [
+                            "npipe:////./pipe/docker_engine",
+                            "tcp://localhost:2375",
+                        ]
+                    else:
+                        docker_urls = [
+                            "unix:///var/run/docker.sock",
+                            "unix://var/run/docker.sock",
+                            "tcp://localhost:2375",
+                        ]
+
+                    for url in docker_urls:
+                        try:
+                            logger.debug(f"Trying Docker URL: {url}")
+                            self._client = docker.DockerClient(base_url=url)
+                            self._client.ping()
+                            logger.info(f"Connected to Docker via: {url}")
+                            break
+                        except Exception as url_err:
+                            logger.debug(f"Docker URL {url} failed: {url_err}")
+                            self._client = None
+                            continue
+
+                    # Fallback to from_env() if explicit URLs failed
+                    if self._client is None:
+                        logger.debug("Trying docker.from_env() as fallback")
+                        docker_host = os.getenv("DOCKER_HOST", "")
+                        logger.debug(f"DOCKER_HOST env: {docker_host}")
+                        self._client = docker.from_env()
 
                 self._ensure_network()
                 self._initialized = True
                 logger.info("Docker client initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize Docker client: {e}")
-                raise RuntimeError(f"Docker not available: {e}")
+                # Provide more helpful error message
+                docker_host = os.getenv("DOCKER_HOST", "not set")
+                sandbox_host = SANDBOX_DOCKER_HOST or "not set"
+                raise RuntimeError(f"Docker not available: {e}. DOCKER_HOST={docker_host}, SANDBOX_DOCKER_HOST={sandbox_host}")
         return self._client
 
     def _ensure_network(self):

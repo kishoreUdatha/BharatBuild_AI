@@ -97,9 +97,39 @@ class DockerSandboxService:
         """Lazy initialization of Docker client"""
         if self._docker_client is None:
             try:
-                self._docker_client = docker.from_env()
-                # Test connection
-                self._docker_client.ping()
+                # Check for remote Docker host (ECS -> EC2 sandbox)
+                sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+                if sandbox_docker_host:
+                    logger.info(f"Connecting to remote Docker host: {sandbox_docker_host}")
+                    self._docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+                    self._docker_client.ping()
+                    logger.info("Docker client initialized via SANDBOX_DOCKER_HOST")
+                else:
+                    # Local Docker - try explicit URLs first
+                    import platform
+                    system = platform.system()
+
+                    docker_urls = []
+                    if system == "Windows":
+                        docker_urls = ["npipe:////./pipe/docker_engine", "tcp://localhost:2375"]
+                    else:
+                        docker_urls = ["unix:///var/run/docker.sock", "tcp://localhost:2375"]
+
+                    for url in docker_urls:
+                        try:
+                            self._docker_client = docker.DockerClient(base_url=url)
+                            self._docker_client.ping()
+                            logger.info(f"Docker client connected via: {url}")
+                            break
+                        except Exception:
+                            self._docker_client = None
+                            continue
+
+                    # Fallback to from_env
+                    if self._docker_client is None:
+                        self._docker_client = docker.from_env()
+                        self._docker_client.ping()
+
             except Exception as e:
                 logger.error(f"Failed to connect to Docker: {e}")
                 raise RuntimeError(f"Docker not available: {e}")
