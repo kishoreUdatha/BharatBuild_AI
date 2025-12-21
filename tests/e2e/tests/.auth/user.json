@@ -5,24 +5,16 @@
       "origin": "http://localhost:3000",
       "localStorage": [
         {
-          "name": "theme",
-          "value": "dark"
-        },
-        {
-          "name": "bharatbuild-project-storage",
-          "value": "{\"state\":{\"currentProject\":null,\"openTabs\":[],\"activeTabPath\":null},\"version\":0}"
-        },
-        {
-          "name": "access_token",
-          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhYjM0M2JmOC1kYzdiLTQwODktOGRmNi05ZjNjYWIwY2E1YjQiLCJlbWFpbCI6ImUyZV90ZXN0X3VzZXJAZXhhbXBsZS5jb20iLCJyb2xlIjoiZGV2ZWxvcGVyIiwiZXhwIjoxNzY2MDkwMTM0LCJ0eXBlIjoiYWNjZXNzIn0.ODF1HEeX3YKYX106DvoaqO0ExkD-yf0ARh-mb3ieE3E"
-        },
-        {
           "name": "user",
-          "value": "{\"id\":\"ab343bf8-dc7b-4089-8df6-9f3cab0ca5b4\",\"email\":\"e2e_test_user@example.com\",\"username\":null,\"full_name\":\"E2E Test User\",\"phone\":null,\"role\":\"developer\",\"is_active\":true,\"is_verified\":false,\"created_at\":\"2025-12-18T19:44:39.176718\",\"avatar_url\":null,\"oauth_provider\":null,\"roll_number\":null,\"college_name\":null,\"university_name\":null,\"department\":null,\"course\":null,\"year_semester\":null,\"batch\":null,\"guide_name\":null,\"guide_designation\":null,\"hod_name\":null}"
+          "value": "{\"id\":\"f34782a4-ac22-4f92-8ca0-da0b1b92c542\",\"email\":\"e2e_test_user@example.com\",\"username\":null,\"full_name\":\"E2E Test User\",\"phone\":null,\"role\":\"admin\",\"is_active\":true,\"is_verified\":false,\"created_at\":\"2025-12-19T16:18:30.315040\",\"avatar_url\":null,\"oauth_provider\":null,\"roll_number\":null,\"college_name\":null,\"university_name\":null,\"department\":null,\"course\":null,\"year_semester\":null,\"batch\":null,\"guide_name\":null,\"guide_designation\":null,\"hod_name\":null}"
         },
         {
           "name": "refresh_token",
-          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhYjM0M2JmOC1kYzdiLTQwODktOGRmNi05ZjNjYWIwY2E1YjQiLCJlbWFpbCI6ImUyZV90ZXN0X3VzZXJAZXhhbXBsZS5jb20iLCJyb2xlIjoiZGV2ZWxvcGVyIiwiZXhwIjoxNzY2NjkzMTM0LCJ0eXBlIjoicmVmcmVzaCJ9.SfDd6Os0JBVblb0latP8yC_n8_i1g5vEZh84e5tgCC8"
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmMzQ3ODJhNC1hYzIyLTRmOTItOGNhMC1kYTBiMWI5MmM1NDIiLCJlbWFpbCI6ImUyZV90ZXN0X3VzZXJAZXhhbXBsZS5jb20iLCJyb2xlIjoiYWRtaW4iLCJleHAiOjE3NjY3NjY5MTcsInR5cGUiOiJyZWZyZXNoIn0.vfpCQA7Hv70oTwi1BUiH_0ynC2R0T1-y3GBB_E0-kWg"
+        },
+        {
+          "name": "access_token",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmMzQ3ODJhNC1hYzIyLTRmOTItOGNhMC1kYTBiMWI5MmM1NDIiLCJlbWFpbCI6ImUyZV90ZXN0X3VzZXJAZXhhbXBsZS5jb20iLCJyb2xlIjoiYWRtaW4iLCJleHAiOjE3NjYxNjM5MTcsInR5cGUiOiJhY2Nlc3MifQ.WO1epo5mkHbFvUfWcIIoa4Nb6NqmvtLH2ogSvOiCWFI"
         }
       ]
     }

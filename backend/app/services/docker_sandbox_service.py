@@ -19,6 +19,20 @@ from app.services.sandbox_db_service import SandboxDBService
 from app.models.sandbox import SandboxStatus
 from app.core.logging_config import logger
 
+# Sandbox public URL for preview (use sandbox EC2 public IP/domain in production)
+SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
+
+
+def get_preview_url(port: int) -> str:
+    """Generate preview URL using sandbox public URL or localhost fallback"""
+    if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
+        base = SANDBOX_PUBLIC_URL.rstrip('/')
+        # If base already has a port, replace it
+        if ':' in base.split('/')[-1]:
+            base = ':'.join(base.rsplit(':', 1)[:-1])
+        return f"{base}:{port}"
+    return f"http://localhost:{port}"
+
 
 @dataclass
 class ContainerConfig:
@@ -174,7 +188,7 @@ class DockerSandboxService:
                 status=SandboxStatus.RUNNING
             )
 
-            preview_url = f"http://localhost:{host_port}"
+            preview_url = get_preview_url(host_port)
 
             logger.info(f"Created sandbox container {container_name} on port {host_port}")
 
