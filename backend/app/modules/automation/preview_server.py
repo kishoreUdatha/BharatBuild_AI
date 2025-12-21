@@ -14,22 +14,39 @@ from dataclasses import dataclass, field
 
 from app.core.logging_config import logger
 
-# Sandbox preview base URL - path-based (e.g., https://bharatbuild.ai/sandbox)
-# Falls back to SANDBOX_PUBLIC_URL for IP:port based URLs
+# Preview URL Configuration
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip('/')
 SANDBOX_PREVIEW_BASE_URL = os.getenv("SANDBOX_PREVIEW_BASE_URL", "")
 SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL", "http://localhost")
 
 
-def get_preview_url(port: int) -> str:
+def get_preview_url(port: int, project_id: str = None) -> str:
     """
     Generate preview URL.
 
-    Supports two modes:
-    1. Path-based (preferred): https://bharatbuild.ai/sandbox/10000
-       - Set SANDBOX_PREVIEW_BASE_URL=https://bharatbuild.ai/sandbox
-    2. IP:port based (fallback): http://13.202.228.249:10000
-       - Set SANDBOX_PUBLIC_URL=http://13.202.228.249
+    Works in both local and production:
+    - Local: http://localhost:{port}
+    - Production with project_id: https://bharatbuild.ai/api/v1/preview/{project_id}/
+    - Production without project_id: Uses SANDBOX_PUBLIC_URL with port
+
+    Args:
+        port: The container port
+        project_id: Optional project ID for API-based preview URL (production)
+
+    Returns:
+        Preview URL string
     """
+    # Check if we're in production
+    is_production = (
+        ENVIRONMENT == "production" or
+        (FRONTEND_URL and "localhost" not in FRONTEND_URL and "127.0.0.1" not in FRONTEND_URL)
+    )
+
+    # Production with project_id: Use domain-based API preview proxy
+    if is_production and project_id:
+        return f"{FRONTEND_URL}/api/v1/preview/{project_id}/"
+
     # Prefer path-based URL if SANDBOX_PREVIEW_BASE_URL is set
     if SANDBOX_PREVIEW_BASE_URL and SANDBOX_PREVIEW_BASE_URL != "http://localhost":
         base = SANDBOX_PREVIEW_BASE_URL.rstrip('/')

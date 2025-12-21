@@ -2402,25 +2402,115 @@ class DynamicOrchestrator:
                 except Exception as token_err:
                     logger.warning(f"[TokenTracker] Failed to save token usage: {token_err}")
 
+            # ============================================
+            # POST-GENERATION: Smart Fullstack Integration
+            # ============================================
+            integration_result = None
+            if len(context.files_created) > 0:
+                try:
+                    # Check if this is a fullstack project (has both frontend and backend folders)
+                    from pathlib import Path
+                    project_path = Path(self._unified_storage.get_sandbox_path(project_id, user_id))
+                    frontend_path = project_path / "frontend"
+                    backend_path = project_path / "backend"
+
+                    if frontend_path.exists() and backend_path.exists():
+                        logger.info(f"[SmartIntegration] Detected fullstack project, running smart integration...")
+
+                        yield OrchestratorEvent(
+                            type=EventType.STATUS,
+                            data={
+                                "message": "Running smart fullstack integration...",
+                                "phase": "integration"
+                            }
+                        )
+
+                        from app.services.fullstack_integrator import FullstackIntegrator
+
+                        integrator = FullstackIntegrator(
+                            project_path=project_path,
+                            frontend_port=3000,
+                            backend_port=4000
+                        )
+                        integration_result = await integrator.integrate(smart_integration=True)
+
+                        if integration_result.get("success"):
+                            logger.info(f"[SmartIntegration] Integration complete: {integration_result.get('actions', [])}")
+
+                            # Report detected endpoints
+                            endpoints_count = integration_result.get("endpoints_detected", 0)
+                            if endpoints_count > 0:
+                                yield OrchestratorEvent(
+                                    type=EventType.STATUS,
+                                    data={
+                                        "message": f"Detected {endpoints_count} backend endpoints",
+                                        "endpoints_detected": endpoints_count,
+                                        "phase": "integration"
+                                    }
+                                )
+
+                            # Report generated API files
+                            api_files = integration_result.get("api_files_generated", [])
+                            if api_files:
+                                yield OrchestratorEvent(
+                                    type=EventType.STATUS,
+                                    data={
+                                        "message": f"Generated {len(api_files)} typed API service files",
+                                        "files_generated": api_files,
+                                        "phase": "integration"
+                                    }
+                                )
+
+                            # Report validation results
+                            validation = integration_result.get("validation")
+                            if validation:
+                                stats = validation.get("statistics", {})
+                                yield OrchestratorEvent(
+                                    type=EventType.STATUS,
+                                    data={
+                                        "message": f"Integration validation: {stats.get('errors', 0)} errors, {stats.get('warnings', 0)} warnings",
+                                        "validation": stats,
+                                        "phase": "integration"
+                                    }
+                                )
+                        else:
+                            logger.warning(f"[SmartIntegration] Integration had issues: {integration_result.get('error')}")
+                    else:
+                        logger.info(f"[SmartIntegration] Not a fullstack project (frontend: {frontend_path.exists()}, backend: {backend_path.exists()})")
+
+                except Exception as integration_err:
+                    logger.warning(f"[SmartIntegration] Failed to run smart integration: {integration_err}")
+
             # Workflow complete - include session_id for ZIP download
+            complete_data = {
+                "message": "Workflow completed successfully",
+                "files_created": len(context.files_created),
+                "files_modified": len(context.files_modified),
+                "commands_executed": len(context.commands_executed),
+                "errors": len(context.errors),
+                "session_id": session_id,  # For ZIP download
+                "download_url": f"/api/v1/download/session/{session_id}" if session_id else None,
+                "s3_zip_key": s3_zip_key,  # S3 download key
+                "token_usage": {
+                    "total": context.total_tokens,
+                    "input": context.total_input_tokens,
+                    "output": context.total_output_tokens,
+                    "by_model": context.token_usage_by_model
+                }
+            }
+
+            # Add integration results if available
+            if integration_result:
+                complete_data["integration"] = {
+                    "success": integration_result.get("success", False),
+                    "endpoints_detected": integration_result.get("endpoints_detected", 0),
+                    "api_files_generated": len(integration_result.get("api_files_generated", [])),
+                    "validation": integration_result.get("validation", {}).get("statistics"),
+                }
+
             yield OrchestratorEvent(
                 type=EventType.COMPLETE,
-                data={
-                    "message": "Workflow completed successfully",
-                    "files_created": len(context.files_created),
-                    "files_modified": len(context.files_modified),
-                    "commands_executed": len(context.commands_executed),
-                    "errors": len(context.errors),
-                    "session_id": session_id,  # For ZIP download
-                    "download_url": f"/api/v1/download/session/{session_id}" if session_id else None,
-                    "s3_zip_key": s3_zip_key,  # S3 download key
-                    "token_usage": {
-                        "total": context.total_tokens,
-                        "input": context.total_input_tokens,
-                        "output": context.total_output_tokens,
-                        "by_model": context.token_usage_by_model
-                    }
-                }
+                data=complete_data
             )
 
             # Mark checkpoint as completed

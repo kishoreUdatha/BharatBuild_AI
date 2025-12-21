@@ -17,13 +17,28 @@ import { useErrorCollector } from '@/hooks/useErrorCollector'
 import { usePlanStatus } from '@/hooks/usePlanStatus'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
-// Sandbox preview URL base (for production, this should be the sandbox EC2 public IP)
+// Sandbox preview URL base (for local development, production uses domain-based URLs from backend)
 const SANDBOX_PREVIEW_BASE = process.env.NEXT_PUBLIC_SANDBOX_URL || 'http://localhost'
 
-// Helper to construct preview URL with correct base
+// Helper to construct preview URL with correct base (fallback for local development)
 const getPreviewUrl = (port: number | string): string => {
   const base = SANDBOX_PREVIEW_BASE.replace(/:\d+$/, '').replace(/\/$/, '')
   return `${base}:${port}`
+}
+
+// Parse _PREVIEW_URL_ marker from backend output (production uses domain-based URLs)
+const parsePreviewUrl = (output: string): string | null => {
+  // Match _PREVIEW_URL_:URL pattern (new format)
+  const previewMatch = output.match(/_PREVIEW_URL_:(.+)/)
+  if (previewMatch && previewMatch[1]) {
+    return previewMatch[1].trim()
+  }
+  // Legacy format: __SERVER_STARTED__:URL
+  const legacyMatch = output.match(/__SERVER_STARTED__:(.+)/)
+  if (legacyMatch && legacyMatch[1]) {
+    return legacyMatch[1].trim()
+  }
+  return null
 }
 
 // COST OPTIMIZATION: Reduced from 10 to 3 (with 3 inner iterations = max 9 API calls)
@@ -204,7 +219,17 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
     console.log('[DetectServer] Checking output:', cleanOutput.substring(0, 100))
 
-    // Patterns to detect server URL and extract port
+    // FIRST: Check for _PREVIEW_URL_ marker from backend (production domain-based URLs)
+    const backendUrl = parsePreviewUrl(cleanOutput)
+    if (backendUrl) {
+      console.log('[DetectServer] Found _PREVIEW_URL_ marker:', backendUrl)
+      setPreviewUrl(backendUrl)
+      setStatus('running')
+      onPreviewUrlChange?.(backendUrl)
+      return true
+    }
+
+    // Patterns to detect server URL and extract port (fallback for local development)
     const serverPatterns = [
       /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)/i,
       /running\s+(?:on|at)\s+(?:port\s+)?(\d+)/i,
@@ -226,7 +251,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       /➜\s+Local:/i,                    // Vite arrow format
     ]
 
-    // FIRST try to extract port from output (more specific patterns)
+    // Try to extract port from output (for local development)
     for (const pattern of serverPatterns) {
       const match = cleanOutput.match(pattern)
       if (match && match[1]) {
