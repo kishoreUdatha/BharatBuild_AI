@@ -6,12 +6,27 @@ Integrates with LogBus to collect build/dev server logs.
 """
 
 import asyncio
+import os
 import re
 from pathlib import Path
 from typing import Dict, Optional, Callable
 from dataclasses import dataclass, field
 
 from app.core.logging_config import logger
+
+# Sandbox public URL for preview (use sandbox EC2 public IP/domain in production)
+SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
+
+
+def get_preview_url(port: int) -> str:
+    """Generate preview URL using sandbox public URL or localhost fallback"""
+    if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
+        base = SANDBOX_PUBLIC_URL.rstrip('/')
+        # Remove any existing port from the base URL
+        if ':' in base.split('/')[-1]:
+            base = ':'.join(base.rsplit(':', 1)[:-1])
+        return f"{base}:{port}"
+    return f"http://localhost:{port}"
 
 
 @dataclass
@@ -112,7 +127,7 @@ class PreviewServerManager:
                 stderr=asyncio.subprocess.STDOUT
             )
 
-            url = f"http://localhost:{port}"
+            url = get_preview_url(port)
 
             # Start background task to collect logs and send to LogBus
             log_task = asyncio.create_task(
