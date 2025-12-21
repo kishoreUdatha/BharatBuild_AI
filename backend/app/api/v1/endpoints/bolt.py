@@ -756,11 +756,11 @@ async def get_project_files(
             )
 
         # Step 4: Fallback to database (Layer 4 - ProjectFile table)
-        # Use string comparison for project_id (stored as String(36), not UUID)
+        # Cast column to String(36) to handle UUID/VARCHAR mismatch
         from sqlalchemy import cast, String as SQLString
         files_result = await db.execute(
             select(ProjectFile).where(
-                ProjectFile.project_id == cast(project_id, SQLString(36)),
+                cast(ProjectFile.project_id, SQLString(36)) == str(project_id),
                 ProjectFile.is_folder == False
             ).order_by(ProjectFile.path)
         )

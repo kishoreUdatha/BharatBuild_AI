@@ -797,15 +797,17 @@ async def get_bolt_workspace(
         user_id = str(current_user.id)
 
         # Stage 2: Fetch project metadata
+        # Cast column to String(36) to handle UUID/VARCHAR mismatch
         result = await db.execute(
-            select(Project).where(Project.id == cast(project_id, String(36)))
+            select(Project).where(cast(Project.id, String(36)) == str(project_id))
         )
         project = result.scalar_one_or_none()
 
         # Stage 2: Fetch file tree (metadata only, NO content!)
+        # Cast column to String(36) to handle UUID/VARCHAR mismatch
         files_result = await db.execute(
             select(ProjectFile)
-            .where(ProjectFile.project_id == cast(project_id, String(36)))
+            .where(cast(ProjectFile.project_id, String(36)) == str(project_id))
             .order_by(ProjectFile.path)
         )
         files = files_result.scalars().all()
@@ -865,9 +867,10 @@ async def get_file_content(
         user_id = str(current_user.id)
 
         # Try to get from database first (Layer 3)
+        # Cast column to String(36) to handle UUID/VARCHAR mismatch
         file_result = await db.execute(
             select(ProjectFile)
-            .where(ProjectFile.project_id == cast(project_id, String(36)))
+            .where(cast(ProjectFile.project_id, String(36)) == str(project_id))
             .where(ProjectFile.path == path)
         )
         file_record = file_result.scalar_one_or_none()

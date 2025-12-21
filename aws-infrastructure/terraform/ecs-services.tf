@@ -236,6 +236,8 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "CORS_ORIGINS_STR", value = var.domain_name != "" ? "https://${var.domain_name},https://www.${var.domain_name}" : "http://${aws_lb.main.dns_name}" },
       { name = "STORAGE_MODE", value = "s3" },
       { name = "USE_MINIO", value = "false" },
+      # Frontend URL for preview URL generation
+      { name = "FRONTEND_URL", value = var.domain_name != "" ? "https://${var.domain_name}" : "http://${aws_lb.main.dns_name}" },
       # Celery Configuration
       { name = "CELERY_BROKER_URL", value = "rediss://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0?ssl_cert_reqs=CERT_NONE" },
       { name = "CELERY_RESULT_BACKEND", value = "rediss://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/1?ssl_cert_reqs=CERT_NONE" },

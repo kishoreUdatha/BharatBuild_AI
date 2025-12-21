@@ -370,10 +370,10 @@ async def save_to_s3(
             return result
 
         # Update PostgreSQL metadata (Layer 3)
-        # Note: Project.id is String(36) not UUID, use cast() to prevent asyncpg UUID conversion
+        # Cast column to String(36) to handle UUID/VARCHAR mismatch
         try:
             db_result = await db.execute(
-                select(Project).where(Project.id == cast(project_id, String(36)))
+                select(Project).where(cast(Project.id, String(36)) == str(project_id))
             )
             project = db_result.scalar_one_or_none()
 
