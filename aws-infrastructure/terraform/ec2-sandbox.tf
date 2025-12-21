@@ -79,6 +79,15 @@ resource "aws_security_group" "sandbox" {
     security_groups = [aws_security_group.alb.id]
   }
 
+  # Nginx reverse proxy port (for ALB health checks and routing)
+  ingress {
+    description     = "Nginx proxy from ALB"
+    from_port       = 8080
+    to_port         = 8080
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
   # Allow all outbound (for npm install, pip install, etc.)
   egress {
     from_port   = 0
@@ -379,6 +388,73 @@ locals {
     # Install CloudWatch agent for monitoring
     dnf install -y amazon-cloudwatch-agent
 
+    # ==========================================================
+    # Install and Configure Nginx for path-based preview routing
+    # Routes /sandbox/{port}/* to localhost:{port}/*
+    # ==========================================================
+    dnf install -y nginx
+    systemctl enable nginx
+
+    # Create Nginx config for sandbox reverse proxy
+    cat > /etc/nginx/conf.d/sandbox.conf <<'NGINXCONFIG'
+server {
+    listen 8080;
+    server_name _;
+
+    # Health check endpoint for ALB
+    location /health {
+        return 200 'OK';
+        add_header Content-Type text/plain;
+    }
+
+    # Sandbox proxy - matches /sandbox/{port}/* and proxies to localhost:{port}/*
+    location ~ ^/sandbox/([0-9]+)(/.*)?$ {
+        set $target_port $1;
+        set $path $2;
+
+        # Default path to / if empty
+        if ($path = '') {
+            set $path /;
+        }
+
+        proxy_pass http://127.0.0.1:$target_port$path$is_args$args;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+
+    # Preview alias (same as sandbox)
+    location ~ ^/preview/([0-9]+)(/.*)?$ {
+        set $target_port $1;
+        set $path $2;
+
+        if ($path = '') {
+            set $path /;
+        }
+
+        proxy_pass http://127.0.0.1:$target_port$path$is_args$args;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+}
+NGINXCONFIG
+
+    # Start Nginx
+    systemctl start nginx
+
     # Create cleanup script (removes idle containers)
     cat > /opt/sandbox/cleanup.sh <<'CLEANUP'
     #!/bin/bash
@@ -414,7 +490,7 @@ locals {
 
 resource "aws_lb_target_group" "sandbox" {
   name        = "${var.app_name}-sandbox-tg"
-  port        = 10000
+  port        = 8080  # Nginx reverse proxy port
   protocol    = "HTTP"
   vpc_id      = aws_vpc.main.id
   target_type = "instance"
@@ -425,10 +501,10 @@ resource "aws_lb_target_group" "sandbox" {
     unhealthy_threshold = 5
     timeout             = 5
     interval            = 30
-    path                = "/"
+    path                = "/health"  # Nginx health endpoint
     protocol            = "HTTP"
-    port                = "10000"
-    matcher             = "200-499"  # Accept various responses
+    port                = "8080"
+    matcher             = "200"
   }
 
   tags = {
@@ -436,19 +512,19 @@ resource "aws_lb_target_group" "sandbox" {
   }
 }
 
-# Register EC2 instance with target group
+# Register EC2 instance with target group (Nginx port)
 resource "aws_lb_target_group_attachment" "sandbox" {
   count            = var.sandbox_use_spot ? 0 : 1
   target_group_arn = aws_lb_target_group.sandbox.arn
   target_id        = aws_instance.sandbox[0].id
-  port             = 10000
+  port             = 8080  # Nginx reverse proxy port
 }
 
 resource "aws_lb_target_group_attachment" "sandbox_spot" {
   count            = var.sandbox_use_spot ? 1 : 0
   target_group_arn = aws_lb_target_group.sandbox.arn
   target_id        = aws_spot_instance_request.sandbox[0].spot_instance_id
-  port             = 10000
+  port             = 8080  # Nginx reverse proxy port
 }
 
 # =============================================================================

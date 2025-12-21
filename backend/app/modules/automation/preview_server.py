@@ -14,18 +14,35 @@ from dataclasses import dataclass, field
 
 from app.core.logging_config import logger
 
-# Sandbox public URL for preview (use sandbox EC2 public IP/domain in production)
-SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
+# Sandbox preview base URL - path-based (e.g., https://bharatbuild.ai/sandbox)
+# Falls back to SANDBOX_PUBLIC_URL for IP:port based URLs
+SANDBOX_PREVIEW_BASE_URL = os.getenv("SANDBOX_PREVIEW_BASE_URL", "")
+SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL", "http://localhost")
 
 
 def get_preview_url(port: int) -> str:
-    """Generate preview URL using sandbox public URL or localhost fallback"""
+    """
+    Generate preview URL.
+
+    Supports two modes:
+    1. Path-based (preferred): https://bharatbuild.ai/sandbox/10000
+       - Set SANDBOX_PREVIEW_BASE_URL=https://bharatbuild.ai/sandbox
+    2. IP:port based (fallback): http://13.202.228.249:10000
+       - Set SANDBOX_PUBLIC_URL=http://13.202.228.249
+    """
+    # Prefer path-based URL if SANDBOX_PREVIEW_BASE_URL is set
+    if SANDBOX_PREVIEW_BASE_URL and SANDBOX_PREVIEW_BASE_URL != "http://localhost":
+        base = SANDBOX_PREVIEW_BASE_URL.rstrip('/')
+        return f"{base}/{port}"
+
+    # Fall back to IP:port based URL
     if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
         base = SANDBOX_PUBLIC_URL.rstrip('/')
         # Remove any existing port from the base URL
         if ':' in base.split('/')[-1]:
             base = ':'.join(base.rsplit(':', 1)[:-1])
         return f"{base}:{port}"
+
     return f"http://localhost:{port}"
 
 
