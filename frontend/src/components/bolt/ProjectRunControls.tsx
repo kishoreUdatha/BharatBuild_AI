@@ -17,6 +17,15 @@ import { useErrorCollector } from '@/hooks/useErrorCollector'
 import { usePlanStatus } from '@/hooks/usePlanStatus'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+// Sandbox preview URL base (for production, this should be the sandbox EC2 public IP)
+const SANDBOX_PREVIEW_BASE = process.env.NEXT_PUBLIC_SANDBOX_URL || 'http://localhost'
+
+// Helper to construct preview URL with correct base
+const getPreviewUrl = (port: number | string): string => {
+  const base = SANDBOX_PREVIEW_BASE.replace(/:\d+$/, '').replace(/\/$/, '')
+  return `${base}:${port}`
+}
+
 // COST OPTIMIZATION: Reduced from 10 to 3 (with 3 inner iterations = max 9 API calls)
 // If 3 outer retries don't fix it, stop and ask user - prevents runaway costs
 const MAX_AUTO_FIX_ATTEMPTS = 3
@@ -222,7 +231,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       const match = cleanOutput.match(pattern)
       if (match && match[1]) {
         const port = match[1]
-        const url = `http://localhost:${port}`
+        const url = getPreviewUrl(port)
         console.log('[DetectServer] MATCHED serverPattern:', pattern, '-> port:', port, '-> url:', url)
         setPreviewUrl(url)
         setStatus('running')
@@ -1079,7 +1088,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
                 }
               } else if (data.type === 'server_started') {
                 // Use preview_url from Docker if available, otherwise construct from port
-                const url = data.preview_url || `http://localhost:${data.port || 3000}`
+                const url = data.preview_url || getPreviewUrl(data.port || 3000)
                 setPreviewUrl(url)
                 onPreviewUrlChange?.(url)
                 // NOTE: Don't reset hasError here - errors detected before server start should still trigger fix
