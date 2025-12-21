@@ -180,7 +180,29 @@ class ContainerExecutor:
         3. requirements.txt or pyproject.toml -> Python
         4. go.mod -> Go
         """
-        files = os.listdir(project_path) if os.path.exists(project_path) else []
+        files = []
+
+        # Check if we're using remote Docker (files are on EC2, not local ECS)
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+        if sandbox_docker_host and self.docker_client:
+            # Remote mode: use Docker to list files on EC2
+            try:
+                logger.info(f"[ContainerExecutor] Remote mode: listing files via Docker on {project_path}")
+                result = self.docker_client.containers.run(
+                    "alpine:latest",
+                    f"ls -1 {project_path}",
+                    remove=True,
+                    volumes={project_path: {"bind": project_path, "mode": "ro"}}
+                )
+                files = result.decode('utf-8').strip().split('\n') if result else []
+                logger.info(f"[ContainerExecutor] Found {len(files)} files: {files[:5]}")
+            except Exception as e:
+                logger.warning(f"[ContainerExecutor] Failed to list remote files: {e}")
+                # Default to Node.js for most generated projects
+                return Technology.NODEJS
+        else:
+            # Local mode: use os.listdir
+            files = os.listdir(project_path) if os.path.exists(project_path) else []
 
         # Node.js detection
         if "package.json" in files:
@@ -440,6 +462,112 @@ class ContainerExecutor:
 
         if self._cleanup_task:
             self._cleanup_task.cancel()
+
+    async def run_project(
+        self,
+        project_id: str,
+        project_path: str,
+        user_id: Optional[str] = None
+    ):
+        """
+        Run a project in a container and stream output.
+
+        This is the main entry point for remote Docker execution.
+        Handles container creation, log streaming, and server detection.
+        """
+        import re
+        import asyncio
+
+        user_id = user_id or "anonymous"
+
+        # Ensure Docker client is initialized
+        if not self.docker_client:
+            yield f"🔧 Initializing Docker client...\n"
+            initialized = await self.initialize()
+            if not initialized or not self.docker_client:
+                yield f"ERROR: Docker client not available\n"
+                return
+
+        yield f"🔍 Detecting project technology...\n"
+
+        # Detect technology
+        technology = self.detect_technology(project_path)
+        if technology == Technology.UNKNOWN:
+            # Default to Node.js for unknown projects
+            technology = Technology.NODEJS
+            yield f"  ⚠️ Could not detect technology, defaulting to Node.js\n"
+        else:
+            yield f"  📦 Detected: {technology.value}\n"
+
+        config = TECHNOLOGY_CONFIGS.get(technology)
+        if not config:
+            yield f"ERROR: Unsupported technology: {technology.value}\n"
+            return
+
+        yield f"🐳 Creating container...\n"
+        yield f"  📁 Project path: {project_path}\n"
+        yield f"  🔌 Container port: {config.port}\n"
+
+        # Create and start container
+        success, message, host_port = await self.create_container(
+            project_id=project_id,
+            user_id=user_id,
+            project_path=project_path,
+            technology=technology
+        )
+
+        if not success:
+            yield f"ERROR: {message}\n"
+            return
+
+        yield f"✅ Container started on port {host_port}\n"
+        yield f"📜 Streaming container logs...\n\n"
+
+        # Stream container logs
+        container_info = self.active_containers.get(project_id)
+        if not container_info:
+            yield f"ERROR: Container not found\n"
+            return
+
+        try:
+            container = self.docker_client.containers.get(container_info["container_id"])
+
+            # Stream logs
+            server_started = False
+            preview_url = None
+            start_patterns = [
+                r"Local:\s*http://\S+:(\d+)",
+                r"listening on port (\d+)",
+                r"Server running at http://\S+:(\d+)",
+                r"Started.*on port (\d+)",
+                r"ready.*http://\S+:(\d+)",
+                r"VITE.*Local:\s*http://\S+:(\d+)",
+            ]
+
+            for log in container.logs(stream=True, follow=True):
+                try:
+                    line = log.decode('utf-8', errors='ignore').strip()
+                    if line:
+                        yield f"{line}\n"
+
+                        # Check for server start patterns
+                        if not server_started:
+                            for pattern in start_patterns:
+                                match = re.search(pattern, line, re.IGNORECASE)
+                                if match:
+                                    server_started = True
+                                    preview_url = _get_preview_url(host_port)
+                                    yield f"\n🚀 Server started!\n"
+                                    yield f"__SERVER_STARTED__:{preview_url}\n"
+                                    break
+
+                except Exception as decode_err:
+                    logger.debug(f"[ContainerExecutor] Log decode error: {decode_err}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Error streaming logs: {e}")
+            yield f"ERROR: Failed to stream logs: {e}\n"
 
 
 # Global instance

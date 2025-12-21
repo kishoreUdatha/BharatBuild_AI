@@ -52,8 +52,51 @@ class DockerSandboxExecutor:
 
     def __init__(self):
         try:
-            self.client = docker.from_env()
-            logger.info("Docker client initialized successfully")
+            # Check for remote Docker host (ECS -> EC2 sandbox)
+            sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+            if sandbox_docker_host:
+                logger.info(f"Connecting to remote Docker host: {sandbox_docker_host}")
+                self.client = docker.DockerClient(base_url=sandbox_docker_host)
+                self.client.ping()
+                logger.info("Docker client initialized via SANDBOX_DOCKER_HOST")
+            else:
+                # Local Docker - try multiple connection methods
+                import platform
+                system = platform.system()
+
+                docker_urls = []
+                if system == "Windows":
+                    docker_urls = [
+                        "npipe:////./pipe/docker_engine",
+                        "tcp://localhost:2375",
+                    ]
+                else:
+                    docker_urls = [
+                        "unix:///var/run/docker.sock",
+                        "unix://var/run/docker.sock",
+                        "tcp://localhost:2375",
+                    ]
+
+                self.client = None
+                for url in docker_urls:
+                    try:
+                        logger.debug(f"Trying Docker URL: {url}")
+                        self.client = docker.DockerClient(base_url=url)
+                        self.client.ping()
+                        logger.info(f"Docker client connected via: {url}")
+                        break
+                    except Exception as url_err:
+                        logger.debug(f"Docker URL {url} failed: {url_err}")
+                        self.client = None
+                        continue
+
+                # Fallback to from_env() if explicit URLs failed
+                if self.client is None:
+                    docker_host = os.environ.get("DOCKER_HOST", "")
+                    logger.debug(f"Trying docker.from_env(), DOCKER_HOST={docker_host}")
+                    self.client = docker.from_env()
+                    logger.info("Docker client initialized via from_env()")
+
         except Exception as e:
             logger.error(f"Failed to initialize Docker client: {e}")
             self.client = None

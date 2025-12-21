@@ -269,10 +269,15 @@ export function useProjectSwitch() {
           const fileTreeData = data.file_tree || data.tree || []
           const totalFiles = data.total_files || data.total || 0
 
-          // Check if project_title is a placeholder (e.g., "Project abc123-uuid...")
+          // Check if project_title is a placeholder (e.g., "Project abc123-uuid...", "New Project")
           // If so, prefer the projectName option or generate a better default
           const isPlaceholderTitle = (title: string | null | undefined): boolean => {
             if (!title) return true
+            const trimmed = title.trim().toLowerCase()
+            // Check for common placeholder names
+            if (trimmed === 'new project' || trimmed === 'untitled' || trimmed === 'untitled project') {
+              return true
+            }
             // Match "Project " followed by UUID-like pattern or "project-" prefix
             return /^Project\s+(?:[a-f0-9-]{8,}|project-\d+)/i.test(title)
           }
