@@ -2281,7 +2281,7 @@ class DockerExecutor:
 
                 if success and port:
                     yield f"  ✅ Container started on port {port}\n"
-                    yield f"  🌐 Preview URL: http://localhost:{port}\n"
+                    yield f"  🌐 Preview URL: {get_preview_url(port)}\n"
 
                     # Store the port
                     self._assigned_ports[project_id] = port
@@ -2297,12 +2297,14 @@ class DockerExecutor:
                         # Check if server is ready
                         status = await container_executor.get_container_status(project_id)
                         if status and status.get("status") == "running":
-                            yield f"\n✅ Server running at http://localhost:{port}\n"
-                            yield f"__PREVIEW_URL__:http://localhost:{port}\n"
+                            preview_url = get_preview_url(port)
+                            yield f"\n✅ Server running at {preview_url}\n"
+                            yield f"__PREVIEW_URL__:{preview_url}\n"
                             return
 
+                    preview_url = get_preview_url(port)
                     yield f"\n⚠️ Container started but server may not be ready\n"
-                    yield f"__PREVIEW_URL__:http://localhost:{port}\n"
+                    yield f"__PREVIEW_URL__:{preview_url}\n"
                     return
                 else:
                     yield f"  ⚠️ Container spawn failed: {message}\n"
