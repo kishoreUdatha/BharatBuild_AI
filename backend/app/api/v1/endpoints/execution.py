@@ -41,18 +41,78 @@ _running_processes: dict[str, asyncio.subprocess.Process] = {}
 _file_manager = FileManager()
 
 
-def get_project_path(project_id: str, user_id: str = None):
-    """
-    Get project path - checks sandbox first (C:/tmp/sandbox/workspace),
-    then falls back to permanent storage (USER_PROJECTS_PATH).
+import os as _os
 
-    The sandbox is the primary location for runtime/execution because:
-    1. Files are written here during generation for live preview
-    2. It's designed for ephemeral execution
+async def get_project_path_async(project_id: str, user_id: str = None):
+    """
+    Async version: Get project path - checks sandbox (local or EC2),
+    restores from DB/S3 if needed, then falls back to permanent storage.
+
+    When SANDBOX_DOCKER_HOST is set, files are on EC2, not local ECS.
+    This function will:
+    1. Check if files exist on EC2 sandbox
+    2. If not, restore from DB/S3 to EC2
+    3. Return the sandbox path for Docker to use
 
     Args:
         project_id: Project UUID string
         user_id: User UUID string (required for correct sandbox path)
+    """
+    from pathlib import Path
+
+    sandbox_path = unified_storage.get_sandbox_path(project_id, user_id)
+    sandbox_docker_host = _os.environ.get("SANDBOX_DOCKER_HOST")
+
+    # Check if using remote EC2 sandbox
+    if sandbox_docker_host:
+        # Check if sandbox exists on EC2
+        exists_on_ec2 = await unified_storage.sandbox_exists(project_id, user_id)
+
+        if not exists_on_ec2:
+            # Try to restore from DB/S3 to EC2
+            logger.info(f"[Execution] Sandbox not on EC2, restoring from DB/S3: {project_id}")
+            try:
+                restored_files = await unified_storage.restore_project_from_database(project_id, user_id)
+                if restored_files:
+                    logger.info(f"[Execution] Restored {len(restored_files)} files to EC2 for {project_id}")
+                    return sandbox_path
+                else:
+                    logger.warning(f"[Execution] No files restored for {project_id}")
+            except Exception as e:
+                logger.error(f"[Execution] Restore failed for {project_id}: {e}")
+
+        else:
+            logger.info(f"[Execution] Sandbox exists on EC2: {project_id}")
+            return sandbox_path
+    else:
+        # Local sandbox (ECS or development)
+        if sandbox_path.exists():
+            return sandbox_path
+
+        # Try legacy path without user_id
+        if user_id:
+            legacy_sandbox_path = unified_storage.get_sandbox_path(project_id)
+            if legacy_sandbox_path.exists():
+                logger.warning(f"[Execution] Using legacy sandbox path for {project_id}")
+                return legacy_sandbox_path
+
+    # Fallback to permanent storage
+    permanent_path = _file_manager.get_project_path(project_id)
+    if permanent_path.exists():
+        logger.info(f"[Execution] Using permanent storage for {project_id}")
+        return permanent_path
+
+    # Return sandbox path (will be checked for existence by caller)
+    return sandbox_path
+
+
+def get_project_path(project_id: str, user_id: str = None):
+    """
+    Sync wrapper for get_project_path_async.
+    For backwards compatibility with non-async callers.
+
+    NOTE: This only works for LOCAL sandbox checks.
+    For EC2 sandbox, use get_project_path_async() instead.
     """
     from pathlib import Path
 
@@ -139,46 +199,57 @@ async def run_project(
         # Touch the project to keep it alive during execution
         touch_project(project_id)
 
-        # Get project path (sandbox first, then permanent storage)
+        # Get project path - uses async version that handles EC2 sandbox
         user_id = str(current_user.id) if current_user else None
-        project_path = get_project_path(project_id, user_id)
+        sandbox_docker_host = _os.environ.get("SANDBOX_DOCKER_HOST")
 
-        # Check if sandbox needs restoration (files might have been cleaned up)
-        # Restore from database if sandbox is empty or missing key files
-        needs_restore = False
-        if not project_path.exists():
-            needs_restore = True
-        else:
-            # Check if project has actual content - look for any project files
-            has_package = (project_path / "package.json").exists()  # Node.js
-            has_pom = (project_path / "pom.xml").exists()  # Java/Maven
-            has_gradle = (project_path / "build.gradle").exists() or (project_path / "build.gradle.kts").exists()  # Gradle
-            has_requirements = (project_path / "requirements.txt").exists()  # Python
-            has_go_mod = (project_path / "go.mod").exists()  # Go
-            has_cargo = (project_path / "Cargo.toml").exists()  # Rust
-            has_src = (project_path / "src").exists()  # Generic src folder
+        # Use async path getter that handles EC2 restore
+        project_path = await get_project_path_async(project_id, user_id)
 
-            # Check if directory is essentially empty (no project files)
-            has_any_project_file = has_package or has_pom or has_gradle or has_requirements or has_go_mod or has_cargo or has_src
-
-            if not has_any_project_file:
-                # Directory exists but has no recognizable project files - restore
+        # For EC2 sandbox, we trust the async getter already restored if needed
+        # For local sandbox, do additional checks
+        if not sandbox_docker_host:
+            # Check if sandbox needs restoration (files might have been cleaned up)
+            needs_restore = False
+            if not project_path.exists():
                 needs_restore = True
-                logger.info(f"[Execution] Sandbox appears empty, will restore from database")
-
-        if needs_restore:
-            logger.info(f"[Execution] Restoring project {project_id} from database...")
-            restored_files = await unified_storage.restore_project_from_database(project_id, user_id)
-            if restored_files:
-                logger.info(f"[Execution] Restored {len(restored_files)} files")
-                # Update project_path after restore
-                project_path = get_project_path(project_id, user_id)
             else:
-                logger.warning(f"[Execution] No files restored from database")
+                # Check if project has actual content - look for any project files
+                has_package = (project_path / "package.json").exists()  # Node.js
+                has_pom = (project_path / "pom.xml").exists()  # Java/Maven
+                has_gradle = (project_path / "build.gradle").exists() or (project_path / "build.gradle.kts").exists()  # Gradle
+                has_requirements = (project_path / "requirements.txt").exists()  # Python
+                has_go_mod = (project_path / "go.mod").exists()  # Go
+                has_cargo = (project_path / "Cargo.toml").exists()  # Rust
+                has_src = (project_path / "src").exists()  # Generic src folder
 
-        if not project_path.exists():
-            logger.error(f"[Execution] Project not found: {project_id}")
-            raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+                # Check if directory is essentially empty (no project files)
+                has_any_project_file = has_package or has_pom or has_gradle or has_requirements or has_go_mod or has_cargo or has_src
+
+                if not has_any_project_file:
+                    # Directory exists but has no recognizable project files - restore
+                    needs_restore = True
+                    logger.info(f"[Execution] Sandbox appears empty, will restore from database")
+
+            if needs_restore:
+                logger.info(f"[Execution] Restoring project {project_id} from database...")
+                restored_files = await unified_storage.restore_project_from_database(project_id, user_id)
+                if restored_files:
+                    logger.info(f"[Execution] Restored {len(restored_files)} files")
+                    # Update project_path after restore
+                    project_path = await get_project_path_async(project_id, user_id)
+                else:
+                    logger.warning(f"[Execution] No files restored from database")
+
+            if not project_path.exists():
+                logger.error(f"[Execution] Project not found: {project_id}")
+                raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+        else:
+            # For EC2 sandbox, check if sandbox exists remotely
+            exists_on_ec2 = await unified_storage.sandbox_exists(project_id, user_id)
+            if not exists_on_ec2:
+                logger.error(f"[Execution] Project not found on EC2: {project_id}")
+                raise HTTPException(status_code=404, detail=f"Project {project_id} not found on sandbox")
 
         logger.info(f"[Execution] Running project from: {project_path}")
         logger.info(f"[Execution] Path has frontend: {(project_path / 'frontend').exists()}")
