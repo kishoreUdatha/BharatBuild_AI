@@ -144,22 +144,27 @@ async def run_project(
         project_path = get_project_path(project_id, user_id)
 
         # Check if sandbox needs restoration (files might have been cleaned up)
-        # Restore from database if sandbox is empty or missing key folders
+        # Restore from database if sandbox is empty or missing key files
         needs_restore = False
         if not project_path.exists():
             needs_restore = True
         else:
-            # Check if project has actual content (not just metadata)
-            has_frontend = (project_path / "frontend").exists()
-            has_backend = (project_path / "backend").exists()
-            has_src = (project_path / "src").exists()
-            has_package = (project_path / "package.json").exists()
+            # Check if project has actual content - look for any project files
+            has_package = (project_path / "package.json").exists()  # Node.js
+            has_pom = (project_path / "pom.xml").exists()  # Java/Maven
+            has_gradle = (project_path / "build.gradle").exists() or (project_path / "build.gradle.kts").exists()  # Gradle
+            has_requirements = (project_path / "requirements.txt").exists()  # Python
+            has_go_mod = (project_path / "go.mod").exists()  # Go
+            has_cargo = (project_path / "Cargo.toml").exists()  # Rust
+            has_src = (project_path / "src").exists()  # Generic src folder
 
-            # If it looks like a monorepo but missing folders, restore
-            if has_package and not has_frontend and not has_backend and not has_src:
-                # Check if this is supposed to be a monorepo by looking at DB file count
+            # Check if directory is essentially empty (no project files)
+            has_any_project_file = has_package or has_pom or has_gradle or has_requirements or has_go_mod or has_cargo or has_src
+
+            if not has_any_project_file:
+                # Directory exists but has no recognizable project files - restore
                 needs_restore = True
-                logger.info(f"[Execution] Sandbox appears incomplete, will restore from database")
+                logger.info(f"[Execution] Sandbox appears empty, will restore from database")
 
         if needs_restore:
             logger.info(f"[Execution] Restoring project {project_id} from database...")
