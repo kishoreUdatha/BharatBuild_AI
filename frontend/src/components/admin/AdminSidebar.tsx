@@ -21,12 +21,14 @@ import {
   Moon,
   Sun,
   Shield,
-  Server
+  Server,
+  GraduationCap
 } from 'lucide-react'
 
 const navItems = [
   { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/admin/users', label: 'Users', icon: Users },
+  { href: '/admin/enrollments', label: 'Enrollments', icon: GraduationCap },
   { href: '/admin/projects', label: 'Projects', icon: FolderKanban },
   { href: '/admin/sandboxes', label: 'Sandboxes', icon: Server },
   { href: '/admin/billing', label: 'Billing', icon: CreditCard },
