@@ -1,17 +1,24 @@
 """
 Admin Project Management endpoints.
 """
-from fastapi import APIRouter, Depends, Query, HTTPException, Request
+from fastapi import APIRouter, Depends, Query, HTTPException, Request, UploadFile, File, Form, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, and_
 from datetime import datetime, timedelta
 from typing import Optional
 import math
+import zipfile
+import io
+import os
+import tempfile
 
 from app.core.database import get_db
 from app.models import User, Project, ProjectStatus, ProjectFile, AuditLog
 from app.modules.auth.dependencies import get_current_admin
 from app.schemas.admin import AdminProjectResponse, AdminProjectsResponse, StorageStats
+from app.services.storage_service import storage_service
+from app.core.types import generate_uuid
 
 router = APIRouter()
 
@@ -342,3 +349,285 @@ async def delete_project(
     )
 
     return {"message": f"Project '{project_title}' has been deleted"}
+
+
+@router.get("/{project_id}/download")
+async def download_project(
+    project_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    """
+    Download a project as ZIP file.
+    Admin can download any user's project for backup or inspection.
+    """
+    # Get project with files
+    result = await db.execute(
+        select(Project, User)
+        .join(User, Project.user_id == User.id)
+        .where(Project.id == project_id)
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project, user = row
+
+    # Get all project files from database
+    files_result = await db.execute(
+        select(ProjectFile).where(
+            ProjectFile.project_id == project_id,
+            ProjectFile.is_folder == False
+        )
+    )
+    files = files_result.scalars().all()
+
+    if not files:
+        raise HTTPException(status_code=404, detail="No files found in project")
+
+    # Create ZIP in memory
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for file in files:
+            content = None
+
+            # Try to get content from S3
+            if file.s3_key:
+                try:
+                    content_bytes = await storage_service.download_file(file.s3_key)
+                    if content_bytes:
+                        content = content_bytes
+                except Exception as e:
+                    pass
+
+            # Fallback to inline content (legacy)
+            if not content and file.content_inline:
+                content = file.content_inline.encode('utf-8')
+
+            if content:
+                # Write file to ZIP
+                zf.writestr(file.path, content)
+
+    # Seek to beginning
+    zip_buffer.seek(0)
+
+    # Sanitize filename
+    safe_title = "".join(c for c in project.title if c.isalnum() or c in (' ', '-', '_')).strip()
+    safe_title = safe_title or "project"
+    filename = f"{safe_title}_{project_id[:8]}.zip"
+
+    # Log admin action
+    await log_admin_action(
+        db=db,
+        admin_id=str(current_admin.id),
+        action="project_downloaded",
+        target_type="project",
+        target_id=project_id,
+        details={"title": project.title, "owner": user.email, "files_count": len(files)},
+        request=request
+    )
+
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
+
+
+# File extensions to process (text-based files)
+TEXT_EXTENSIONS = {
+    '.py', '.js', '.ts', '.tsx', '.jsx', '.java', '.cpp', '.c', '.h', '.hpp',
+    '.cs', '.go', '.rs', '.rb', '.php', '.swift', '.kt', '.scala', '.html',
+    '.css', '.scss', '.less', '.json', '.xml', '.yaml', '.yml', '.md', '.txt',
+    '.sql', '.sh', '.bat', '.ps1', '.env', '.gitignore', '.dockerignore',
+    '.dockerfile', '.makefile', '.gradle', '.properties', '.ini', '.cfg',
+    '.vue', '.svelte', '.astro', '.prisma', '.graphql', '.proto'
+}
+
+# Directories to skip
+SKIP_DIRS = {
+    'node_modules', '.git', '__pycache__', '.venv', 'venv', 'env',
+    '.idea', '.vscode', 'dist', 'build', 'target', '.next', '.nuxt',
+    'coverage', '.pytest_cache', '.mypy_cache', 'vendor', 'packages'
+}
+
+MAX_FILE_SIZE = 100 * 1024  # 100KB per file
+MAX_TOTAL_SIZE = 50 * 1024 * 1024  # 50MB total for admin upload
+
+
+def get_language_from_extension(ext: str) -> str:
+    """Map file extension to language"""
+    mapping = {
+        '.py': 'python', '.js': 'javascript', '.ts': 'typescript',
+        '.tsx': 'typescriptreact', '.jsx': 'javascriptreact',
+        '.java': 'java', '.cpp': 'cpp', '.c': 'c', '.h': 'c', '.hpp': 'cpp',
+        '.cs': 'csharp', '.go': 'go', '.rs': 'rust', '.rb': 'ruby',
+        '.php': 'php', '.swift': 'swift', '.kt': 'kotlin', '.scala': 'scala',
+        '.html': 'html', '.css': 'css', '.scss': 'scss', '.less': 'less',
+        '.json': 'json', '.xml': 'xml', '.yaml': 'yaml', '.yml': 'yaml',
+        '.md': 'markdown', '.txt': 'plaintext', '.sql': 'sql',
+        '.sh': 'bash', '.bat': 'batch', '.ps1': 'powershell',
+        '.vue': 'vue', '.svelte': 'svelte', '.graphql': 'graphql', '.prisma': 'prisma',
+    }
+    return mapping.get(ext, 'plaintext')
+
+
+@router.post("/upload")
+async def upload_project_for_user(
+    request: Request,
+    file: UploadFile = File(...),
+    user_id: str = Form(...),
+    project_name: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    """
+    Upload a project ZIP file for a specific user.
+    Admin can upload projects to any user's account.
+    """
+    # Verify target user exists
+    target_user = await db.get(User, user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Target user not found")
+
+    if not file.filename.endswith('.zip'):
+        raise HTTPException(status_code=400, detail="Only ZIP files are supported")
+
+    try:
+        # Read ZIP file
+        content = await file.read()
+        if len(content) > MAX_TOTAL_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large. Maximum size is {MAX_TOTAL_SIZE // (1024*1024)}MB"
+            )
+
+        # Extract files from ZIP
+        files_data = []
+        total_size = 0
+
+        with zipfile.ZipFile(io.BytesIO(content), 'r') as zip_ref:
+            for zip_info in zip_ref.infolist():
+                # Skip directories
+                if zip_info.is_dir():
+                    continue
+
+                file_path = zip_info.filename
+
+                # Skip hidden and excluded directories
+                path_parts = file_path.split('/')
+                if any(part in SKIP_DIRS or part.startswith('.') for part in path_parts[:-1]):
+                    continue
+
+                # Skip if file is too large
+                if zip_info.file_size > MAX_FILE_SIZE:
+                    continue
+
+                # Get file extension
+                _, ext = os.path.splitext(file_path.lower())
+
+                # Only process text files
+                if ext not in TEXT_EXTENSIONS and not file_path.endswith('Dockerfile'):
+                    continue
+
+                # Read file content
+                try:
+                    with zip_ref.open(zip_info) as f:
+                        file_content = f.read().decode('utf-8', errors='ignore')
+                        total_size += len(file_content)
+
+                        if total_size > MAX_TOTAL_SIZE:
+                            break
+
+                        language = get_language_from_extension(ext)
+                        files_data.append({
+                            'path': file_path,
+                            'content': file_content,
+                            'language': language,
+                            'size': len(file_content)
+                        })
+                except Exception:
+                    continue
+
+        if not files_data:
+            raise HTTPException(status_code=400, detail="No valid source files found in ZIP")
+
+        # Extract project name from ZIP filename if not provided
+        if not project_name:
+            project_name = os.path.splitext(file.filename)[0]
+
+        # Create project in database
+        project_id = str(generate_uuid())
+        project = Project(
+            id=project_id,
+            title=project_name,
+            description=f"Uploaded by admin: {current_admin.email}",
+            user_id=user_id,
+            status=ProjectStatus.COMPLETED
+        )
+        db.add(project)
+
+        # Create project files and upload to S3
+        for file_data in files_data:
+            file_content_bytes = file_data['content'].encode('utf-8')
+
+            # Upload to S3
+            upload_result = await storage_service.upload_file(
+                project_id=project_id,
+                file_path=file_data['path'],
+                content=file_content_bytes
+            )
+
+            # Create file record in database
+            project_file = ProjectFile(
+                id=str(generate_uuid()),
+                project_id=project_id,
+                path=file_data['path'],
+                name=file_data['path'].split('/')[-1],
+                language=file_data['language'],
+                s3_key=upload_result.get('s3_key'),
+                content_hash=upload_result.get('content_hash'),
+                size_bytes=file_data['size'],
+                is_folder=False,
+                is_inline=False
+            )
+            db.add(project_file)
+
+        await db.commit()
+
+        # Log admin action
+        await log_admin_action(
+            db=db,
+            admin_id=str(current_admin.id),
+            action="project_uploaded",
+            target_type="project",
+            target_id=project_id,
+            details={
+                "project_name": project_name,
+                "target_user": target_user.email,
+                "files_count": len(files_data),
+                "total_size": total_size
+            },
+            request=request
+        )
+
+        return {
+            "success": True,
+            "project_id": project_id,
+            "project_name": project_name,
+            "target_user": target_user.email,
+            "total_files": len(files_data),
+            "total_size": total_size,
+            "message": f"Project '{project_name}' uploaded successfully for user {target_user.email}"
+        }
+
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Invalid ZIP file")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

@@ -76,11 +76,9 @@ export default function AdminEnrollmentsPage() {
   const formatDate = (dateString: string | null) => {
     if (!dateString) return '-'
     return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
       month: 'short',
       day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
+      year: '2-digit',
     })
   }
 
@@ -257,11 +255,11 @@ export default function AdminEnrollmentsPage() {
           isDark ? 'bg-[#1a1a1a] border-[#333]' : 'bg-white border-gray-200'
         }`}>
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full text-xs">
               <thead>
                 <tr className={isDark ? 'bg-[#252525]' : 'bg-gray-50'}>
                   <th
-                    className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider cursor-pointer ${
+                    className={`px-3 py-2 text-left font-medium uppercase cursor-pointer whitespace-nowrap ${
                       isDark ? 'text-gray-400' : 'text-gray-500'
                     }`}
                     onClick={() => handleSort('full_name')}
@@ -271,13 +269,13 @@ export default function AdminEnrollmentsPage() {
                       <SortIcon field="full_name" />
                     </div>
                   </th>
-                  <th className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                  <th className={`px-3 py-2 text-left font-medium uppercase whitespace-nowrap ${
                     isDark ? 'text-gray-400' : 'text-gray-500'
                   }`}>
                     Contact
                   </th>
                   <th
-                    className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider cursor-pointer ${
+                    className={`px-3 py-2 text-left font-medium uppercase cursor-pointer whitespace-nowrap ${
                       isDark ? 'text-gray-400' : 'text-gray-500'
                     }`}
                     onClick={() => handleSort('college_name')}
@@ -287,18 +285,18 @@ export default function AdminEnrollmentsPage() {
                       <SortIcon field="college_name" />
                     </div>
                   </th>
-                  <th className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                  <th className={`px-3 py-2 text-left font-medium uppercase whitespace-nowrap ${
                     isDark ? 'text-gray-400' : 'text-gray-500'
                   }`}>
-                    Department
+                    Dept
                   </th>
-                  <th className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                  <th className={`px-3 py-2 text-left font-medium uppercase whitespace-nowrap ${
                     isDark ? 'text-gray-400' : 'text-gray-500'
                   }`}>
                     Year
                   </th>
                   <th
-                    className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider cursor-pointer ${
+                    className={`px-3 py-2 text-left font-medium uppercase cursor-pointer whitespace-nowrap ${
                       isDark ? 'text-gray-400' : 'text-gray-500'
                     }`}
                     onClick={() => handleSort('workshop_name')}
@@ -308,19 +306,19 @@ export default function AdminEnrollmentsPage() {
                       <SortIcon field="workshop_name" />
                     </div>
                   </th>
-                  <th className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                  <th className={`px-3 py-2 text-left font-medium uppercase whitespace-nowrap ${
                     isDark ? 'text-gray-400' : 'text-gray-500'
                   }`}>
                     Status
                   </th>
                   <th
-                    className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider cursor-pointer ${
+                    className={`px-3 py-2 text-left font-medium uppercase cursor-pointer whitespace-nowrap ${
                       isDark ? 'text-gray-400' : 'text-gray-500'
                     }`}
                     onClick={() => handleSort('created_at')}
                   >
                     <div className="flex items-center gap-1">
-                      Registered
+                      Date
                       <SortIcon field="created_at" />
                     </div>
                   </th>
@@ -330,12 +328,12 @@ export default function AdminEnrollmentsPage() {
                 {loading ? (
                   [...Array(5)].map((_, i) => (
                     <tr key={i}>
-                      <td colSpan={8} className="px-4 py-4">
-                        <div className="animate-pulse flex items-center gap-4">
-                          <div className={`w-10 h-10 rounded-full ${isDark ? 'bg-[#333]' : 'bg-gray-200'}`} />
-                          <div className="flex-1 space-y-2">
-                            <div className={`h-4 w-48 rounded ${isDark ? 'bg-[#333]' : 'bg-gray-200'}`} />
+                      <td colSpan={8} className="px-3 py-3">
+                        <div className="animate-pulse flex items-center gap-3">
+                          <div className={`w-8 h-8 rounded-full ${isDark ? 'bg-[#333]' : 'bg-gray-200'}`} />
+                          <div className="flex-1 space-y-1">
                             <div className={`h-3 w-32 rounded ${isDark ? 'bg-[#333]' : 'bg-gray-200'}`} />
+                            <div className={`h-2 w-24 rounded ${isDark ? 'bg-[#333]' : 'bg-gray-200'}`} />
                           </div>
                         </div>
                       </td>
@@ -343,7 +341,7 @@ export default function AdminEnrollmentsPage() {
                   ))
                 ) : enrollments.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className={`px-4 py-8 text-center ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+                    <td colSpan={8} className={`px-3 py-6 text-center text-sm ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
                       No enrollments found
                     </td>
                   </tr>
@@ -355,73 +353,69 @@ export default function AdminEnrollmentsPage() {
                         isDark ? 'hover:bg-[#252525]' : 'hover:bg-gray-50'
                       }`}
                     >
-                      <td className="px-4 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-500 to-teal-600 flex items-center justify-center text-white font-medium">
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-green-500 to-teal-600 flex items-center justify-center text-white text-xs font-medium flex-shrink-0">
                             {enrollment.full_name.charAt(0).toUpperCase()}
                           </div>
-                          <div>
-                            <div className={`font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                          <div className="min-w-0">
+                            <div className={`font-medium truncate max-w-[120px] ${isDark ? 'text-white' : 'text-gray-900'}`} title={enrollment.full_name}>
                               {enrollment.full_name}
                             </div>
                             {enrollment.roll_number && (
-                              <div className={`text-xs ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
-                                Roll: {enrollment.roll_number}
+                              <div className={`text-[10px] ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+                                {enrollment.roll_number}
                               </div>
                             )}
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-4">
-                        <div className="space-y-1">
-                          <div className={`flex items-center gap-1.5 text-sm ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
-                            <Mail className="w-3.5 h-3.5" />
-                            {enrollment.email}
+                      <td className="px-3 py-2">
+                        <div className="space-y-0.5">
+                          <div className={`flex items-center gap-1 truncate max-w-[150px] ${isDark ? 'text-gray-300' : 'text-gray-600'}`} title={enrollment.email}>
+                            <Mail className="w-3 h-3 flex-shrink-0" />
+                            <span className="truncate">{enrollment.email}</span>
                           </div>
-                          <div className={`flex items-center gap-1.5 text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
-                            <Phone className="w-3.5 h-3.5" />
+                          <div className={`flex items-center gap-1 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                            <Phone className="w-3 h-3 flex-shrink-0" />
                             {enrollment.phone}
                           </div>
                         </div>
                       </td>
-                      <td className={`px-4 py-4 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
-                        <div className="max-w-[200px] truncate" title={enrollment.college_name}>
+                      <td className={`px-3 py-2 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
+                        <div className="max-w-[140px] truncate" title={enrollment.college_name}>
                           {enrollment.college_name}
                         </div>
                       </td>
-                      <td className={`px-4 py-4 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
-                        {enrollment.department}
+                      <td className={`px-3 py-2 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
+                        <div className="max-w-[80px] truncate" title={enrollment.department}>
+                          {enrollment.department}
+                        </div>
                       </td>
-                      <td className="px-4 py-4">
-                        <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${getYearBadgeColor(enrollment.year_of_study)}`}>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium ${getYearBadgeColor(enrollment.year_of_study)}`}>
                           {enrollment.year_of_study}
                         </span>
                       </td>
-                      <td className="px-4 py-4">
-                        <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium bg-blue-500/20 text-blue-400`}>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/20 text-blue-400 max-w-[100px] truncate`} title={enrollment.workshop_name}>
                           {enrollment.workshop_name}
                         </span>
                       </td>
-                      <td className="px-4 py-4">
-                        <div className="flex items-center gap-2">
-                          {enrollment.is_confirmed ? (
-                            <>
-                              <CheckCircle className="w-4 h-4 text-green-500" />
-                              <span className={`text-sm ${isDark ? 'text-green-400' : 'text-green-600'}`}>
-                                Confirmed
-                              </span>
-                            </>
-                          ) : (
-                            <>
-                              <XCircle className="w-4 h-4 text-yellow-500" />
-                              <span className={`text-sm ${isDark ? 'text-yellow-400' : 'text-yellow-600'}`}>
-                                Pending
-                              </span>
-                            </>
-                          )}
-                        </div>
+                      <td className="px-3 py-2">
+                        {enrollment.is_confirmed ? (
+                          <span className="flex items-center gap-1">
+                            <CheckCircle className="w-3.5 h-3.5 text-green-500" />
+                            <span className={`text-[10px] ${isDark ? 'text-green-400' : 'text-green-600'}`}>OK</span>
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1">
+                            <XCircle className="w-3.5 h-3.5 text-yellow-500" />
+                            <span className={`text-[10px] ${isDark ? 'text-yellow-400' : 'text-yellow-600'}`}>Pending</span>
+                          </span>
+                        )}
                       </td>
-                      <td className={`px-4 py-4 text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                      <td className={`px-3 py-2 whitespace-nowrap ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
                         {formatDate(enrollment.created_at)}
                       </td>
                     </tr>

@@ -5,6 +5,10 @@ Provides visibility into all user sandboxes and their health status.
 from typing import Optional, List
 from datetime import datetime, timedelta
 from uuid import UUID
+import os
+import time
+import asyncio
+import socket
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +21,121 @@ from app.models.project import Project
 from app.core.logging_config import logger
 
 router = APIRouter()
+
+
+@router.get("/connection-health")
+async def get_sandbox_connection_health(
+    admin: User = Depends(get_current_admin)
+):
+    """
+    Check the health/connectivity of the sandbox server (remote Docker host).
+    Returns connection status, latency, and Docker API availability.
+    """
+    sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+    sandbox_public_url = os.environ.get("SANDBOX_PUBLIC_URL", "")
+
+    result = {
+        "sandbox_mode": "remote" if sandbox_docker_host else "local",
+        "sandbox_docker_host": sandbox_docker_host or "local",
+        "sandbox_public_url": sandbox_public_url,
+        "connection_status": "unknown",
+        "docker_api_status": "unknown",
+        "latency_ms": None,
+        "docker_version": None,
+        "docker_info": None,
+        "error": None,
+        "last_checked": datetime.utcnow().isoformat()
+    }
+
+    if not sandbox_docker_host:
+        # Local mode - check local Docker
+        try:
+            import docker
+            start = time.time()
+            client = docker.from_env()
+            version = client.version()
+            latency = (time.time() - start) * 1000
+
+            result["connection_status"] = "connected"
+            result["docker_api_status"] = "healthy"
+            result["latency_ms"] = round(latency, 2)
+            result["docker_version"] = version.get("Version", "unknown")
+            result["docker_info"] = {
+                "containers": client.info().get("Containers", 0),
+                "running": client.info().get("ContainersRunning", 0),
+                "paused": client.info().get("ContainersPaused", 0),
+                "stopped": client.info().get("ContainersStopped", 0),
+                "images": client.info().get("Images", 0),
+                "memory_total_gb": round(client.info().get("MemTotal", 0) / (1024**3), 2),
+                "cpus": client.info().get("NCPU", 0),
+                "os": client.info().get("OperatingSystem", "unknown"),
+                "kernel": client.info().get("KernelVersion", "unknown"),
+            }
+        except Exception as e:
+            result["connection_status"] = "error"
+            result["docker_api_status"] = "unavailable"
+            result["error"] = str(e)
+        return result
+
+    # Remote mode - check remote Docker host
+    try:
+        # Parse host and port from SANDBOX_DOCKER_HOST (e.g., tcp://1.2.3.4:2375)
+        host_url = sandbox_docker_host.replace("tcp://", "").replace("http://", "")
+        if ":" in host_url:
+            host, port_str = host_url.split(":")
+            port = int(port_str)
+        else:
+            host = host_url
+            port = 2375
+
+        # TCP connectivity check
+        start = time.time()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        tcp_result = sock.connect_ex((host, port))
+        sock.close()
+        tcp_latency = (time.time() - start) * 1000
+
+        if tcp_result != 0:
+            result["connection_status"] = "unreachable"
+            result["docker_api_status"] = "unavailable"
+            result["error"] = f"Cannot connect to {host}:{port} (TCP error: {tcp_result})"
+            return result
+
+        result["connection_status"] = "connected"
+        result["latency_ms"] = round(tcp_latency, 2)
+
+        # Docker API check
+        try:
+            import docker
+            start = time.time()
+            client = docker.DockerClient(base_url=sandbox_docker_host, timeout=10)
+            version = client.version()
+            api_latency = (time.time() - start) * 1000
+
+            result["docker_api_status"] = "healthy"
+            result["latency_ms"] = round(api_latency, 2)
+            result["docker_version"] = version.get("Version", "unknown")
+            result["docker_info"] = {
+                "containers": client.info().get("Containers", 0),
+                "running": client.info().get("ContainersRunning", 0),
+                "paused": client.info().get("ContainersPaused", 0),
+                "stopped": client.info().get("ContainersStopped", 0),
+                "images": client.info().get("Images", 0),
+                "memory_total_gb": round(client.info().get("MemTotal", 0) / (1024**3), 2),
+                "cpus": client.info().get("NCPU", 0),
+                "os": client.info().get("OperatingSystem", "unknown"),
+                "kernel": client.info().get("KernelVersion", "unknown"),
+            }
+        except Exception as e:
+            result["docker_api_status"] = "error"
+            result["error"] = f"Docker API error: {str(e)}"
+
+    except Exception as e:
+        result["connection_status"] = "error"
+        result["error"] = str(e)
+
+    return result
 
 
 @router.get("")
