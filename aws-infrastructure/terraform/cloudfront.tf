@@ -23,13 +23,21 @@ resource "aws_cloudfront_distribution" "main" {
       https_port               = 443
       origin_protocol_policy   = "http-only"
       origin_ssl_protocols     = ["TLSv1.2"]
-      origin_read_timeout      = 60   # Max allowed without Origin Shield
+      # Increased to 180 seconds for SSE streaming during Claude processing
+      origin_read_timeout      = 180
       origin_keepalive_timeout = 60
     }
 
     custom_header {
       name  = "X-Custom-Header"
       value = "bharatbuild-cloudfront"
+    }
+
+    # Enable Origin Shield to allow origin_read_timeout up to 180 seconds
+    # Using ap-south-1 region to match ALB location for best performance
+    origin_shield {
+      enabled              = true
+      origin_shield_region = "ap-south-1"
     }
   }
 

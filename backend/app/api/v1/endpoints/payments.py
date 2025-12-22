@@ -25,10 +25,11 @@ from app.core.database import get_db
 from app.core.config import settings
 from app.core.logging_config import logger
 from app.models.user import User
-from app.models.billing import Transaction, TransactionStatus
+from app.models.billing import Transaction, TransactionStatus, Subscription, SubscriptionStatus, Plan, PlanType
 from app.models.token_balance import TokenPurchase
 from app.modules.auth.dependencies import get_current_user
 from app.utils.token_manager import token_manager
+from dateutil.relativedelta import relativedelta
 
 # Razorpay client initialization
 try:
@@ -270,6 +271,78 @@ async def verify_payment(
             )
             db.add(token_purchase)
 
+            # ================================================================
+            # CREATE SUBSCRIPTION RECORD FOR PRO STATUS
+            # This ensures user is recognized as PRO across the entire app:
+            # - Document generation (SRS, PPT, Report, Viva Q&A)
+            # - Dashboard showing PRO status
+            # - All subscription-based feature checks
+            # ================================================================
+            try:
+                # Find existing PRO plan or create one
+                pro_plan_result = await db.execute(
+                    select(Plan).where(
+                        Plan.plan_type == PlanType.PRO,
+                        Plan.is_active == True
+                    ).limit(1)
+                )
+                pro_plan = pro_plan_result.scalar_one_or_none()
+
+                # If no PRO plan exists in database, create one
+                if not pro_plan:
+                    pro_plan = Plan(
+                        name="PRO Plan",
+                        slug="pro-token-purchase",
+                        plan_type=PlanType.PRO,
+                        description="PRO access via token purchase - Full features including academic documents",
+                        price=transaction.amount,
+                        currency="INR",
+                        billing_period="lifetime",
+                        token_limit=None,  # Unlimited
+                        project_limit=None,  # Unlimited
+                        documents_per_month=None,  # Unlimited
+                        document_types_allowed=["report", "srs", "sds", "ppt", "viva"],
+                        features=["unlimited_tokens", "all_documents", "priority_support", "academic_docs"],
+                        allowed_models=["haiku", "sonnet", "opus"],
+                        priority_queue=True,
+                        is_active=True
+                    )
+                    db.add(pro_plan)
+                    await db.flush()  # Get the plan ID without committing
+                    logger.info(f"[Payment] Created PRO plan for token purchases: {pro_plan.id}")
+
+                # Cancel any existing active subscriptions for this user
+                existing_subs = await db.execute(
+                    select(Subscription).where(
+                        Subscription.user_id == current_user.id,
+                        Subscription.status == SubscriptionStatus.ACTIVE
+                    )
+                )
+                for existing_sub in existing_subs.scalars().all():
+                    existing_sub.status = SubscriptionStatus.CANCELLED
+                    existing_sub.cancelled_at = datetime.utcnow()
+                    logger.info(f"[Payment] Cancelled existing subscription: {existing_sub.id}")
+
+                # Create new PRO subscription
+                now = datetime.utcnow()
+                new_subscription = Subscription(
+                    user_id=current_user.id,
+                    plan_id=pro_plan.id,
+                    status=SubscriptionStatus.ACTIVE,
+                    razorpay_subscription_id=None,  # One-time purchase, not recurring
+                    razorpay_customer_id=None,
+                    current_period_start=now,
+                    current_period_end=now + relativedelta(years=100),  # Lifetime access
+                    cancel_at_period_end=False
+                )
+                db.add(new_subscription)
+                logger.info(f"[Payment] Created PRO subscription for user {current_user.id}")
+
+            except Exception as sub_error:
+                # Log error but don't fail the payment - tokens are already credited
+                # User still gets tokens, subscription is a bonus
+                logger.error(f"[Payment] Failed to create subscription record (non-fatal): {sub_error}")
+
             await db.commit()
 
             logger.info(f"[Payment] Successfully credited {tokens_to_add} tokens to user {current_user.id}")
@@ -418,6 +491,68 @@ async def _handle_payment_captured(payload: dict, db: AsyncSession):
             is_expired=False
         )
         db.add(token_purchase)
+
+        # ================================================================
+        # CREATE SUBSCRIPTION RECORD FOR PRO STATUS (Webhook backup)
+        # Same logic as /verify endpoint for consistency
+        # ================================================================
+        try:
+            # Find existing PRO plan or create one
+            pro_plan_result = await db.execute(
+                select(Plan).where(
+                    Plan.plan_type == PlanType.PRO,
+                    Plan.is_active == True
+                ).limit(1)
+            )
+            pro_plan = pro_plan_result.scalar_one_or_none()
+
+            if not pro_plan:
+                pro_plan = Plan(
+                    name="PRO Plan",
+                    slug="pro-token-purchase",
+                    plan_type=PlanType.PRO,
+                    description="PRO access via token purchase",
+                    price=transaction.amount,
+                    currency="INR",
+                    billing_period="lifetime",
+                    token_limit=None,
+                    project_limit=None,
+                    documents_per_month=None,
+                    document_types_allowed=["report", "srs", "sds", "ppt", "viva"],
+                    features=["unlimited_tokens", "all_documents", "priority_support", "academic_docs"],
+                    allowed_models=["haiku", "sonnet", "opus"],
+                    priority_queue=True,
+                    is_active=True
+                )
+                db.add(pro_plan)
+                await db.flush()
+
+            # Cancel existing subscriptions
+            existing_subs = await db.execute(
+                select(Subscription).where(
+                    Subscription.user_id == transaction.user_id,
+                    Subscription.status == SubscriptionStatus.ACTIVE
+                )
+            )
+            for existing_sub in existing_subs.scalars().all():
+                existing_sub.status = SubscriptionStatus.CANCELLED
+                existing_sub.cancelled_at = datetime.utcnow()
+
+            # Create PRO subscription
+            now = datetime.utcnow()
+            new_subscription = Subscription(
+                user_id=transaction.user_id,
+                plan_id=pro_plan.id,
+                status=SubscriptionStatus.ACTIVE,
+                current_period_start=now,
+                current_period_end=now + relativedelta(years=100),
+                cancel_at_period_end=False
+            )
+            db.add(new_subscription)
+            logger.info(f"[Webhook] Created PRO subscription for user {transaction.user_id}")
+
+        except Exception as sub_error:
+            logger.error(f"[Webhook] Failed to create subscription (non-fatal): {sub_error}")
 
     await db.commit()
     logger.info(f"[Webhook] Processed payment.captured for order {order_id}")
