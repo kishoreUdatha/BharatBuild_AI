@@ -26,17 +26,28 @@ from datetime import datetime, timedelta
 
 from app.core.logging_config import logger
 
-# Sandbox public URL for preview (use sandbox EC2 public IP/domain in production)
+# Frontend URL for API proxy pattern
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 
 
-def _get_preview_url(port: int) -> str:
-    """Generate preview URL using sandbox public URL or localhost fallback"""
-    if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
-        base = SANDBOX_PUBLIC_URL.rstrip('/')
-        # Use path-based routing: /sandbox/PORT/
-        # This works with Nginx reverse proxy that routes /sandbox/PORT/* to EC2:PORT
-        return f"{base}/{port}/"
+def _get_preview_url(port: int, project_id: str = None) -> str:
+    """
+    Generate preview URL using API proxy pattern (production) or localhost (development).
+
+    Production: Uses /api/v1/preview/{project_id}/ which proxies through backend
+    Development: Uses localhost:{port}
+    """
+    is_production = (
+        ENVIRONMENT == "production" or
+        (FRONTEND_URL and "localhost" not in FRONTEND_URL and "127.0.0.1" not in FRONTEND_URL)
+    )
+
+    if is_production and project_id:
+        # Use API proxy pattern - this routes through backend preview_proxy
+        return f"{FRONTEND_URL}/api/v1/preview/{project_id}/"
+
     return f"http://localhost:{port}"
 
 
@@ -556,7 +567,7 @@ class ContainerExecutor:
                                 match = re.search(pattern, line, re.IGNORECASE)
                                 if match:
                                     server_started = True
-                                    preview_url = _get_preview_url(host_port)
+                                    preview_url = _get_preview_url(host_port, project_id)
                                     yield f"\n🚀 Server started!\n"
                                     yield f"__SERVER_STARTED__:{preview_url}\n"
                                     break
