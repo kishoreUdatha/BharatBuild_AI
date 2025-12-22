@@ -42,7 +42,7 @@ export default function StudentFormPage() {
     setErrorMessage('')
 
     try {
-      const response = await fetch(`${API_URL}/api/v1/workshop/enroll`, {
+      const response = await fetch(`${API_URL}/workshop/enroll`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
