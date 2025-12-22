@@ -24,15 +24,21 @@ Architecture:
 import asyncio
 import httpx
 import re
+import os
 from typing import Optional
 from fastapi import APIRouter, Request, Response, HTTPException
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
 from app.modules.execution import get_container_manager
+from app.services.container_executor import container_executor
 from app.core.logging_config import logger
 
 router = APIRouter(prefix="/preview", tags=["Preview Proxy"])
+
+# Check if using remote Docker (EC2 sandbox)
+SANDBOX_DOCKER_HOST = os.environ.get("SANDBOX_DOCKER_HOST", "")
+IS_REMOTE_DOCKER = bool(SANDBOX_DOCKER_HOST)
 
 # HTTP client for proxying requests
 _http_client: Optional[httpx.AsyncClient] = None
@@ -57,6 +63,20 @@ async def get_container_internal_address(project_id: str) -> Optional[tuple[str,
     Returns:
         Tuple of (container_ip, active_port) or None if container not found
     """
+    # For remote Docker (EC2 sandbox), check container_executor first
+    if IS_REMOTE_DOCKER:
+        if project_id in container_executor.active_containers:
+            container_info = container_executor.active_containers[project_id]
+            # Extract EC2 IP from SANDBOX_DOCKER_HOST (e.g., "tcp://10.0.1.115:2375" -> "10.0.1.115")
+            ec2_ip = SANDBOX_DOCKER_HOST.replace("tcp://", "").split(":")[0]
+            host_port = container_info.get("port", 3000)
+            logger.info(f"[Preview] Remote mode: {project_id} -> {ec2_ip}:{host_port}")
+            return (ec2_ip, host_port)
+        else:
+            logger.warning(f"[Preview] Remote container not found for {project_id}")
+            # Container might have been created but not tracked - return None to try local manager
+
+    # Local Docker mode or fallback
     manager = get_container_manager()
 
     # Check if container exists
