@@ -129,18 +129,6 @@ export default function AdminProjectsPage() {
     }
   }, [])
 
-  useEffect(() => {
-    fetchProjects()
-  }, [fetchProjects])
-
-  useEffect(() => {
-    fetchStats()
-  }, [fetchStats])
-
-  useEffect(() => {
-    fetchUsers()
-  }, [fetchUsers])
-
   const fetchUsers = useCallback(async () => {
     setUsersLoading(true)
     try {
@@ -152,6 +140,18 @@ export default function AdminProjectsPage() {
       setUsersLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    fetchProjects()
+  }, [fetchProjects])
+
+  useEffect(() => {
+    fetchStats()
+  }, [fetchStats])
+
+  useEffect(() => {
+    fetchUsers()
+  }, [fetchUsers])
 
   const handleDownload = async (projectId: string, projectTitle: string) => {
     setDownloadingId(projectId)

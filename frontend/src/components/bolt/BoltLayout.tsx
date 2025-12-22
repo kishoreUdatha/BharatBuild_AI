@@ -53,7 +53,7 @@ import {
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useTerminal } from '@/hooks/useTerminal'
-import { Message, useChatStore } from '@/store/chatStore'
+import { Message, AIMessage, ThinkingStep, useChatStore } from '@/store/chatStore'
 import { useVersionControl } from '@/services/versionControl/historyManager'
 import { exportProjectAsZip } from '@/services/project/exportService'
 import { useProject } from '@/hooks/useProject'
@@ -427,9 +427,11 @@ export function BoltLayout({
                 const mappedStatus = status === 'complete' ? 'complete' : status === 'active' ? 'active' : 'pending'
 
                 // Check if step already exists
-                const existingStep = useChatStore.getState().messages
-                  .find(m => m.id === resumeMessageId)?.thinkingSteps
-                  ?.find(s => s.label === label)
+                const foundMessage = useChatStore.getState().messages
+                  .find(m => m.id === resumeMessageId)
+                const existingStep = foundMessage?.type === 'assistant'
+                  ? (foundMessage as AIMessage).thinkingSteps?.find((s: ThinkingStep) => s.label === label)
+                  : undefined
 
                 if (existingStep) {
                   updateThinkingStep(resumeMessageId, label, { status: mappedStatus })
