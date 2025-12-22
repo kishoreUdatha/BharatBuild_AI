@@ -34,9 +34,9 @@ def _get_preview_url(port: int) -> str:
     """Generate preview URL using sandbox public URL or localhost fallback"""
     if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
         base = SANDBOX_PUBLIC_URL.rstrip('/')
-        if ':' in base.split('/')[-1]:
-            base = ':'.join(base.rsplit(':', 1)[:-1])
-        return f"{base}:{port}"
+        # Use path-based routing: /sandbox/PORT/
+        # This works with Nginx reverse proxy that routes /sandbox/PORT/* to EC2:PORT
+        return f"{base}/{port}/"
     return f"http://localhost:{port}"
 
 
