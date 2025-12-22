@@ -223,7 +223,7 @@ export function BoltLayout({
   const { sessionId, downloadUrl, resetProject } = useProjectStore()
 
   // Get chat store for clearing messages and updating message state
-  const { clearMessages, addMessage, updateFileOperation, updateMessageStatus, appendToMessage } = useChatStore()
+  const { clearMessages, addMessage, addFileOperation, updateFileOperation, updateMessageStatus, appendToMessage, addThinkingStep, updateThinkingStep } = useChatStore()
 
   // Get plan status for project limits
   const { projectsCreated, projectLimit, isPremium, isFree, needsUpgrade, features } = usePlanStatus()
@@ -315,6 +315,25 @@ export function BoltLayout({
       addMessage(resumeMessage)
 
       const decoder = new TextDecoder()
+
+      // Track which files have been added to avoid duplicates (persists across all events)
+      const addedFiles = new Set<string>()
+
+      // Helper to add file operation if not exists, then update
+      const addOrUpdateFileOp = (path: string, status: 'pending' | 'in-progress' | 'complete', description?: string) => {
+        if (!addedFiles.has(path)) {
+          addFileOperation(resumeMessageId, {
+            type: 'create',
+            path,
+            description: description || `Creating ${path}`,
+            status
+          })
+          addedFiles.add(path)
+        } else {
+          updateFileOperation(resumeMessageId, path, { status, description })
+        }
+      }
+
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
@@ -328,18 +347,35 @@ export function BoltLayout({
               const event = JSON.parse(line.slice(6))
               console.log('[Resume] Event:', event.type, event.data)
 
+              // Handle plan_created to show planned files FIRST (this should come early in the stream)
+              // Backend sends files in event.data.files (direct) or event.data.plan.files (nested)
+              if (event.type === 'plan_created') {
+                const files = event.data?.files || event.data?.plan?.files || []
+                console.log('[Resume] plan_created received with', files.length, 'files')
+                for (const file of files) {
+                  const filePath = typeof file === 'string' ? file : file.path
+                  if (filePath) {
+                    addOrUpdateFileOp(filePath, 'pending', `Planned: ${filePath}`)
+                  }
+                }
+              }
+
               // Handle file_operation events to show progress in UI
               if (event.type === 'file_operation') {
                 const fileOp = event.data || event
                 const opPath = fileOp.path || ''
-                const opStatus = fileOp.operation_status || 'pending'
+                const opStatus = fileOp.operation_status || fileOp.status || 'pending'
 
                 if (opPath) {
-                  updateFileOperation(resumeMessageId, opPath, {
-                    status: opStatus === 'complete' ? 'complete' : opStatus === 'in_progress' ? 'in-progress' : 'pending',
-                    description: opStatus === 'in_progress' ? `Creating ${opPath}` : undefined
-                  })
+                  const mappedStatus = opStatus === 'complete' ? 'complete' : opStatus === 'in_progress' ? 'in-progress' : 'pending'
+                  addOrUpdateFileOp(opPath, mappedStatus, opStatus === 'in_progress' ? `Creating ${opPath}` : undefined)
                 }
+              }
+
+              // Handle file_start events (file generation starting)
+              if (event.type === 'file_start' && event.data?.path) {
+                const filePath = event.data.path
+                addOrUpdateFileOp(filePath, 'in-progress', `Creating ${filePath}`)
               }
 
               // Handle file_content events (file completed)
@@ -358,7 +394,7 @@ export function BoltLayout({
                   language: langMap[ext] || ext || 'text'
                 })
                 // Mark file as complete
-                updateFileOperation(resumeMessageId, filePath, { status: 'complete' })
+                addOrUpdateFileOp(filePath, 'complete')
               }
 
               // Handle file_complete events (legacy format)
@@ -377,17 +413,36 @@ export function BoltLayout({
                   language: langMap[ext] || ext || 'text'
                 })
                 // Mark file as complete
-                updateFileOperation(resumeMessageId, filePath, { status: 'complete' })
+                addOrUpdateFileOp(filePath, 'complete')
               }
 
-              // Handle plan_created to show planned files
-              if (event.type === 'plan_created' && event.data?.plan?.files) {
-                const files = event.data.plan.files
-                for (const file of files) {
-                  const filePath = typeof file === 'string' ? file : file.path
-                  if (filePath) {
-                    updateFileOperation(resumeMessageId, filePath, { status: 'pending' })
-                  }
+              // Handle thinking_step events to show progress stages
+              if (event.type === 'thinking_step') {
+                const stepData = event.data || event
+                const label = stepData.label || stepData.step || 'Processing'
+                const status = stepData.status || 'active'
+                const category = stepData.category || 'general'
+
+                // Map backend status to frontend status
+                const mappedStatus = status === 'complete' ? 'complete' : status === 'active' ? 'active' : 'pending'
+
+                // Check if step already exists
+                const existingStep = useChatStore.getState().messages
+                  .find(m => m.id === resumeMessageId)?.thinkingSteps
+                  ?.find(s => s.label === label)
+
+                if (existingStep) {
+                  updateThinkingStep(resumeMessageId, label, { status: mappedStatus })
+                } else {
+                  addThinkingStep(resumeMessageId, { label, status: mappedStatus, category })
+                }
+              }
+
+              // Handle status events for general progress updates
+              if (event.type === 'status') {
+                const message = event.data?.message || event.message
+                if (message) {
+                  appendToMessage(resumeMessageId, `\n${message}`)
                 }
               }
 

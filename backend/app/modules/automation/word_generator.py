@@ -18,6 +18,7 @@ from datetime import datetime
 import os
 import tempfile
 import re
+import asyncio
 
 from docx import Document
 from docx.shared import Inches, Pt, Cm, RGBColor
@@ -53,13 +54,17 @@ class WordDocumentGenerator:
         self.document = None
         self.styles_created = False
 
+    # Default timeout for document generation (5 minutes)
+    DOCUMENT_GENERATION_TIMEOUT_SECONDS = 300
+
     async def create_document(
         self,
         sections: List[Dict],
         project_data: Dict,
         document_type: str,
         project_id: str = None,
-        user_id: str = None
+        user_id: str = None,
+        timeout_seconds: int = None
     ) -> str:
         """
         Create complete Word document from sections.
@@ -70,14 +75,45 @@ class WordDocumentGenerator:
             document_type: Type of document (project_report, srs, etc.)
             project_id: Project ID for saving to project's docs folder
             user_id: User ID for isolation
+            timeout_seconds: Optional timeout override (default: 300s / 5 minutes)
 
         Returns:
             Path to generated document
+
+        Raises:
+            asyncio.TimeoutError: If document generation exceeds timeout
         """
         # Store user_id for diagram generation
         self.user_id = user_id
         self.project_id = project_id
 
+        # Use provided timeout or default
+        timeout = timeout_seconds or self.DOCUMENT_GENERATION_TIMEOUT_SECONDS
+
+        try:
+            # Wrap document generation with timeout
+            return await asyncio.wait_for(
+                self._create_document_internal(sections, project_data, document_type, project_id, user_id),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"[WordGenerator] Document generation timed out after {timeout}s for {document_type}")
+            raise
+        except Exception as e:
+            logger.error(f"[WordGenerator] Error: {e}", exc_info=True)
+            raise
+
+    async def _create_document_internal(
+        self,
+        sections: List[Dict],
+        project_data: Dict,
+        document_type: str,
+        project_id: str = None,
+        user_id: str = None
+    ) -> str:
+        """
+        Internal document creation logic (wrapped by timeout in create_document).
+        """
         try:
             # Create document
             self.document = Document()
@@ -249,66 +285,79 @@ class WordDocumentGenerator:
             return
 
         styles = self.document.styles
+        from app.core.logging_config import logger
+
+        def _add_style_safe(style_name: str, style_type, configure_func):
+            """Safely add a style, handling duplicates and errors"""
+            try:
+                # Check if style already exists
+                if style_name in styles:
+                    style = styles[style_name]
+                else:
+                    style = styles.add_style(style_name, style_type)
+                configure_func(style)
+            except ValueError as e:
+                # Style already exists - try to get and configure it
+                if "already exists" in str(e).lower():
+                    try:
+                        style = styles[style_name]
+                        configure_func(style)
+                    except Exception as inner_e:
+                        logger.warning(f"[WordGenerator] Could not configure existing style '{style_name}': {inner_e}")
+                else:
+                    logger.warning(f"[WordGenerator] ValueError creating style '{style_name}': {e}")
+            except Exception as e:
+                logger.warning(f"[WordGenerator] Failed to create style '{style_name}': {type(e).__name__}: {e}")
 
         # Title Style
-        try:
-            title_style = styles.add_style('ProjectTitle', WD_STYLE_TYPE.PARAGRAPH)
-            title_style.font.name = 'Arial'
-            title_style.font.size = Pt(28)
-            title_style.font.bold = True
-            title_style.font.color.rgb = self.PRIMARY_COLOR
-            title_style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            title_style.paragraph_format.space_after = Pt(24)
-        except:
-            pass
+        def configure_title(style):
+            style.font.name = 'Arial'
+            style.font.size = Pt(28)
+            style.font.bold = True
+            style.font.color.rgb = self.PRIMARY_COLOR
+            style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            style.paragraph_format.space_after = Pt(24)
+        _add_style_safe('ProjectTitle', WD_STYLE_TYPE.PARAGRAPH, configure_title)
 
         # Chapter Heading Style
-        try:
-            chapter_style = styles.add_style('ChapterHeading', WD_STYLE_TYPE.PARAGRAPH)
-            chapter_style.font.name = 'Arial'
-            chapter_style.font.size = Pt(18)
-            chapter_style.font.bold = True
-            chapter_style.font.color.rgb = self.PRIMARY_COLOR
-            chapter_style.paragraph_format.space_before = Pt(24)
-            chapter_style.paragraph_format.space_after = Pt(12)
-            chapter_style.paragraph_format.page_break_before = True
-        except:
-            pass
+        def configure_chapter(style):
+            style.font.name = 'Arial'
+            style.font.size = Pt(18)
+            style.font.bold = True
+            style.font.color.rgb = self.PRIMARY_COLOR
+            style.paragraph_format.space_before = Pt(24)
+            style.paragraph_format.space_after = Pt(12)
+            style.paragraph_format.page_break_before = True
+        _add_style_safe('ChapterHeading', WD_STYLE_TYPE.PARAGRAPH, configure_chapter)
 
         # Section Heading Style
-        try:
-            section_style = styles.add_style('SectionHeading', WD_STYLE_TYPE.PARAGRAPH)
-            section_style.font.name = 'Arial'
-            section_style.font.size = Pt(14)
-            section_style.font.bold = True
-            section_style.font.color.rgb = self.SECONDARY_COLOR
-            section_style.paragraph_format.space_before = Pt(18)
-            section_style.paragraph_format.space_after = Pt(8)
-        except:
-            pass
+        def configure_section(style):
+            style.font.name = 'Arial'
+            style.font.size = Pt(14)
+            style.font.bold = True
+            style.font.color.rgb = self.SECONDARY_COLOR
+            style.paragraph_format.space_before = Pt(18)
+            style.paragraph_format.space_after = Pt(8)
+        _add_style_safe('SectionHeading', WD_STYLE_TYPE.PARAGRAPH, configure_section)
 
         # Subsection Heading Style
-        try:
-            subsection_style = styles.add_style('SubsectionHeading', WD_STYLE_TYPE.PARAGRAPH)
-            subsection_style.font.name = 'Arial'
-            subsection_style.font.size = Pt(12)
-            subsection_style.font.bold = True
-            subsection_style.font.color.rgb = self.SECONDARY_COLOR
-            subsection_style.paragraph_format.space_before = Pt(12)
-            subsection_style.paragraph_format.space_after = Pt(6)
-        except:
-            pass
+        def configure_subsection(style):
+            style.font.name = 'Arial'
+            style.font.size = Pt(12)
+            style.font.bold = True
+            style.font.color.rgb = self.SECONDARY_COLOR
+            style.paragraph_format.space_before = Pt(12)
+            style.paragraph_format.space_after = Pt(6)
+        _add_style_safe('SubsectionHeading', WD_STYLE_TYPE.PARAGRAPH, configure_subsection)
 
         # Body Text Style - MUST be 12pt with 1.5 line spacing
-        try:
-            body_style = styles.add_style('BodyText', WD_STYLE_TYPE.PARAGRAPH)
-            body_style.font.name = 'Times New Roman'
-            body_style.font.size = Pt(12)
-            body_style.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
-            body_style.paragraph_format.space_after = Pt(8)
-            body_style.paragraph_format.first_line_indent = Cm(1.27)
-        except:
-            pass
+        def configure_body(style):
+            style.font.name = 'Times New Roman'
+            style.font.size = Pt(12)
+            style.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+            style.paragraph_format.space_after = Pt(8)
+            style.paragraph_format.first_line_indent = Cm(1.27)
+        _add_style_safe('BodyText', WD_STYLE_TYPE.PARAGRAPH, configure_body)
 
         # Also modify the default Normal style to ensure consistency
         try:
@@ -316,8 +365,8 @@ class WordDocumentGenerator:
             normal_style.font.name = 'Times New Roman'
             normal_style.font.size = Pt(12)
             normal_style.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"[WordGenerator] Could not modify Normal style: {e}")
 
         # Modify List Bullet style
         try:
@@ -326,8 +375,8 @@ class WordDocumentGenerator:
                 list_style.font.name = 'Times New Roman'
                 list_style.font.size = Pt(12)
                 list_style.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"[WordGenerator] Could not modify List Bullet style: {e}")
 
         # Modify List Number style
         try:
@@ -336,48 +385,72 @@ class WordDocumentGenerator:
                 list_num_style.font.name = 'Times New Roman'
                 list_num_style.font.size = Pt(12)
                 list_num_style.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"[WordGenerator] Could not modify List Number style: {e}")
 
         # Code Style
-        try:
-            code_style = styles.add_style('CodeBlock', WD_STYLE_TYPE.PARAGRAPH)
-            code_style.font.name = 'Consolas'
-            code_style.font.size = Pt(10)
-            code_style.paragraph_format.space_before = Pt(6)
-            code_style.paragraph_format.space_after = Pt(6)
-        except:
-            pass
+        def configure_code(style):
+            style.font.name = 'Consolas'
+            style.font.size = Pt(10)
+            style.paragraph_format.space_before = Pt(6)
+            style.paragraph_format.space_after = Pt(6)
+        _add_style_safe('CodeBlock', WD_STYLE_TYPE.PARAGRAPH, configure_code)
 
         # Caption Style
-        try:
-            caption_style = styles.add_style('FigureCaption', WD_STYLE_TYPE.PARAGRAPH)
-            caption_style.font.name = 'Arial'
-            caption_style.font.size = Pt(10)
-            caption_style.font.italic = True
-            caption_style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            caption_style.paragraph_format.space_before = Pt(6)
-            caption_style.paragraph_format.space_after = Pt(12)
-        except:
-            pass
+        def configure_caption(style):
+            style.font.name = 'Arial'
+            style.font.size = Pt(10)
+            style.font.italic = True
+            style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            style.paragraph_format.space_before = Pt(6)
+            style.paragraph_format.space_after = Pt(12)
+        _add_style_safe('FigureCaption', WD_STYLE_TYPE.PARAGRAPH, configure_caption)
 
         self.styles_created = True
 
     async def _add_section(self, section: Dict, project_data: Dict):
-        """Add a section to the document"""
+        """Add a section to the document with error handling per section"""
         section_type = section.get("type", "generate")
         section_id = section.get("section_id", "")
         title = section.get("title", "")
         content = section.get("content", {})
 
-        if section_type == "template":
-            self._add_template_section(section_id, content, project_data)
-        elif section_type == "auto":
-            self._add_auto_section(section_id)
-        elif section_type == "code":
-            self._add_code_section(content)
-        else:
-            self._add_generated_section(section_id, title, content, project_data)
+        try:
+            if section_type == "template":
+                self._add_template_section(section_id, content, project_data)
+            elif section_type == "auto":
+                self._add_auto_section(section_id)
+            elif section_type == "code":
+                self._add_code_section(content)
+            else:
+                self._add_generated_section(section_id, title, content, project_data)
+
+        except Exception as e:
+            # Log error but continue with document generation
+            logger.error(f"[WordGenerator] Failed to add section '{section_id}' ({section_type}): {type(e).__name__}: {e}")
+
+            # Add a placeholder indicating section generation failed
+            try:
+                self._add_section_error_placeholder(section_id, title, str(e))
+            except Exception as placeholder_error:
+                logger.error(f"[WordGenerator] Could not add error placeholder: {placeholder_error}")
+
+    def _add_section_error_placeholder(self, section_id: str, title: str, error_msg: str):
+        """Add a placeholder when a section fails to generate"""
+        display_title = title or section_id or "Section"
+
+        # Add section heading
+        p = self.document.add_paragraph(display_title, style='Heading 1')
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+        # Add error message
+        error_para = self.document.add_paragraph()
+        error_run = error_para.add_run(f"[Section generation failed: {error_msg}]")
+        error_run.font.italic = True
+        error_run.font.color.rgb = RGBColor(255, 0, 0)  # Red text
+
+        # Add page break
+        self.document.add_page_break()
 
     def _add_template_section(self, section_id: str, content: Dict, project_data: Dict):
         """Add template-based section (cover, certificate, etc.)"""

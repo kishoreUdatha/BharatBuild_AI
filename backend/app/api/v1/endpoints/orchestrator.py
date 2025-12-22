@@ -12,13 +12,19 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, AsyncIterator, TypeVar
 from enum import Enum
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 import asyncio
 import json
 import uuid
+from datetime import datetime
+
+T = TypeVar('T')
+
+# SSE Keepalive interval (seconds) - CloudFront has 60s timeout, so send keepalive every 30s
+SSE_KEEPALIVE_INTERVAL = 30
 
 from app.modules.orchestrator.dynamic_orchestrator import (
     DynamicOrchestrator,
@@ -70,6 +76,41 @@ optional_security = HTTPBearer(auto_error=False)
 
 
 # ==================== Helper Functions ====================
+
+async def with_keepalive(async_iterator: AsyncIterator[T], project_id: str) -> AsyncIterator[T]:
+    """
+    Wrap an async iterator with SSE keepalive support.
+
+    CloudFront has a 60-second origin read timeout. When Claude is processing
+    (thinking/generating), no events are yielded, causing CloudFront to timeout.
+
+    This wrapper sends keepalive events every SSE_KEEPALIVE_INTERVAL seconds
+    when no events are received from the source iterator.
+
+    Keepalive events are SSE comments (: keepalive) which are ignored by EventSource
+    but keep the connection alive.
+    """
+    # Use aiter to make the async iterator work with anext
+    ait = async_iterator.__aiter__()
+
+    while True:
+        try:
+            # Try to get the next event with a timeout
+            event = await asyncio.wait_for(
+                ait.__anext__(),
+                timeout=SSE_KEEPALIVE_INTERVAL
+            )
+            yield event
+        except asyncio.TimeoutError:
+            # No event received within timeout - send keepalive
+            # SSE comment format (: comment) is ignored by browser EventSource
+            # but keeps the TCP connection alive
+            logger.debug(f"[SSE Keepalive] Sending keepalive for project {project_id}")
+            yield None  # Signal to send keepalive
+        except StopAsyncIteration:
+            # Iterator exhausted
+            break
+
 
 async def get_or_create_project(
     db: AsyncSession,
@@ -275,13 +316,23 @@ async def event_generator(
         # Clear any previous cancellation for this project
         clear_cancellation(project_id)
 
-        # Execute workflow and stream events
-        async for event in orchestrator.execute_workflow(
+        # Execute workflow and stream events with keepalive wrapper
+        # The keepalive wrapper sends heartbeats every 30 seconds to prevent CloudFront timeout
+        workflow_events = orchestrator.execute_workflow(
             user_request=user_request,
             project_id=project_id,
             workflow_name=workflow_name,
             metadata=metadata
-        ):
+        )
+
+        async for event in with_keepalive(workflow_events, project_id):
+            # Handle keepalive signal (None event)
+            if event is None:
+                # Send SSE comment as keepalive - ignored by EventSource but keeps connection alive
+                yield ": keepalive\n\n"
+                await asyncio.sleep(0)
+                continue
+
             # Check for cancellation before processing each event
             if is_project_cancelled(project_id):
                 logger.info(f"[SSE Generator] Project {project_id} cancelled, stopping generation")

@@ -539,9 +539,15 @@ async def _execute_docker_stream(project_id: str, project_path):
 
         # Use smart run_project which handles Docker + fallback
         async for output in docker_executor.run_project(project_id, project_path):
-            # Check for special server started marker
-            if output.startswith("__SERVER_STARTED__:"):
-                preview_url = output.split(":", 1)[1].strip()
+            # Check for special server started markers (both legacy and new format)
+            # Legacy: __SERVER_STARTED__:URL
+            # New:    _PREVIEW_URL_:URL
+            if output.startswith("__SERVER_STARTED__:") or output.startswith("_PREVIEW_URL_:"):
+                # Extract URL from either marker format
+                if output.startswith("__SERVER_STARTED__:"):
+                    preview_url = output.split(":", 1)[1].strip()
+                else:
+                    preview_url = output.split("_PREVIEW_URL_:", 1)[1].strip()
                 server_started = True
 
                 # Extract port from URL
@@ -551,6 +557,20 @@ async def _execute_docker_stream(project_id: str, project_path):
 
                 # Send server_started event for frontend
                 yield f"data: {json.dumps({'type': 'server_started', 'port': port, 'preview_url': preview_url})}\n\n"
+            elif "_PREVIEW_URL_:" in output:
+                # Handle case where _PREVIEW_URL_ is embedded in output (e.g., after banner)
+                import re
+                url_match = re.search(r'_PREVIEW_URL_:(.+?)(?:\n|$)', output)
+                if url_match:
+                    preview_url = url_match.group(1).strip()
+                    server_started = True
+                    port_match = re.search(r':(\d+)', preview_url)
+                    port = int(port_match.group(1)) if port_match else 3000
+                    yield f"data: {json.dumps({'type': 'server_started', 'port': port, 'preview_url': preview_url})}\n\n"
+                # Also send the output (without the marker) for display
+                clean_output = re.sub(r'_PREVIEW_URL_:.+?(?:\n|$)', '', output).strip()
+                if clean_output:
+                    yield f"data: {json.dumps({'type': 'output', 'content': clean_output})}\n\n"
             else:
                 # Regular output
                 yield f"data: {json.dumps({'type': 'output', 'content': output.strip()})}\n\n"

@@ -62,14 +62,21 @@ class Technology(Enum):
 
 @dataclass
 class ContainerConfig:
-    """Configuration for a technology container"""
+    """Configuration for a technology container - uses CENTRALIZED settings"""
     image: str
     run_command: str
     build_command: Optional[str] = None
     port: int = 3000
     memory_limit: str = "512m"
     cpu_limit: float = 0.5
-    timeout_seconds: int = 300  # 5 minutes max
+    # Use centralized timeout from settings (default 30 minutes)
+    timeout_seconds: int = None
+
+    def __post_init__(self):
+        # Load from centralized settings if not specified
+        from app.core.config import settings
+        if self.timeout_seconds is None:
+            self.timeout_seconds = settings.CONTAINER_IDLE_TIMEOUT_SECONDS
 
 
 # Pre-built images for each technology
@@ -266,6 +273,10 @@ class ContainerExecutor:
         if not self.docker_client:
             return False, "Docker client not initialized", None
 
+        # Clean up any existing container for this project before creating new one
+        # This ensures only ONE container per project at any time
+        await self._cleanup_project_container(project_id)
+
         # Auto-detect technology if not provided
         if technology is None:
             technology = self.detect_technology(project_path)
@@ -445,12 +456,44 @@ class ContainerExecutor:
 
         raise RuntimeError("No available ports")
 
+    async def _cleanup_project_container(self, project_id: str):
+        """
+        Clean up any existing container for a specific project.
+        Called before creating a new container to ensure only ONE container per project.
+        """
+        if not self.docker_client:
+            return
+
+        try:
+            # Find containers with this project_id label
+            containers = self.docker_client.containers.list(
+                all=True,
+                filters={"label": f"project_id={project_id}"}
+            )
+
+            for container in containers:
+                try:
+                    logger.info(f"[ContainerExecutor] Removing existing container {container.name} for project {project_id}")
+                    if container.status == "running":
+                        container.stop(timeout=5)
+                    container.remove(force=True)
+                except Exception as e:
+                    logger.warning(f"[ContainerExecutor] Failed to remove container {container.name}: {e}")
+
+            # Also remove from active_containers dict
+            if project_id in self.active_containers:
+                del self.active_containers[project_id]
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Error cleaning up project container: {e}")
+
     async def _cleanup_loop(self):
         """Background task to cleanup expired containers"""
         while True:
             try:
                 await asyncio.sleep(60)  # Check every minute
 
+                # 1. Clean up in-memory tracked containers
                 now = datetime.utcnow()
                 expired = [
                     project_id for project_id, info in self.active_containers.items()
@@ -461,10 +504,66 @@ class ContainerExecutor:
                     logger.info(f"[ContainerExecutor] Auto-cleanup expired container: {project_id}")
                     await self.stop_container(project_id)
 
+                # 2. Clean up orphaned containers directly from Docker
+                # This handles containers that exist but aren't tracked in memory
+                # (e.g., after backend restart)
+                await self._cleanup_orphaned_containers()
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"[ContainerExecutor] Cleanup error: {e}")
+
+    async def _cleanup_orphaned_containers(self):
+        """
+        Clean up bharatbuild containers that are older than the idle timeout.
+        This queries Docker directly, handling containers that survived backend restarts.
+        Uses centralized CONTAINER_IDLE_TIMEOUT_SECONDS from settings.
+        """
+        if not self.docker_client:
+            return
+
+        try:
+            from app.core.config import settings
+
+            # Find all bharatbuild containers
+            containers = self.docker_client.containers.list(
+                all=True,
+                filters={"label": "bharatbuild=true"}
+            )
+
+            now = datetime.utcnow()
+            # Use centralized timeout setting
+            max_age_minutes = settings.CONTAINER_IDLE_TIMEOUT_SECONDS / 60
+
+            for container in containers:
+                try:
+                    # Get container creation time
+                    created_str = container.attrs.get("Created", "")
+                    if created_str:
+                        # Parse Docker timestamp (e.g., "2025-12-22T09:00:00.000000000Z")
+                        created_at = datetime.fromisoformat(created_str.replace("Z", "+00:00").split(".")[0])
+                        created_at = created_at.replace(tzinfo=None)  # Make naive for comparison
+                        age_minutes = (now - created_at).total_seconds() / 60
+
+                        if age_minutes > max_age_minutes:
+                            project_id = container.labels.get("project_id", "unknown")
+                            logger.info(f"[ContainerExecutor] Removing orphaned container {container.name} "
+                                       f"(project: {project_id}, age: {age_minutes:.1f} min)")
+
+                            if container.status == "running":
+                                container.stop(timeout=5)
+                            container.remove(force=True)
+
+                            # Also remove from active_containers if tracked
+                            if project_id in self.active_containers:
+                                del self.active_containers[project_id]
+
+                except Exception as e:
+                    logger.warning(f"[ContainerExecutor] Failed to cleanup container {container.name}: {e}")
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Error in orphaned container cleanup: {e}")
 
     async def cleanup_all(self):
         """Stop all containers (for shutdown)"""

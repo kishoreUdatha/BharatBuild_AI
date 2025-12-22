@@ -96,6 +96,47 @@ def get_direct_preview_url(port: int) -> str:
     return f"http://localhost:{port}"
 
 
+def replace_port_in_command(command: str, old_port: int, new_port: int) -> str:
+    """
+    Safely replace port number in command string.
+    Only replaces port when it appears in port-specific contexts to avoid
+    accidentally replacing the same number if it appears elsewhere (e.g., in filenames).
+
+    Contexts matched:
+    - --port 3000, --port=3000, -p 3000
+    - :3000 (URL or binding)
+    - PORT=3000 (environment variable)
+    - port 3000 (space-separated)
+    """
+    import re
+    old = str(old_port)
+    new = str(new_port)
+
+    # Patterns for port contexts (with word boundaries to avoid partial matches)
+    patterns = [
+        (rf'(--port[=\s])({old})\b', rf'\g<1>{new}'),           # --port 3000 or --port=3000
+        (rf'(-p\s+)({old})\b', rf'\g<1>{new}'),                  # -p 3000
+        (rf'(:)({old})\b', rf'\g<1>{new}'),                      # :3000 (URL or port binding)
+        (rf'(PORT[=\s])({old})\b', rf'\g<1>{new}'),              # PORT=3000 or PORT 3000
+        (rf'(\sport\s+)({old})\b', rf'\g<1>{new}', re.IGNORECASE),  # " port 3000"
+    ]
+
+    result = command
+    for pattern in patterns:
+        if len(pattern) == 3:
+            result = re.sub(pattern[0], pattern[1], result, flags=pattern[2])
+        else:
+            result = re.sub(pattern[0], pattern[1], result)
+
+    # Fallback: if no pattern matched but port exists, use simple replace
+    # This handles edge cases but logs a warning
+    if old in result and new not in result:
+        logger.warning(f"[replace_port] Fallback to simple replace for: {command[:100]}")
+        result = command.replace(old, new)
+
+    return result
+
+
 class FrameworkType(Enum):
     # ===== FRONTEND =====
     REACT_VITE = "react-vite"
@@ -534,6 +575,7 @@ class DockerExecutor:
         self._running_processes: Dict[str, asyncio.subprocess.Process] = {}  # For direct execution
         self._docker_available: Optional[bool] = None  # Cache Docker availability
         self._fix_in_progress: Dict[str, bool] = {}  # Track fix status per project
+        self._fix_lock = threading.Lock()  # Lock for thread-safe fix status updates
         self._background_monitors: Dict[str, bool] = {}  # Track background monitors per project
 
     def _should_use_ai_fixer(self, error_message: str, project_path: Path) -> bool:
@@ -789,38 +831,45 @@ class DockerExecutor:
         if not hasattr(self, '_pending_errors'):
             self._pending_errors = {}
 
-        # If a fix is in progress, queue this error for later (unless it's a duplicate)
-        if self._fix_in_progress.get(project_id, False):
-            # Check if this is a high-priority error (real errors should be processed)
-            high_priority_patterns = [
-                'class does not exist',  # Tailwind
-                '[postcss]',
-                '[vite]',
-                'Module not found',
-                'Cannot find module',
-                'SyntaxError',
-                'TypeError',
-            ]
-            is_high_priority = any(p in error_message for p in high_priority_patterns)
+        # Thread-safe check and set for fix_in_progress to prevent race conditions
+        # Multiple threads (reader thread + main loop) may try to trigger auto-fix simultaneously
+        with self._fix_lock:
+            # If a fix is in progress, queue this error for later (unless it's a duplicate)
+            if self._fix_in_progress.get(project_id, False):
+                # Check if this is a high-priority error (real errors should be processed)
+                high_priority_patterns = [
+                    'class does not exist',  # Tailwind
+                    '[postcss]',
+                    '[vite]',
+                    'Module not found',
+                    'Cannot find module',
+                    'SyntaxError',
+                    'TypeError',
+                ]
+                is_high_priority = any(p in error_message for p in high_priority_patterns)
 
-            if is_high_priority:
-                # Store the error for processing after current fix completes
-                if project_id not in self._pending_errors:
-                    self._pending_errors[project_id] = []
-                # Avoid duplicate errors in queue
-                error_hash = hash(error_message[:500])
-                existing_hashes = [hash(e['error'][:500]) for e in self._pending_errors.get(project_id, [])]
-                if error_hash not in existing_hashes:
-                    self._pending_errors[project_id].append({
-                        'error': error_message,
-                        'command': command,
-                        'user_id': user_id,
-                        'project_path': project_path,
-                    })
-                    logger.info(f"[DockerExecutor:{project_id}] Queued high-priority error for later processing")
+                if is_high_priority:
+                    # Store the error for processing after current fix completes
+                    if project_id not in self._pending_errors:
+                        self._pending_errors[project_id] = []
+                    # Avoid duplicate errors in queue
+                    error_hash = hash(error_message[:500])
+                    existing_hashes = [hash(e['error'][:500]) for e in self._pending_errors.get(project_id, [])]
+                    if error_hash not in existing_hashes:
+                        self._pending_errors[project_id].append({
+                            'error': error_message,
+                            'command': command,
+                            'user_id': user_id,
+                            'project_path': project_path,
+                        })
+                        logger.info(f"[DockerExecutor:{project_id}] Queued high-priority error for later processing")
 
-            logger.info(f"[DockerExecutor:{project_id}] Fix already in progress, skipping (queued={is_high_priority})")
-            return
+                logger.info(f"[DockerExecutor:{project_id}] Fix already in progress, skipping (queued={is_high_priority})")
+                return
+
+            # Atomically mark fix as in progress BEFORE releasing the lock
+            # This prevents another thread from also passing the check
+            self._fix_in_progress[project_id] = True
 
         async def run_production_auto_fix():
             """
@@ -830,7 +879,7 @@ class DockerExecutor:
             No complex routing, no pattern matching, just simple AI-powered fixing.
             """
             try:
-                self._fix_in_progress[project_id] = True
+                # Fix already marked as in progress above (atomically with lock)
                 logger.info(f"[DockerExecutor:{project_id}] [SIMPLE] Auto-fix triggered")
 
                 # First, let SimpleFixer decide if this is a real error
@@ -870,23 +919,28 @@ class DockerExecutor:
                 import traceback
                 logger.error(traceback.format_exc())
             finally:
-                self._fix_in_progress[project_id] = False
+                # Thread-safe clear of fix_in_progress
+                with self._fix_lock:
+                    self._fix_in_progress[project_id] = False
 
-                # Process any queued errors
-                if hasattr(self, '_pending_errors') and project_id in self._pending_errors:
-                    pending = self._pending_errors.pop(project_id, [])
-                    if pending:
-                        logger.info(f"[DockerExecutor:{project_id}] Processing {len(pending)} queued errors")
-                        for queued_error in pending[:3]:  # Limit to 3 queued errors to avoid infinite loops
-                            # Schedule the queued error to be processed
-                            self._trigger_auto_fix_background(
-                                project_id=project_id,
-                                project_path=queued_error['project_path'],
-                                error_message=queued_error['error'],
-                                command=queued_error.get('command'),
-                                user_id=queued_error.get('user_id'),
-                            )
-                            break  # Only process one at a time
+                    # Process any queued errors (get them while holding the lock)
+                    pending = []
+                    if hasattr(self, '_pending_errors') and project_id in self._pending_errors:
+                        pending = self._pending_errors.pop(project_id, [])
+
+                # Process pending errors outside the lock to avoid deadlock
+                if pending:
+                    logger.info(f"[DockerExecutor:{project_id}] Processing {len(pending)} queued errors")
+                    for queued_error in pending[:3]:  # Limit to 3 queued errors to avoid infinite loops
+                        # Schedule the queued error to be processed
+                        self._trigger_auto_fix_background(
+                            project_id=project_id,
+                            project_path=queued_error['project_path'],
+                            error_message=queued_error['error'],
+                            command=queued_error.get('command'),
+                            user_id=queued_error.get('user_id'),
+                        )
+                        break  # Only process one at a time
 
         # Create background task - handle both async and threaded contexts
         try:
@@ -1836,10 +1890,11 @@ class DockerExecutor:
                             if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
                                 preview_url = get_preview_url(host_port, project_id)
                                 backend_port = host_port + 1000
+                                backend_url = get_direct_preview_url(backend_port)
                                 yield f"\n{'='*50}\n"
                                 yield f"FULLSTACK SERVERS STARTED!\n"
                                 yield f"Frontend (Preview): {preview_url}\n"
-                                yield f"Backend API: http://localhost:{backend_port}\n"
+                                yield f"Backend API: {backend_url}\n"
                                 yield f"{'='*50}\n\n"
                                 yield f"_PREVIEW_URL_:{preview_url}\n"
                             else:
@@ -1865,10 +1920,11 @@ class DockerExecutor:
                         if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
                             preview_url = get_preview_url(host_port, project_id)
                             backend_port = host_port + 1000
+                            backend_url = get_direct_preview_url(backend_port)
                             yield f"\n{'='*50}\n"
                             yield f"FULLSTACK SERVERS STARTED!\n"
                             yield f"Frontend (Preview): {preview_url}\n"
-                            yield f"Backend API: http://localhost:{backend_port}\n"
+                            yield f"Backend API: {backend_url}\n"
                             yield f"{'='*50}\n\n"
                             yield f"_PREVIEW_URL_:{preview_url}\n"
                         else:
@@ -2795,7 +2851,8 @@ class DockerExecutor:
                                     # host_port is the frontend port, backend is +1000
                                     preview_url = get_preview_url(host_port, project_id)
                                     backend_port = host_port + 1000
-                                    yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n_PREVIEW_URL_:{preview_url}\n"
+                                    backend_url = get_direct_preview_url(backend_port)
+                                    yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: {backend_url}\n{'='*50}\n\n_PREVIEW_URL_:{preview_url}\n"
                                 else:
                                     preview_url = get_preview_url(detected_port, project_id)
                                     yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n_PREVIEW_URL_:{preview_url}\n"
@@ -2825,8 +2882,8 @@ class DockerExecutor:
                                 proc.wait(timeout=5)
                             except:
                                 proc.kill()
-                        # Regenerate command with new port and retry
-                        new_command = command.replace(str(old_port), str(host_port))
+                        # Regenerate command with new port and retry (safe port replacement)
+                        new_command = replace_port_in_command(command, old_port, host_port)
                         port_conflict_detected = False
                         has_error = False
                         # Execute the new command
@@ -2867,7 +2924,8 @@ class DockerExecutor:
                                     if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
                                         preview_url = get_preview_url(host_port, project_id)
                                         backend_port = host_port + 1000
-                                        yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n_PREVIEW_URL_:{preview_url}\n"
+                                        backend_url = get_direct_preview_url(backend_port)
+                                        yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: {backend_url}\n{'='*50}\n\n_PREVIEW_URL_:{preview_url}\n"
                                     else:
                                         preview_url = get_preview_url(detected_port, project_id)
                                         yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n_PREVIEW_URL_:{preview_url}\n"
@@ -2947,7 +3005,8 @@ class DockerExecutor:
                                         if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
                                             preview_url = get_preview_url(host_port, project_id)
                                             backend_port = host_port + 1000
-                                            yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n_PREVIEW_URL_:{preview_url}\n"
+                                            backend_url = get_direct_preview_url(backend_port)
+                                            yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: {backend_url}\n{'='*50}\n\n_PREVIEW_URL_:{preview_url}\n"
                                         else:
                                             preview_url = get_preview_url(detected_port, project_id)
                                             yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n_PREVIEW_URL_:{preview_url}\n"
@@ -2967,8 +3026,8 @@ class DockerExecutor:
                         yield f"Retry attempt {port_conflict_retries}/{MAX_PORT_CONFLICT_RETRIES}\n"
                         yield f"{'='*50}\n\n"
                         logger.info(f"[DockerExecutor:{project_id}] Port conflict retry {port_conflict_retries}: {old_port} -> {host_port}")
-                        # Regenerate command with new port and retry
-                        new_command = command.replace(str(old_port), str(host_port))
+                        # Regenerate command with new port and retry (safe port replacement)
+                        new_command = replace_port_in_command(command, old_port, host_port)
                         port_conflict_detected = False
                         has_error = False
                         # Execute the new command
@@ -2996,7 +3055,8 @@ class DockerExecutor:
                                             if framework in [FrameworkType.FULLSTACK_REACT_SPRING, FrameworkType.FULLSTACK_REACT_EXPRESS, FrameworkType.FULLSTACK_REACT_FASTAPI]:
                                                 preview_url = get_preview_url(host_port, project_id)
                                                 backend_port = host_port + 1000
-                                                yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: http://localhost:{backend_port}\n{'='*50}\n\n_PREVIEW_URL_:{preview_url}\n"
+                                                backend_url = get_direct_preview_url(backend_port)
+                                                yield f"\n{'='*50}\nFULLSTACK SERVERS STARTED!\nFrontend (Preview): {preview_url}\nBackend API: {backend_url}\n{'='*50}\n\n_PREVIEW_URL_:{preview_url}\n"
                                             else:
                                                 preview_url = get_preview_url(detected_port, project_id)
                                                 yield f"\n{'='*50}\nSERVER STARTED!\nPreview URL: {preview_url}\n{'='*50}\n\n_PREVIEW_URL_:{preview_url}\n"
@@ -3367,8 +3427,10 @@ class DockerExecutor:
                 if integration_result.get("success"):
                     for action in integration_result.get("actions", []):
                         yield f"  ✅ {action}\n"
-                    yield f"  📍 Frontend: http://localhost:{frontend_port}\n"
-                    yield f"  📍 Backend API: http://localhost:{backend_port}\n"
+                    frontend_url = get_direct_preview_url(frontend_port)
+                    backend_url = get_direct_preview_url(backend_port)
+                    yield f"  📍 Frontend: {frontend_url}\n"
+                    yield f"  📍 Backend API: {backend_url}\n"
                 else:
                     yield f"  ⚠️ Integration had issues: {integration_result.get('error', 'Unknown')}\n"
 
@@ -4740,10 +4802,11 @@ class DockerComposeExecutor:
                                     frontend_port = allocated.get("frontend", detected_port)
                                     backend_port_val = allocated.get("backend", detected_port + 1000)
                                     preview_url = get_preview_url(frontend_port, project_id)
+                                    backend_url = get_direct_preview_url(backend_port_val)
                                     yield f"\n{'='*50}\n"
                                     yield f"FULLSTACK SERVERS STARTED!\n"
                                     yield f"Frontend (Preview): {preview_url}\n"
-                                    yield f"Backend API: http://localhost:{backend_port_val}\n"
+                                    yield f"Backend API: {backend_url}\n"
                                     yield f"{'='*50}\n"
                                     yield f"_PREVIEW_URL_:{preview_url}\n"
                                 else:

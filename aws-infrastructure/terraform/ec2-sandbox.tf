@@ -3,6 +3,9 @@
 # =============================================================================
 # This EC2 instance runs Docker containers for user-generated projects
 # Fargate cannot run Docker-in-Docker, so we use EC2 for sandbox execution
+#
+# SECURITY: Docker API uses TLS for secure remote access
+# SCALING: Auto-scaling group for horizontal scaling
 # =============================================================================
 
 # =============================================================================
@@ -22,6 +25,31 @@ variable "sandbox_use_spot" {
 variable "sandbox_key_name" {
   description = "SSH key pair name for sandbox EC2 instance"
   default     = ""  # Set to your key pair name for SSH access
+}
+
+variable "sandbox_enable_autoscaling" {
+  description = "Enable auto-scaling for sandbox servers"
+  default     = false  # Set to true for production
+}
+
+variable "sandbox_min_size" {
+  description = "Minimum number of sandbox instances"
+  default     = 1
+}
+
+variable "sandbox_max_size" {
+  description = "Maximum number of sandbox instances"
+  default     = 5
+}
+
+variable "sandbox_desired_size" {
+  description = "Desired number of sandbox instances"
+  default     = 1
+}
+
+variable "sandbox_enable_tls" {
+  description = "Enable TLS for Docker API (recommended for production)"
+  default     = true
 }
 
 # =============================================================================
@@ -52,11 +80,20 @@ resource "aws_security_group" "sandbox" {
   description = "Security group for Docker sandbox server"
   vpc_id      = aws_vpc.main.id
 
-  # Docker API (from ECS backend only)
+  # Docker API without TLS (from ECS backend only) - for development
   ingress {
-    description     = "Docker API from ECS"
+    description     = "Docker API from ECS (no TLS)"
     from_port       = 2375
     to_port         = 2375
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs.id]
+  }
+
+  # Docker API with TLS (from ECS backend only) - for production
+  ingress {
+    description     = "Docker API from ECS (TLS)"
+    from_port       = 2376
+    to_port         = 2376
     protocol        = "tcp"
     security_groups = [aws_security_group.ecs.id]
   }
@@ -323,16 +360,91 @@ locals {
     # Update system
     dnf update -y
 
-    # Install Docker
-    dnf install -y docker
+    # Install Docker and OpenSSL for TLS
+    dnf install -y docker openssl
     systemctl start docker
     systemctl enable docker
 
-    # Configure Docker to listen on TCP (for remote access from ECS)
+    # ==========================================================
+    # TLS Certificate Generation for Docker API Security
+    # This creates self-signed certs - use proper CA in production
+    # ==========================================================
+    mkdir -p /opt/docker-certs
+    cd /opt/docker-certs
+
+    # Generate CA key and certificate
+    openssl genrsa -out ca-key.pem 4096
+    openssl req -new -x509 -days 365 -key ca-key.pem -sha256 -out ca.pem \
+      -subj "/C=IN/ST=State/L=City/O=BharatBuild/CN=Docker CA"
+
+    # Generate server key
+    openssl genrsa -out server-key.pem 4096
+
+    # Get instance private IP for SAN
+    PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+    PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || echo "")
+
+    # Create server CSR with SANs
+    cat > server-csr.conf <<CSRCONF
+    [req]
+    req_extensions = v3_req
+    distinguished_name = req_distinguished_name
+    [req_distinguished_name]
+    [v3_req]
+    basicConstraints = CA:FALSE
+    keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+    extendedKeyUsage = serverAuth
+    subjectAltName = @alt_names
+    [alt_names]
+    DNS.1 = localhost
+    IP.1 = 127.0.0.1
+    IP.2 = $PRIVATE_IP
+    CSRCONF
+
+    # Add public IP if available
+    if [ -n "$PUBLIC_IP" ]; then
+      echo "IP.3 = $PUBLIC_IP" >> server-csr.conf
+    fi
+
+    openssl req -subj "/CN=$PRIVATE_IP" -sha256 -new -key server-key.pem -out server.csr -config server-csr.conf
+
+    # Sign server certificate
+    openssl x509 -req -days 365 -sha256 -in server.csr -CA ca.pem -CAkey ca-key.pem \
+      -CAcreateserial -out server-cert.pem -extfile server-csr.conf -extensions v3_req
+
+    # Generate client key and certificate (for ECS backend)
+    openssl genrsa -out client-key.pem 4096
+    openssl req -subj '/CN=client' -new -key client-key.pem -out client.csr
+
+    cat > client-ext.cnf <<CLIENTEXT
+    extendedKeyUsage = clientAuth
+    CLIENTEXT
+
+    openssl x509 -req -days 365 -sha256 -in client.csr -CA ca.pem -CAkey ca-key.pem \
+      -CAcreateserial -out client-cert.pem -extfile client-ext.cnf
+
+    # Set permissions
+    chmod 0400 ca-key.pem server-key.pem client-key.pem
+    chmod 0444 ca.pem server-cert.pem client-cert.pem
+
+    # Store client certs in SSM for ECS to retrieve
+    aws ssm put-parameter --name "/${var.app_name}/docker/ca-cert" --value "$(cat ca.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
+    aws ssm put-parameter --name "/${var.app_name}/docker/client-cert" --value "$(cat client-cert.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
+    aws ssm put-parameter --name "/${var.app_name}/docker/client-key" --value "$(cat client-key.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
+
+    # ==========================================================
+    # Configure Docker with TLS
+    # Listens on both 2375 (no TLS) and 2376 (TLS)
+    # ==========================================================
     mkdir -p /etc/docker
     cat > /etc/docker/daemon.json <<'DOCKERCONFIG'
     {
-      "hosts": ["unix:///var/run/docker.sock", "tcp://0.0.0.0:2375"],
+      "hosts": ["unix:///var/run/docker.sock", "tcp://0.0.0.0:2375", "tcp://0.0.0.0:2376"],
+      "tls": true,
+      "tlscacert": "/opt/docker-certs/ca.pem",
+      "tlscert": "/opt/docker-certs/server-cert.pem",
+      "tlskey": "/opt/docker-certs/server-key.pem",
+      "tlsverify": true,
       "log-driver": "awslogs",
       "log-opts": {
         "awslogs-region": "${var.aws_region}",
@@ -455,24 +567,71 @@ NGINXCONFIG
     # Start Nginx
     systemctl start nginx
 
-    # Create cleanup script (removes idle containers)
+    # Create cleanup script (removes idle containers based on heartbeat label)
     cat > /opt/sandbox/cleanup.sh <<'CLEANUP'
     #!/bin/bash
-    # Remove containers idle for more than 30 minutes
-    docker ps -q --filter "status=running" | while read container; do
+    # Remove containers idle for more than 30 minutes (1800 seconds)
+    # Uses heartbeat label (last_activity) instead of container age
+    # This prevents race condition where active container is deleted
+
+    IDLE_TIMEOUT=1800  # 30 minutes in seconds
+    NOW_TS=$(date +%s)
+
+    docker ps -q --filter "label=bharatbuild=true" --filter "status=running" | while read container; do
+      # Check heartbeat label first
+      LAST_ACTIVITY=$(docker inspect --format='{{index .Config.Labels "last_activity"}}' $container 2>/dev/null || echo "")
+
+      if [ -n "$LAST_ACTIVITY" ]; then
+        # Parse ISO timestamp
+        ACTIVITY_TS=$(date -d "$LAST_ACTIVITY" +%s 2>/dev/null || echo "0")
+        if [ "$ACTIVITY_TS" != "0" ]; then
+          IDLE_TIME=$((NOW_TS - ACTIVITY_TS))
+          if [ $IDLE_TIME -gt $IDLE_TIMEOUT ]; then
+            PROJECT_ID=$(docker inspect --format='{{index .Config.Labels "project_id"}}' $container || echo "unknown")
+            echo "$(date): Stopping idle container: $container (project: $PROJECT_ID, idle: $IDLE_TIME s)"
+            docker stop $container
+            docker rm $container
+          fi
+          continue
+        fi
+      fi
+
+      # Fallback: use container start time if no heartbeat label
       STARTED=$(docker inspect --format='{{.State.StartedAt}}' $container)
-      STARTED_TS=$(date -d "$STARTED" +%s)
-      NOW_TS=$(date +%s)
-      AGE=$((NOW_TS - STARTED_TS))
-      if [ $AGE -gt 1800 ]; then
-        echo "Stopping idle container: $container (age: $AGE s)"
-        docker stop $container
-        docker rm $container
+      STARTED_TS=$(date -d "$STARTED" +%s 2>/dev/null || echo "0")
+      if [ "$STARTED_TS" != "0" ]; then
+        AGE=$((NOW_TS - STARTED_TS))
+        if [ $AGE -gt $IDLE_TIMEOUT ]; then
+          PROJECT_ID=$(docker inspect --format='{{index .Config.Labels "project_id"}}' $container || echo "unknown")
+          echo "$(date): Stopping old container: $container (project: $PROJECT_ID, age: $AGE s)"
+          docker stop $container
+          docker rm $container
+        fi
       fi
     done
 
-    # Prune unused resources
-    docker system prune -f --volumes
+    # Prune unused resources (images, networks, volumes)
+    docker system prune -f --volumes 2>/dev/null
+
+    # Cleanup old user networks (older than 24 hours with no containers)
+    docker network ls --filter "label=bharatbuild=true" -q | while read network; do
+      CREATED=$(docker network inspect --format='{{index .Labels "created_at"}}' $network 2>/dev/null || echo "")
+      if [ -n "$CREATED" ]; then
+        CREATED_TS=$(date -d "$CREATED" +%s 2>/dev/null || echo "0")
+        if [ "$CREATED_TS" != "0" ]; then
+          AGE=$((NOW_TS - CREATED_TS))
+          # 24 hours = 86400 seconds
+          if [ $AGE -gt 86400 ]; then
+            # Check if network has containers
+            CONTAINERS=$(docker network inspect --format='{{len .Containers}}' $network 2>/dev/null || echo "0")
+            if [ "$CONTAINERS" = "0" ]; then
+              echo "$(date): Removing old network: $network (age: $AGE s)"
+              docker network rm $network 2>/dev/null || true
+            fi
+          fi
+        fi
+      fi
+    done
     CLEANUP
     chmod +x /opt/sandbox/cleanup.sh
 
@@ -594,22 +753,192 @@ resource "aws_eip_association" "sandbox_spot" {
 }
 
 # =============================================================================
+# Auto-Scaling Group for Sandbox Servers (Optional - for high traffic)
+# =============================================================================
+
+# Launch Template for Auto-Scaling
+resource "aws_launch_template" "sandbox" {
+  count = var.sandbox_enable_autoscaling ? 1 : 0
+
+  name_prefix   = "${var.app_name}-sandbox-"
+  image_id      = data.aws_ami.amazon_linux_2023.id
+  instance_type = var.sandbox_instance_type
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.sandbox.name
+  }
+
+  network_interfaces {
+    associate_public_ip_address = true
+    security_groups             = [aws_security_group.sandbox.id]
+  }
+
+  block_device_mappings {
+    device_name = "/dev/xvda"
+    ebs {
+      volume_size = 100
+      volume_type = "gp3"
+      encrypted   = true
+    }
+  }
+
+  user_data = base64encode(local.sandbox_user_data)
+
+  tag_specifications {
+    resource_type = "instance"
+    tags = {
+      Name        = "${var.app_name}-sandbox-asg"
+      Environment = "production"
+      Project     = var.app_name
+      ManagedBy   = "terraform"
+    }
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Auto-Scaling Group
+resource "aws_autoscaling_group" "sandbox" {
+  count = var.sandbox_enable_autoscaling ? 1 : 0
+
+  name_prefix         = "${var.app_name}-sandbox-asg-"
+  min_size            = var.sandbox_min_size
+  max_size            = var.sandbox_max_size
+  desired_capacity    = var.sandbox_desired_size
+  vpc_zone_identifier = aws_subnet.public[*].id
+
+  # Use mixed instances for cost optimization
+  mixed_instances_policy {
+    launch_template {
+      launch_template_specification {
+        launch_template_id = aws_launch_template.sandbox[0].id
+        version            = "$Latest"
+      }
+
+      override {
+        instance_type = "t3.xlarge"
+      }
+      override {
+        instance_type = "t3a.xlarge"
+      }
+      override {
+        instance_type = "m5.xlarge"
+      }
+    }
+
+    instances_distribution {
+      on_demand_base_capacity                  = var.sandbox_use_spot ? 0 : 1
+      on_demand_percentage_above_base_capacity = var.sandbox_use_spot ? 0 : 100
+      spot_allocation_strategy                 = "capacity-optimized"
+    }
+  }
+
+  target_group_arns = [aws_lb_target_group.sandbox.arn]
+
+  health_check_type         = "ELB"
+  health_check_grace_period = 300
+
+  tag {
+    key                 = "Name"
+    value               = "${var.app_name}-sandbox-asg"
+    propagate_at_launch = true
+  }
+
+  tag {
+    key                 = "Environment"
+    value               = "production"
+    propagate_at_launch = true
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Auto-Scaling Policies
+resource "aws_autoscaling_policy" "sandbox_scale_up" {
+  count = var.sandbox_enable_autoscaling ? 1 : 0
+
+  name                   = "${var.app_name}-sandbox-scale-up"
+  scaling_adjustment     = 1
+  adjustment_type        = "ChangeInCapacity"
+  cooldown               = 300
+  autoscaling_group_name = aws_autoscaling_group.sandbox[0].name
+}
+
+resource "aws_autoscaling_policy" "sandbox_scale_down" {
+  count = var.sandbox_enable_autoscaling ? 1 : 0
+
+  name                   = "${var.app_name}-sandbox-scale-down"
+  scaling_adjustment     = -1
+  adjustment_type        = "ChangeInCapacity"
+  cooldown               = 300
+  autoscaling_group_name = aws_autoscaling_group.sandbox[0].name
+}
+
+# CloudWatch Alarms for Auto-Scaling
+resource "aws_cloudwatch_metric_alarm" "sandbox_high_cpu" {
+  count = var.sandbox_enable_autoscaling ? 1 : 0
+
+  alarm_name          = "${var.app_name}-sandbox-high-cpu"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = 120
+  statistic           = "Average"
+  threshold           = 70
+
+  dimensions = {
+    AutoScalingGroupName = aws_autoscaling_group.sandbox[0].name
+  }
+
+  alarm_actions = [aws_autoscaling_policy.sandbox_scale_up[0].arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "sandbox_low_cpu" {
+  count = var.sandbox_enable_autoscaling ? 1 : 0
+
+  alarm_name          = "${var.app_name}-sandbox-low-cpu"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 3
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = 120
+  statistic           = "Average"
+  threshold           = 30
+
+  dimensions = {
+    AutoScalingGroupName = aws_autoscaling_group.sandbox[0].name
+  }
+
+  alarm_actions = [aws_autoscaling_policy.sandbox_scale_down[0].arn]
+}
+
+# =============================================================================
 # Outputs
 # =============================================================================
 
 output "sandbox_instance_id" {
   description = "Sandbox EC2 instance ID"
-  value       = var.sandbox_use_spot ? (length(aws_spot_instance_request.sandbox) > 0 ? aws_spot_instance_request.sandbox[0].spot_instance_id : null) : (length(aws_instance.sandbox) > 0 ? aws_instance.sandbox[0].id : null)
+  value       = var.sandbox_enable_autoscaling ? null : (var.sandbox_use_spot ? (length(aws_spot_instance_request.sandbox) > 0 ? aws_spot_instance_request.sandbox[0].spot_instance_id : null) : (length(aws_instance.sandbox) > 0 ? aws_instance.sandbox[0].id : null))
 }
 
 output "sandbox_private_ip" {
   description = "Sandbox server private IP (for ECS to connect)"
-  value       = var.sandbox_use_spot ? (length(aws_spot_instance_request.sandbox) > 0 ? aws_spot_instance_request.sandbox[0].private_ip : null) : (length(aws_instance.sandbox) > 0 ? aws_instance.sandbox[0].private_ip : null)
+  value       = var.sandbox_enable_autoscaling ? null : (var.sandbox_use_spot ? (length(aws_spot_instance_request.sandbox) > 0 ? aws_spot_instance_request.sandbox[0].private_ip : null) : (length(aws_instance.sandbox) > 0 ? aws_instance.sandbox[0].private_ip : null))
 }
 
 output "sandbox_docker_url" {
-  description = "Docker API URL for ECS backend to use"
-  value       = var.sandbox_use_spot ? (length(aws_spot_instance_request.sandbox) > 0 ? "tcp://${aws_spot_instance_request.sandbox[0].private_ip}:2375" : null) : (length(aws_instance.sandbox) > 0 ? "tcp://${aws_instance.sandbox[0].private_ip}:2375" : null)
+  description = "Docker API URL for ECS backend to use (TLS on port 2376)"
+  value       = var.sandbox_enable_autoscaling ? "Use ALB DNS for auto-scaling" : (var.sandbox_use_spot ? (length(aws_spot_instance_request.sandbox) > 0 ? "tcp://${aws_spot_instance_request.sandbox[0].private_ip}:2376" : null) : (length(aws_instance.sandbox) > 0 ? "tcp://${aws_instance.sandbox[0].private_ip}:2376" : null))
+}
+
+output "sandbox_docker_url_no_tls" {
+  description = "Docker API URL without TLS (development only)"
+  value       = var.sandbox_enable_autoscaling ? null : (var.sandbox_use_spot ? (length(aws_spot_instance_request.sandbox) > 0 ? "tcp://${aws_spot_instance_request.sandbox[0].private_ip}:2375" : null) : (length(aws_instance.sandbox) > 0 ? "tcp://${aws_instance.sandbox[0].private_ip}:2375" : null))
 }
 
 output "sandbox_preview_url" {
@@ -619,10 +948,20 @@ output "sandbox_preview_url" {
 
 output "sandbox_public_ip" {
   description = "Sandbox server public IP (for SSH access)"
-  value       = aws_eip.sandbox.public_ip
+  value       = var.sandbox_enable_autoscaling ? null : aws_eip.sandbox.public_ip
 }
 
 output "sandbox_ssh_command" {
   description = "SSH command to connect to sandbox"
-  value       = "ssh -i your-key.pem ec2-user@${aws_eip.sandbox.public_ip}"
+  value       = var.sandbox_enable_autoscaling ? "Use SSM Session Manager for auto-scaling instances" : "ssh -i your-key.pem ec2-user@${aws_eip.sandbox.public_ip}"
+}
+
+output "sandbox_autoscaling_enabled" {
+  description = "Whether auto-scaling is enabled"
+  value       = var.sandbox_enable_autoscaling
+}
+
+output "sandbox_tls_enabled" {
+  description = "Whether TLS is enabled for Docker API"
+  value       = var.sandbox_enable_tls
 }

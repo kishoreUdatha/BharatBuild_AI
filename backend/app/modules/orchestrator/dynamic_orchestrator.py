@@ -2909,6 +2909,29 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
             context.project_description = project_description
         context.features = features
 
+        # CRITICAL: Update project title in database IMMEDIATELY after planner extracts it
+        # This fixes the bug where dropdown shows "New App" instead of actual project name
+        if project_name and context.project_id:
+            try:
+                from app.core.database import async_session
+                from app.models.project import Project
+                from sqlalchemy import update
+
+                async with async_session() as db:
+                    update_values = {'title': project_name}
+                    if project_description:
+                        update_values['description'] = project_description
+
+                    await db.execute(
+                        update(Project)
+                        .where(Project.id == context.project_id)
+                        .values(**update_values)
+                    )
+                    await db.commit()
+                    logger.info(f"[Planner] Updated project title in DB: '{project_name}' for {context.project_id}")
+            except Exception as e:
+                logger.warning(f"[Planner] Failed to update project title in DB: {e}")
+
         # NEW: Handle file-based plan format
         if use_file_mode:
             # File-by-file mode: Each file becomes a "task" for the frontend
@@ -3193,6 +3216,14 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
 
         logger.info(f"[Writer] Generating single file: {file_path}")
 
+        # Track time for keepalive events
+        # CloudFront has a 60-second origin read timeout, so send keepalive every 25 seconds
+        # NOTE: We track time since last YIELDED event (not since last received chunk)
+        # because Claude streams tokens continuously but we only yield when file is complete
+        import time
+        last_event_time = time.time()
+        KEEPALIVE_INTERVAL = 25  # seconds
+
         async for chunk in self.claude_client.generate_stream(
             prompt=user_prompt,
             system_prompt=system_prompt,
@@ -3200,6 +3231,19 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
             max_tokens=config.max_tokens,
             temperature=config.temperature
         ):
+            # Check if we need to send keepalive (time since last yielded event)
+            current_time = time.time()
+            if current_time - last_event_time >= KEEPALIVE_INTERVAL:
+                last_event_time = current_time
+                logger.info(f"[Writer] Sending keepalive during {file_path} generation")
+                yield OrchestratorEvent(
+                    type=EventType.STATUS,
+                    data={
+                        "message": f"Generating {file_path}...",
+                        "file": file_path,
+                        "keepalive": True
+                    }
+                )
             # Check for token usage marker at end of stream
             if chunk.startswith("__TOKEN_USAGE__:"):
                 parts = chunk.split(":")
@@ -3249,6 +3293,8 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
                         "project_id": context.project_id  # For file isolation in frontend
                     }
                 )
+                # Reset keepalive timer after yielding an event
+                last_event_time = time.time()
 
                 logger.info(f"[Writer] [OK] File saved: {extracted_path} ({len(file_content)} chars)")
 
@@ -3394,6 +3440,30 @@ Stream code in chunks for real-time display.
                             logger.info(f"[Writer] Extracted tech_stack from plan: {context.tech_stack}")
 
                         plan_extracted = True
+
+                        # CRITICAL: Update project title in database IMMEDIATELY
+                        # This fixes the bug where dropdown shows "New App" instead of actual project name
+                        if context.project_name and context.project_id:
+                            try:
+                                from app.core.database import async_session
+                                from app.models.project import Project
+                                from sqlalchemy import update as sql_update
+
+                                async with async_session() as db:
+                                    update_values = {'title': context.project_name}
+                                    if context.project_description:
+                                        update_values['description'] = context.project_description
+
+                                    await db.execute(
+                                        sql_update(Project)
+                                        .where(Project.id == context.project_id)
+                                        .values(**update_values)
+                                    )
+                                    await db.commit()
+                                    logger.info(f"[Writer] Updated project title in DB: '{context.project_name}' for {context.project_id}")
+                            except Exception as db_err:
+                                logger.warning(f"[Writer] Failed to update project title in DB: {db_err}")
+
                 except Exception as e:
                     logger.warning(f"[Writer] Failed to extract plan block: {e}")
                     plan_extracted = True  # Don't retry on error
@@ -5223,14 +5293,17 @@ Stream code in chunks for real-time display.
         Returns student academic details like college name, roll number, etc.
         """
         if not user_id:
-            return {}
+            logger.warning("[Orchestrator] No user_id provided for document generation - using defaults")
+            return self._get_default_user_details()
 
         try:
-            from app.core.database import AsyncSessionLocal
+            from app.core.database import get_session_local
             from app.models.user import User
             from sqlalchemy import select
+            import traceback
 
-            async with AsyncSessionLocal() as session:
+            session_factory = get_session_local()
+            async with session_factory() as session:
                 result = await session.execute(
                     select(User).where(User.id == user_id)
                 )
@@ -5238,9 +5311,10 @@ Stream code in chunks for real-time display.
 
                 if not user:
                     logger.warning(f"[Orchestrator] User not found for document generation: {user_id}")
-                    return {}
+                    return self._get_default_user_details()
 
-                return {
+                # Log what fields are populated vs using defaults
+                user_details = {
                     "full_name": user.full_name or "Student Name",
                     "roll_number": user.roll_number or "ROLL001",
                     "college_name": user.college_name or "College Name",
@@ -5253,9 +5327,40 @@ Stream code in chunks for real-time display.
                     "guide_designation": user.guide_designation or "Assistant Professor",
                     "hod_name": user.hod_name or "Dr. HOD Name",
                 }
+
+                # Log which fields are using defaults (user hasn't set them)
+                defaults_used = [k for k, v in {
+                    "full_name": user.full_name,
+                    "roll_number": user.roll_number,
+                    "college_name": user.college_name,
+                }.items() if not v]
+
+                if defaults_used:
+                    logger.info(f"[Orchestrator] User {user_id} missing profile fields: {defaults_used}")
+
+                logger.debug(f"[Orchestrator] User details fetched for {user_id}: college={user_details['college_name']}")
+                return user_details
+
         except Exception as e:
-            logger.error(f"[Orchestrator] Failed to fetch user details: {e}")
-            return {}
+            logger.error(f"[Orchestrator] Failed to fetch user details for {user_id}: {type(e).__name__}: {e}")
+            logger.error(f"[Orchestrator] Traceback: {traceback.format_exc()}")
+            return self._get_default_user_details()
+
+    def _get_default_user_details(self) -> Dict[str, Any]:
+        """Return default user details when unable to fetch from database"""
+        return {
+            "full_name": "Student Name",
+            "roll_number": "ROLL001",
+            "college_name": "College Name",
+            "university_name": "Autonomous Institution",
+            "department": "Department of Computer Science and Engineering",
+            "course": "B.Tech",
+            "year_semester": "4th Year",
+            "batch": "2024-2025",
+            "guide_name": "Dr. Guide Name",
+            "guide_designation": "Assistant Professor",
+            "hod_name": "Dr. HOD Name",
+        }
 
     def _extract_project_name_from_request(self, user_request: str) -> str:
         """
@@ -5943,6 +6048,19 @@ htmlcov
 
             # Unpack results
             report_path, srs_path, ppt_path, viva_path = results
+
+            # Helper to process results and log exceptions
+            doc_names = ["Project Report", "SRS", "PPT", "Viva Q&A"]
+            doc_results = [report_path, srs_path, ppt_path, viva_path]
+            failed_docs = []
+
+            for doc_name, result in zip(doc_names, doc_results):
+                if isinstance(result, Exception):
+                    logger.error(f"[Documenter] {doc_name} generation failed: {type(result).__name__}: {result}")
+                    failed_docs.append(doc_name)
+
+            if failed_docs:
+                logger.warning(f"[Documenter] Failed documents: {', '.join(failed_docs)}")
 
             # Process Project Report
             if report_path and not isinstance(report_path, Exception):

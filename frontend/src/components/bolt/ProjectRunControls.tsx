@@ -80,6 +80,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   // Auto-fix state
   const [lastError, setLastError] = useState<ErrorInfo | null>(null)
   const [fixAttempts, setFixAttempts] = useState(0)
+  const fixAttemptsRef = useRef(0) // Ref for synchronous access (React state updates are async!)
   const [isFixing, setIsFixing] = useState(false)
   const [maxAttemptsReached, setMaxAttemptsReached] = useState(false)
   const errorBufferRef = useRef<string[]>([]) // Collect error lines
@@ -547,6 +548,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   // Reset fix state
   const resetFixState = useCallback(() => {
     setFixAttempts(0)
+    fixAttemptsRef.current = 0 // Reset ref too (synchronous)
     setLastError(null)
     setMaxAttemptsReached(false)
     errorBufferRef.current = []
@@ -568,7 +570,8 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       return false
     }
 
-    if (fixAttempts >= MAX_AUTO_FIX_ATTEMPTS) {
+    // Use ref for synchronous check (React state updates are async!)
+    if (fixAttemptsRef.current >= MAX_AUTO_FIX_ATTEMPTS) {
       setMaxAttemptsReached(true)
       onOutput?.('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
       onOutput?.(`❌ Max auto-fix attempts (${MAX_AUTO_FIX_ATTEMPTS}) reached.`)
@@ -583,11 +586,15 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       return false
     }
 
+    // Increment ref FIRST (synchronous), then state (for UI)
+    fixAttemptsRef.current += 1
+    const currentAttempt = fixAttemptsRef.current
+
     setIsFixing(true)
     setStatus('fixing')
-    setFixAttempts(prev => prev + 1)
+    setFixAttempts(currentAttempt) // Sync state with ref
     onOutput?.('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-    onOutput?.(`🔧 AUTO-FIX ATTEMPT ${fixAttempts + 1}/${MAX_AUTO_FIX_ATTEMPTS}`)
+    onOutput?.(`🔧 AUTO-FIX ATTEMPT ${currentAttempt}/${MAX_AUTO_FIX_ATTEMPTS}`)
     onOutput?.('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
     onOutput?.('🤖 Fixer Agent analyzing error...')
     onOutput?.(`📋 Command: ${currentCommandRef.current || 'unknown'}`)
@@ -1247,14 +1254,16 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
           return
         }
 
-        if (autoFix && fixAttempts < MAX_AUTO_FIX_ATTEMPTS) {
+        // Use ref for synchronous check (React state updates are async!)
+        const currentAttempts = fixAttemptsRef.current
+
+        if (autoFix && currentAttempts < MAX_AUTO_FIX_ATTEMPTS) {
           isRetryingRef.current = true
-          const attemptNum = fixAttempts + 1
 
           onOutput?.('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-          onOutput?.(`🔄 AUTO-RETRY LOOP [${attemptNum}/${MAX_AUTO_FIX_ATTEMPTS}]`)
+          onOutput?.(`🔄 AUTO-RETRY LOOP [${currentAttempts + 1}/${MAX_AUTO_FIX_ATTEMPTS}]`)
           onOutput?.('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-          console.log(`[AutoFix] Fix loop iteration ${attemptNum}/${MAX_AUTO_FIX_ATTEMPTS}`)
+          console.log(`[AutoFix] Fix loop iteration ${currentAttempts + 1}/${MAX_AUTO_FIX_ATTEMPTS}`)
 
           setStatus('fixing')
           const fixSuccess = await attemptAutoFix(
@@ -1262,21 +1271,25 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
             errorToFix
           )
 
+          // After attemptAutoFix, the ref has been incremented
+          const attemptsAfterFix = fixAttemptsRef.current
+
           if (fixSuccess) {
             // ✅ FIX APPLIED → RE-RUN TO VERIFY
             consecutiveFailuresRef.current = 0 // Reset on successful fix
             const delay = DEFAULT_RETRY_DELAY
-            onOutput?.(`\n🚀 Fix applied! Re-running to verify in ${delay/1000}s... (verify attempt ${attemptNum})`)
+            onOutput?.(`\n🚀 Fix applied! Re-running to verify in ${delay/1000}s... (attempt ${attemptsAfterFix}/${MAX_AUTO_FIX_ATTEMPTS})`)
             isRetryingRef.current = false
             setTimeout(() => handleRun(), delay)
             return
           } else {
-            // ❌ FIX FAILED → RETRY WITH BACKOFF
+            // ❌ FIX FAILED → Check if we can retry
             consecutiveFailuresRef.current += 1
             const backoffDelay = getRetryDelay(consecutiveFailuresRef.current)
 
-            if (fixAttempts + 1 < MAX_AUTO_FIX_ATTEMPTS) {
-              onOutput?.(`\n⚠️ Fix attempt ${attemptNum} failed.`)
+            // Use ref value AFTER increment to check if we can retry
+            if (attemptsAfterFix < MAX_AUTO_FIX_ATTEMPTS) {
+              onOutput?.(`\n⚠️ Fix attempt ${attemptsAfterFix} failed.`)
               onOutput?.(`⏳ Retrying in ${(backoffDelay/1000).toFixed(1)}s with different approach...`)
               isRetryingRef.current = false
               // Continue retry loop - try fixing again
@@ -1287,7 +1300,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         }
 
         // Max attempts reached or autoFix disabled
-        if (fixAttempts >= MAX_AUTO_FIX_ATTEMPTS) {
+        if (fixAttemptsRef.current >= MAX_AUTO_FIX_ATTEMPTS) {
           onOutput?.('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
           onOutput?.(`🛑 MAX ATTEMPTS (${MAX_AUTO_FIX_ATTEMPTS}) REACHED`)
           onOutput?.('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
@@ -1317,15 +1330,24 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
   // ============= BOLT.NEW: AUTO-RESTART AFTER LOGBUS FIX =============
   // Check if LogBus auto-fix completed and restart is pending
+  // Added safeguard: only restart if we haven't exceeded max attempts
   useEffect(() => {
     if (pendingRestartRef.current && status !== 'fixing') {
       pendingRestartRef.current = false
+
+      // Safety check: don't restart if max attempts reached (use ref for synchronous check)
+      if (fixAttemptsRef.current >= MAX_AUTO_FIX_ATTEMPTS) {
+        console.log('[AutoRestart] Skipping restart - max attempts reached')
+        onOutput?.(`⚠️ Auto-restart skipped: max fix attempts (${MAX_AUTO_FIX_ATTEMPTS}) reached`)
+        return
+      }
+
       // Delay restart to let files sync
       setTimeout(() => {
         handleRun()
       }, 1000)
     }
-  }, [status, handleRun])
+  }, [status, handleRun, onOutput]) // Removed fixAttempts - using ref now
 
   // ============= STOP HANDLER =============
   const handleStop = useCallback(async () => {
@@ -1351,6 +1373,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       if (executionMode === 'docker') {
         await fetch(`${API_BASE_URL}/containers/${currentProject?.id}/stop`, {
           method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
         }).catch(() => {})
       }
 

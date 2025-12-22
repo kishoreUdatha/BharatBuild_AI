@@ -13,6 +13,9 @@ resource "aws_lb" "main" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = aws_subnet.public[*].id
 
+  # Increase idle timeout for SSE streaming (Claude API can take time to respond)
+  idle_timeout       = 300  # 5 minutes (default is 60 seconds)
+
   enable_deletion_protection = false  # Set to true in production with domain
 
   tags = {

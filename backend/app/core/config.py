@@ -258,7 +258,8 @@ class Settings(BaseSettings):
     PROMO_CODES: str = "WELCOME2024:10000,LAUNCH50:50000,BETA100:100000"
 
     # ==========================================
-    # Container Execution
+    # Container Execution - CENTRALIZED TIMEOUT CONFIGURATION
+    # Single source of truth for all container lifecycle settings
     # ==========================================
     CONTAINER_MEMORY_LIMIT: str = "512m"
     CONTAINER_CPU_LIMIT: float = 0.5
@@ -267,8 +268,36 @@ class Settings(BaseSettings):
     DEFAULT_CONTAINER_PORT: int = 3000
     BACKEND_DEFAULT_PORT: int = 8001
     CONTAINER_PORT_RANGE_START: int = 10000
-    CONTAINER_MAX_LIFETIME: int = 86400  # 24 hours in seconds
-    CONTAINER_COMMAND_TIMEOUT: int = 300  # 5 minutes
+    CONTAINER_PORT_RANGE_END: int = 60000
+
+    # Container Lifecycle Timeouts (CENTRALIZED - used by all cleanup services)
+    CONTAINER_IDLE_TIMEOUT_SECONDS: int = 1800  # 30 minutes - idle before cleanup
+    CONTAINER_MAX_LIFETIME_SECONDS: int = 86400  # 24 hours - absolute max lifetime
+    CONTAINER_COMMAND_TIMEOUT: int = 300  # 5 minutes - single command timeout
+    CONTAINER_PAUSE_AFTER_IDLE_SECONDS: int = 300  # 5 minutes - pause (not delete) after idle
+    CONTAINER_CLEANUP_INTERVAL_SECONDS: int = 60  # 1 minute - how often to check for expired
+
+    # Legacy aliases for backwards compatibility
+    CONTAINER_MAX_LIFETIME: int = 86400  # Deprecated: use CONTAINER_MAX_LIFETIME_SECONDS
+
+    # Container Reuse Settings
+    CONTAINER_REUSE_ENABLED: bool = True  # Reuse existing containers instead of creating new
+    CONTAINER_HEALTH_CHECK_TIMEOUT: int = 5  # Seconds to wait for health check
+
+    # Docker TLS Settings (for secure remote Docker API)
+    DOCKER_TLS_ENABLED: bool = True  # Enable TLS for Docker API
+    DOCKER_TLS_VERIFY: bool = True  # Verify TLS certificates
+    DOCKER_TLS_CA_CERT: str = "/certs/ca.pem"
+    DOCKER_TLS_CLIENT_CERT: str = "/certs/client-cert.pem"
+    DOCKER_TLS_CLIENT_KEY: str = "/certs/client-key.pem"
+
+    # Redis Container State Settings
+    REDIS_CONTAINER_STATE_PREFIX: str = "container:"
+    REDIS_CONTAINER_STATE_TTL: int = 86400  # 24 hours
+
+    # Sandbox Cleanup Settings
+    SANDBOX_PATH: str = "C:/tmp/sandbox/workspace"  # Default for Windows, override in env
+    SANDBOX_MIN_AGE_MINUTES: int = 5  # Don't delete projects younger than this
 
     # ==========================================
     # Shared Database Infrastructure (Production)

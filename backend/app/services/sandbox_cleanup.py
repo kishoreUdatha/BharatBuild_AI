@@ -35,19 +35,31 @@ class SandboxCleanupService:
     - Projects live in sandbox during active session
     - Auto-deleted after idle timeout
     - No permanent storage by default
+
+    Uses CENTRALIZED settings from config.py for all timeouts.
     """
 
     def __init__(
         self,
-        sandbox_path: str = "C:/tmp/sandbox/workspace",
-        idle_timeout_minutes: int = 30,  # Bolt.new style: 30 min idle timeout
-        cleanup_interval_minutes: int = 5,  # Check every 5 minutes
-        min_project_age_minutes: int = 5,  # Don't delete projects younger than 5 min
+        sandbox_path: str = None,
+        idle_timeout_minutes: int = None,
+        cleanup_interval_minutes: int = None,
+        min_project_age_minutes: int = None,
     ):
-        self.sandbox_path = Path(sandbox_path)
-        self.idle_timeout = timedelta(minutes=idle_timeout_minutes)
-        self.cleanup_interval = timedelta(minutes=cleanup_interval_minutes)
-        self.min_age = timedelta(minutes=min_project_age_minutes)
+        # Import centralized settings
+        from app.core.config import settings
+
+        # Use centralized settings as defaults
+        self.sandbox_path = Path(sandbox_path or settings.SANDBOX_PATH)
+
+        # Convert seconds to minutes for centralized timeout
+        idle_timeout = idle_timeout_minutes or (settings.CONTAINER_IDLE_TIMEOUT_SECONDS / 60)
+        cleanup_interval = cleanup_interval_minutes or (settings.CONTAINER_CLEANUP_INTERVAL_SECONDS / 60)
+        min_age = min_project_age_minutes or settings.SANDBOX_MIN_AGE_MINUTES
+
+        self.idle_timeout = timedelta(minutes=idle_timeout)
+        self.cleanup_interval = timedelta(minutes=cleanup_interval)
+        self.min_age = timedelta(minutes=min_age)
 
         self.running = False
         self._task: Optional[asyncio.Task] = None

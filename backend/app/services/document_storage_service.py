@@ -118,15 +118,34 @@ class DocumentStorageService:
             logger.error(f"[DocStorage] Failed to upload to S3: {e}", exc_info=True)
             return None
 
-    async def _upload_to_s3_direct(self, s3_key: str, content: bytes, content_type: str):
+    async def _upload_to_s3_direct(
+        self,
+        s3_key: str,
+        content: bytes,
+        content_type: str,
+        max_retries: int = 3,
+        base_delay: float = 1.0
+    ):
         """
         Upload directly to S3 with custom key (bypasses storage_service key generation).
         This ensures user isolation in the S3 path.
+
+        Includes retry logic with exponential backoff for transient failures.
+
+        Args:
+            s3_key: S3 object key
+            content: File content as bytes
+            content_type: MIME type
+            max_retries: Maximum number of retry attempts (default: 3)
+            base_delay: Base delay in seconds for exponential backoff (default: 1.0)
         """
         import boto3
+        import asyncio
         from botocore.config import Config
+        from botocore.exceptions import ClientError, EndpointConnectionError, ConnectionClosedError
         from app.core.config import settings
 
+        # Build S3 client
         if settings.USE_MINIO:
             client = boto3.client(
                 's3',
@@ -148,13 +167,66 @@ class DocumentStorageService:
                 client = boto3.client('s3', region_name=settings.AWS_REGION)
 
         bucket = settings.effective_bucket_name
-        client.put_object(
-            Bucket=bucket,
-            Key=s3_key,
-            Body=content,
-            ContentType=content_type
-        )
-        logger.info(f"[DocStorage] Direct S3 upload: {bucket}/{s3_key}")
+        last_exception = None
+
+        # Retry loop with exponential backoff
+        for attempt in range(max_retries + 1):
+            try:
+                client.put_object(
+                    Bucket=bucket,
+                    Key=s3_key,
+                    Body=content,
+                    ContentType=content_type
+                )
+                logger.info(f"[DocStorage] Direct S3 upload: {bucket}/{s3_key} (attempt {attempt + 1})")
+                return  # Success - exit the function
+
+            except (EndpointConnectionError, ConnectionClosedError) as e:
+                # Network-related errors - retry
+                last_exception = e
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning(
+                        f"[DocStorage] S3 upload network error (attempt {attempt + 1}/{max_retries + 1}), "
+                        f"retrying in {delay:.1f}s: {type(e).__name__}: {e}"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(
+                        f"[DocStorage] S3 upload failed after {max_retries + 1} attempts: "
+                        f"{type(e).__name__}: {e}"
+                    )
+
+            except ClientError as e:
+                error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+                last_exception = e
+
+                # Retryable error codes
+                retryable_codes = ['RequestTimeout', 'ServiceUnavailable', 'ThrottlingException', 'SlowDown']
+
+                if error_code in retryable_codes and attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(
+                        f"[DocStorage] S3 upload error {error_code} (attempt {attempt + 1}/{max_retries + 1}), "
+                        f"retrying in {delay:.1f}s"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    # Non-retryable error or out of retries
+                    logger.error(
+                        f"[DocStorage] S3 upload failed with {error_code}: {e}"
+                    )
+                    break
+
+            except Exception as e:
+                # Unexpected error - don't retry
+                last_exception = e
+                logger.error(f"[DocStorage] Unexpected S3 upload error: {type(e).__name__}: {e}")
+                break
+
+        # If we get here, all retries failed
+        if last_exception:
+            raise last_exception
 
     async def save_document_to_db(
         self,
