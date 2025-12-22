@@ -309,7 +309,7 @@ export function BoltLayout({
         content: 'Resuming generation...',
         isStreaming: true,
         timestamp: new Date(),
-        fileOperations: [] as Array<{ path: string; status: string; description?: string }>,
+        fileOperations: [] as Array<{ type: 'create' | 'modify' | 'delete'; path: string; description: string; status: 'pending' | 'in-progress' | 'complete' | 'error' }>,
         thinkingSteps: [] as Array<{ label: string; status: string; category: string }>
       }
       addMessage(resumeMessage)
