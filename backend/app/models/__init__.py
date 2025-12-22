@@ -16,6 +16,7 @@ from app.models.session import Session
 from app.models.snapshot import Snapshot
 from app.models.agent_task import AgentTask
 from app.models.project_message import ProjectMessage
+from app.models.workshop_enrollment import WorkshopEnrollment
 
 __all__ = [
     # User
@@ -63,4 +64,6 @@ __all__ = [
     "Snapshot",
     # Agent
     "AgentTask",
+    # Workshop
+    "WorkshopEnrollment",
 ]
