@@ -222,8 +222,8 @@ export function BoltLayout({
   // Get session info for ephemeral storage download
   const { sessionId, downloadUrl, resetProject } = useProjectStore()
 
-  // Get chat store for clearing messages
-  const { clearMessages } = useChatStore()
+  // Get chat store for clearing messages and updating message state
+  const { clearMessages, addMessage, updateFileOperation, updateMessageStatus, appendToMessage } = useChatStore()
 
   // Get plan status for project limits
   const { projectsCreated, projectLimit, isPremium, isFree, needsUpgrade, features } = usePlanStatus()
@@ -301,6 +301,19 @@ export function BoltLayout({
       const reader = response.body?.getReader()
       if (!reader) return
 
+      // Create a resume message to track file operations
+      const resumeMessageId = `resume-${Date.now()}`
+      const resumeMessage = {
+        id: resumeMessageId,
+        type: 'assistant' as const,
+        content: 'Resuming generation...',
+        isStreaming: true,
+        timestamp: new Date(),
+        fileOperations: [] as Array<{ path: string; status: string; description?: string }>,
+        thinkingSteps: [] as Array<{ label: string; status: string; category: string }>
+      }
+      addMessage(resumeMessage)
+
       const decoder = new TextDecoder()
       while (true) {
         const { done, value } = await reader.read()
@@ -315,7 +328,40 @@ export function BoltLayout({
               const event = JSON.parse(line.slice(6))
               console.log('[Resume] Event:', event.type, event.data)
 
-              // Handle file_complete events to update the UI
+              // Handle file_operation events to show progress in UI
+              if (event.type === 'file_operation') {
+                const fileOp = event.data || event
+                const opPath = fileOp.path || ''
+                const opStatus = fileOp.operation_status || 'pending'
+
+                if (opPath) {
+                  updateFileOperation(resumeMessageId, opPath, {
+                    status: opStatus === 'complete' ? 'complete' : opStatus === 'in_progress' ? 'in-progress' : 'pending',
+                    description: opStatus === 'in_progress' ? `Creating ${opPath}` : undefined
+                  })
+                }
+              }
+
+              // Handle file_content events (file completed)
+              if (event.type === 'file_content' && event.data?.path) {
+                const projectStore = useProjectStore.getState()
+                const filePath = event.data.path
+                const ext = filePath.split('.').pop()?.toLowerCase() || ''
+                const langMap: Record<string, string> = {
+                  'ts': 'typescript', 'tsx': 'typescript', 'js': 'javascript', 'jsx': 'javascript',
+                  'py': 'python', 'css': 'css', 'html': 'html', 'json': 'json', 'md': 'markdown'
+                }
+                projectStore.addFile({
+                  path: filePath,
+                  content: event.data.content || '',
+                  type: 'file',
+                  language: langMap[ext] || ext || 'text'
+                })
+                // Mark file as complete
+                updateFileOperation(resumeMessageId, filePath, { status: 'complete' })
+              }
+
+              // Handle file_complete events (legacy format)
               if (event.type === 'file_complete' && event.data?.path) {
                 const projectStore = useProjectStore.getState()
                 const filePath = event.data.path
@@ -330,11 +376,26 @@ export function BoltLayout({
                   type: 'file',
                   language: langMap[ext] || ext || 'text'
                 })
+                // Mark file as complete
+                updateFileOperation(resumeMessageId, filePath, { status: 'complete' })
+              }
+
+              // Handle plan_created to show planned files
+              if (event.type === 'plan_created' && event.data?.plan?.files) {
+                const files = event.data.plan.files
+                for (const file of files) {
+                  const filePath = typeof file === 'string' ? file : file.path
+                  if (filePath) {
+                    updateFileOperation(resumeMessageId, filePath, { status: 'pending' })
+                  }
+                }
               }
 
               if (event.type === 'complete') {
                 setCanResume(false)
                 setResumeMessage(null)
+                updateMessageStatus(resumeMessageId, 'complete')
+                appendToMessage(resumeMessageId, '\n\nResume complete!')
               }
 
               if (event.type === 'upgrade_required') {
@@ -347,6 +408,9 @@ export function BoltLayout({
           }
         }
       }
+
+      // Mark resume message as complete
+      updateMessageStatus(resumeMessageId, 'complete')
 
     } catch (error) {
       console.error('[Resume] Error:', error)
