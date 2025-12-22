@@ -37,20 +37,20 @@ langchain==0.1.9
 langchain-community==0.0.24
 langchain-openai==0.0.6
 langchain-anthropic==0.1.1
-llama-index==0.10.12
-tiktoken==0.6.0
-sentence-transformers==2.3.1
+llama-index>=0.10.13
+tiktoken>=0.8.0
+sentence-transformers>=3.0.0
 
 # ============================================
 # Deep Learning Frameworks
 # ============================================
-torch==2.2.0
-torchvision==0.17.0
-torchaudio==2.2.0
-tensorflow==2.15.0
+torch>=2.6.0
+torchvision>=0.21.0
+torchaudio>=2.6.0
+tensorflow>=2.18.0
 # keras version managed by tensorflow
-jax[cpu]==0.4.25
-flax==0.8.1
+jax[cpu]>=0.4.35
+flax>=0.10.0
 
 # ============================================
 # Machine Learning
