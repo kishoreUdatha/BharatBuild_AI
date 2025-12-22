@@ -54,6 +54,7 @@ def _get_preview_url(port: int, project_id: str = None) -> str:
 class Technology(Enum):
     """Supported technology stacks"""
     NODEJS = "nodejs"
+    NODEJS_VITE = "nodejs_vite"  # Vite-based projects (React, Vue, Svelte with Vite)
     JAVA = "java"
     PYTHON = "python"
     GO = "go"
@@ -86,6 +87,13 @@ TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
         build_command="npm install",
         run_command="npm run dev",
         port=3000,
+        memory_limit="512m"
+    ),
+    Technology.NODEJS_VITE: ContainerConfig(
+        image="node:20-alpine",
+        build_command="npm install",
+        run_command="npm run dev",
+        port=5173,  # Vite default port
         memory_limit="512m"
     ),
     Technology.JAVA: ContainerConfig(
@@ -222,8 +230,29 @@ class ContainerExecutor:
             # Local mode: use os.listdir
             files = os.listdir(project_path) if os.path.exists(project_path) else []
 
-        # Node.js detection
+        # Node.js detection - check for Vite first
         if "package.json" in files:
+            # Check for Vite config files
+            vite_configs = ["vite.config.js", "vite.config.ts", "vite.config.mjs", "vite.config.cjs"]
+            if any(vf in files for vf in vite_configs):
+                logger.info(f"[ContainerExecutor] Detected Vite project (config file found)")
+                return Technology.NODEJS_VITE
+
+            # Also check package.json for vite dependency
+            try:
+                import json
+                pkg_path = os.path.join(project_path, "package.json")
+                if os.path.exists(pkg_path):
+                    with open(pkg_path, 'r') as f:
+                        pkg = json.load(f)
+                        deps = pkg.get("dependencies", {})
+                        dev_deps = pkg.get("devDependencies", {})
+                        if "vite" in deps or "vite" in dev_deps:
+                            logger.info(f"[ContainerExecutor] Detected Vite project (package.json)")
+                            return Technology.NODEJS_VITE
+            except Exception as e:
+                logger.warning(f"[ContainerExecutor] Error reading package.json: {e}")
+
             return Technology.NODEJS
 
         # Java detection
