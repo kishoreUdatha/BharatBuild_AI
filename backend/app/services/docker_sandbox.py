@@ -79,6 +79,12 @@ SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL", "http://localhost")  # e.g.
 
 def _get_preview_url(port: int) -> str:
     """Generate preview URL using sandbox public URL or localhost fallback"""
+    # Use SANDBOX_PREVIEW_BASE_URL for path-based routing (preferred)
+    if SANDBOX_PREVIEW_BASE_URL and SANDBOX_PREVIEW_BASE_URL != "http://localhost":
+        base = SANDBOX_PREVIEW_BASE_URL.rstrip('/')
+        # Path-based routing: /sandbox/PORT/
+        return f"{base}/{port}/"
+    # Fallback to SANDBOX_PUBLIC_URL for direct port access
     if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
         base = SANDBOX_PUBLIC_URL.rstrip('/')
         if ':' in base.split('/')[-1]:
