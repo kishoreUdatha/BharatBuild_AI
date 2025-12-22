@@ -22,7 +22,8 @@ import {
   Sun,
   Shield,
   Server,
-  GraduationCap
+  GraduationCap,
+  FileSpreadsheet
 } from 'lucide-react'
 
 const navItems = [
@@ -30,6 +31,7 @@ const navItems = [
   { href: '/admin/users', label: 'Users', icon: Users },
   { href: '/admin/enrollments', label: 'Enrollments', icon: GraduationCap },
   { href: '/admin/projects', label: 'Projects', icon: FolderKanban },
+  { href: '/admin/documents', label: 'Documents', icon: FileSpreadsheet },
   { href: '/admin/sandboxes', label: 'Sandboxes', icon: Server },
   { href: '/admin/billing', label: 'Billing', icon: CreditCard },
   { href: '/admin/analytics', label: 'Analytics', icon: BarChart3 },

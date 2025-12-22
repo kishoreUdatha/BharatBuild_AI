@@ -4,7 +4,7 @@ All endpoints require admin or superuser privileges.
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints.admin import dashboard, users, projects, billing, analytics, plans, api_keys, audit_logs, settings, feedback, websocket, sandboxes
+from app.api.v1.endpoints.admin import dashboard, users, projects, billing, analytics, plans, api_keys, audit_logs, settings, feedback, websocket, sandboxes, documents
 
 admin_router = APIRouter(prefix="/admin", tags=["Admin Dashboard"])
 
@@ -21,3 +21,4 @@ admin_router.include_router(settings.router, prefix="/settings", tags=["Admin Se
 admin_router.include_router(feedback.router, prefix="/feedback", tags=["Admin Feedback"])
 admin_router.include_router(websocket.router, tags=["Admin WebSocket"])
 admin_router.include_router(sandboxes.router, prefix="/sandboxes", tags=["Admin Sandboxes"])
+admin_router.include_router(documents.router, prefix="/documents", tags=["Admin Documents"])

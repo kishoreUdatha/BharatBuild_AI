@@ -23,7 +23,11 @@ import {
   ExternalLink,
   Zap,
   ChevronUp,
-  ChevronDown
+  ChevronDown,
+  Wifi,
+  WifiOff,
+  Globe,
+  Database
 } from 'lucide-react'
 
 interface SandboxStats {
@@ -49,6 +53,29 @@ interface SandboxStats {
     available: number
   }
   unhealthy_containers: string[]
+}
+
+interface ConnectionHealth {
+  sandbox_mode: string
+  sandbox_docker_host: string
+  sandbox_public_url: string
+  connection_status: string
+  docker_api_status: string
+  latency_ms: number | null
+  docker_version: string | null
+  docker_info: {
+    containers: number
+    running: number
+    paused: number
+    stopped: number
+    images: number
+    memory_total_gb: number
+    cpus: number
+    os: string
+    kernel: string
+  } | null
+  error: string | null
+  last_checked: string
 }
 
 interface Sandbox {
@@ -81,6 +108,8 @@ export default function AdminSandboxesPage() {
   const { theme } = useAdminTheme()
   const [sandboxes, setSandboxes] = useState<Sandbox[]>([])
   const [stats, setStats] = useState<SandboxStats | null>(null)
+  const [connectionHealth, setConnectionHealth] = useState<ConnectionHealth | null>(null)
+  const [connectionLoading, setConnectionLoading] = useState(true)
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -145,19 +174,34 @@ export default function AdminSandboxesPage() {
     }
   }, [])
 
+  const fetchConnectionHealth = useCallback(async () => {
+    setConnectionLoading(true)
+    try {
+      const data = await apiClient.get<ConnectionHealth>('/admin/sandboxes/connection-health')
+      setConnectionHealth(data)
+    } catch (err) {
+      console.error('Failed to fetch connection health:', err)
+      setConnectionHealth(null)
+    } finally {
+      setConnectionLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     fetchSandboxes()
     fetchStats()
-  }, [fetchSandboxes, fetchStats])
+    fetchConnectionHealth()
+  }, [fetchSandboxes, fetchStats, fetchConnectionHealth])
 
   // Auto-refresh every 30 seconds
   useEffect(() => {
     const interval = setInterval(() => {
       fetchSandboxes()
       fetchStats()
+      fetchConnectionHealth()
     }, 30000)
     return () => clearInterval(interval)
-  }, [fetchSandboxes, fetchStats])
+  }, [fetchSandboxes, fetchStats, fetchConnectionHealth])
 
   const handleRestart = async (projectId: string) => {
     setActionLoading(projectId)
@@ -249,11 +293,139 @@ export default function AdminSandboxesPage() {
       <AdminHeader
         title="Sandbox Health"
         subtitle="Monitor and manage user sandboxes"
-        onRefresh={() => { fetchSandboxes(); fetchStats(); }}
+        onRefresh={() => { fetchSandboxes(); fetchStats(); fetchConnectionHealth(); }}
         isLoading={loading}
       />
 
       <div className="p-6">
+        {/* Connection Health Panel */}
+        <div className={`mb-6 p-4 rounded-xl border ${
+          isDark ? 'bg-[#1a1a1a] border-[#333]' : 'bg-white border-gray-200'
+        }`}>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className={`text-sm font-medium flex items-center gap-2 ${isDark ? 'text-white' : 'text-gray-900'}`}>
+              <Globe className="w-4 h-4" />
+              Sandbox Server Connection
+            </h3>
+            <button
+              onClick={fetchConnectionHealth}
+              disabled={connectionLoading}
+              className={`p-1.5 rounded-lg text-xs ${isDark ? 'hover:bg-[#252525]' : 'hover:bg-gray-100'}`}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${connectionLoading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+
+          {connectionLoading && !connectionHealth ? (
+            <div className="flex items-center gap-2 text-sm text-gray-400">
+              <RefreshCw className="w-4 h-4 animate-spin" />
+              Checking connection...
+            </div>
+          ) : connectionHealth ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+              {/* Connection Status */}
+              <div className="flex items-center gap-2">
+                {connectionHealth.connection_status === 'connected' ? (
+                  <Wifi className="w-5 h-5 text-green-400" />
+                ) : (
+                  <WifiOff className="w-5 h-5 text-red-400" />
+                )}
+                <div>
+                  <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Status</div>
+                  <div className={`text-sm font-medium ${
+                    connectionHealth.connection_status === 'connected' ? 'text-green-400' : 'text-red-400'
+                  }`}>
+                    {connectionHealth.connection_status === 'connected' ? 'Connected' : 'Disconnected'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Mode */}
+              <div className="flex items-center gap-2">
+                <Server className="w-5 h-5 text-blue-400" />
+                <div>
+                  <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Mode</div>
+                  <div className={`text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                    {connectionHealth.sandbox_mode === 'remote' ? 'Remote' : 'Local'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Docker API */}
+              <div className="flex items-center gap-2">
+                <Database className="w-5 h-5 text-purple-400" />
+                <div>
+                  <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Docker API</div>
+                  <div className={`text-sm font-medium ${
+                    connectionHealth.docker_api_status === 'healthy' ? 'text-green-400' : 'text-red-400'
+                  }`}>
+                    {connectionHealth.docker_api_status === 'healthy' ? 'Healthy' : connectionHealth.docker_api_status}
+                  </div>
+                </div>
+              </div>
+
+              {/* Latency */}
+              <div className="flex items-center gap-2">
+                <Zap className="w-5 h-5 text-yellow-400" />
+                <div>
+                  <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Latency</div>
+                  <div className={`text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                    {connectionHealth.latency_ms ? `${connectionHealth.latency_ms}ms` : '-'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Docker Version */}
+              {connectionHealth.docker_version && (
+                <div className="flex items-center gap-2">
+                  <Activity className="w-5 h-5 text-cyan-400" />
+                  <div>
+                    <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Docker</div>
+                    <div className={`text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                      v{connectionHealth.docker_version}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Resources */}
+              {connectionHealth.docker_info && (
+                <div className="flex items-center gap-2">
+                  <Cpu className="w-5 h-5 text-orange-400" />
+                  <div>
+                    <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Resources</div>
+                    <div className={`text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                      {connectionHealth.docker_info.cpus} CPU / {connectionHealth.docker_info.memory_total_gb}GB
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-sm text-red-400">
+              <XCircle className="w-4 h-4" />
+              Failed to check connection
+            </div>
+          )}
+
+          {/* Error Message */}
+          {connectionHealth?.error && (
+            <div className={`mt-3 p-2 rounded-lg text-xs ${isDark ? 'bg-red-500/10 text-red-400' : 'bg-red-50 text-red-600'}`}>
+              {connectionHealth.error}
+            </div>
+          )}
+
+          {/* Host Info */}
+          {connectionHealth && (
+            <div className={`mt-3 pt-3 border-t text-xs ${isDark ? 'border-[#333] text-gray-500' : 'border-gray-200 text-gray-400'}`}>
+              <span className="font-mono">Host: {connectionHealth.sandbox_docker_host}</span>
+              {connectionHealth.sandbox_public_url && (
+                <span className="ml-4 font-mono">Public URL: {connectionHealth.sandbox_public_url}</span>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Stats */}
         {stats && (
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
