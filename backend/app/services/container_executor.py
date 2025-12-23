@@ -85,14 +85,14 @@ TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
     Technology.NODEJS: ContainerConfig(
         image="node:20-alpine",
         build_command="npm install",
-        run_command="npm run dev",
+        run_command="npm run dev -- --host 0.0.0.0 --no-open",
         port=3000,
         memory_limit="512m"
     ),
     Technology.NODEJS_VITE: ContainerConfig(
         image="node:20-alpine",
         build_command="npm install",
-        run_command="npm run dev",
+        run_command="npm run dev -- --host 0.0.0.0 --no-open",
         port=5173,  # Vite default port
         memory_limit="512m"
     ),
