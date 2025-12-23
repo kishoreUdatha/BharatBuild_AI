@@ -42,7 +42,7 @@ docker run -d \
     --restart unless-stopped \
     --network bharatbuild-sandbox \
     -p 8080:8080 \
-    -p 8081:8080 \
+    -p 8081:8081 \
     -v /var/run/docker.sock:/var/run/docker.sock:ro \
     traefik:v3.0 \
     --api.insecure=true \
@@ -51,6 +51,7 @@ docker run -d \
     --providers.docker.exposedbydefault=false \
     --providers.docker.network=bharatbuild-sandbox \
     --entrypoints.web.address=:8080 \
+    --entrypoints.traefik.address=:8081 \
     --log.level=INFO \
     --accesslog=true
 
