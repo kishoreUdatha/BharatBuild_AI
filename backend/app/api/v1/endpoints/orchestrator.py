@@ -807,7 +807,6 @@ async def execute_workflow(
 
                 # Update project status on code completion if authenticated
                 # Mark as PARTIAL_COMPLETED (code done, documents pending)
-                # Project becomes COMPLETED only after documents are generated
                 if db_project:
                     try:
                         db_project.status = ProjectStatus.PARTIAL_COMPLETED
@@ -815,6 +814,142 @@ async def execute_workflow(
                         logger.info(f"Project {db_project.id} marked as PARTIAL_COMPLETED (code generation done)")
                     except Exception as e:
                         logger.warning(f"Failed to update project status: {e}")
+
+                # ==================== AUTO DOCUMENT GENERATION ====================
+                # Automatically generate documents after code generation completes
+                if db_project and current_user:
+                    try:
+                        from app.modules.agents.chunked_document_agent import chunked_document_agent, DocumentType
+                        from app.models.document import DocumentType as DBDocumentType
+
+                        # Send document generation starting event
+                        doc_start_event = {
+                            "type": "documents_starting",
+                            "data": {
+                                "message": "Code generation complete. Starting document generation...",
+                                "documents": ["SRS", "Project Report", "PPT", "Viva Q&A"]
+                            },
+                            "step": None,
+                            "agent": "document_generator",
+                            "timestamp": None
+                        }
+                        yield f"data: {json.dumps(doc_start_event)}\n\n".encode('utf-8')
+                        await asyncio.sleep(0.01)
+
+                        # Documents to generate in order
+                        documents_to_generate = [
+                            ("srs", "SRS Document", DocumentType.SRS, DBDocumentType.SRS),
+                            ("report", "Project Report", DocumentType.PROJECT_REPORT, DBDocumentType.REPORT),
+                            ("ppt", "Presentation", DocumentType.PPT, DBDocumentType.PPT),
+                            ("viva", "Viva Q&A", DocumentType.VIVA_QA, DBDocumentType.VIVA_QA),
+                        ]
+
+                        for doc_key, doc_name, doc_type, db_doc_type in documents_to_generate:
+                            try:
+                                # Send document start event
+                                doc_event = {
+                                    "type": "document_generating",
+                                    "data": {
+                                        "document": doc_name,
+                                        "key": doc_key,
+                                        "message": f"Generating {doc_name}..."
+                                    },
+                                    "step": None,
+                                    "agent": "document_generator",
+                                    "timestamp": None
+                                }
+                                yield f"data: {json.dumps(doc_event)}\n\n".encode('utf-8')
+                                await asyncio.sleep(0.01)
+
+                                # Generate document with streaming progress
+                                async for event in chunked_document_agent.generate_document_streaming(
+                                    project_id=actual_project_id,
+                                    doc_type=doc_type,
+                                    db=db
+                                ):
+                                    # Forward document generation events
+                                    doc_progress_event = {
+                                        "type": "document_progress",
+                                        "data": {
+                                            "document": doc_name,
+                                            "key": doc_key,
+                                            **event
+                                        },
+                                        "step": None,
+                                        "agent": "document_generator",
+                                        "timestamp": None
+                                    }
+                                    yield f"data: {json.dumps(doc_progress_event)}\n\n".encode('utf-8')
+                                    await asyncio.sleep(0.01)
+
+                                # Send document complete event
+                                doc_complete_event = {
+                                    "type": "document_complete",
+                                    "data": {
+                                        "document": doc_name,
+                                        "key": doc_key,
+                                        "message": f"{doc_name} generated successfully"
+                                    },
+                                    "step": None,
+                                    "agent": "document_generator",
+                                    "timestamp": None
+                                }
+                                yield f"data: {json.dumps(doc_complete_event)}\n\n".encode('utf-8')
+                                await asyncio.sleep(0.01)
+
+                                logger.info(f"[AutoDocs] Generated {doc_name} for project {actual_project_id}")
+
+                            except Exception as doc_err:
+                                logger.error(f"[AutoDocs] Error generating {doc_name}: {doc_err}")
+                                doc_error_event = {
+                                    "type": "document_error",
+                                    "data": {
+                                        "document": doc_name,
+                                        "key": doc_key,
+                                        "error": str(doc_err)
+                                    },
+                                    "step": None,
+                                    "agent": "document_generator",
+                                    "timestamp": None
+                                }
+                                yield f"data: {json.dumps(doc_error_event)}\n\n".encode('utf-8')
+                                await asyncio.sleep(0.01)
+
+                        # Mark project as COMPLETED after all documents generated
+                        db_project.status = ProjectStatus.COMPLETED
+                        db_project.completed_at = datetime.utcnow()
+                        await db.commit()
+                        logger.info(f"[AutoDocs] Project {db_project.id} marked as COMPLETED (code + documents done)")
+
+                        # Send all documents complete event
+                        all_docs_event = {
+                            "type": "all_documents_complete",
+                            "data": {
+                                "message": "All documents generated successfully!",
+                                "project_status": "COMPLETED"
+                            },
+                            "step": None,
+                            "agent": "document_generator",
+                            "timestamp": None
+                        }
+                        yield f"data: {json.dumps(all_docs_event)}\n\n".encode('utf-8')
+                        await asyncio.sleep(0.01)
+
+                    except Exception as doc_gen_err:
+                        logger.error(f"[AutoDocs] Document generation failed: {doc_gen_err}")
+                        # Don't fail the whole workflow - code is already generated
+                        doc_fail_event = {
+                            "type": "documents_failed",
+                            "data": {
+                                "error": str(doc_gen_err),
+                                "message": "Document generation failed. You can retry from the project page."
+                            },
+                            "step": None,
+                            "agent": "document_generator",
+                            "timestamp": None
+                        }
+                        yield f"data: {json.dumps(doc_fail_event)}\n\n".encode('utf-8')
+                        await asyncio.sleep(0.01)
 
             except Exception as e:
                 logger.error(f"Error in workflow execution: {e}")

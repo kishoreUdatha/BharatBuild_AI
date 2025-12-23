@@ -7,18 +7,21 @@ This implements the production-grade approach used by Bolt.new, Replit, and Code
 - Infinite scaling (100k+ concurrent users)
 - Complete isolation between sandboxes
 
-Architecture:
+Architecture (Updated - uses Traefik Gateway on EC2):
     Browser Request: GET /preview/abc123/index.html
            ↓
-    FastAPI Reverse Proxy (this module)
+    FastAPI Reverse Proxy (this module - runs in ECS)
            ↓
-    Docker Network Lookup: container "bb-abc123"
+    Traefik Gateway (runs on EC2 sandbox, port 8080)
            ↓
-    Internal Port Detection (5173, 3000, 8000, etc.)
+    Docker Internal Network (no host ports!)
            ↓
-    Proxy Request to Container
+    Container (localhost:5173/3000/etc)
            ↓
     Return Response to Browser
+
+Key: The Traefik gateway runs ON the EC2 and can reach container internal IPs.
+ECS only needs to reach EC2:8080 (the gateway port).
 """
 
 import asyncio
@@ -40,6 +43,9 @@ router = APIRouter(prefix="/preview", tags=["Preview Proxy"])
 # Check if using remote Docker (EC2 sandbox)
 SANDBOX_DOCKER_HOST = os.environ.get("SANDBOX_DOCKER_HOST", "")
 IS_REMOTE_DOCKER = bool(SANDBOX_DOCKER_HOST)
+
+# Preview Gateway port (Traefik on EC2)
+PREVIEW_GATEWAY_PORT = int(os.environ.get("PREVIEW_GATEWAY_PORT", "8080"))
 
 # HTTP client for proxying requests
 _http_client: Optional[httpx.AsyncClient] = None
@@ -133,32 +139,44 @@ def get_http_client() -> httpx.AsyncClient:
     return _http_client
 
 
-async def get_container_internal_address(project_id: str) -> Optional[tuple[str, int]]:
+async def get_container_internal_address(project_id: str) -> Optional[tuple[str, int, str]]:
     """
-    Get the internal Docker address and active port for a project container.
+    Get the gateway address for a project container.
 
     Returns:
-        Tuple of (container_ip, active_port) or None if container not found
+        Tuple of (gateway_ip, gateway_port, project_id) or None if container not found
+
+    Architecture:
+        - Uses Traefik gateway running on EC2 port 8080
+        - Gateway routes /{project_id}/* to the correct container
+        - No host port mapping needed!
     """
-    # For remote Docker (EC2 sandbox), check container_executor first
+    # For remote Docker (EC2 sandbox), route via Traefik gateway
     if IS_REMOTE_DOCKER:
+        # Extract EC2 IP from SANDBOX_DOCKER_HOST (e.g., "tcp://10.0.1.13:2375" -> "10.0.1.13")
+        ec2_ip = SANDBOX_DOCKER_HOST.replace("tcp://", "").split(":")[0]
+
+        # Check if container exists (in-memory or via Docker query)
+        container_exists = False
+
         if project_id in container_executor.active_containers:
-            container_info = container_executor.active_containers[project_id]
-            # Extract EC2 IP from SANDBOX_DOCKER_HOST (e.g., "tcp://10.0.1.115:2375" -> "10.0.1.115")
-            ec2_ip = SANDBOX_DOCKER_HOST.replace("tcp://", "").split(":")[0]
-            host_port = container_info.get("port", 3000)
-            logger.info(f"[Preview] Remote mode (in-memory): {project_id} -> {ec2_ip}:{host_port}")
-            return (ec2_ip, host_port)
+            container_exists = True
+            logger.info(f"[Preview] Container found in memory: {project_id}")
         else:
-            # Container not in memory - query Docker directly
-            # This handles ECS restarts where in-memory state was lost
-            logger.info(f"[Preview] Container not in memory, querying Docker for {project_id}")
+            # Query Docker directly for container
+            logger.info(f"[Preview] Checking Docker for container: {project_id}")
             discovered = discover_container_from_docker(project_id)
             if discovered:
-                return discovered
-            logger.warning(f"[Preview] Remote container not found for {project_id}")
+                container_exists = True
 
-    # Local Docker mode or fallback
+        if container_exists:
+            # Route via Traefik gateway on port 8080
+            logger.info(f"[Preview] Routing via gateway: {ec2_ip}:{PREVIEW_GATEWAY_PORT}/{project_id}")
+            return (ec2_ip, PREVIEW_GATEWAY_PORT, project_id)
+        else:
+            logger.warning(f"[Preview] Container not found for {project_id}")
+
+    # Local Docker mode or fallback (direct container access)
     manager = get_container_manager()
 
     # Check if container exists
@@ -181,23 +199,24 @@ async def get_container_internal_address(project_id: str) -> Optional[tuple[str,
         if 'bharatbuild-sandbox' in networks:
             ip = networks['bharatbuild-sandbox'].get('IPAddress')
             if ip:
-                return (ip, active_port)
+                # Local mode: no gateway, direct to container IP
+                return (ip, active_port, None)
 
         # Try bridge network
         if 'bridge' in networks:
             ip = networks['bridge'].get('IPAddress')
             if ip:
-                return (ip, active_port)
+                return (ip, active_port, None)
 
         # Try any network
         for net_name, net_config in networks.items():
             ip = net_config.get('IPAddress')
             if ip:
-                return (ip, active_port)
+                return (ip, active_port, None)
 
         # Fallback: use container name (Docker DNS)
         container_name = f"bb-{project_id[:12]}"
-        return (container_name, active_port)
+        return (container_name, active_port, None)
 
     except Exception as e:
         logger.error(f"Failed to get container address for {project_id}: {e}")
@@ -207,19 +226,21 @@ async def get_container_internal_address(project_id: str) -> Optional[tuple[str,
 @router.api_route("/{project_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def proxy_preview(project_id: str, path: str, request: Request):
     """
-    Reverse proxy to container's internal port.
+    Reverse proxy to container via Traefik gateway.
 
     This is the Bolt.new-style preview URL handler:
-    - GET /preview/abc123/ → proxied to container abc123 port 3000/5173/etc
-    - GET /preview/abc123/index.js → proxied to container
+    - GET /preview/abc123/ → gateway → container abc123 port 3000/5173/etc
+    - GET /preview/abc123/index.js → gateway → container
     - All HTTP methods supported (for HMR websockets, API calls, etc.)
 
-    No port mapping needed - uses Docker internal networking.
+    Architecture:
+    - Remote mode: ECS → Traefik Gateway (EC2:8080) → Container
+    - Local mode: Direct to container IP (for development)
     """
     logger.info(f"[Preview] Incoming request: {request.method} /preview/{project_id}/{path}")
     logger.info(f"[Preview] IS_REMOTE_DOCKER={IS_REMOTE_DOCKER}, SANDBOX_DOCKER_HOST={SANDBOX_DOCKER_HOST}")
 
-    # Get container address
+    # Get container address (returns 3-tuple: ip, port, gateway_project_id)
     address = await get_container_internal_address(project_id)
 
     if not address:
@@ -228,16 +249,22 @@ async def proxy_preview(project_id: str, path: str, request: Request):
             detail=f"Preview not available. Container for project {project_id} not found or not running."
         )
 
-    container_ip, container_port = address
+    gateway_ip, gateway_port, gateway_project_id = address
 
     # Build target URL
-    target_url = f"http://{container_ip}:{container_port}/{path}"
+    if gateway_project_id:
+        # Remote mode: route via Traefik gateway
+        # Gateway routes /{project_id}/path → container:port/path
+        target_url = f"http://{gateway_ip}:{gateway_port}/{gateway_project_id}/{path}"
+    else:
+        # Local mode: direct to container IP
+        target_url = f"http://{gateway_ip}:{gateway_port}/{path}"
 
     # Add query string if present
     if request.url.query:
         target_url += f"?{request.url.query}"
 
-    logger.debug(f"[Preview] Proxying {request.method} /preview/{project_id}/{path} -> {target_url}")
+    logger.info(f"[Preview] Proxying {request.method} /preview/{project_id}/{path} -> {target_url}")
 
     try:
         client = get_http_client()
@@ -250,8 +277,8 @@ async def proxy_preview(project_id: str, path: str, request: Request):
                                    'te', 'trailers', 'upgrade'):
                 headers[key] = value
 
-        # Set correct Host header for container
-        headers['Host'] = f"{container_ip}:{container_port}"
+        # Set correct Host header for gateway/container
+        headers['Host'] = f"{gateway_ip}:{gateway_port}"
         headers['X-Forwarded-For'] = request.client.host if request.client else '127.0.0.1'
         headers['X-Forwarded-Proto'] = request.url.scheme
         headers['X-Real-IP'] = request.client.host if request.client else '127.0.0.1'
@@ -291,7 +318,7 @@ async def proxy_preview(project_id: str, path: str, request: Request):
         logger.warning(f"[Preview] Connection failed to {target_url}: {e}")
         raise HTTPException(
             status_code=503,
-            detail=f"Preview service starting... Container at {container_ip}:{container_port} not ready yet."
+            detail=f"Preview service starting... Gateway/Container at {gateway_ip}:{gateway_port} not ready yet."
         )
     except httpx.TimeoutException as e:
         logger.warning(f"[Preview] Timeout proxying to {target_url}: {e}")
@@ -343,21 +370,30 @@ async def get_preview_status(project_id: str):
             "error": "Container not found or not running"
         }
 
-    container_ip, container_port = address
+    gateway_ip, gateway_port, gateway_project_id = address
 
     manager = get_container_manager()
     container_info = manager.containers.get(project_id)
+
+    # Determine routing method and target
+    if gateway_project_id:
+        routing_method = "traefik_gateway"
+        target = f"http://{gateway_ip}:{gateway_port}/{gateway_project_id}/{{path}}"
+    else:
+        routing_method = "direct_container"
+        target = f"http://{gateway_ip}:{gateway_port}/{{path}}"
 
     return {
         "project_id": project_id,
         "available": True,
         "preview_url": f"/preview/{project_id}/",
-        "internal_address": f"{container_ip}:{container_port}",
+        "gateway_address": f"{gateway_ip}:{gateway_port}",
+        "uses_gateway": gateway_project_id is not None,
         "detected_port": container_info.active_port if container_info else None,
         "container_status": container_info.status.value if container_info else "unknown",
         "routing": {
-            "method": "reverse_proxy",
+            "method": routing_method,
             "path_pattern": f"/preview/{project_id}/{{path}}",
-            "target": f"http://{container_ip}:{container_port}/{{path}}"
+            "target": target
         }
     }
