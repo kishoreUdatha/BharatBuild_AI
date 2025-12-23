@@ -247,20 +247,34 @@ export function useProjectSwitch() {
           // Content is lazy-loaded when user clicks a file
           console.log(`[ProjectSwitch] Loading project metadata via /projects/${newProjectId}/metadata`)
 
+          // Verify token exists
+          const token = localStorage.getItem('access_token')
+          if (!token) {
+            console.error('[ProjectSwitch] No access token found! User may need to re-login.')
+          } else {
+            console.log('[ProjectSwitch] Token present, length:', token.length)
+          }
+
           let data: any = null
           let useMetadataEndpoint = true
 
           // Try the new /metadata endpoint first
           try {
+            console.log('[ProjectSwitch] Calling /projects/' + newProjectId + '/metadata...')
             data = await apiClient.get(`/projects/${newProjectId}/metadata`)
-            console.log(`[ProjectSwitch] Metadata response:`, data)
+            console.log(`[ProjectSwitch] Metadata response received:`, JSON.stringify(data, null, 2))
           } catch (metadataErr: any) {
-            console.warn(`[ProjectSwitch] /metadata endpoint failed, falling back to /sync/files:`, metadataErr)
+            console.warn(`[ProjectSwitch] /metadata endpoint failed:`, {
+              message: metadataErr.message,
+              status: metadataErr.response?.status,
+              data: metadataErr.response?.data
+            })
             useMetadataEndpoint = false
 
             // Fallback to old /sync/files endpoint (loads content too, but works)
+            console.log('[ProjectSwitch] Falling back to /sync/files/' + newProjectId)
             data = await apiClient.get(`/sync/files/${newProjectId}`)
-            console.log(`[ProjectSwitch] Fallback /sync/files response:`, data)
+            console.log(`[ProjectSwitch] Fallback /sync/files response:`, JSON.stringify(data, null, 2))
           }
 
           // Handle response from either endpoint
@@ -308,6 +322,10 @@ export function useProjectSwitch() {
           if (data.success && fileTreeData.length > 0) {
             // Convert backend tree format to frontend ProjectFile format
             const convertTree = (items: any[]): ProjectFile[] => {
+              if (!items || !Array.isArray(items)) {
+                console.warn('[ProjectSwitch] convertTree received invalid items:', items)
+                return []
+              }
               return items.map((item: any) => ({
                 path: item.path,
                 name: item.name || item.path.split('/').pop() || item.path,  // Extract name from path if not provided
@@ -374,6 +392,14 @@ export function useProjectSwitch() {
             console.log(`[ProjectSwitch] ✓ Loaded ${result.fileCount} files from ${result.layer}`)
           } else {
             // No files found - create empty project
+            console.warn('[ProjectSwitch] No files found in API response:', {
+              success: data.success,
+              fileTreeLength: fileTreeData?.length,
+              hasFileTree: !!data.file_tree,
+              hasTree: !!data.tree,
+              rawData: data
+            })
+
             useProjectStore.getState().setCurrentProject({
               id: newProjectId,
               name: projectTitle,
