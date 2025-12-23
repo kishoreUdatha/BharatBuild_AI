@@ -72,22 +72,22 @@ def get_docker_client() -> Optional[docker.DockerClient]:
     return _docker_client
 
 
-def discover_container_from_docker(project_id: str) -> Optional[tuple[str, int]]:
+def container_exists_on_docker(project_id: str) -> bool:
     """
-    Query EC2 Docker directly to find a running container for the project.
+    Check if a container exists on EC2 Docker for the project.
 
     This handles the case where ECS backend restarted and lost in-memory container tracking.
     Containers are discovered by their 'project_id' label.
 
     Returns:
-        Tuple of (ec2_ip, host_port) or None if not found
+        True if container exists and is running, False otherwise
     """
     if not IS_REMOTE_DOCKER:
-        return None
+        return False
 
     docker_client = get_docker_client()
     if not docker_client:
-        return None
+        return False
 
     try:
         # Query containers by project_id label
@@ -95,36 +95,17 @@ def discover_container_from_docker(project_id: str) -> Optional[tuple[str, int]]
             filters={"label": f"project_id={project_id}", "status": "running"}
         )
 
-        if not containers:
+        if containers:
+            container = containers[0]
+            logger.info(f"[Preview] Container found on Docker: {project_id} -> {container.name}")
+            return True
+        else:
             logger.debug(f"[Preview] No running container found for project {project_id}")
-            return None
-
-        container = containers[0]  # Take the first matching container
-
-        # Extract port bindings from container
-        ports = container.attrs.get('NetworkSettings', {}).get('Ports', {})
-
-        # Find the first mapped port (e.g., '5173/tcp' -> [{'HostIp': '0.0.0.0', 'HostPort': '10000'}])
-        host_port = None
-        for container_port, bindings in ports.items():
-            if bindings:
-                host_port = int(bindings[0].get('HostPort', 0))
-                if host_port:
-                    break
-
-        if not host_port:
-            logger.warning(f"[Preview] Container found but no port mapping for {project_id}")
-            return None
-
-        # Extract EC2 IP from SANDBOX_DOCKER_HOST
-        ec2_ip = SANDBOX_DOCKER_HOST.replace("tcp://", "").split(":")[0]
-
-        logger.info(f"[Preview] Discovered container via Docker API: {project_id} -> {ec2_ip}:{host_port}")
-        return (ec2_ip, host_port)
+            return False
 
     except Exception as e:
-        logger.error(f"[Preview] Error discovering container from Docker: {e}")
-        return None
+        logger.error(f"[Preview] Error checking container on Docker: {e}")
+        return False
 
 
 def get_http_client() -> httpx.AsyncClient:
@@ -163,11 +144,9 @@ async def get_container_internal_address(project_id: str) -> Optional[tuple[str,
             container_exists = True
             logger.info(f"[Preview] Container found in memory: {project_id}")
         else:
-            # Query Docker directly for container
+            # Query Docker directly for container (Traefik mode - no port mappings needed)
             logger.info(f"[Preview] Checking Docker for container: {project_id}")
-            discovered = discover_container_from_docker(project_id)
-            if discovered:
-                container_exists = True
+            container_exists = container_exists_on_docker(project_id)
 
         if container_exists:
             # Route via Traefik gateway on port 8080

@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect, useCallback, useState, useMemo } from 'react'
+import { useEffect, useCallback, useState, useMemo, useRef } from 'react'
 import Editor from '@monaco-editor/react'
 import { useProject } from '@/hooks/useProject'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { usePlanStatus } from '@/hooks/usePlanStatus'
 import { CodeTabs } from './CodeTabs'
+import { MarkdownToolbar } from './MarkdownToolbar'
 import { monacoThemeDark, monacoThemeLight } from '@/utils/editorThemes'
 import { Code2, Cloud, CloudOff, Loader2, Eye, EyeOff, Columns, FileText, Lock } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
@@ -17,8 +18,10 @@ type MarkdownViewMode = 'editor' | 'split' | 'preview'
 export function CodeEditor() {
   // Theme state
   const [editorTheme, setEditorTheme] = useState<'bharatbuild-dark' | 'bharatbuild-light'>('bharatbuild-dark')
-  // Markdown preview mode - default to full preview for better readability
-  const [markdownViewMode, setMarkdownViewMode] = useState<MarkdownViewMode>('preview')
+  // Markdown preview mode - default to split for editing with preview
+  const [markdownViewMode, setMarkdownViewMode] = useState<MarkdownViewMode>('split')
+  // Monaco editor ref for toolbar integration
+  const editorRef = useRef<any>(null)
 
   // Direct store access (like your example)
   const {
@@ -73,6 +76,54 @@ export function CodeEditor() {
 
   // Handle editor mount - add copy/cut restrictions for non-premium users
   const handleEditorDidMount = useCallback((editor: any, monaco: any) => {
+    // Store editor reference for toolbar integration
+    editorRef.current = editor
+
+    // Add keyboard shortcuts for markdown editing
+    if (isMarkdownFile) {
+      // Bold: Ctrl+B
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB, () => {
+        const selection = editor.getSelection()
+        const model = editor.getModel()
+        if (selection && model) {
+          const selectedText = model.getValueInRange(selection)
+          editor.executeEdits('markdown', [{
+            range: selection,
+            text: selectedText ? `**${selectedText}**` : '**text**',
+            forceMoveMarkers: true
+          }])
+        }
+      })
+
+      // Italic: Ctrl+I
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI, () => {
+        const selection = editor.getSelection()
+        const model = editor.getModel()
+        if (selection && model) {
+          const selectedText = model.getValueInRange(selection)
+          editor.executeEdits('markdown', [{
+            range: selection,
+            text: selectedText ? `*${selectedText}*` : '*text*',
+            forceMoveMarkers: true
+          }])
+        }
+      })
+
+      // Link: Ctrl+K
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, () => {
+        const selection = editor.getSelection()
+        const model = editor.getModel()
+        if (selection && model) {
+          const selectedText = model.getValueInRange(selection)
+          editor.executeEdits('markdown', [{
+            range: selection,
+            text: selectedText ? `[${selectedText}](url)` : '[link text](url)',
+            forceMoveMarkers: true
+          }])
+        }
+      })
+    }
+
     if (!canCopyCode) {
       // Disable copy command
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyC, () => {
@@ -101,7 +152,7 @@ export function CodeEditor() {
         }
       }
     }
-  }, [canCopyCode])
+  }, [canCopyCode, isMarkdownFile])
 
   // Watch for theme changes on document
   useEffect(() => {
@@ -286,43 +337,51 @@ export function CodeEditor() {
         )}
       </div>
 
-      {/* Markdown View Mode Toggle (like IntelliJ) */}
+      {/* Markdown Toolbar and View Mode Toggle (like IntelliJ/VS Code) */}
       {isMarkdownFile && (
-        <div className="flex items-center justify-end gap-1 px-2 py-1 border-b border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))]">
-          <span className="text-xs text-[hsl(var(--bolt-text-tertiary))] mr-2">Preview:</span>
-          <button
-            onClick={() => setMarkdownViewMode('editor')}
-            className={`p-1.5 rounded transition-colors ${
-              markdownViewMode === 'editor'
-                ? 'bg-blue-500/20 text-blue-400'
-                : 'hover:bg-white/10 text-gray-400'
-            }`}
-            title="Editor Only"
-          >
-            <Code2 className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setMarkdownViewMode('split')}
-            className={`p-1.5 rounded transition-colors ${
-              markdownViewMode === 'split'
-                ? 'bg-blue-500/20 text-blue-400'
-                : 'hover:bg-white/10 text-gray-400'
-            }`}
-            title="Split View (Editor + Preview)"
-          >
-            <Columns className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setMarkdownViewMode('preview')}
-            className={`p-1.5 rounded transition-colors ${
-              markdownViewMode === 'preview'
-                ? 'bg-blue-500/20 text-blue-400'
-                : 'hover:bg-white/10 text-gray-400'
-            }`}
-            title="Preview Only"
-          >
-            <Eye className="w-4 h-4" />
-          </button>
+        <div className="flex flex-col border-b border-[hsl(var(--bolt-border))]">
+          {/* Formatting Toolbar - only show when editor is visible */}
+          {markdownViewMode !== 'preview' && (
+            <MarkdownToolbar editorRef={editorRef} onContentChange={handleEditorChange} />
+          )}
+
+          {/* View Mode Toggle */}
+          <div className="flex items-center justify-end gap-1 px-2 py-1 bg-[hsl(var(--bolt-bg-secondary))]">
+            <span className="text-xs text-[hsl(var(--bolt-text-tertiary))] mr-2">View:</span>
+            <button
+              onClick={() => setMarkdownViewMode('editor')}
+              className={`p-1.5 rounded transition-colors ${
+                markdownViewMode === 'editor'
+                  ? 'bg-blue-500/20 text-blue-400'
+                  : 'hover:bg-white/10 text-gray-400'
+              }`}
+              title="Editor Only"
+            >
+              <Code2 className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setMarkdownViewMode('split')}
+              className={`p-1.5 rounded transition-colors ${
+                markdownViewMode === 'split'
+                  ? 'bg-blue-500/20 text-blue-400'
+                  : 'hover:bg-white/10 text-gray-400'
+              }`}
+              title="Split View (Editor + Preview)"
+            >
+              <Columns className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setMarkdownViewMode('preview')}
+              className={`p-1.5 rounded transition-colors ${
+                markdownViewMode === 'preview'
+                  ? 'bg-blue-500/20 text-blue-400'
+                  : 'hover:bg-white/10 text-gray-400'
+              }`}
+              title="Preview Only"
+            >
+              <Eye className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       )}
 
