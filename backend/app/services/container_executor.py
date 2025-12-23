@@ -26,10 +26,7 @@ from datetime import datetime, timedelta
 
 from app.core.logging_config import logger
 
-# Frontend URL for API proxy pattern
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
-SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
-ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+# Note: Environment variables are read dynamically in _get_preview_url() to handle late initialization
 
 
 def _get_preview_url(port: int, project_id: str = None) -> str:
@@ -38,17 +35,43 @@ def _get_preview_url(port: int, project_id: str = None) -> str:
 
     Production: Uses /api/v1/preview/{project_id}/ which proxies through backend
     Development: Uses localhost:{port}
+
+    Note: Reads environment variables dynamically (not at import time) to ensure
+    they are available even if module was imported before env was configured.
     """
+    # Read environment variables dynamically
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip('/')
+    environment = os.getenv("ENVIRONMENT", "development")
+    sandbox_public_url = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "")
+
+    # Determine if we're in production
     is_production = (
-        ENVIRONMENT == "production" or
-        (FRONTEND_URL and "localhost" not in FRONTEND_URL and "127.0.0.1" not in FRONTEND_URL)
+        environment == "production" or
+        (frontend_url and "localhost" not in frontend_url and "127.0.0.1" not in frontend_url)
     )
+
+    logger.info(f"[ContainerExecutor] _get_preview_url: port={port}, project_id={project_id}, "
+                f"env={environment}, frontend_url={frontend_url}, is_production={is_production}")
 
     if is_production and project_id:
         # Use API proxy pattern - this routes through backend preview_proxy
-        return f"{FRONTEND_URL}/api/v1/preview/{project_id}/"
+        result = f"{frontend_url}/api/v1/preview/{project_id}/"
+        logger.info(f"[ContainerExecutor] Preview URL (production): {result}")
+        return result
 
-    return f"http://localhost:{port}"
+    if sandbox_public_url and sandbox_public_url != "http://localhost":
+        # Use sandbox public URL if available
+        base = sandbox_public_url.rstrip('/')
+        # Remove any existing port from base URL
+        if ':' in base.split('/')[-1]:
+            base = ':'.join(base.rsplit(':', 1)[:-1])
+        result = f"{base}:{port}"
+        logger.info(f"[ContainerExecutor] Preview URL (sandbox): {result}")
+        return result
+
+    result = f"http://localhost:{port}"
+    logger.info(f"[ContainerExecutor] Preview URL (local): {result}")
+    return result
 
 
 class Technology(Enum):
@@ -429,7 +452,7 @@ class ContainerExecutor:
                 "technology": container_info["technology"],
                 "created_at": container_info["created_at"].isoformat(),
                 "expires_at": container_info["expires_at"].isoformat(),
-                "url": _get_preview_url(container_info['port'])
+                "url": _get_preview_url(container_info['port'], project_id)  # Pass project_id for production URL
             }
         except NotFound:
             del self.active_containers[project_id]
@@ -671,9 +694,13 @@ class ContainerExecutor:
         try:
             container = self.docker_client.containers.get(container_info["container_id"])
 
+            # Generate preview URL upfront
+            preview_url = _get_preview_url(host_port, project_id)
+            logger.info(f"[ContainerExecutor] Preview URL generated: {preview_url}")
+            yield f"📍 Preview URL: {preview_url}\n\n"
+
             # Stream logs
             server_started = False
-            preview_url = None
             start_patterns = [
                 r"Local:\s*http://\S+:(\d+)",
                 r"listening on port (\d+)",
@@ -681,6 +708,8 @@ class ContainerExecutor:
                 r"Started.*on port (\d+)",
                 r"ready.*http://\S+:(\d+)",
                 r"VITE.*Local:\s*http://\S+:(\d+)",
+                r"ready in \d+",  # Vite ready message
+                r"compiled successfully",  # Webpack
             ]
 
             for log in container.logs(stream=True, follow=True):
@@ -695,14 +724,25 @@ class ContainerExecutor:
                                 match = re.search(pattern, line, re.IGNORECASE)
                                 if match:
                                     server_started = True
-                                    preview_url = _get_preview_url(host_port, project_id)
-                                    yield f"\n🚀 Server started!\n"
+                                    logger.info(f"[ContainerExecutor] Server started! Pattern matched: {pattern}")
+                                    yield f"\n{'='*50}\n"
+                                    yield f"🚀 SERVER STARTED!\n"
+                                    yield f"Preview URL: {preview_url}\n"
+                                    yield f"{'='*50}\n\n"
+                                    # Emit both markers for compatibility
                                     yield f"__SERVER_STARTED__:{preview_url}\n"
+                                    yield f"_PREVIEW_URL_:{preview_url}\n"
                                     break
 
                 except Exception as decode_err:
                     logger.debug(f"[ContainerExecutor] Log decode error: {decode_err}")
                     continue
+
+            # If we exited the loop without detecting server start, still emit the URL
+            if not server_started and preview_url:
+                logger.warning(f"[ContainerExecutor] Server start not detected, emitting URL anyway")
+                yield f"\n📍 Container running - Preview may be available at: {preview_url}\n"
+                yield f"_PREVIEW_URL_:{preview_url}\n"
 
         except Exception as e:
             logger.error(f"[ContainerExecutor] Error streaming logs: {e}")
