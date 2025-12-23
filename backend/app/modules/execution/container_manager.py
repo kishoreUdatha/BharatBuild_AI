@@ -1285,10 +1285,19 @@ class ContainerManager:
 
         return full_path.read_text(encoding="utf-8")
 
+    # Directories to hide from file explorer (generated/build artifacts)
+    HIDDEN_DIRS = {
+        'node_modules', '.git', '__pycache__', '.venv', 'venv', 'env',
+        'dist', 'build', '.next', '.vite', '.cache', '.turbo',
+        'target', '.gradle', '.idea', '.vs',
+        'coverage', '.nyc_output', '.pytest_cache', '__snapshots__'
+    }
+
     async def list_files(self,
                          project_id: str,
                          path: str = ".",
-                         user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+                         user_id: Optional[str] = None,
+                         include_hidden: bool = False) -> List[Dict[str, Any]]:
         """
         List files in project directory.
 
@@ -1296,6 +1305,7 @@ class ContainerManager:
             project_id: Project identifier
             path: Relative path within project
             user_id: User identifier for user-scoped paths
+            include_hidden: If True, include node_modules and other generated dirs
 
         Returns:
             List of file/directory info
@@ -1318,6 +1328,10 @@ class ContainerManager:
 
         files = []
         for item in target_path.iterdir():
+            # Skip hidden/generated directories unless explicitly requested
+            if not include_hidden and item.is_dir() and item.name in self.HIDDEN_DIRS:
+                continue
+
             rel_path = item.relative_to(project_path)
             files.append({
                 "name": item.name,
