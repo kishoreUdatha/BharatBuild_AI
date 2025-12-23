@@ -107,13 +107,22 @@ resource "aws_security_group" "sandbox" {
     cidr_blocks = ["0.0.0.0/0"]  # Restrict to your IP in production
   }
 
-  # Sandbox preview ports (10000-10100)
+  # Sandbox preview ports (10000-10100) - from ALB for direct access
   ingress {
     description     = "Sandbox previews from ALB"
     from_port       = 10000
     to_port         = 10100
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
+  }
+
+  # Sandbox preview ports (10000-10100) - from ECS for reverse proxy
+  ingress {
+    description     = "Sandbox previews from ECS backend (reverse proxy)"
+    from_port       = 10000
+    to_port         = 10100
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs.id]
   }
 
   # Nginx reverse proxy port (for ALB health checks and routing)
