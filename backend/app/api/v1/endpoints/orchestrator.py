@@ -548,9 +548,32 @@ async def event_generator(
 
     except Exception as e:
         logger.error(f"Error in event streaming: {e}", exc_info=True)
+
+        # Provide user-friendly error messages for common failures
+        error_msg = str(e).lower()
+        if "authentication" in error_msg or "api key" in error_msg or "401" in error_msg:
+            user_error = "AI service authentication failed. Please contact support."
+            error_code = "AUTH_ERROR"
+        elif "rate" in error_msg or "429" in error_msg:
+            user_error = "AI service is busy. Please try again in a few moments."
+            error_code = "RATE_LIMITED"
+        elif "timeout" in error_msg or "connection" in error_msg:
+            user_error = "Connection to AI service timed out. Please try again."
+            error_code = "TIMEOUT"
+        elif "token" in error_msg and "limit" in error_msg:
+            user_error = "You've reached your token limit. Please upgrade your plan."
+            error_code = "TOKEN_LIMIT"
+        else:
+            user_error = "An error occurred during generation. Please try again."
+            error_code = "GENERATION_ERROR"
+
         error_event = {
             "type": "error",
-            "data": {"error": str(e)},
+            "data": {
+                "error": user_error,
+                "code": error_code,
+                "details": str(e) if settings.DEBUG else None
+            },
             "step": None,
             "agent": None,
             "timestamp": None

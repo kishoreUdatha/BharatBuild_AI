@@ -1354,7 +1354,32 @@ I'll keep trying to help!`)
             case 'error':
               updateMessageStatus(aiMessageId, 'complete')
               const errorMsg = event.data?.error || event.data?.message || 'Unknown error'
-              appendToMessage(aiMessageId, `\n\n⚠️ Error: ${errorMsg}`)
+              const errorCode = event.data?.code || 'ERROR'
+
+              // Format error message based on error code
+              let formattedError = `\n\n---\n\n## ⚠️ Generation Error\n\n`
+              formattedError += `**${errorMsg}**\n\n`
+
+              // Add helpful suggestions based on error code
+              switch (errorCode) {
+                case 'AUTH_ERROR':
+                  formattedError += `> This is a service configuration issue. Please contact support.\n`
+                  break
+                case 'RATE_LIMITED':
+                  formattedError += `> The AI service is temporarily busy. Please wait a moment and try again.\n`
+                  break
+                case 'TIMEOUT':
+                  formattedError += `> The request took too long. Try simplifying your request or try again.\n`
+                  break
+                case 'TOKEN_LIMIT':
+                  formattedError += `> Consider upgrading your plan for more tokens.\n`
+                  break
+                default:
+                  formattedError += `> If this persists, try refreshing the page or contact support.\n`
+              }
+
+              appendToMessage(aiMessageId, formattedError)
+              console.error('[useChat] Generation error:', errorCode, errorMsg)
               break
 
             case 'cancelled':

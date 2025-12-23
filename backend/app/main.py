@@ -27,6 +27,78 @@ from app.api.v1.endpoints.log_stream import log_stream_manager
 import app.models  # Import models so metadata knows about them
 
 
+async def validate_critical_config():
+    """Validate critical configuration at startup - fail fast if missing"""
+    errors = []
+    warnings = []
+
+    # Critical: Without these, the app cannot function
+    if not settings.DATABASE_URL:
+        errors.append("DATABASE_URL is not set")
+
+    if not settings.SECRET_KEY or settings.SECRET_KEY == "CHANGE_ME":
+        errors.append("SECRET_KEY is not set or using default value")
+
+    if not settings.JWT_SECRET_KEY or settings.JWT_SECRET_KEY == "CHANGE_ME":
+        errors.append("JWT_SECRET_KEY is not set or using default value")
+
+    # Critical for AI generation
+    if not settings.ANTHROPIC_API_KEY:
+        errors.append("ANTHROPIC_API_KEY is not set - AI generation will NOT work!")
+
+    # Warnings: App can function but some features may not work
+    if not settings.REDIS_URL:
+        warnings.append("REDIS_URL not set - rate limiting disabled")
+
+    if errors:
+        for err in errors:
+            logger.critical(f"[Startup] CRITICAL: {err}")
+        raise RuntimeError(f"Missing critical configuration: {', '.join(errors)}")
+
+    for warn in warnings:
+        logger.warning(f"[Startup] WARNING: {warn}")
+
+    logger.info("[Startup] ✓ Critical configuration validated")
+    return True
+
+
+async def validate_claude_api():
+    """Test Claude API connection at startup"""
+    try:
+        from app.utils.claude_client import ClaudeClient
+        client = ClaudeClient()
+
+        logger.info("[Startup] Testing Claude API connection...")
+        response = await client.generate(
+            prompt="Say OK",
+            system_prompt="Respond with only: OK",
+            model="haiku",
+            max_tokens=10,
+            temperature=0
+        )
+
+        content = response.get("content", "")
+        if content:
+            logger.info(f"[Startup] ✓ Claude API connection verified (model: {settings.CLAUDE_HAIKU_MODEL})")
+            return True
+        else:
+            logger.error("[Startup] ✗ Claude API returned empty response")
+            return False
+
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "authentication" in error_msg or "api key" in error_msg or "401" in error_msg:
+            logger.critical(f"[Startup] ✗ Claude API key is INVALID: {e}")
+            raise RuntimeError("ANTHROPIC_API_KEY is invalid - AI generation will not work!")
+        elif "rate" in error_msg or "429" in error_msg:
+            logger.warning(f"[Startup] Claude API rate limited (will retry later): {e}")
+            return True  # Don't fail startup for rate limits
+        else:
+            logger.error(f"[Startup] ✗ Claude API connection failed: {e}")
+            # Don't fail startup for network issues - might be temporary
+            return False
+
+
 async def ensure_database_ready():
     """Ensure database tables exist - critical for registration to work"""
     from sqlalchemy import text
@@ -63,14 +135,24 @@ async def ensure_database_ready():
 async def lifespan(app: FastAPI):
     """Lifespan event handler for startup and shutdown"""
     # Startup
+    logger.info("=" * 60)
     logger.info("Starting BharatBuild AI Platform...")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"API Version: {settings.API_VERSION}")
+    logger.info("=" * 60)
 
-    # Ensure database tables exist (prevents registration failures after deployment)
+    # Step 1: Validate critical configuration (fail fast!)
+    await validate_critical_config()
+
+    # Step 2: Ensure database tables exist (prevents registration failures)
     db_ready = await ensure_database_ready()
     if not db_ready:
         logger.warning("[Startup] Database not ready - some features may fail")
+
+    # Step 3: Validate Claude API connection (critical for AI generation)
+    claude_ready = await validate_claude_api()
+    if not claude_ready:
+        logger.warning("[Startup] Claude API not ready - AI generation may fail")
 
     # Clean up any leftover temp sessions from previous runs
     temp_storage.cleanup_all()
