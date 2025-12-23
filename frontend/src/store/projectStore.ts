@@ -405,11 +405,82 @@ export const useProjectStore = create<ProjectState>()(
         }))
     }
 
-    // Backend now returns `tree` (hierarchical) instead of `files` (flat)
-    const tree = projectData.tree || projectData.files || []
-    const files = convertTree(tree)
+    // Build hierarchical tree from flat file list
+    // Input: [{path: 'src/App.tsx', ...}, {path: 'package.json', ...}]
+    // Output: [{path: 'src', type: 'folder', children: [...]}, {path: 'package.json', type: 'file'}]
+    const buildTreeFromFlat = (flatFiles: any[]): ProjectFile[] => {
+      if (!flatFiles || !Array.isArray(flatFiles)) return []
 
-    console.log('[ProjectStore] Received tree from backend:', tree.length, 'root items')
+      const root: ProjectFile[] = []
+
+      for (const file of flatFiles) {
+        if (!file?.path) continue
+
+        const parts = file.path.split('/')
+        let currentLevel = root
+        let currentPath = ''
+
+        for (let i = 0; i < parts.length; i++) {
+          const part = parts[i]
+          currentPath = currentPath ? `${currentPath}/${part}` : part
+          const isLastPart = i === parts.length - 1
+
+          if (isLastPart) {
+            // It's a file - add to current level
+            currentLevel.push({
+              path: file.path,
+              name: part,
+              content: file.content ?? '',
+              language: file.language || 'plaintext',
+              type: 'file'
+            })
+          } else {
+            // It's a folder - find or create it
+            let folder = currentLevel.find(f => f.type === 'folder' && f.path === currentPath)
+            if (!folder) {
+              folder = {
+                path: currentPath,
+                name: part,
+                content: '',
+                language: '',
+                type: 'folder',
+                children: []
+              }
+              currentLevel.push(folder)
+            }
+            currentLevel = folder.children!
+          }
+        }
+      }
+
+      // Sort: folders first, then files, alphabetically
+      const sortTree = (items: ProjectFile[]): ProjectFile[] => {
+        return items
+          .map(item => ({
+            ...item,
+            children: item.children ? sortTree(item.children) : undefined
+          }))
+          .sort((a, b) => {
+            if (a.type === 'folder' && b.type === 'file') return -1
+            if (a.type === 'file' && b.type === 'folder') return 1
+            return (a.name || '').localeCompare(b.name || '')
+          })
+      }
+
+      return sortTree(root)
+    }
+
+    // Backend returns `tree` (hierarchical) or `files` (flat)
+    const rawData = projectData.tree || projectData.files || []
+
+    // Check if data is already hierarchical (has children) or flat
+    const isHierarchical = rawData.some((item: any) => item.children && item.children.length > 0)
+
+    const files = isHierarchical
+      ? convertTree(rawData)  // Already hierarchical, just convert format
+      : buildTreeFromFlat(rawData)  // Flat list, build tree structure
+
+    console.log('[ProjectStore] Received from backend:', rawData.length, 'items, isHierarchical:', isHierarchical, '-> built', files.length, 'root items')
     console.log('[ProjectStore] Tree structure:', JSON.stringify(files.map((f: any) => ({
       path: f.path,
       type: f.type,
