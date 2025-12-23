@@ -35,6 +35,13 @@ export function LivePreview({
   const [autoReloadIndicator, setAutoReloadIndicator] = useState(false)
   const [autoFixStatus, setAutoFixStatus] = useState<'idle' | 'fixing' | 'completed' | 'failed'>('idle')
   const [autoFixMessage, setAutoFixMessage] = useState<string | null>(null)
+
+  // Retry state for dev server startup
+  const [retryCount, setRetryCount] = useState(0)
+  const [retryStatus, setRetryStatus] = useState<'idle' | 'waiting' | 'retrying'>('idle')
+  const maxRetries = 15 // Max retries (~30 seconds total)
+  const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
   const { addBrowserError, addNetworkError, getErrorCount, clearErrors } = useErrorStore()
   const errorCount = getErrorCount()
 
@@ -119,11 +126,51 @@ export function LivePreview({
       console.log('[LivePreview] Switching to server mode with URL:', serverUrl)
       setPreviewMode('server')
       setIsLoading(true) // Reset loading state when switching to server mode
+      setRetryCount(0) // Reset retry count
+      setRetryStatus('waiting') // Start in waiting mode for dev server
+      setError(null)
     } else {
       console.log('[LivePreview] Switching to static mode')
       setPreviewMode('static')
+      setRetryStatus('idle')
     }
   }, [isServerRunning, serverUrl])
+
+  // Cleanup retry timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  // Retry loading the preview with exponential backoff
+  const retryPreview = useCallback(() => {
+    if (retryCount >= maxRetries) {
+      console.log('[LivePreview] Max retries reached, giving up')
+      setRetryStatus('idle')
+      setError('Dev server is taking too long to start. Try clicking Refresh.')
+      return
+    }
+
+    const delay = Math.min(1000 * Math.pow(1.5, Math.min(retryCount, 5)), 5000) // 1s, 1.5s, 2.25s, 3.4s, 5s, 5s...
+    console.log(`[LivePreview] Scheduling retry ${retryCount + 1}/${maxRetries} in ${delay}ms`)
+
+    setRetryStatus('waiting')
+
+    retryTimeoutRef.current = setTimeout(() => {
+      setRetryCount(prev => prev + 1)
+      setRetryStatus('retrying')
+
+      if (iframeRef.current && serverUrl) {
+        // Force reload the iframe with a cache-busting parameter
+        const newUrl = serverUrl + (serverUrl.includes('?') ? '&' : '?') + '_retry=' + Date.now()
+        console.log(`[LivePreview] Retry ${retryCount + 1}: Loading ${newUrl}`)
+        iframeRef.current.src = newUrl
+      }
+    }, delay)
+  }, [retryCount, maxRetries, serverUrl])
 
   // Listen for error messages from iframe via postMessage
   const handleIframeMessage = useCallback((event: MessageEvent) => {
@@ -307,18 +354,34 @@ export function LivePreview({
   }, [files, entryPoint, previewMode, refreshKey, projectId])
 
   // Handle iframe load
-  const handleIframeLoad = () => {
+  const handleIframeLoad = useCallback(() => {
+    console.log('[LivePreview] Iframe loaded successfully')
     setIsLoading(false)
-  }
+    setRetryStatus('idle')
+    setError(null)
+    // Clear any pending retry timeout
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current)
+      retryTimeoutRef.current = null
+    }
+  }, [])
 
   // Handle iframe crash/sandbox errors (Bolt.new style - Layer 12)
   const handleIframeError = useCallback((event: React.SyntheticEvent<HTMLIFrameElement, Event>) => {
     console.log('[LivePreview] 💀 IFRAME CRASH/ERROR detected:', event)
+
+    // In server mode, trigger retry instead of showing error immediately
+    if (previewMode === 'server' && retryCount < maxRetries) {
+      console.log(`[LivePreview] Server mode error, triggering retry (${retryCount + 1}/${maxRetries})`)
+      retryPreview()
+      return
+    }
+
     const message = 'Preview iframe crashed or failed to load'
     setError(message)
     addBrowserError(message)
     forwardBrowserError(message)
-  }, [addBrowserError, forwardBrowserError])
+  }, [addBrowserError, forwardBrowserError, previewMode, retryCount, maxRetries, retryPreview])
 
   // Monitor iframe for unresponsive state
   useEffect(() => {
@@ -348,19 +411,34 @@ export function LivePreview({
     }
   }, [previewMode, isServerRunning])
 
-  // Timeout to hide loading indicator if iframe doesn't fire onLoad (CORS/X-Frame-Options block)
+  // Timeout to trigger retry if iframe doesn't fire onLoad (connection refused, CORS, etc.)
   useEffect(() => {
-    if (previewMode === 'server' && isLoading) {
+    if (previewMode === 'server' && isLoading && retryStatus !== 'idle') {
       const timeout = setTimeout(() => {
-        setIsLoading(false)
-        console.log('[LivePreview] Loading timeout - iframe may be blocked by CORS/X-Frame-Options')
-      }, 5000) // 5 second timeout
+        console.log('[LivePreview] Loading timeout - triggering retry')
+        // Don't hide loading, trigger retry instead
+        if (retryCount < maxRetries) {
+          retryPreview()
+        } else {
+          setIsLoading(false)
+          setRetryStatus('idle')
+          console.log('[LivePreview] Max retries reached after timeout')
+        }
+      }, 3000) // 3 second timeout per attempt
       return () => clearTimeout(timeout)
     }
-  }, [previewMode, isLoading, serverUrl])
+  }, [previewMode, isLoading, serverUrl, retryStatus, retryCount, maxRetries, retryPreview])
 
   const handleRefresh = () => {
     setIsLoading(true)
+    setError(null)
+    setRetryCount(0)
+    setRetryStatus('waiting')
+    // Clear any pending retry timeout
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current)
+      retryTimeoutRef.current = null
+    }
     if (previewMode === 'server' && serverUrl && iframeRef.current) {
       // Force reload server iframe
       iframeRef.current.src = serverUrl + '?t=' + Date.now()
@@ -477,13 +555,31 @@ export function LivePreview({
           // Server mode - point to running server
           // Note: Cross-origin issues may occur. User can click "Open in new tab" to view
           <>
-            {/* Loading overlay */}
+            {/* Loading overlay with retry status */}
             {isLoading && (
               <div className="absolute inset-0 bg-[hsl(var(--bolt-bg-primary))] flex items-center justify-center z-10">
-                <div className="text-center">
+                <div className="text-center max-w-sm px-4">
                   <div className="w-12 h-12 border-4 border-[hsl(var(--bolt-accent))] border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                  <p className="text-[hsl(var(--bolt-text-secondary))] text-sm">Loading preview...</p>
+                  <p className="text-[hsl(var(--bolt-text-secondary))] text-sm font-medium">
+                    {retryCount === 0 ? 'Starting dev server...' : `Waiting for dev server... (${retryCount}/${maxRetries})`}
+                  </p>
                   <p className="text-[hsl(var(--bolt-text-tertiary))] text-xs mt-2">{serverUrl}</p>
+
+                  {/* Progress bar */}
+                  {retryCount > 0 && (
+                    <div className="mt-4 w-full bg-[hsl(var(--bolt-bg-tertiary))] rounded-full h-1.5">
+                      <div
+                        className="bg-[hsl(var(--bolt-accent))] h-1.5 rounded-full transition-all duration-300"
+                        style={{ width: `${Math.min((retryCount / maxRetries) * 100, 100)}%` }}
+                      />
+                    </div>
+                  )}
+
+                  <p className="text-[hsl(var(--bolt-text-tertiary))] text-xs mt-3">
+                    {retryStatus === 'waiting' && retryCount === 0 && 'Vite dev server is initializing...'}
+                    {retryStatus === 'waiting' && retryCount > 0 && 'Dev server is starting up, please wait...'}
+                    {retryStatus === 'retrying' && 'Connecting to dev server...'}
+                  </p>
                 </div>
               </div>
             )}
@@ -494,10 +590,7 @@ export function LivePreview({
               sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
               title="Live Preview"
               onLoad={handleIframeLoad}
-              onError={(e) => {
-                handleIframeError(e)
-                setError('Failed to load server preview. Try opening in new tab.')
-              }}
+              onError={handleIframeError}
             />
           </>
         ) : Object.keys(files).length === 0 ? (
