@@ -158,6 +158,76 @@ async def check_storage() -> Dict[str, Any]:
         }
 
 
+async def check_claude_api() -> Dict[str, Any]:
+    """Check Claude API connectivity by making a test request"""
+    start = time.time()
+    try:
+        if not settings.ANTHROPIC_API_KEY:
+            return {
+                "status": "unhealthy",
+                "latency_ms": 0,
+                "error": "ANTHROPIC_API_KEY not configured",
+                "message": "Claude API key missing - AI generation will not work"
+            }
+
+        from app.utils.claude_client import ClaudeClient
+        client = ClaudeClient()
+
+        # Make a minimal test request
+        response = await client.generate(
+            prompt="Say 'OK' in one word.",
+            system_prompt="You are a health check. Respond with only 'OK'.",
+            model="haiku",
+            max_tokens=10,
+            temperature=0
+        )
+
+        latency = (time.time() - start) * 1000
+        content = response.get("content", "")
+
+        if content:
+            return {
+                "status": "healthy",
+                "latency_ms": round(latency, 2),
+                "model": settings.CLAUDE_HAIKU_MODEL,
+                "message": "Claude API connection successful"
+            }
+        else:
+            return {
+                "status": "degraded",
+                "latency_ms": round(latency, 2),
+                "error": "Empty response from Claude API",
+                "message": "Claude API returned empty response"
+            }
+    except Exception as e:
+        latency = (time.time() - start) * 1000
+        error_msg = str(e)
+        logger.error(f"[HealthCheck] Claude API check failed: {e}")
+
+        # Check for specific error types
+        if "authentication" in error_msg.lower() or "api key" in error_msg.lower():
+            return {
+                "status": "unhealthy",
+                "latency_ms": round(latency, 2),
+                "error": "Invalid API key",
+                "message": "Claude API key is invalid - check ANTHROPIC_API_KEY"
+            }
+        elif "rate" in error_msg.lower() or "429" in error_msg:
+            return {
+                "status": "degraded",
+                "latency_ms": round(latency, 2),
+                "error": "Rate limited",
+                "message": "Claude API rate limited - requests may be slow"
+            }
+        else:
+            return {
+                "status": "unhealthy",
+                "latency_ms": round(latency, 2),
+                "error": error_msg[:200],
+                "message": "Claude API connection failed"
+            }
+
+
 def check_critical_env_vars() -> Dict[str, Any]:
     """Verify all critical environment variables are set"""
     missing = []
@@ -291,10 +361,11 @@ async def deep_health_check():
         check_redis(),
         check_email_config(),
         check_storage(),
+        check_claude_api(),
         return_exceptions=True
     )
 
-    db_check, redis_check, email_check, storage_check = results
+    db_check, redis_check, email_check, storage_check, claude_check = results
 
     # Handle exceptions
     checks = {}
@@ -302,7 +373,8 @@ async def deep_health_check():
         ("database", db_check),
         ("redis", redis_check),
         ("email", email_check),
-        ("storage", storage_check)
+        ("storage", storage_check),
+        ("claude_api", claude_check)
     ]:
         if isinstance(result, Exception):
             checks[name] = {"status": "unhealthy", "error": str(result)}
@@ -389,6 +461,31 @@ async def registration_health_check():
         )
 
     if not can_register:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=response
+        )
+
+    return response
+
+
+@router.get("/claude")
+async def claude_health_check():
+    """
+    Check Claude API connectivity.
+
+    Use this to verify AI generation will work.
+    Tests the API key and makes a minimal request to Claude.
+    """
+    claude_check = await check_claude_api()
+
+    response = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "ai_generation_ready": claude_check.get("status") == "healthy",
+        "check": claude_check
+    }
+
+    if claude_check.get("status") == "unhealthy":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=response
