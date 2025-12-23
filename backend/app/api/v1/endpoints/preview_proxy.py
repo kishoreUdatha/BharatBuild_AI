@@ -25,6 +25,7 @@ import asyncio
 import httpx
 import re
 import os
+import docker
 from typing import Optional
 from fastapi import APIRouter, Request, Response, HTTPException
 from fastapi.responses import StreamingResponse
@@ -42,6 +43,78 @@ IS_REMOTE_DOCKER = bool(SANDBOX_DOCKER_HOST)
 
 # HTTP client for proxying requests
 _http_client: Optional[httpx.AsyncClient] = None
+
+# Docker client for querying remote containers
+_docker_client: Optional[docker.DockerClient] = None
+
+
+def get_docker_client() -> Optional[docker.DockerClient]:
+    """Get or create Docker client for querying remote containers"""
+    global _docker_client
+    if _docker_client is None and SANDBOX_DOCKER_HOST:
+        try:
+            _docker_client = docker.DockerClient(base_url=SANDBOX_DOCKER_HOST)
+            _docker_client.ping()
+            logger.info(f"[Preview] Docker client connected to {SANDBOX_DOCKER_HOST}")
+        except Exception as e:
+            logger.error(f"[Preview] Failed to connect to Docker: {e}")
+            return None
+    return _docker_client
+
+
+def discover_container_from_docker(project_id: str) -> Optional[tuple[str, int]]:
+    """
+    Query EC2 Docker directly to find a running container for the project.
+
+    This handles the case where ECS backend restarted and lost in-memory container tracking.
+    Containers are discovered by their 'project_id' label.
+
+    Returns:
+        Tuple of (ec2_ip, host_port) or None if not found
+    """
+    if not IS_REMOTE_DOCKER:
+        return None
+
+    docker_client = get_docker_client()
+    if not docker_client:
+        return None
+
+    try:
+        # Query containers by project_id label
+        containers = docker_client.containers.list(
+            filters={"label": f"project_id={project_id}", "status": "running"}
+        )
+
+        if not containers:
+            logger.debug(f"[Preview] No running container found for project {project_id}")
+            return None
+
+        container = containers[0]  # Take the first matching container
+
+        # Extract port bindings from container
+        ports = container.attrs.get('NetworkSettings', {}).get('Ports', {})
+
+        # Find the first mapped port (e.g., '5173/tcp' -> [{'HostIp': '0.0.0.0', 'HostPort': '10000'}])
+        host_port = None
+        for container_port, bindings in ports.items():
+            if bindings:
+                host_port = int(bindings[0].get('HostPort', 0))
+                if host_port:
+                    break
+
+        if not host_port:
+            logger.warning(f"[Preview] Container found but no port mapping for {project_id}")
+            return None
+
+        # Extract EC2 IP from SANDBOX_DOCKER_HOST
+        ec2_ip = SANDBOX_DOCKER_HOST.replace("tcp://", "").split(":")[0]
+
+        logger.info(f"[Preview] Discovered container via Docker API: {project_id} -> {ec2_ip}:{host_port}")
+        return (ec2_ip, host_port)
+
+    except Exception as e:
+        logger.error(f"[Preview] Error discovering container from Docker: {e}")
+        return None
 
 
 def get_http_client() -> httpx.AsyncClient:
@@ -70,11 +143,16 @@ async def get_container_internal_address(project_id: str) -> Optional[tuple[str,
             # Extract EC2 IP from SANDBOX_DOCKER_HOST (e.g., "tcp://10.0.1.115:2375" -> "10.0.1.115")
             ec2_ip = SANDBOX_DOCKER_HOST.replace("tcp://", "").split(":")[0]
             host_port = container_info.get("port", 3000)
-            logger.info(f"[Preview] Remote mode: {project_id} -> {ec2_ip}:{host_port}")
+            logger.info(f"[Preview] Remote mode (in-memory): {project_id} -> {ec2_ip}:{host_port}")
             return (ec2_ip, host_port)
         else:
+            # Container not in memory - query Docker directly
+            # This handles ECS restarts where in-memory state was lost
+            logger.info(f"[Preview] Container not in memory, querying Docker for {project_id}")
+            discovered = discover_container_from_docker(project_id)
+            if discovered:
+                return discovered
             logger.warning(f"[Preview] Remote container not found for {project_id}")
-            # Container might have been created but not tracked - return None to try local manager
 
     # Local Docker mode or fallback
     manager = get_container_manager()
