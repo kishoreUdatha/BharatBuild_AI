@@ -139,6 +139,47 @@ export function ProjectStagesPanel() {
   const fileOperations = (lastAssistantMessage as any)?.fileOperations || []
   const planData = (lastAssistantMessage as any)?.planData
 
+  // Check if this is a loaded project (has files but no live generation data)
+  const isLoadedProject = currentProject?.files && currentProject.files.length > 0 &&
+                          thinkingSteps.length === 0 && fileOperations.length === 0
+
+  // Helper to flatten file tree and count files
+  const flattenFiles = (files: any[]): any[] => {
+    const result: any[] = []
+    for (const f of files) {
+      if (f.type === 'file') result.push(f)
+      if (f.children) result.push(...flattenFiles(f.children))
+    }
+    return result
+  }
+
+  // Get all files from loaded project
+  const loadedFiles = isLoadedProject ? flattenFiles(currentProject?.files || []) : []
+
+  // Detect tech stack from loaded files
+  const detectTechStackFromFiles = (files: any[]): string[] => {
+    const tech: string[] = []
+    const paths = files.map(f => f.path?.toLowerCase() || '')
+
+    if (paths.some(p => p.includes('package.json'))) tech.push('Node.js')
+    if (paths.some(p => p.includes('.tsx') || p.includes('.jsx'))) tech.push('React')
+    if (paths.some(p => p.includes('next.config'))) tech.push('Next.js')
+    if (paths.some(p => p.includes('vite.config'))) tech.push('Vite')
+    if (paths.some(p => p.includes('tailwind.config'))) tech.push('Tailwind CSS')
+    if (paths.some(p => p.includes('requirements.txt') || p.includes('.py'))) tech.push('Python')
+    if (paths.some(p => p.includes('pom.xml') || p.includes('build.gradle'))) tech.push('Java')
+
+    return tech.length > 0 ? tech : ['Full Stack']
+  }
+
+  // Check if project has documents
+  const hasDocuments = loadedFiles.some(f =>
+    f.path?.includes('.docx') || f.path?.includes('.pdf') || f.path?.includes('.pptx')
+  )
+  const documentFiles = loadedFiles.filter(f =>
+    f.path?.includes('.docx') || f.path?.includes('.pdf') || f.path?.includes('.pptx')
+  )
+
   // Extract tech stack from user prompt or planData
   const extractTechFromPrompt = (prompt: string): string[] => {
     const techKeywords = ['react', 'vue', 'angular', 'next.js', 'node', 'express', 'fastapi', 'django', 'flask',
@@ -176,12 +217,9 @@ export function ProjectStagesPanel() {
     const allFilesComplete = fileOperations.length > 0 && fileOperations.every((f: any) => f.status === 'complete')
     const allStepsComplete = thinkingSteps.length > 0 && thinkingSteps.every((s: any) => s.status === 'complete')
 
-    // Check if this is a loaded project (has files already)
-    const isLoadedProject = currentProject?.files && currentProject.files.length > 0
-
     switch (stageId) {
       case 'abstract':
-        // If project is already loaded with files, mark as completed
+        // If project is already loaded with files (not live generation), mark as completed
         if (isLoadedProject) return 'completed'
         if (planData?.projectName) return 'completed'
         if (hasUserMessage && !hasThinkingSteps) return 'active'
@@ -206,20 +244,16 @@ export function ProjectStagesPanel() {
 
       case 'documents':
         // Check if project has documents
-        if (currentProject?.files?.some((f: any) => f.path?.includes('.docx') || f.path?.includes('.pdf'))) {
-          return 'completed'
-        }
-        // If project is loaded but no docs, show as pending (not spinning)
-        if (isLoadedProject) return 'pending'
+        if (hasDocuments) return 'completed'
+        // If project is loaded but no docs, show as completed (generation done)
+        if (isLoadedProject) return 'completed'
         if (allFilesComplete) return 'active'
         return 'pending'
 
       case 'summary':
-        if (currentProject?.files?.some((f: any) => f.path?.includes('.docx'))) {
-          return 'completed'
-        }
-        // If project is loaded, show as pending (not spinning)
-        if (isLoadedProject) return 'pending'
+        // For loaded projects, show as completed
+        if (isLoadedProject) return 'completed'
+        if (hasDocuments) return 'completed'
         return 'pending'
 
       default:
@@ -227,31 +261,61 @@ export function ProjectStagesPanel() {
     }
   }
 
-  // Build abstract content from planData or user prompt
-  const abstractContent: AbstractContent | null = userPrompt ? {
-    projectName: planData?.projectName || currentProject?.name || 'Project',
-    description: planData?.projectDescription || userPrompt,
-    techStack: planData?.techStack?.map((t: any) => t.name || t.items || t) || extractTechFromPrompt(userPrompt),
-    features: planData?.features?.map((f: any) => f.name || f) || extractFeaturesFromPrompt(userPrompt),
-    complexity: planData?.complexity || 'Intermediate',
-    estimatedFiles: parseInt(planData?.estimatedFiles) || fileOperations.length || 15,
-  } : null
+  // Build abstract content from planData, user prompt, or loaded project
+  const abstractContent: AbstractContent | null = (() => {
+    // For loaded projects, derive from project files
+    if (isLoadedProject && currentProject) {
+      return {
+        projectName: currentProject.name || 'Project',
+        description: currentProject.description || userPrompt || 'Loaded project',
+        techStack: detectTechStackFromFiles(loadedFiles),
+        features: [], // Can't determine from files
+        complexity: 'Intermediate',
+        estimatedFiles: loadedFiles.length,
+      }
+    }
+    // For live generation, use planData or prompt
+    if (userPrompt) {
+      return {
+        projectName: planData?.projectName || currentProject?.name || 'Project',
+        description: planData?.projectDescription || userPrompt,
+        techStack: planData?.techStack?.map((t: any) => t.name || t.items || t) || extractTechFromPrompt(userPrompt),
+        features: planData?.features?.map((f: any) => f.name || f) || extractFeaturesFromPrompt(userPrompt),
+        complexity: planData?.complexity || 'Intermediate',
+        estimatedFiles: parseInt(planData?.estimatedFiles) || fileOperations.length || 15,
+      }
+    }
+    return null
+  })()
 
-  // Build plan steps - use thinkingSteps if available, otherwise create from fileOperations
-  const planSteps = thinkingSteps.length > 0
-    ? thinkingSteps.map((step: any, idx: number) => ({
+  // Build plan steps - use thinkingSteps if available, create from fileOperations, or show completed for loaded projects
+  const planSteps = (() => {
+    if (thinkingSteps.length > 0) {
+      return thinkingSteps.map((step: any, idx: number) => ({
         id: `step-${idx}`,
         label: step.label,
         status: step.status === 'complete' ? 'completed' as StageStatus : step.status === 'active' ? 'active' as StageStatus : 'pending' as StageStatus,
         category: step.category,
       }))
-    : fileOperations.length > 0
-    ? [
+    }
+    if (fileOperations.length > 0) {
+      return [
         { id: 'step-1', label: 'Analyzing requirements', status: 'completed' as StageStatus, category: 'Setup' },
         { id: 'step-2', label: 'Creating project structure', status: 'completed' as StageStatus, category: 'Setup' },
         { id: 'step-3', label: 'Generating code files', status: fileOperations.every((f: any) => f.status === 'complete') ? 'completed' as StageStatus : 'active' as StageStatus, category: 'Build' },
       ]
-    : []
+    }
+    // For loaded projects, show completed steps
+    if (isLoadedProject) {
+      return [
+        { id: 'step-1', label: 'Requirements analyzed', status: 'completed' as StageStatus, category: 'Setup' },
+        { id: 'step-2', label: 'Project structure created', status: 'completed' as StageStatus, category: 'Setup' },
+        { id: 'step-3', label: 'Code files generated', status: 'completed' as StageStatus, category: 'Build' },
+        { id: 'step-4', label: 'Project completed', status: 'completed' as StageStatus, category: 'Complete' },
+      ]
+    }
+    return []
+  })()
 
   // Build stages data
   const stages: StageData[] = [
@@ -279,7 +343,18 @@ export function ProjectStagesPanel() {
       title: 'BUILD',
       icon: Hammer,
       status: getStageStatus('build'),
-      content: {
+      content: isLoadedProject ? {
+        // For loaded projects, show files from project
+        files: loadedFiles.slice(0, 20).map((f: any) => ({
+          path: f.path,
+          status: 'completed' as const,
+        })),
+        currentFile: undefined,
+        progress: 100,
+        totalFiles: loadedFiles.length,
+        completedFiles: loadedFiles.length,
+      } : {
+        // For live generation, use fileOperations
         files: fileOperations.map((op: any) => ({
           path: op.path,
           status: op.status === 'complete' ? 'completed' : op.status === 'in-progress' ? 'generating' : 'pending',
@@ -298,7 +373,18 @@ export function ProjectStagesPanel() {
       icon: FileStack,
       status: getStageStatus('documents'),
       content: {
-        documents: [
+        documents: hasDocuments ? [
+          // Show actual documents from project
+          ...documentFiles.map((f: any) => {
+            const name = f.path?.split('/').pop() || f.name || 'Document'
+            const type = name.includes('SRS') ? 'srs' :
+                        name.includes('Report') ? 'report' :
+                        name.includes('.pptx') ? 'ppt' :
+                        name.includes('Viva') ? 'viva' : 'doc'
+            return { type, name, status: 'completed' as StageStatus, downloadUrl: f.path }
+          })
+        ] : [
+          // Default pending documents
           { type: 'srs', name: 'SRS Document', status: 'pending' as StageStatus },
           { type: 'report', name: 'Project Report', status: 'pending' as StageStatus },
           { type: 'ppt', name: 'Presentation', status: 'pending' as StageStatus },
@@ -312,9 +398,9 @@ export function ProjectStagesPanel() {
       icon: BarChart3,
       status: getStageStatus('summary'),
       content: {
-        totalFiles: fileOperations.length,
-        totalDocuments: 4,
-        techStack: planData?.techStack?.map((t: any) => t.name) || [],
+        totalFiles: isLoadedProject ? loadedFiles.length : fileOperations.length,
+        totalDocuments: hasDocuments ? documentFiles.length : 4,
+        techStack: isLoadedProject ? detectTechStackFromFiles(loadedFiles) : (planData?.techStack?.map((t: any) => t.name) || []),
       },
     },
   ]
