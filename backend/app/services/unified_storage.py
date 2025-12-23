@@ -1039,13 +1039,13 @@ class UnifiedStorageService:
                     restore_commands.extend([f"mkdir -p {dp}", f"aws s3 cp s3://{s3_bucket}/{f.s3_key} {fp}"])
 
             logger.info(f"[RemoteRestore] Restoring {len(file_records)} files to {workspace_path}")
-            # Use alpine with aws-cli since amazon/aws-cli doesn't have sh
-            # The entrypoint of amazon/aws-cli is 'aws' itself, not a shell
+            # amazon/aws-cli image has entrypoint set to 'aws', so we override it
+            # When entrypoint="/bin/sh", command should be ["-c", script] not ["/bin/sh", "-c", script]
             restore_script = ' && '.join(restore_commands)
             docker_client.containers.run(
                 "amazon/aws-cli:latest",
-                ["/bin/sh", "-c", restore_script],
-                entrypoint="/bin/sh",  # Override entrypoint to use shell
+                ["-c", restore_script],  # Just the args for /bin/sh
+                entrypoint="/bin/sh",    # Override entrypoint to use shell
                 volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
                 environment={"AWS_REGION": aws_region}, remove=True, detach=False, network_mode="host"
             )
