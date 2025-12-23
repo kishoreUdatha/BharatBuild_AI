@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, memo, useCallback } from 'react'
 import { Copy, Check, Brain, RotateCcw, ThumbsUp, ThumbsDown } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -17,8 +17,9 @@ interface ChatMessageProps {
  * Modern chat message component
  * - User messages: Right aligned with bubble
  * - AI messages: Left aligned with rich formatting
+ * - Memoized to prevent unnecessary re-renders
  */
-export function ChatMessage({
+export const ChatMessage = memo(function ChatMessage({
   role,
   content,
   isStreaming = false,
@@ -27,11 +28,11 @@ export function ChatMessage({
   const [copied, setCopied] = useState(false)
   const [feedback, setFeedback] = useState<'up' | 'down' | null>(null)
 
-  const handleCopy = async () => {
+  const handleCopy = useCallback(async () => {
     await navigator.clipboard.writeText(content)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
-  }
+  }, [content])
 
   // Don't render empty messages
   if (!content && !isStreaming) {
@@ -131,12 +132,13 @@ export function ChatMessage({
       </div>
     </div>
   )
-}
+})
 
 /**
  * Enhanced Markdown renderer with beautiful formatting
+ * Memoized to prevent re-parsing markdown on parent re-renders
  */
-function MarkdownContent({ content, isStreaming }: { content: string; isStreaming: boolean }) {
+const MarkdownContent = memo(function MarkdownContent({ content, isStreaming }: { content: string; isStreaming: boolean }) {
   return (
     <div className="text-[15px] leading-relaxed text-[hsl(var(--bolt-text-primary))]/85">
       <ReactMarkdown
@@ -277,6 +279,6 @@ function MarkdownContent({ content, isStreaming }: { content: string; isStreamin
       )}
     </div>
   )
-}
+})
 
 export default ChatMessage

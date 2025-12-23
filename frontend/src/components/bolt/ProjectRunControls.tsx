@@ -19,9 +19,24 @@ import { usePlanStatus } from '@/hooks/usePlanStatus'
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
 // Sandbox preview URL base (for local development, production uses domain-based URLs from backend)
 const SANDBOX_PREVIEW_BASE = process.env.NEXT_PUBLIC_SANDBOX_URL || 'http://localhost'
+const FRONTEND_URL = process.env.NEXT_PUBLIC_FRONTEND_URL || (typeof window !== 'undefined' ? window.location.origin : '')
 
-// Helper to construct preview URL with correct base (fallback for local development)
-const getPreviewUrl = (port: number | string): string => {
+// Check if we're in production (not localhost)
+const isProduction = (): boolean => {
+  if (typeof window === 'undefined') return false
+  const hostname = window.location.hostname
+  return hostname !== 'localhost' && hostname !== '127.0.0.1'
+}
+
+// Helper to construct preview URL with correct base
+// In production: uses API proxy URL, in development: uses localhost:port
+const getPreviewUrl = (port: number | string, projectId?: string): string => {
+  if (isProduction() && projectId) {
+    // Production: Use domain-based API preview proxy
+    const baseUrl = FRONTEND_URL || window.location.origin
+    return `${baseUrl}/api/v1/preview/${projectId}/`
+  }
+  // Development: Use localhost
   const base = SANDBOX_PREVIEW_BASE.replace(/:\d+$/, '').replace(/\/$/, '')
   return `${base}:${port}`
 }
@@ -252,12 +267,14 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       /➜\s+Local:/i,                    // Vite arrow format
     ]
 
-    // Try to extract port from output (for local development)
+    // Try to extract port from output
+    // In production, use API proxy URL with project ID; in development, use localhost:port
     for (const pattern of serverPatterns) {
       const match = cleanOutput.match(pattern)
       if (match && match[1]) {
         const port = match[1]
-        const url = getPreviewUrl(port)
+        // Pass project ID to get correct production URL
+        const url = getPreviewUrl(port, currentProject?.id)
         console.log('[DetectServer] MATCHED serverPattern:', pattern, '-> port:', port, '-> url:', url)
         setPreviewUrl(url)
         setStatus('running')
@@ -277,7 +294,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       }
     }
     return false
-  }, [onPreviewUrlChange])
+  }, [onPreviewUrlChange, currentProject?.id])
 
   // ============= BOLT.NEW STYLE ERROR DETECTION =============
   // Track current command for fixer agent
@@ -1120,7 +1137,8 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
                 }
               } else if (data.type === 'server_started') {
                 // Use preview_url from Docker if available, otherwise construct from port
-                const url = data.preview_url || getPreviewUrl(data.port || 3000)
+                // Pass project ID for production URL construction
+                const url = data.preview_url || getPreviewUrl(data.port || 3000, currentProject?.id)
                 setPreviewUrl(url)
                 onPreviewUrlChange?.(url)
                 // NOTE: Don't reset hasError here - errors detected before server start should still trigger fix
