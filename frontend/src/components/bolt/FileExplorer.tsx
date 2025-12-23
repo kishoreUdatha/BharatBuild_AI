@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, memo, useCallback } from 'react'
 import {
   ChevronRight,
   ChevronDown,
@@ -78,7 +78,7 @@ const isBinaryFile = (fileName: string): boolean => {
   return ['pdf', 'docx', 'doc', 'pptx', 'ppt', 'xlsx', 'xls', 'zip', 'rar'].includes(ext || '')
 }
 
-function FileTreeNode({
+const FileTreeNode = memo(function FileTreeNode({
   node,
   level = 0,
   onSelect,
@@ -93,13 +93,13 @@ function FileTreeNode({
   const isSelected = selectedFile === node.name
   const isBinary = node.type === 'file' && isBinaryFile(node.name)
 
-  const handleClick = () => {
+  const handleClick = useCallback(() => {
     if (node.type === 'folder') {
-      setIsExpanded(!isExpanded)
+      setIsExpanded(prev => !prev)
     } else {
       onSelect?.(node)
     }
-  }
+  }, [node, onSelect])
 
   const Icon = node.type === 'folder'
     ? (isExpanded ? FolderOpen : Folder)
@@ -162,7 +162,7 @@ function FileTreeNode({
         <div>
           {node.children.map((child, index) => (
             <FileTreeNode
-              key={`${child.name}-${index}`}
+              key={child.path || `${child.name}-${index}`}
               node={child}
               level={level + 1}
               onSelect={onSelect}
@@ -173,12 +173,9 @@ function FileTreeNode({
       )}
     </div>
   )
-}
+})
 
-export function FileExplorer({ files, onFileSelect, selectedFile }: FileExplorerProps) {
-  // Debug: Log files received
-  console.log('[FileExplorer] Received files:', files.length, files.map(f => ({ name: f.name, type: f.type })))
-
+export const FileExplorer = memo(function FileExplorer({ files, onFileSelect, selectedFile }: FileExplorerProps) {
   return (
     <div className="h-full flex flex-col bg-[hsl(var(--bolt-bg-secondary))] border-r border-[hsl(var(--bolt-border))]">
       {/* Header */}
@@ -207,4 +204,4 @@ export function FileExplorer({ files, onFileSelect, selectedFile }: FileExplorer
       </div>
     </div>
   )
-}
+})

@@ -612,25 +612,40 @@ export function BoltLayout({
     setIsResizingExplorer(true)
   }, [])
 
-  // Mouse move handler for resizing
+  // Mouse move handler for resizing with requestAnimationFrame throttling
   useEffect(() => {
+    let rafId: number | null = null
+    let lastX = 0
+
     const handleMouseMove = (e: MouseEvent) => {
-      if (isResizingMain && containerRef.current) {
-        const containerRect = containerRef.current.getBoundingClientRect()
-        const newWidth = ((e.clientX - containerRect.left) / containerRect.width) * 100
-        // Clamp between 10% and 30%
-        setLeftPanelWidth(Math.max(10, Math.min(30, newWidth)))
-      }
-      if (isResizingExplorer && containerRef.current) {
-        const containerRect = containerRef.current.getBoundingClientRect()
-        const rightPanelStart = containerRect.left + (containerRect.width * leftPanelWidth / 100)
-        const newWidth = e.clientX - rightPanelStart
-        // Clamp between 50px and 180px
-        setFileExplorerWidth(Math.max(50, Math.min(180, newWidth)))
+      lastX = e.clientX
+
+      // Use requestAnimationFrame to throttle updates (smoother than debounce for resize)
+      if (rafId === null) {
+        rafId = requestAnimationFrame(() => {
+          if (isResizingMain && containerRef.current) {
+            const containerRect = containerRef.current.getBoundingClientRect()
+            const newWidth = ((lastX - containerRect.left) / containerRect.width) * 100
+            // Clamp between 10% and 30%
+            setLeftPanelWidth(Math.max(10, Math.min(30, newWidth)))
+          }
+          if (isResizingExplorer && containerRef.current) {
+            const containerRect = containerRef.current.getBoundingClientRect()
+            const rightPanelStart = containerRect.left + (containerRect.width * leftPanelWidth / 100)
+            const newWidth = lastX - rightPanelStart
+            // Clamp between 50px and 180px
+            setFileExplorerWidth(Math.max(50, Math.min(180, newWidth)))
+          }
+          rafId = null
+        })
       }
     }
 
     const handleMouseUp = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId)
+        rafId = null
+      }
       setIsResizingMain(false)
       setIsResizingExplorer(false)
     }
@@ -643,6 +658,9 @@ export function BoltLayout({
     }
 
     return () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId)
+      }
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
       document.body.style.cursor = ''

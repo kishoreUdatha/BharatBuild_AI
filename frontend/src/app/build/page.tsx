@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { BoltLayout } from '@/components/bolt/BoltLayout'
 import { LivePreview } from '@/components/bolt/LivePreview'
@@ -66,24 +66,27 @@ export default function BuildPage() {
     : []
 
   // Build file contents object for LivePreview
-  // Only extract if we have a valid project with synced files
-  const fileContents: Record<string, string> = {}
-  const extractFileContents = (files: NonNullable<typeof currentProject>['files'] | undefined) => {
-    files?.forEach(file => {
-      if (file.type === 'file' && file.content) {
-        fileContents[file.path] = file.content
-        console.log('[BuildPage] Extracted file for preview:', file.path, '(', file.content.length, 'chars)')
-      }
-      if (file.children) {
-        extractFileContents(file.children)
-      }
-    })
-  }
-  if (hasProject && currentProject?.files && currentProject.files.length > 0) {
-    console.log('[BuildPage] Current project files count:', currentProject.files.length)
-    extractFileContents(currentProject.files)
-    console.log('[BuildPage] Total files for preview:', Object.keys(fileContents).length)
-  }
+  // Memoized to prevent recalculation on every render
+  const fileContents = useMemo(() => {
+    const contents: Record<string, string> = {}
+
+    const extractFileContents = (files: NonNullable<typeof currentProject>['files'] | undefined) => {
+      files?.forEach(file => {
+        if (file.type === 'file' && file.content) {
+          contents[file.path] = file.content
+        }
+        if (file.children) {
+          extractFileContents(file.children)
+        }
+      })
+    }
+
+    if (hasProject && currentProject?.files && currentProject.files.length > 0) {
+      extractFileContents(currentProject.files)
+    }
+
+    return contents
+  }, [hasProject, currentProject?.files])
 
   // Set mounted state on client side
   useEffect(() => {
