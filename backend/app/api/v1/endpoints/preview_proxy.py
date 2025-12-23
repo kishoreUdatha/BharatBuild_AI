@@ -53,12 +53,16 @@ def get_docker_client() -> Optional[docker.DockerClient]:
     global _docker_client
     if _docker_client is None and SANDBOX_DOCKER_HOST:
         try:
-            _docker_client = docker.DockerClient(base_url=SANDBOX_DOCKER_HOST)
+            logger.info(f"[Preview] Attempting Docker connection to {SANDBOX_DOCKER_HOST}")
+            _docker_client = docker.DockerClient(base_url=SANDBOX_DOCKER_HOST, timeout=5)
             _docker_client.ping()
-            logger.info(f"[Preview] Docker client connected to {SANDBOX_DOCKER_HOST}")
+            logger.info(f"[Preview] Docker client connected successfully to {SANDBOX_DOCKER_HOST}")
         except Exception as e:
-            logger.error(f"[Preview] Failed to connect to Docker: {e}")
+            logger.error(f"[Preview] Failed to connect to Docker at {SANDBOX_DOCKER_HOST}: {type(e).__name__}: {e}")
+            _docker_client = None
             return None
+    elif not SANDBOX_DOCKER_HOST:
+        logger.warning("[Preview] SANDBOX_DOCKER_HOST not set, cannot connect to remote Docker")
     return _docker_client
 
 
@@ -212,6 +216,9 @@ async def proxy_preview(project_id: str, path: str, request: Request):
 
     No port mapping needed - uses Docker internal networking.
     """
+    logger.info(f"[Preview] Incoming request: {request.method} /preview/{project_id}/{path}")
+    logger.info(f"[Preview] IS_REMOTE_DOCKER={IS_REMOTE_DOCKER}, SANDBOX_DOCKER_HOST={SANDBOX_DOCKER_HOST}")
+
     # Get container address
     address = await get_container_internal_address(project_id)
 
