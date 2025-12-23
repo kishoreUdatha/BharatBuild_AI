@@ -75,12 +75,33 @@ def _get_preview_url(port: int, project_id: str = None) -> str:
 
 
 class Technology(Enum):
-    """Supported technology stacks"""
+    """Supported technology stacks - Universal Preview Architecture"""
+    # Frontend Frameworks
     NODEJS = "nodejs"
     NODEJS_VITE = "nodejs_vite"  # Vite-based projects (React, Vue, Svelte with Vite)
-    JAVA = "java"
-    PYTHON = "python"
+    REACT_NATIVE = "react_native"  # React Native (Metro bundler - web preview)
+    FLUTTER = "flutter"  # Flutter (web preview)
+    ANGULAR = "angular"
+
+    # Backend Frameworks
+    JAVA = "java"  # Spring Boot
+    PYTHON = "python"  # FastAPI, Django, Flask
+    PYTHON_ML = "python_ml"  # AI/ML/DL with Jupyter
     GO = "go"
+    DOTNET = "dotnet"  # ASP.NET Core
+
+    # Blockchain
+    BLOCKCHAIN = "blockchain"  # Solidity, Hardhat, Truffle
+
+    # Databases (with web UI)
+    POSTGRESQL = "postgresql"
+    MONGODB = "mongodb"
+    MYSQL = "mysql"
+
+    # Specialized
+    JUPYTER = "jupyter"  # Jupyter notebooks for AI/ML/DL
+    STREAMLIT = "streamlit"  # Streamlit for ML dashboards
+
     UNKNOWN = "unknown"
 
 
@@ -103,8 +124,9 @@ class ContainerConfig:
             self.timeout_seconds = settings.CONTAINER_IDLE_TIMEOUT_SECONDS
 
 
-# Pre-built images for each technology
+# Pre-built images for each technology - Universal Preview Architecture
 TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
+    # ==================== FRONTEND FRAMEWORKS ====================
     Technology.NODEJS: ContainerConfig(
         image="node:20-alpine",
         build_command="npm install",
@@ -119,6 +141,30 @@ TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
         port=5173,  # Vite default port
         memory_limit="512m"
     ),
+    Technology.ANGULAR: ContainerConfig(
+        image="node:20-alpine",
+        build_command="npm install",
+        run_command="npm run start -- --host 0.0.0.0 --port 4200 --disable-host-check",
+        port=4200,
+        memory_limit="512m"
+    ),
+    Technology.REACT_NATIVE: ContainerConfig(
+        image="node:20-alpine",
+        build_command="npm install && npx expo export:web",
+        run_command="npx serve dist -l 3000",
+        port=3000,  # Web preview for React Native
+        memory_limit="1g"
+    ),
+    Technology.FLUTTER: ContainerConfig(
+        image="cirrusci/flutter:stable",
+        build_command="flutter pub get && flutter build web",
+        run_command="python3 -m http.server 8080 --directory build/web",
+        port=8080,  # Flutter web preview
+        memory_limit="1g",
+        cpu_limit=1.0
+    ),
+
+    # ==================== BACKEND FRAMEWORKS ====================
     Technology.JAVA: ContainerConfig(
         image="maven:3.9-eclipse-temurin-17",
         build_command="mvn clean install -DskipTests",
@@ -139,6 +185,71 @@ TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
         build_command="go mod download && go build -o main .",
         run_command="./main",
         port=8080,
+        memory_limit="256m"
+    ),
+    Technology.DOTNET: ContainerConfig(
+        image="mcr.microsoft.com/dotnet/sdk:8.0",
+        build_command="dotnet restore && dotnet build",
+        run_command="dotnet run --urls=http://0.0.0.0:5000",
+        port=5000,
+        memory_limit="1g",
+        cpu_limit=1.0
+    ),
+
+    # ==================== AI / ML / DL ====================
+    Technology.PYTHON_ML: ContainerConfig(
+        image="python:3.11",
+        build_command="pip install -r requirements.txt",
+        run_command="python main.py",
+        port=8000,
+        memory_limit="2g",  # ML needs more memory
+        cpu_limit=2.0
+    ),
+    Technology.JUPYTER: ContainerConfig(
+        image="jupyter/scipy-notebook:latest",
+        build_command=None,
+        run_command="jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=''",
+        port=8888,
+        memory_limit="2g",
+        cpu_limit=2.0
+    ),
+    Technology.STREAMLIT: ContainerConfig(
+        image="python:3.11-slim",
+        build_command="pip install streamlit pandas numpy matplotlib",
+        run_command="streamlit run app.py --server.address=0.0.0.0 --server.port=8501",
+        port=8501,
+        memory_limit="1g"
+    ),
+
+    # ==================== BLOCKCHAIN ====================
+    Technology.BLOCKCHAIN: ContainerConfig(
+        image="node:20-alpine",
+        build_command="npm install",
+        run_command="npx hardhat node",  # Local Ethereum node
+        port=8545,
+        memory_limit="1g"
+    ),
+
+    # ==================== DATABASES (with Web UI) ====================
+    Technology.POSTGRESQL: ContainerConfig(
+        image="dpage/pgadmin4:latest",
+        build_command=None,
+        run_command=None,  # pgAdmin runs automatically
+        port=80,  # pgAdmin web UI
+        memory_limit="512m"
+    ),
+    Technology.MONGODB: ContainerConfig(
+        image="mongo-express:latest",
+        build_command=None,
+        run_command=None,  # Mongo Express runs automatically
+        port=8081,  # Mongo Express web UI
+        memory_limit="256m"
+    ),
+    Technology.MYSQL: ContainerConfig(
+        image="phpmyadmin/phpmyadmin:latest",
+        build_command=None,
+        run_command=None,  # phpMyAdmin runs automatically
+        port=80,  # phpMyAdmin web UI
         memory_limit="256m"
     ),
 }
@@ -349,7 +460,30 @@ class ContainerExecutor:
         try:
             logger.info(f"[ContainerExecutor] Creating container for {project_id} ({technology.value})")
 
-            # Create container
+            # Traefik routing labels for preview gateway
+            # Format: Host(`preview-{project_id}.bharatbuild.ai`) OR PathPrefix(`/preview/{project_id}`)
+            traefik_labels = {
+                "traefik.enable": "true",
+                # Route by path prefix: /preview/{project_id}/
+                f"traefik.http.routers.{project_id[:12]}.rule": f"PathPrefix(`/{project_id}`)",
+                f"traefik.http.routers.{project_id[:12]}.entrypoints": "web",
+                # Strip the project_id prefix before forwarding to container
+                f"traefik.http.middlewares.{project_id[:12]}-strip.stripprefix.prefixes": f"/{project_id}",
+                f"traefik.http.routers.{project_id[:12]}.middlewares": f"{project_id[:12]}-strip",
+                # Service port (container's internal port)
+                f"traefik.http.services.{project_id[:12]}.loadbalancer.server.port": str(config.port),
+            }
+
+            # Merge with basic labels
+            all_labels = {
+                "bharatbuild": "true",
+                "project_id": project_id,
+                "user_id": user_id,
+                "technology": technology.value,
+                **traefik_labels
+            }
+
+            # Create container - NO port mapping needed! Traefik handles routing via Docker network
             container = self.docker_client.containers.run(
                 image=config.image,
                 name=container_name,
@@ -358,7 +492,8 @@ class ContainerExecutor:
                 volumes={
                     project_path: {"bind": "/app", "mode": "rw"}
                 },
-                ports={f"{config.port}/tcp": host_port},
+                # NO ports parameter - Traefik routes via Docker internal IPs
+                network="bharatbuild-sandbox",  # Must be on same network as Traefik
                 mem_limit=config.memory_limit,
                 cpu_period=100000,
                 cpu_quota=int(config.cpu_limit * 100000),
@@ -368,28 +503,24 @@ class ContainerExecutor:
                     "PYTHONUNBUFFERED": "1"
                 },
                 command=f"sh -c '{config.build_command} && {config.run_command}'" if config.build_command else config.run_command,
-                labels={
-                    "bharatbuild": "true",
-                    "project_id": project_id,
-                    "user_id": user_id,
-                    "technology": technology.value
-                }
+                labels=all_labels
             )
 
-            # Track container
+            # Track container (no host_port - routing via Traefik gateway)
             self.active_containers[project_id] = {
                 "container_id": container.id,
                 "container_name": container_name,
                 "user_id": user_id,
                 "technology": technology.value,
-                "port": host_port,
+                "internal_port": config.port,  # Container's internal port (5173, 3000, etc.)
                 "created_at": datetime.utcnow(),
                 "expires_at": datetime.utcnow() + timedelta(seconds=config.timeout_seconds)
             }
 
-            logger.info(f"[ContainerExecutor] Container {container_name} started on port {host_port}")
+            logger.info(f"[ContainerExecutor] Container {container_name} started (internal port: {config.port})")
 
-            return True, f"Container started successfully", host_port
+            # Return internal_port instead of host_port - routing via Traefik gateway
+            return True, f"Container started successfully", config.port
 
         except APIError as e:
             logger.error(f"[ContainerExecutor] Docker API error: {e}")

@@ -1,0 +1,48 @@
+version: "3.8"
+
+# Preview Gateway for BharatBuild AI
+# Runs ON the sandbox EC2 to proxy preview requests to containers
+# Uses Docker internal networking - NO port mapping needed!
+
+services:
+  preview-gateway:
+    image: traefik:v3.0
+    container_name: preview-gateway
+    restart: unless-stopped
+    command:
+      # API and Dashboard
+      - "--api.insecure=true"
+      - "--api.dashboard=true"
+
+      # Docker provider - auto-discover containers
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=bharatbuild-sandbox"
+
+      # Entrypoints
+      - "--entrypoints.web.address=:8080"
+
+      # Logging
+      - "--log.level=INFO"
+      - "--accesslog=true"
+
+    ports:
+      # Preview gateway port - only port exposed!
+      - "8080:8080"
+      # Dashboard (optional, for debugging)
+      - "8081:8080"
+
+    volumes:
+      # Connect to Docker socket to discover containers
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    networks:
+      - bharatbuild-sandbox
+
+    labels:
+      # Make Traefik discoverable too
+      - "traefik.enable=true"
+
+networks:
+  bharatbuild-sandbox:
+    external: true
