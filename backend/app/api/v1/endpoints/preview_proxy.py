@@ -233,8 +233,9 @@ async def proxy_preview(project_id: str, path: str, request: Request):
     # Build target URL
     if gateway_project_id:
         # Remote mode: route via Traefik gateway
-        # Gateway routes /{project_id}/path → container:port/path
-        target_url = f"http://{gateway_ip}:{gateway_port}/{gateway_project_id}/{path}"
+        # Send FULL path to Traefik - NO stripping, Vite matches with --base
+        # Vite with --base=/api/v1/preview/{project_id}/ expects the full path
+        target_url = f"http://{gateway_ip}:{gateway_port}/api/v1/preview/{gateway_project_id}/{path}"
     else:
         # Local mode: direct to container IP
         target_url = f"http://{gateway_ip}:{gateway_port}/{path}"

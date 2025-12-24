@@ -461,18 +461,38 @@ class ContainerExecutor:
             logger.info(f"[ContainerExecutor] Creating container for {project_id} ({technology.value})")
 
             # Traefik routing labels for preview gateway
-            # Format: Host(`preview-{project_id}.bharatbuild.ai`) OR PathPrefix(`/preview/{project_id}`)
+            # Architecture: Browser → /api/v1/preview/{project_id}/ → Backend → Traefik → Container
+            #
+            # Flow:
+            # 1. Vite generates: <script src="/api/v1/preview/{project_id}/src/main.tsx">
+            # 2. Browser requests: /api/v1/preview/{project_id}/src/main.tsx
+            # 3. CloudFront routes /api/* → ALB → ECS backend preview_proxy.py
+            # 4. Backend proxies to Traefik: /api/v1/preview/{project_id}/src/main.tsx (FULL path)
+            # 5. Traefik matches PathPrefix and forwards WITHOUT stripping
+            # 6. Vite with --base=/api/v1/preview/{project_id}/ matches and serves the file
+
+            # Build run command - Vite needs --base for correct asset URL generation AND request matching
+            run_command = config.run_command
+            if technology == Technology.NODEJS_VITE:
+                # Use full path so Vite matches incoming requests correctly
+                full_base = f"/api/v1/preview/{project_id}/"
+                run_command = f"npm run dev -- --host 0.0.0.0 --no-open --base={full_base}"
+                logger.info(f"[ContainerExecutor] Using Vite with base path: {full_base}")
+
+            # Traefik routes /api/v1/preview/{project_id}/... to container
+            # NO stripPrefix - Vite expects the full path to match its --base
+            full_prefix = f"/api/v1/preview/{project_id}"
             traefik_labels = {
                 "traefik.enable": "true",
-                # Route by path prefix: /preview/{project_id}/
-                f"traefik.http.routers.{project_id[:12]}.rule": f"PathPrefix(`/{project_id}`)",
+                # Route by full path prefix
+                f"traefik.http.routers.{project_id[:12]}.rule": f"PathPrefix(`{full_prefix}`)",
                 f"traefik.http.routers.{project_id[:12]}.entrypoints": "web",
-                # Strip the project_id prefix before forwarding to container
-                f"traefik.http.middlewares.{project_id[:12]}-strip.stripprefix.prefixes": f"/{project_id}",
-                f"traefik.http.routers.{project_id[:12]}.middlewares": f"{project_id[:12]}-strip",
                 # Service port (container's internal port)
                 f"traefik.http.services.{project_id[:12]}.loadbalancer.server.port": str(config.port),
+                # NO stripPrefix middleware - Vite handles the full path with --base
             }
+
+            logger.info(f"[ContainerExecutor] Traefik routing {full_prefix}/ → container (no strip)")
 
             # Merge with basic labels
             all_labels = {
@@ -482,14 +502,6 @@ class ContainerExecutor:
                 "technology": technology.value,
                 **traefik_labels
             }
-
-            # Build run command - for Vite projects, add --base for correct asset paths
-            run_command = config.run_command
-            if technology == Technology.NODEJS_VITE:
-                # Vite needs --base to generate correct asset paths when accessed via /project_id/
-                # This ensures /src/main.tsx becomes /project_id/src/main.tsx
-                run_command = f"npm run dev -- --host 0.0.0.0 --no-open --base=/{project_id}/"
-                logger.info(f"[ContainerExecutor] Using Vite with base path: /{project_id}/")
 
             # Create container - NO port mapping needed! Traefik handles routing via Docker network
             container = self.docker_client.containers.run(
