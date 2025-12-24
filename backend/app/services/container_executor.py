@@ -483,6 +483,14 @@ class ContainerExecutor:
                 **traefik_labels
             }
 
+            # Build run command - for Vite projects, add --base for correct asset paths
+            run_command = config.run_command
+            if technology == Technology.NODEJS_VITE:
+                # Vite needs --base to generate correct asset paths when accessed via /project_id/
+                # This ensures /src/main.tsx becomes /project_id/src/main.tsx
+                run_command = f"npm run dev -- --host 0.0.0.0 --no-open --base=/{project_id}/"
+                logger.info(f"[ContainerExecutor] Using Vite with base path: /{project_id}/")
+
             # Create container - NO port mapping needed! Traefik handles routing via Docker network
             container = self.docker_client.containers.run(
                 image=config.image,
@@ -502,7 +510,7 @@ class ContainerExecutor:
                     "JAVA_OPTS": "-Xmx512m",
                     "PYTHONUNBUFFERED": "1"
                 },
-                command=f"sh -c '{config.build_command} && {config.run_command}'" if config.build_command else config.run_command,
+                command=f"sh -c '{config.build_command} && {run_command}'" if config.build_command else run_command,
                 labels=all_labels
             )
 
