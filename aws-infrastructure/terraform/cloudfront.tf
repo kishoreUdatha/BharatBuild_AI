@@ -23,8 +23,9 @@ resource "aws_cloudfront_distribution" "main" {
       https_port               = 443
       origin_protocol_policy   = "http-only"
       origin_ssl_protocols     = ["TLSv1.2"]
-      # Increased to 180 seconds for SSE streaming during Claude processing
-      origin_read_timeout      = 180
+      # 60 seconds max for read timeout; ALB idle timeout handles SSE (300s)
+      origin_read_timeout      = 60
+      # 60 seconds is the max allowed for keepalive
       origin_keepalive_timeout = 60
     }
 

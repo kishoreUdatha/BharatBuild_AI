@@ -363,161 +363,171 @@ resource "aws_ec2_tag" "sandbox_spot_managed_by" {
 
 locals {
   sandbox_user_data = <<-EOF
-    #!/bin/bash
-    set -e
+#!/bin/bash
+set -e
 
-    # Update system
-    dnf update -y
+# Update system
+dnf update -y
 
-    # Install Docker and OpenSSL for TLS
-    dnf install -y docker openssl
-    systemctl start docker
-    systemctl enable docker
+# Install Docker and OpenSSL for TLS
+dnf install -y docker openssl
+systemctl start docker
+systemctl enable docker
 
-    # ==========================================================
-    # TLS Certificate Generation for Docker API Security
-    # This creates self-signed certs - use proper CA in production
-    # ==========================================================
-    mkdir -p /opt/docker-certs
-    cd /opt/docker-certs
+# ==========================================================
+# TLS Certificate Generation for Docker API Security
+# This creates self-signed certs - use proper CA in production
+# ==========================================================
+mkdir -p /opt/docker-certs
+cd /opt/docker-certs
 
-    # Generate CA key and certificate
-    openssl genrsa -out ca-key.pem 4096
-    openssl req -new -x509 -days 365 -key ca-key.pem -sha256 -out ca.pem \
-      -subj "/C=IN/ST=State/L=City/O=BharatBuild/CN=Docker CA"
+# Generate CA key and certificate
+openssl genrsa -out ca-key.pem 4096
+openssl req -new -x509 -days 365 -key ca-key.pem -sha256 -out ca.pem \
+  -subj "/C=IN/ST=State/L=City/O=BharatBuild/CN=Docker CA"
 
-    # Generate server key
-    openssl genrsa -out server-key.pem 4096
+# Generate server key
+openssl genrsa -out server-key.pem 4096
 
-    # Get instance private IP for SAN
-    PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
-    PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || echo "")
+# Get instance private IP for SAN - using TOKEN for IMDSv2 compatibility
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+PRIVATE_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
+PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 || echo "")
 
-    # Create server CSR with SANs
-    cat > server-csr.conf <<CSRCONF
-    [req]
-    req_extensions = v3_req
-    distinguished_name = req_distinguished_name
-    [req_distinguished_name]
-    [v3_req]
-    basicConstraints = CA:FALSE
-    keyUsage = nonRepudiation, digitalSignature, keyEncipherment
-    extendedKeyUsage = serverAuth
-    subjectAltName = @alt_names
-    [alt_names]
-    DNS.1 = localhost
-    IP.1 = 127.0.0.1
-    IP.2 = $PRIVATE_IP
-    CSRCONF
+echo "Detected PRIVATE_IP: $PRIVATE_IP" >> /var/log/sandbox-setup.log
+echo "Detected PUBLIC_IP: $PUBLIC_IP" >> /var/log/sandbox-setup.log
 
-    # Add public IP if available
-    if [ -n "$PUBLIC_IP" ]; then
-      echo "IP.3 = $PUBLIC_IP" >> server-csr.conf
-    fi
+# Create server CSR with SANs - using quoted heredoc and sed for variable substitution
+cat > server-csr.conf <<'CSRCONF'
+[req]
+req_extensions = v3_req
+distinguished_name = req_distinguished_name
+[req_distinguished_name]
+[v3_req]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+[alt_names]
+DNS.1 = localhost
+IP.1 = 127.0.0.1
+IP.2 = __PRIVATE_IP__
+CSRCONF
 
-    openssl req -subj "/CN=$PRIVATE_IP" -sha256 -new -key server-key.pem -out server.csr -config server-csr.conf
+# Replace placeholder with actual IP
+sed -i "s/__PRIVATE_IP__/$PRIVATE_IP/g" server-csr.conf
 
-    # Sign server certificate
-    openssl x509 -req -days 365 -sha256 -in server.csr -CA ca.pem -CAkey ca-key.pem \
-      -CAcreateserial -out server-cert.pem -extfile server-csr.conf -extensions v3_req
+# Add public IP if available
+if [ -n "$PUBLIC_IP" ]; then
+  echo "IP.3 = $PUBLIC_IP" >> server-csr.conf
+fi
 
-    # Generate client key and certificate (for ECS backend)
-    openssl genrsa -out client-key.pem 4096
-    openssl req -subj '/CN=client' -new -key client-key.pem -out client.csr
+# Log the CSR config for debugging
+cat server-csr.conf >> /var/log/sandbox-setup.log
 
-    cat > client-ext.cnf <<CLIENTEXT
-    extendedKeyUsage = clientAuth
-    CLIENTEXT
+openssl req -subj "/CN=$PRIVATE_IP" -sha256 -new -key server-key.pem -out server.csr -config server-csr.conf
 
-    openssl x509 -req -days 365 -sha256 -in client.csr -CA ca.pem -CAkey ca-key.pem \
-      -CAcreateserial -out client-cert.pem -extfile client-ext.cnf
+# Sign server certificate
+openssl x509 -req -days 365 -sha256 -in server.csr -CA ca.pem -CAkey ca-key.pem \
+  -CAcreateserial -out server-cert.pem -extfile server-csr.conf -extensions v3_req
 
-    # Set permissions
-    chmod 0400 ca-key.pem server-key.pem client-key.pem
-    chmod 0444 ca.pem server-cert.pem client-cert.pem
+# Generate client key and certificate (for ECS backend)
+openssl genrsa -out client-key.pem 4096
+openssl req -subj '/CN=client' -new -key client-key.pem -out client.csr
 
-    # Store client certs in SSM for ECS to retrieve
-    aws ssm put-parameter --name "/${var.app_name}/docker/ca-cert" --value "$(cat ca.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
-    aws ssm put-parameter --name "/${var.app_name}/docker/client-cert" --value "$(cat client-cert.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
-    aws ssm put-parameter --name "/${var.app_name}/docker/client-key" --value "$(cat client-key.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
+cat > client-ext.cnf <<CLIENTEXT
+extendedKeyUsage = clientAuth
+CLIENTEXT
 
-    # ==========================================================
-    # Configure Docker with TLS
-    # Listens on both 2375 (no TLS) and 2376 (TLS)
-    # ==========================================================
-    mkdir -p /etc/docker
-    cat > /etc/docker/daemon.json <<'DOCKERCONFIG'
-    {
-      "hosts": ["unix:///var/run/docker.sock", "tcp://0.0.0.0:2375", "tcp://0.0.0.0:2376"],
-      "tls": true,
-      "tlscacert": "/opt/docker-certs/ca.pem",
-      "tlscert": "/opt/docker-certs/server-cert.pem",
-      "tlskey": "/opt/docker-certs/server-key.pem",
-      "tlsverify": true,
-      "log-driver": "awslogs",
-      "log-opts": {
-        "awslogs-region": "${var.aws_region}",
-        "awslogs-group": "/ec2/${var.app_name}/sandbox"
-      },
-      "storage-driver": "overlay2",
-      "default-ulimits": {
-        "nofile": {
-          "Name": "nofile",
-          "Hard": 65535,
-          "Soft": 65535
-        }
-      },
-      "live-restore": true
+openssl x509 -req -days 365 -sha256 -in client.csr -CA ca.pem -CAkey ca-key.pem \
+  -CAcreateserial -out client-cert.pem -extfile client-ext.cnf
+
+# Set permissions
+chmod 0400 ca-key.pem server-key.pem client-key.pem
+chmod 0444 ca.pem server-cert.pem client-cert.pem
+
+# Store client certs in SSM for ECS to retrieve
+aws ssm put-parameter --name "/${var.app_name}/docker/ca-cert" --value "$(cat ca.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
+aws ssm put-parameter --name "/${var.app_name}/docker/client-cert" --value "$(cat client-cert.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
+aws ssm put-parameter --name "/${var.app_name}/docker/client-key" --value "$(cat client-key.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
+
+# ==========================================================
+# Configure Docker with TLS
+# Listens on both 2375 (no TLS) and 2376 (TLS)
+# ==========================================================
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json <<'DOCKERCONFIG'
+{
+  "hosts": ["unix:///var/run/docker.sock", "tcp://0.0.0.0:2375", "tcp://0.0.0.0:2376"],
+  "tls": true,
+  "tlscacert": "/opt/docker-certs/ca.pem",
+  "tlscert": "/opt/docker-certs/server-cert.pem",
+  "tlskey": "/opt/docker-certs/server-key.pem",
+  "tlsverify": true,
+  "log-driver": "awslogs",
+  "log-opts": {
+    "awslogs-region": "${var.aws_region}",
+    "awslogs-group": "/ec2/${var.app_name}/sandbox"
+  },
+  "storage-driver": "overlay2",
+  "default-ulimits": {
+    "nofile": {
+      "Name": "nofile",
+      "Hard": 65535,
+      "Soft": 65535
     }
-    DOCKERCONFIG
+  },
+  "live-restore": true
+}
+DOCKERCONFIG
 
-    # Override Docker service to not use -H flag (conflicts with daemon.json)
-    mkdir -p /etc/systemd/system/docker.service.d
-    cat > /etc/systemd/system/docker.service.d/override.conf <<'OVERRIDE'
-    [Service]
-    ExecStart=
-    ExecStart=/usr/bin/dockerd
-    OVERRIDE
+# Override Docker service to not use -H flag (conflicts with daemon.json)
+mkdir -p /etc/systemd/system/docker.service.d
+cat > /etc/systemd/system/docker.service.d/override.conf <<'OVERRIDE'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/dockerd
+OVERRIDE
 
-    # Reload and restart Docker
-    systemctl daemon-reload
-    systemctl restart docker
+# Reload and restart Docker
+systemctl daemon-reload
+systemctl restart docker
 
-    # Create sandbox network
-    docker network create bharatbuild-sandbox || true
+# Create sandbox network
+docker network create bharatbuild-sandbox || true
 
-    # Pull common base images (speeds up sandbox creation)
-    docker pull node:18-alpine &
-    docker pull node:20-alpine &
-    docker pull python:3.11-slim &
-    docker pull python:3.12-slim &
-    docker pull golang:1.21-alpine &
-    docker pull openjdk:17-slim &
-    docker pull nginx:alpine &
-    docker pull postgres:15-alpine &
-    docker pull redis:7-alpine &
-    wait
+# Pull common base images (speeds up sandbox creation)
+docker pull node:18-alpine &
+docker pull node:20-alpine &
+docker pull python:3.11-slim &
+docker pull python:3.12-slim &
+docker pull golang:1.21-alpine &
+docker pull openjdk:17-slim &
+docker pull nginx:alpine &
+docker pull postgres:15-alpine &
+docker pull redis:7-alpine &
+wait
 
-    # Install Docker Compose
-    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    chmod +x /usr/local/bin/docker-compose
+# Install Docker Compose
+curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
 
-    # Create sandbox workspace directory
-    mkdir -p /opt/sandbox/workspaces
-    chmod 777 /opt/sandbox/workspaces
+# Create sandbox workspace directory
+mkdir -p /opt/sandbox/workspaces
+chmod 777 /opt/sandbox/workspaces
 
-    # Install CloudWatch agent for monitoring
-    dnf install -y amazon-cloudwatch-agent
+# Install CloudWatch agent for monitoring
+dnf install -y amazon-cloudwatch-agent
 
-    # ==========================================================
-    # Install and Configure Nginx for path-based preview routing
-    # Routes /sandbox/{port}/* to localhost:{port}/*
-    # ==========================================================
-    dnf install -y nginx
-    systemctl enable nginx
+# ==========================================================
+# Install and Configure Nginx for path-based preview routing
+# Routes /sandbox/{port}/* to localhost:{port}/*
+# ==========================================================
+dnf install -y nginx
+systemctl enable nginx
 
-    # Create Nginx config for sandbox reverse proxy
-    cat > /etc/nginx/conf.d/sandbox.conf <<'NGINXCONFIG'
+# Create Nginx config for sandbox reverse proxy
+cat > /etc/nginx/conf.d/sandbox.conf <<'NGINXCONFIG'
 server {
     listen 8080;
     server_name _;
@@ -573,83 +583,83 @@ server {
 }
 NGINXCONFIG
 
-    # Start Nginx
-    systemctl start nginx
+# Start Nginx
+systemctl start nginx
 
-    # Create cleanup script (removes idle containers based on heartbeat label)
-    cat > /opt/sandbox/cleanup.sh <<'CLEANUP'
-    #!/bin/bash
-    # Remove containers idle for more than 30 minutes (1800 seconds)
-    # Uses heartbeat label (last_activity) instead of container age
-    # This prevents race condition where active container is deleted
+# Create cleanup script (removes idle containers based on heartbeat label)
+cat > /opt/sandbox/cleanup.sh <<'CLEANUP'
+#!/bin/bash
+# Remove containers idle for more than 30 minutes (1800 seconds)
+# Uses heartbeat label (last_activity) instead of container age
+# This prevents race condition where active container is deleted
 
-    IDLE_TIMEOUT=1800  # 30 minutes in seconds
-    NOW_TS=$(date +%s)
+IDLE_TIMEOUT=1800  # 30 minutes in seconds
+NOW_TS=$(date +%s)
 
-    docker ps -q --filter "label=bharatbuild=true" --filter "status=running" | while read container; do
-      # Check heartbeat label first
-      LAST_ACTIVITY=$(docker inspect --format='{{index .Config.Labels "last_activity"}}' $container 2>/dev/null || echo "")
+docker ps -q --filter "label=bharatbuild=true" --filter "status=running" | while read container; do
+  # Check heartbeat label first
+  LAST_ACTIVITY=$(docker inspect --format='{{index .Config.Labels "last_activity"}}' $container 2>/dev/null || echo "")
 
-      if [ -n "$LAST_ACTIVITY" ]; then
-        # Parse ISO timestamp
-        ACTIVITY_TS=$(date -d "$LAST_ACTIVITY" +%s 2>/dev/null || echo "0")
-        if [ "$ACTIVITY_TS" != "0" ]; then
-          IDLE_TIME=$((NOW_TS - ACTIVITY_TS))
-          if [ $IDLE_TIME -gt $IDLE_TIMEOUT ]; then
-            PROJECT_ID=$(docker inspect --format='{{index .Config.Labels "project_id"}}' $container || echo "unknown")
-            echo "$(date): Stopping idle container: $container (project: $PROJECT_ID, idle: $IDLE_TIME s)"
-            docker stop $container
-            docker rm $container
-          fi
-          continue
+  if [ -n "$LAST_ACTIVITY" ]; then
+    # Parse ISO timestamp
+    ACTIVITY_TS=$(date -d "$LAST_ACTIVITY" +%s 2>/dev/null || echo "0")
+    if [ "$ACTIVITY_TS" != "0" ]; then
+      IDLE_TIME=$((NOW_TS - ACTIVITY_TS))
+      if [ $IDLE_TIME -gt $IDLE_TIMEOUT ]; then
+        PROJECT_ID=$(docker inspect --format='{{index .Config.Labels "project_id"}}' $container || echo "unknown")
+        echo "$(date): Stopping idle container: $container (project: $PROJECT_ID, idle: $IDLE_TIME s)"
+        docker stop $container
+        docker rm $container
+      fi
+      continue
+    fi
+  fi
+
+  # Fallback: use container start time if no heartbeat label
+  STARTED=$(docker inspect --format='{{.State.StartedAt}}' $container)
+  STARTED_TS=$(date -d "$STARTED" +%s 2>/dev/null || echo "0")
+  if [ "$STARTED_TS" != "0" ]; then
+    AGE=$((NOW_TS - STARTED_TS))
+    if [ $AGE -gt $IDLE_TIMEOUT ]; then
+      PROJECT_ID=$(docker inspect --format='{{index .Config.Labels "project_id"}}' $container || echo "unknown")
+      echo "$(date): Stopping old container: $container (project: $PROJECT_ID, age: $AGE s)"
+      docker stop $container
+      docker rm $container
+    fi
+  fi
+done
+
+# Prune unused resources (images, networks, volumes)
+docker system prune -f --volumes 2>/dev/null
+
+# Cleanup old user networks (older than 24 hours with no containers)
+docker network ls --filter "label=bharatbuild=true" -q | while read network; do
+  CREATED=$(docker network inspect --format='{{index .Labels "created_at"}}' $network 2>/dev/null || echo "")
+  if [ -n "$CREATED" ]; then
+    CREATED_TS=$(date -d "$CREATED" +%s 2>/dev/null || echo "0")
+    if [ "$CREATED_TS" != "0" ]; then
+      AGE=$((NOW_TS - CREATED_TS))
+      # 24 hours = 86400 seconds
+      if [ $AGE -gt 86400 ]; then
+        # Check if network has containers
+        CONTAINERS=$(docker network inspect --format='{{len .Containers}}' $network 2>/dev/null || echo "0")
+        if [ "$CONTAINERS" = "0" ]; then
+          echo "$(date): Removing old network: $network (age: $AGE s)"
+          docker network rm $network 2>/dev/null || true
         fi
       fi
+    fi
+  fi
+done
+CLEANUP
+chmod +x /opt/sandbox/cleanup.sh
 
-      # Fallback: use container start time if no heartbeat label
-      STARTED=$(docker inspect --format='{{.State.StartedAt}}' $container)
-      STARTED_TS=$(date -d "$STARTED" +%s 2>/dev/null || echo "0")
-      if [ "$STARTED_TS" != "0" ]; then
-        AGE=$((NOW_TS - STARTED_TS))
-        if [ $AGE -gt $IDLE_TIMEOUT ]; then
-          PROJECT_ID=$(docker inspect --format='{{index .Config.Labels "project_id"}}' $container || echo "unknown")
-          echo "$(date): Stopping old container: $container (project: $PROJECT_ID, age: $AGE s)"
-          docker stop $container
-          docker rm $container
-        fi
-      fi
-    done
+# Add cron job for cleanup every 5 minutes
+echo "*/5 * * * * /opt/sandbox/cleanup.sh >> /var/log/sandbox-cleanup.log 2>&1" | crontab -
 
-    # Prune unused resources (images, networks, volumes)
-    docker system prune -f --volumes 2>/dev/null
-
-    # Cleanup old user networks (older than 24 hours with no containers)
-    docker network ls --filter "label=bharatbuild=true" -q | while read network; do
-      CREATED=$(docker network inspect --format='{{index .Labels "created_at"}}' $network 2>/dev/null || echo "")
-      if [ -n "$CREATED" ]; then
-        CREATED_TS=$(date -d "$CREATED" +%s 2>/dev/null || echo "0")
-        if [ "$CREATED_TS" != "0" ]; then
-          AGE=$((NOW_TS - CREATED_TS))
-          # 24 hours = 86400 seconds
-          if [ $AGE -gt 86400 ]; then
-            # Check if network has containers
-            CONTAINERS=$(docker network inspect --format='{{len .Containers}}' $network 2>/dev/null || echo "0")
-            if [ "$CONTAINERS" = "0" ]; then
-              echo "$(date): Removing old network: $network (age: $AGE s)"
-              docker network rm $network 2>/dev/null || true
-            fi
-          fi
-        fi
-      fi
-    done
-    CLEANUP
-    chmod +x /opt/sandbox/cleanup.sh
-
-    # Add cron job for cleanup every 5 minutes
-    echo "*/5 * * * * /opt/sandbox/cleanup.sh >> /var/log/sandbox-cleanup.log 2>&1" | crontab -
-
-    # Log completion
-    echo "Sandbox server setup complete at $(date)" >> /var/log/sandbox-setup.log
-  EOF
+# Log completion
+echo "Sandbox server setup complete at $(date)" >> /var/log/sandbox-setup.log
+EOF
 }
 
 # =============================================================================
