@@ -199,12 +199,19 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         response = await call_next(request)
+        path = request.url.path
 
         # Add security headers
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
+        # Allow iframe embedding for preview routes (needed for preview iframe)
+        # Use SAMEORIGIN for preview paths, DENY for everything else
+        if path.startswith("/api/v1/preview/"):
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        else:
+            response.headers["X-Frame-Options"] = "DENY"
 
         # CSP is typically handled by frontend/nginx, but add basic one here
         # response.headers["Content-Security-Policy"] = "default-src 'self'"
