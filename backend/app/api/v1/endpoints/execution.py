@@ -248,8 +248,21 @@ async def run_project(
             # For EC2 sandbox, check if sandbox exists remotely
             exists_on_ec2 = await unified_storage.sandbox_exists(project_id, user_id)
             if not exists_on_ec2:
-                logger.error(f"[Execution] Project not found on EC2: {project_id}")
-                raise HTTPException(status_code=404, detail=f"Project {project_id} not found on sandbox")
+                # RESTORE FILES FROM S3/DATABASE TO EC2 SANDBOX
+                # This happens when user clicks "Run" on a project that was cleaned up
+                logger.info(f"[Execution] Sandbox missing on EC2, restoring from S3/DB for {project_id}")
+                try:
+                    restored_files = await unified_storage.restore_project_from_database(project_id, user_id)
+                    if restored_files:
+                        logger.info(f"[Execution] Restored {len(restored_files)} files to EC2 sandbox")
+                    else:
+                        logger.error(f"[Execution] No files found in database for {project_id}")
+                        raise HTTPException(status_code=404, detail=f"Project {project_id} has no files")
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    logger.error(f"[Execution] Failed to restore project to EC2: {e}")
+                    raise HTTPException(status_code=500, detail=f"Failed to restore project files: {str(e)}")
 
         logger.info(f"[Execution] Running project from: {project_path}")
         logger.info(f"[Execution] Path has frontend: {(project_path / 'frontend').exists()}")

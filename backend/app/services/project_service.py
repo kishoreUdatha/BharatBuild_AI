@@ -102,10 +102,11 @@ class ProjectService:
         if cached:
             return cached
 
-        # Fetch from database
+        # Fetch from database - cast to handle UUID/VARCHAR mismatch
+        from sqlalchemy import cast, String as SQLString
         result = await self.db.execute(
             select(ProjectFile)
-            .where(ProjectFile.project_id == project_id)
+            .where(cast(ProjectFile.project_id, SQLString(36)) == project_id_str)
             .order_by(ProjectFile.path)
         )
         files = result.scalars().all()
@@ -138,9 +139,11 @@ class ProjectService:
             return cached
 
         # 2. Fetch file metadata from DB
+        # Cast to String to handle UUID/VARCHAR mismatch (project_id stored as string)
+        from sqlalchemy import cast, String as SQLString
         result = await self.db.execute(
             select(ProjectFile)
-            .where(ProjectFile.project_id == project_id)
+            .where(cast(ProjectFile.project_id, SQLString(36)) == project_id_str)
             .where(ProjectFile.path == file_path)
         )
         file_record = result.scalar_one_or_none()
@@ -185,10 +188,11 @@ class ProjectService:
         if not language:
             language = self._detect_language(file_name)
 
-        # Check if file exists
+        # Check if file exists - cast to handle UUID/VARCHAR mismatch
+        from sqlalchemy import cast, String as SQLString
         result = await self.db.execute(
             select(ProjectFile)
-            .where(ProjectFile.project_id == project_id)
+            .where(cast(ProjectFile.project_id, SQLString(36)) == project_id_str)
             .where(ProjectFile.path == file_path)
         )
         existing_file = result.scalar_one_or_none()
@@ -261,10 +265,11 @@ class ProjectService:
         """Delete a file from all storage layers"""
         project_id_str = str(project_id)
 
-        # Get file record
+        # Get file record - cast to handle UUID/VARCHAR mismatch
+        from sqlalchemy import cast, String as SQLString
         result = await self.db.execute(
             select(ProjectFile)
-            .where(ProjectFile.project_id == project_id)
+            .where(cast(ProjectFile.project_id, SQLString(36)) == project_id_str)
             .where(ProjectFile.path == file_path)
         )
         file_record = result.scalar_one_or_none()
@@ -339,9 +344,10 @@ class ProjectService:
         # Delete from S3
         await storage_service.delete_project_files(project_id_str)
 
-        # Delete from database
+        # Delete from database - cast to handle UUID/VARCHAR mismatch
+        from sqlalchemy import cast, String as SQLString
         result = await self.db.execute(
-            delete(ProjectFile).where(ProjectFile.project_id == project_id)
+            delete(ProjectFile).where(cast(ProjectFile.project_id, SQLString(36)) == project_id_str)
         )
         await self.db.commit()
 
@@ -434,20 +440,22 @@ class ProjectService:
             return
 
         current_path = ''
+        project_id_str = str(project_id)
         for i, part in enumerate(parts[:-1]):  # Exclude the file itself
             current_path = f"{current_path}/{part}" if current_path else part
 
-            # Check if folder exists
+            # Check if folder exists - cast to handle UUID/VARCHAR mismatch
+            from sqlalchemy import cast, String as SQLString
             result = await self.db.execute(
                 select(ProjectFile)
-                .where(ProjectFile.project_id == project_id)
+                .where(cast(ProjectFile.project_id, SQLString(36)) == project_id_str)
                 .where(ProjectFile.path == current_path)
             )
             existing = result.scalar_one_or_none()
 
             if not existing:
                 folder = ProjectFile(
-                    project_id=project_id,
+                    project_id=project_id_str,
                     path=current_path,
                     name=part,
                     is_folder=True,
