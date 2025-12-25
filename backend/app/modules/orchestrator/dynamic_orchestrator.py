@@ -3339,8 +3339,8 @@ Ensure every import in every file has a corresponding file in the plan.
                                 "keepalive": True,
                                 "keepalive_count": event_data,
                                 "chunks_received": chunk_count,
-                                # Padding to force CloudFront HTTP/2 flush (prevents 30s buffering)
-                                "_p": "." * 2048
+                                # Large padding (8KB) to force CloudFront HTTP/2 flush immediately
+                                "_p": "." * 8192
                             }
                         )
                         continue
@@ -3411,8 +3411,8 @@ Ensure every import in every file has a corresponding file in the plan.
                             "keepalive": True,
                             "keepalive_count": keepalive_count,
                             "chunks_received": chunk_count,
-                            # Padding to force CloudFront HTTP/2 flush (prevents 30s buffering)
-                            "_p": "." * 2048
+                            # Large padding (8KB) to force CloudFront HTTP/2 flush immediately
+                            "_p": "." * 8192
                         }
                     )
 
@@ -3959,7 +3959,7 @@ Ensure every import in every file has a corresponding file in the plan.
                     try:
                         msg_type, msg_data = await asyncio.wait_for(
                             event_queue.get(),
-                            timeout=15.0  # Keepalive timeout
+                            timeout=10.0  # Keepalive timeout - reduced from 15s to 10s
                         )
 
                         if msg_type == "batch_done":
@@ -3975,7 +3975,8 @@ Ensure every import in every file has a corresponding file in the plan.
                                 "message": f"Generating files... (batch {batch_start//PARALLEL_BATCH_SIZE + 1})",
                                 "keepalive": True,
                                 "batch": batch_start//PARALLEL_BATCH_SIZE + 1,
-                                "_p": "." * 2048  # Padding for CloudFront
+                                # Large padding (8KB) to force CloudFront HTTP/2 flush immediately
+                                "_p": "." * 8192
                             }
                         )
 
@@ -4194,13 +4195,14 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
         logger.info(f"[Writer] Generating single file: {file_path} (timeout: {SINGLE_FILE_GENERATION_TIMEOUT}s)")
 
         # Track time for keepalive events
-        # CloudFront has a 60-second origin read timeout, so send keepalive every 25 seconds
+        # CloudFront has a 60-second origin read timeout, but browser EventSource may timeout earlier
+        # IMPORTANT: Send keepalive every 10 seconds to prevent 30s browser disconnects
         # NOTE: We track time since last YIELDED event (not since last received chunk)
         # because Claude streams tokens continuously but we only yield when file is complete
         import time
         last_event_time = time.time()
         generation_start_time = time.time()
-        KEEPALIVE_INTERVAL = 25  # seconds
+        KEEPALIVE_INTERVAL = 10  # seconds - reduced from 25s to prevent 30s browser timeout
         file_generated = False
 
         try:
@@ -4224,8 +4226,9 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
                                 "message": f"Generating {file_path}...",
                                 "file": file_path,
                                 "keepalive": True,
-                                # Padding to force CloudFront HTTP/2 flush (prevents 30s buffering)
-                                "_p": "." * 2048
+                                # Large padding (8KB) to force CloudFront HTTP/2 flush immediately
+                                # CloudFront buffers small HTTP/2 DATA frames, causing 30s timeout
+                                "_p": "." * 8192
                             }
                         )
                     # Check for token usage marker at end of stream

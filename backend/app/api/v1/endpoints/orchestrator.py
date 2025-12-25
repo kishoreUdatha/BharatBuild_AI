@@ -23,8 +23,9 @@ from datetime import datetime
 
 T = TypeVar('T')
 
-# SSE Keepalive interval (seconds) - CloudFront has 60s timeout, so send keepalive every 30s
-SSE_KEEPALIVE_INTERVAL = 30
+# SSE Keepalive interval (seconds) - CloudFront has 60s timeout, browser may timeout earlier
+# Send keepalive every 10s to prevent 30s browser/proxy disconnects
+SSE_KEEPALIVE_INTERVAL = 10
 
 from app.modules.orchestrator.dynamic_orchestrator import (
     DynamicOrchestrator,
