@@ -89,8 +89,71 @@ async def get_current_user_token(
     return payload
 
 
-def verify_api_key(api_key: str, secret_key: str) -> bool:
-    """Verify API key and secret"""
-    # This will be implemented with database check
-    # For now, simple validation
-    return api_key.startswith("bb_") and len(secret_key) > 30
+async def verify_api_key(api_key: str, secret_key: str) -> bool:
+    """
+    Verify API key and secret against database.
+
+    Args:
+        api_key: The API key (format: bb_xxxx)
+        secret_key: The secret key associated with the API key
+
+    Returns:
+        True if API key and secret are valid, False otherwise
+    """
+    # Basic format validation
+    if not api_key or not secret_key:
+        return False
+
+    if not api_key.startswith("bb_") or len(api_key) < 10:
+        return False
+
+    if len(secret_key) < 32:
+        return False
+
+    # Database validation
+    try:
+        from app.core.database import AsyncSessionLocal
+        from sqlalchemy import select, text
+
+        async with AsyncSessionLocal() as session:
+            # Query API key from database
+            result = await session.execute(
+                text("""
+                    SELECT id, secret_key_hash, is_active, expires_at
+                    FROM api_keys
+                    WHERE api_key = :api_key
+                """),
+                {"api_key": api_key}
+            )
+            row = result.fetchone()
+
+            if not row:
+                return False
+
+            key_id, secret_hash, is_active, expires_at = row
+
+            # Check if key is active
+            if not is_active:
+                return False
+
+            # Check expiration
+            if expires_at:
+                from datetime import datetime
+                if datetime.utcnow() > expires_at:
+                    return False
+
+            # Verify secret key hash
+            # Using constant-time comparison to prevent timing attacks
+            import hmac
+            import hashlib
+            expected_hash = hashlib.sha256(secret_key.encode()).hexdigest()
+            if not hmac.compare_digest(secret_hash, expected_hash):
+                return False
+
+            return True
+
+    except Exception as e:
+        # Log error but don't expose details
+        import logging
+        logging.getLogger(__name__).error(f"API key verification error: {e}")
+        return False

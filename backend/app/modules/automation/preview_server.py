@@ -373,7 +373,8 @@ class PreviewServerManager:
             result = sock.connect_ex(('localhost', port))
             sock.close()
             return result != 0
-        except:
+        except (socket.error, OSError) as e:
+            logger.debug(f"Could not check port {port}: {e}")
             return False
 
     async def _find_available_port(self, start_port: int) -> int:

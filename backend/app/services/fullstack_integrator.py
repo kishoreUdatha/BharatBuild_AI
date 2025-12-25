@@ -78,7 +78,8 @@ class FullstackIntegrator:
                     return "angular"
                 else:
                     return "react"
-        except:
+        except (json.JSONDecodeError, IOError, OSError, KeyError) as e:
+            logger.debug(f"Could not detect frontend type from package.json: {e}")
             return "unknown"
 
     def _detect_backend_type(self) -> str:
@@ -100,8 +101,8 @@ class FullstackIntegrator:
                         return "flask"
                     elif "django" in content:
                         return "django"
-            except:
-                pass
+            except (IOError, OSError) as e:
+                logger.debug(f"Could not read requirements.txt for backend detection: {e}")
             return "python"
 
         # Node.js

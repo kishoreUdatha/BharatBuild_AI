@@ -44,7 +44,11 @@ async def get_optional_user(
         )
         user = result.scalar_one_or_none()
         return user if user and user.is_active else None
-    except Exception:
+    except (HTTPException, ValueError) as e:
+        logger.debug(f"Optional auth validation error: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Unexpected error in get_optional_user: {type(e).__name__}: {e}")
         return None
 
 
@@ -195,7 +199,11 @@ async def get_current_user_optional(
             return None
 
         return user
-    except Exception:
+    except (HTTPException, ValueError) as e:
+        logger.debug(f"Optional user auth error: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Unexpected error in get_current_user_optional: {type(e).__name__}: {e}")
         return None
 
 

@@ -77,7 +77,8 @@ class UMLGenerator:
                 self.font = ImageFont.truetype("arial.ttf", 14)
                 self.font_bold = ImageFont.truetype("arialbd.ttf", 16)
                 self.font_small = ImageFont.truetype("arial.ttf", 12)
-            except:
+            except (IOError, OSError) as e:
+                logger.debug(f"Could not load custom fonts, using default: {e}")
                 self.font = ImageFont.load_default()
                 self.font_bold = self.font
                 self.font_small = self.font

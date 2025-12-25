@@ -268,7 +268,14 @@ class StorageClient:
                     Key=object_name
                 )
             return True
-        except:
+        except ClientError as e:
+            # 404 means object doesn't exist
+            if e.response.get('Error', {}).get('Code') == '404':
+                return False
+            logger.warning(f"S3 object check error: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Unexpected error checking S3 object: {type(e).__name__}: {e}")
             return False
 
 

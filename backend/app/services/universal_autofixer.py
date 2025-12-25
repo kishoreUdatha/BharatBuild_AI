@@ -266,7 +266,8 @@ class UniversalAutoFixer:
                 if suggested_fix and match.groups():
                     try:
                         fix_cmd = suggested_fix.format(*match.groups())
-                    except:
+                    except (IndexError, KeyError) as e:
+                        logger.debug(f"Could not format suggested fix with match groups: {e}")
                         fix_cmd = suggested_fix
                 elif suggested_fix:
                     fix_cmd = suggested_fix

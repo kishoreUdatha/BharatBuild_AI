@@ -1333,8 +1333,8 @@ Output valid JSON only.
                     # Clean up temp file
                     try:
                         os.unlink(tmp_path)
-                    except:
-                        pass
+                    except (IOError, OSError) as e:
+                        logger.debug(f"Could not delete temp PDF file {tmp_path}: {e}")
 
                     return {
                         "path": file_path,
@@ -1365,8 +1365,8 @@ Output valid JSON only.
 
                     try:
                         os.unlink(tmp_path)
-                    except:
-                        pass
+                    except (IOError, OSError) as e:
+                        logger.debug(f"Could not delete temp PPTX file {tmp_path}: {e}")
 
                     return {
                         "path": file_path,
@@ -1441,8 +1441,8 @@ Output valid JSON only.
 
                         try:
                             os.unlink(tmp_path)
-                        except:
-                            pass
+                        except (IOError, OSError) as e:
+                            logger.debug(f"Could not delete temp PDF file: {e}")
 
                         created_files.append({
                             "path": file_path,
@@ -1468,8 +1468,8 @@ Output valid JSON only.
 
                         try:
                             os.unlink(tmp_path)
-                        except:
-                            pass
+                        except (IOError, OSError) as e:
+                            logger.debug(f"Could not delete temp PPTX file: {e}")
 
                         created_files.append({
                             "path": file_path,

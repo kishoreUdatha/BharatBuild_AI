@@ -412,7 +412,8 @@ async def agentic_chat_stream(
                                 # Parse tool input JSON
                                 try:
                                     current_tool["input"] = json.loads(current_tool["input"])
-                                except:
+                                except (json.JSONDecodeError, TypeError) as e:
+                                    logger.debug(f"Could not parse tool input JSON: {e}")
                                     current_tool["input"] = {}
 
                                 tool_calls.append(current_tool)

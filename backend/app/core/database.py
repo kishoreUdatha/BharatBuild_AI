@@ -22,23 +22,58 @@ def get_database_url() -> str:
 
 
 def get_engine() -> AsyncEngine:
-    """Get or create the database engine (lazy initialization)"""
+    """
+    Get or create the database engine (lazy initialization).
+
+    Connection pooling strategy:
+    - SQLite: NullPool (required for thread safety)
+    - PostgreSQL Development: NullPool (simpler debugging)
+    - PostgreSQL Production: QueuePool with connection limits
+
+    Environment variables:
+    - DB_POOL_SIZE: Maximum pool size (default: 10)
+    - DB_MAX_OVERFLOW: Extra connections allowed (default: 20)
+    - DB_POOL_TIMEOUT: Seconds to wait for connection (default: 30)
+    - DB_POOL_RECYCLE: Seconds before connection is recycled (default: 1800)
+    """
     global _engine
     if _engine is None:
         db_url = get_database_url()
+
         if "sqlite" in db_url:
+            # SQLite requires NullPool for thread safety
             _engine = create_async_engine(
                 db_url,
                 echo=settings.DB_ECHO,
                 connect_args={"check_same_thread": False},
                 poolclass=NullPool,
             )
-        else:
-            # For AWS RDS: use NullPool for fresh connections each time
+        elif getattr(settings, 'DEBUG', False) or getattr(settings, 'ENVIRONMENT', 'development') == 'development':
+            # Development: Use NullPool for simpler debugging
             _engine = create_async_engine(
                 db_url,
                 echo=settings.DB_ECHO,
                 poolclass=NullPool,
+            )
+        else:
+            # Production: Use QueuePool with proper connection management
+            from sqlalchemy.pool import QueuePool
+            import os
+
+            pool_size = int(os.getenv('DB_POOL_SIZE', '10'))
+            max_overflow = int(os.getenv('DB_MAX_OVERFLOW', '20'))
+            pool_timeout = int(os.getenv('DB_POOL_TIMEOUT', '30'))
+            pool_recycle = int(os.getenv('DB_POOL_RECYCLE', '1800'))  # 30 minutes
+
+            _engine = create_async_engine(
+                db_url,
+                echo=settings.DB_ECHO,
+                poolclass=QueuePool,
+                pool_size=pool_size,
+                max_overflow=max_overflow,
+                pool_timeout=pool_timeout,
+                pool_recycle=pool_recycle,
+                pool_pre_ping=True,  # Verify connections before use
             )
     return _engine
 

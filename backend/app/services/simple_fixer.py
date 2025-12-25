@@ -746,8 +746,8 @@ Please analyze and fix these errors. If the output shows success or warnings onl
                     content = full_path.read_text(encoding='utf-8')
                     if len(content) < 5000:  # Config files should be small
                         files[rel_path] = content
-                except:
-                    pass
+                except (IOError, OSError, UnicodeDecodeError) as e:
+                    logger.debug(f"Could not read config file {rel_path}: {e}")
 
         # Extract files mentioned in errors - ONLY RELEVANT LINES!
         for err in errors[:5]:
@@ -773,8 +773,8 @@ Please analyze and fix these errors. If the output shows success or warnings onl
                             # Large file without line number - send first/last portions
                             files[file_path] = f"[File truncated - {len(content)} chars]\n{content[:2000]}\n...\n{content[-2000:]}"
                             logger.info(f"[SimpleFixer] Truncated large file {file_path} (was {len(content)} chars)")
-                    except:
-                        pass
+                    except (IOError, OSError, UnicodeDecodeError) as e:
+                        logger.debug(f"Could not read error file {file_path}: {e}")
 
         # Parse line numbers from error output (e.g., "line 687", ":687:", "at line 687")
         line_pattern = r'(?:line\s+(\d+)|:(\d+):|at\s+line\s+(\d+))'
@@ -906,8 +906,8 @@ Please analyze and fix these errors. If the output shows success or warnings onl
 [END PARTIAL FILE]"""
                         logger.info(f"[SimpleFixer] Sent last 100 lines of {path_fragment} (no line number available)")
                     continue
-                except:
-                    pass
+                except (IOError, OSError, UnicodeDecodeError) as e:
+                    logger.debug(f"Could not read file {path_fragment}: {e}")
 
             # Fallback to glob search
             for p in project_path.rglob(f"*{path_fragment}"):
@@ -934,8 +934,8 @@ Please analyze and fix these errors. If the output shows success or warnings onl
 [⚠️ USE str_replace TOOL ONLY - file is larger than shown]
 {last_100}
 [END PARTIAL FILE]"""
-                    except:
-                        pass
+                    except (IOError, OSError, UnicodeDecodeError) as e:
+                        logger.debug(f"Could not read glob matched file {p}: {e}")
                     break
 
         total_chars = sum(len(v) for v in files.values())
@@ -1480,8 +1480,8 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                     content = full_path.read_text(encoding='utf-8')
                     if len(content) < 20000:  # Skip huge files
                         files[rel_path] = content
-                except:
-                    pass
+                except (IOError, OSError, UnicodeDecodeError) as e:
+                    logger.debug(f"Could not read config file {rel_path}: {e}")
 
         # Extract files mentioned in error output
         import re
@@ -1498,8 +1498,8 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                         content = p.read_text(encoding='utf-8')
                         if len(content) < 20000:
                             files[str(rel)] = content
-                    except:
-                        pass
+                    except (IOError, OSError, UnicodeDecodeError, ValueError) as e:
+                        logger.debug(f"Could not read error-mentioned file {p}: {e}")
                     break
 
         return files

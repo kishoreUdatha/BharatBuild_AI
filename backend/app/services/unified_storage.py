@@ -254,6 +254,57 @@ class UnifiedStorageService:
             logger.error(f"[Sandbox] ✗ Failed to write {file_path}: {e}", exc_info=True)
             return False
 
+    def _validate_sandbox_path(self, file_path: str) -> bool:
+        """
+        Validate file path to prevent path traversal attacks.
+
+        Security checks:
+        - No parent directory references (..)
+        - No absolute paths
+        - No null bytes
+        - Path components must be valid
+
+        Args:
+            file_path: Relative file path to validate
+
+        Returns:
+            True if path is safe, False otherwise
+        """
+        if not file_path:
+            return False
+
+        # Check for null bytes (injection attack)
+        if '\x00' in file_path:
+            logger.error(f"[Security] Null byte detected in path: {repr(file_path)}")
+            return False
+
+        # Check for parent directory traversal
+        if '..' in file_path:
+            logger.error(f"[Security] Path traversal detected: {file_path}")
+            return False
+
+        # Check for absolute paths
+        if file_path.startswith('/') or file_path.startswith('\\'):
+            logger.error(f"[Security] Absolute path detected: {file_path}")
+            return False
+
+        # Check for Windows drive letters
+        if len(file_path) >= 2 and file_path[1] == ':':
+            logger.error(f"[Security] Windows drive path detected: {file_path}")
+            return False
+
+        # Normalize and check path components
+        import re
+        # Allow alphanumeric, dash, underscore, dot, and forward slash
+        if not re.match(r'^[\w\-./]+$', file_path):
+            # More permissive check for special but valid characters
+            invalid_chars = set(file_path) - set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./@')
+            if invalid_chars - {' ', '(', ')', '[', ']', '+', '=', ','}:  # Allow some special chars
+                logger.warning(f"[Security] Suspicious characters in path: {file_path}")
+                # Don't block, just warn for now
+
+        return True
+
     async def _write_to_remote_sandbox(
         self,
         project_id: str,
@@ -286,6 +337,11 @@ class UnifiedStorageService:
         import docker
         import base64
         import asyncio
+
+        # SECURITY: Validate file path to prevent traversal attacks
+        if not self._validate_sandbox_path(file_path):
+            logger.error(f"[RemoteWrite] ✗ Invalid file path rejected: {file_path}")
+            return False
 
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
 

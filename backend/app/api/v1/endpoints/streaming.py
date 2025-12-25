@@ -70,8 +70,9 @@ Create a complete file structure. Return ONLY a JSON object with this structure:
         try:
             file_structure = json.loads(planning_response["content"])
             files_to_generate = file_structure.get("files", [])
-        except:
+        except (json.JSONDecodeError, TypeError, KeyError) as e:
             # Fallback to basic structure
+            logger.debug(f"Could not parse file structure: {e}")
             files_to_generate = [
                 {"path": "src/index.js", "description": "Main file"},
                 {"path": "package.json", "description": "Dependencies"},
