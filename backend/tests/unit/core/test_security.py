@@ -253,30 +253,64 @@ class TestApiKeyGeneration:
 class TestVerifyApiKey:
     """Test API key verification"""
 
-    def test_verify_valid_api_key(self):
-        """Test verifying valid API key format"""
-        api_key = generate_api_key()
+    @pytest.mark.asyncio
+    async def test_verify_empty_api_key(self):
+        """Test verifying empty API key returns False"""
+        api_key = ""
         secret_key = generate_secret_key()
 
-        result = verify_api_key(api_key, secret_key)
+        result = await verify_api_key(api_key, secret_key)
 
-        assert result is True
+        assert result is False
 
-    def test_verify_invalid_api_key_format(self):
+    @pytest.mark.asyncio
+    async def test_verify_empty_secret_key(self):
+        """Test verifying empty secret key returns False"""
+        api_key = generate_api_key()
+        secret_key = ""
+
+        result = await verify_api_key(api_key, secret_key)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_verify_invalid_api_key_format(self):
         """Test verifying invalid API key format"""
         api_key = "invalid_key"
         secret_key = generate_secret_key()
 
-        result = verify_api_key(api_key, secret_key)
+        result = await verify_api_key(api_key, secret_key)
 
         assert result is False
 
-    def test_verify_short_secret(self):
+    @pytest.mark.asyncio
+    async def test_verify_api_key_wrong_prefix(self):
+        """Test verifying API key with wrong prefix"""
+        api_key = "xx_" + "a" * 40  # Wrong prefix
+        secret_key = generate_secret_key()
+
+        result = await verify_api_key(api_key, secret_key)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_verify_short_secret(self):
         """Test verifying with too short secret"""
         api_key = generate_api_key()
         secret_key = "short"
 
-        result = verify_api_key(api_key, secret_key)
+        result = await verify_api_key(api_key, secret_key)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_verify_valid_format_not_in_db(self):
+        """Test that valid format key returns False when not in database"""
+        api_key = generate_api_key()
+        secret_key = generate_secret_key()
+
+        # Valid format but not in database - should return False
+        result = await verify_api_key(api_key, secret_key)
 
         assert result is False
 
