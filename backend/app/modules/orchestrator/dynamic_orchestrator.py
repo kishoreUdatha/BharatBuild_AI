@@ -3338,7 +3338,9 @@ Ensure every import in every file has a corresponding file in the plan.
                                 "message": f"Planning project structure... (analyzing)",
                                 "keepalive": True,
                                 "keepalive_count": event_data,
-                                "chunks_received": chunk_count
+                                "chunks_received": chunk_count,
+                                # Padding to force CloudFront HTTP/2 flush (prevents 30s buffering)
+                                "_p": "." * 2048
                             }
                         )
                         continue
@@ -3408,7 +3410,9 @@ Ensure every import in every file has a corresponding file in the plan.
                             "message": f"Planning project structure... (waiting for AI)",
                             "keepalive": True,
                             "keepalive_count": keepalive_count,
-                            "chunks_received": chunk_count
+                            "chunks_received": chunk_count,
+                            # Padding to force CloudFront HTTP/2 flush (prevents 30s buffering)
+                            "_p": "." * 2048
                         }
                     )
 
@@ -4176,7 +4180,9 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
                             data={
                                 "message": f"Generating {file_path}...",
                                 "file": file_path,
-                                "keepalive": True
+                                "keepalive": True,
+                                # Padding to force CloudFront HTTP/2 flush (prevents 30s buffering)
+                                "_p": "." * 2048
                             }
                         )
                     # Check for token usage marker at end of stream
