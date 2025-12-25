@@ -153,9 +153,12 @@ async def get_container_internal_address(project_id: str) -> Optional[tuple[str,
             logger.info(f"[Preview] Routing via gateway: {ec2_ip}:{PREVIEW_GATEWAY_PORT}/{project_id}")
             return (ec2_ip, PREVIEW_GATEWAY_PORT, project_id)
         else:
-            logger.warning(f"[Preview] Container not found for {project_id}")
+            # In remote Docker mode, if container doesn't exist, return None
+            # Don't fall through to ContainerManager which tries local Docker
+            logger.warning(f"[Preview] Container not found on remote Docker for {project_id}")
+            return None
 
-    # Local Docker mode or fallback (direct container access)
+    # Local Docker mode only (not production - production uses remote Docker)
     manager = get_container_manager()
 
     # Check if container exists
