@@ -1531,7 +1531,7 @@ class DynamicOrchestrator:
                     "include_frontend": True,  # Mobile apps are "frontend"
                     "include_backend": False,
                     "include_docker": False,
-                    "hint": f"Simple mobile app. Generate {max_files} files max. Include screens, widgets, models."
+                    "hint": "Simple mobile app. Include screens, widgets, models."
                 }
             else:
                 logger.info(f"[ComplexityDetection] Detected FULL mobile app")
@@ -1543,7 +1543,7 @@ class DynamicOrchestrator:
                     "include_frontend": True,  # Mobile apps are "frontend"
                     "include_backend": "backend" in request_lower or "api" in request_lower,
                     "include_docker": False,
-                    "hint": f"Full mobile app. Generate up to {max_files} files. Include screens, widgets, models, services, state management."
+                    "hint": "Full mobile app. Include all screens, widgets, models, services, state management needed."
                 }
 
         # ============== JAVA/SPRING BOOT ==============
@@ -1569,7 +1569,7 @@ class DynamicOrchestrator:
                     "include_backend": True,
                     "include_frontend": False,
                     "include_docker": False,
-                    "hint": f"Simple Spring Boot API. Generate {max_files} files max. Include controllers, services, repositories, models."
+                    "hint": "Simple Spring Boot API. Include controllers, services, repositories, models."
                 }
             elif wants_fullstack:
                 # Fullstack: Spring Boot backend + React/Vue frontend
@@ -1582,7 +1582,7 @@ class DynamicOrchestrator:
                     "include_backend": True,
                     "include_frontend": True,
                     "include_docker": True,
-                    "hint": f"Full-stack application with Spring Boot backend and React frontend. Generate up to {max_files} files. Structure: backend/ folder with Spring Boot (controllers, services, repositories, models, DTOs, configs, security) AND frontend/ folder with React (components, pages, hooks, services, styles). Include docker-compose.yml for both services."
+                    "hint": "Full-stack application with Spring Boot backend and React frontend. Structure: backend/ folder with Spring Boot (controllers, services, repositories, models, DTOs, configs, security) AND frontend/ folder with React (components, pages, hooks, services, styles). Include docker-compose.yml for both services."
                 }
             else:
                 logger.info(f"[ComplexityDetection] Detected FULL Spring Boot backend-only project")
@@ -1594,7 +1594,7 @@ class DynamicOrchestrator:
                     "include_backend": True,
                     "include_frontend": False,
                     "include_docker": True,
-                    "hint": f"Full Spring Boot backend application. Generate up to {max_files} files. Include controllers, services, repositories, models, DTOs, configs, security."
+                    "hint": "Full Spring Boot backend application. Include controllers, services, repositories, models, DTOs, configs, security."
                 }
 
         # ============== DJANGO ==============
@@ -1611,7 +1611,7 @@ class DynamicOrchestrator:
                     "include_frontend": True,  # Django includes templates (frontend)
                     "include_backend": True,
                     "include_docker": False,
-                    "hint": f"Simple Django app. Generate {max_files} files max. Include models, views, urls, templates."
+                    "hint": "Simple Django app. Include models, views, urls, templates."
                 }
             else:
                 logger.info(f"[ComplexityDetection] Detected FULL Django project")
@@ -1623,7 +1623,7 @@ class DynamicOrchestrator:
                     "include_frontend": True,  # Django includes templates (frontend)
                     "include_backend": True,
                     "include_docker": True,
-                    "hint": f"Full Django application. Generate up to {max_files} files. Include models, views, serializers, urls, templates, admin, celery tasks."
+                    "hint": "Full Django application. Include models, views, serializers, urls, templates, admin, celery tasks."
                 }
 
         # ============== AI/ML ==============
@@ -1638,7 +1638,7 @@ class DynamicOrchestrator:
                 "include_frontend": True,  # Includes Streamlit/Gradio UI
                 "include_backend": False,
                 "include_docker": False,
-                "hint": f"AI/ML project. Generate {max_files} files max. Include model, preprocessing, training, inference, notebooks, Streamlit/Gradio interface."
+                "hint": "AI/ML project. Include model, preprocessing, training, inference, notebooks, Streamlit/Gradio interface."
             }
 
         # ============== WEB APPS (React/Next.js/Vue) ==============
@@ -1653,7 +1653,7 @@ class DynamicOrchestrator:
                 "include_frontend": True,
                 "include_backend": False,
                 "include_docker": False,
-                "hint": f"Generate {max_files} files MAX. Frontend only. NO backend, NO Docker."
+                "hint": "Frontend only landing page. NO backend, NO Docker."
             }
 
         # Check for SIMPLE
@@ -1667,7 +1667,7 @@ class DynamicOrchestrator:
                 "include_frontend": True,
                 "include_backend": False,
                 "include_docker": False,
-                "hint": f"Generate {max_files} files MAX. Frontend only unless backend explicitly requested."
+                "hint": "Simple frontend app. Include only backend if explicitly requested."
             }
 
         # Check for COMPLEX (must be explicit)
@@ -1681,7 +1681,7 @@ class DynamicOrchestrator:
                 "include_frontend": True,
                 "include_backend": True,
                 "include_docker": True,
-                "hint": f"Full-stack project. Generate up to {max_files} files. Structure: frontend/ folder with React/Next.js AND backend/ folder with FastAPI/Node.js. Include database models and Docker setup."
+                "hint": "Full-stack project. Structure: frontend/ folder with React/Next.js AND backend/ folder with FastAPI/Node.js. Include ALL necessary files, database models and Docker setup."
             }
 
         # Check if "e-commerce" without "platform" or "full"
@@ -1696,7 +1696,7 @@ class DynamicOrchestrator:
                     "include_frontend": True,
                     "include_backend": False,
                     "include_docker": False,
-                    "hint": f"E-commerce landing page. Generate {max_files} files max. Frontend only with mock data."
+                    "hint": "E-commerce landing page. Frontend only with mock data."
                 }
 
         # Default to intermediate
@@ -1710,7 +1710,7 @@ class DynamicOrchestrator:
             "include_frontend": True,
             "include_backend": needs_backend,
             "include_docker": needs_backend,
-            "hint": f"Generate {max_files} files max. {'Structure: frontend/ and backend/ folders. Include backend and database.' if needs_backend else 'Frontend focused.'}"
+            "hint": f"{'Structure: frontend/ and backend/ folders. Include backend and database.' if needs_backend else 'Frontend focused project.'}"
         }
 
     def _parse_xml_plan(self, plan_text: str) -> Dict[str, Any]:
@@ -3211,18 +3211,19 @@ Generate ONLY the file content, no explanations. Output the complete, working co
         complexity_info = self._detect_project_complexity(context.user_request)
         logger.info(f"[Planner] Complexity: {complexity_info['complexity']}, Max files: {complexity_info['max_files']}")
 
-        # Build complexity-aware prompt
+        # Build complexity-aware prompt (no hard file limits - planner decides)
         include_frontend = complexity_info.get('include_frontend', True)  # Default to True for backward compatibility
         complexity_hint = f"""
 COMPLEXITY DETECTION RESULT:
 - Detected Complexity: {complexity_info['complexity'].upper()}
-- Maximum Files Allowed: {complexity_info['max_files']}
 - Recommended Stack: {complexity_info['recommended_stack']}
 - Include Frontend: {'YES - Generate frontend/ folder with React/Vue/Angular' if include_frontend else 'NO - Backend only, no frontend files'}
 - Include Backend: {'YES' if complexity_info['include_backend'] else 'NO'}
 - Include Docker: {'YES' if complexity_info['include_docker'] else 'NO'}
 
-CRITICAL INSTRUCTION: {complexity_info['hint']}
+IMPORTANT: Generate ALL files needed for a complete, working project.
+Include every file that will be imported by other files.
+Do not leave any imports pointing to non-existent files.
 """
 
         # Build color theme instruction if user specified colors
@@ -3238,9 +3239,9 @@ PROJECT CONTEXT:
 - Project ID: {context.project_id}
 - Existing Files: {len(context.files_created)} files
 
-Analyze this request and create a complete file list for the project.
-Output in <plan> XML tags with <files> containing all needed files.
-RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
+Analyze this request and create a COMPLETE file list for the project.
+Output in <plan> XML tags with <files> containing ALL needed files.
+Ensure every import in every file has a corresponding file in the plan.
 """
 
         yield OrchestratorEvent(
@@ -3702,120 +3703,167 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
                 except Exception as db_err:
                     logger.warning(f"[Writer-Resume] Database query failed, using plan files: {db_err}")
 
-        # FILE-BY-FILE MODE (NEW - like Bolt.new)
+        # PARALLEL FILE GENERATION MODE (FAST - generates 3 files at a time)
+        PARALLEL_BATCH_SIZE = 3  # Generate 3 files concurrently
+
         if files_to_generate:
-            logger.info(f"[Writer] ⚡ File-by-file mode: generating {len(files_to_generate)} files one at a time")
+            logger.info(f"[Writer] ⚡ Parallel mode: generating {len(files_to_generate)} files ({PARALLEL_BATCH_SIZE} at a time)")
 
             yield OrchestratorEvent(
                 type=EventType.STATUS,
                 data={
-                    "message": f"Generating {len(files_to_generate)} files...",
+                    "message": f"Generating {len(files_to_generate)} files ({PARALLEL_BATCH_SIZE} in parallel)...",
                     "total_files": len(files_to_generate),
-                    "mode": "file-by-file"
+                    "mode": "parallel",
+                    "batch_size": PARALLEL_BATCH_SIZE
                 }
             )
 
-            # Generate each file with separate API call (avoids token limits)
-            for file_index, file_info in enumerate(files_to_generate, 1):
+            # Helper function to generate a single file and collect events
+            async def generate_single_file(file_info: Dict, file_index: int) -> Dict:
+                """Generate a single file and return results (for parallel execution)"""
                 file_path = file_info.get('path', '')
                 file_description = file_info.get('description', '')
-                file_priority = file_info.get('priority', file_index)
+                events = []
+                success = False
+                file_content = ""
+                error_msg = None
 
                 if not file_path:
-                    continue
+                    return {"success": False, "events": [], "file_path": ""}
 
-                # ============================================================
-                # STEP 1: Mark file as GENERATING in database (enables resume)
-                # ============================================================
-                await self.update_file_generation_status(
-                    project_id=context.project_id,
-                    file_path=file_path,
-                    status="generating"
-                )
-
-                # Emit file start event
-                yield OrchestratorEvent(
-                    type=EventType.FILE_OPERATION,
-                    data={
-                        "operation": "create",
-                        "path": file_path,
-                        "operation_status": "in_progress",
-                        "file_number": file_index,
-                        "total_files": len(files_to_generate),
-                        "description": file_description,
-                        "generation_status": "generating"
-                    }
-                )
-
-                yield OrchestratorEvent(
-                    type=EventType.STATUS,
-                    data={"message": f"Generating {file_path} ({file_index}/{len(files_to_generate)})..."}
-                )
-
-                # Generate this single file
                 try:
+                    # Mark as generating
+                    await self.update_file_generation_status(
+                        project_id=context.project_id,
+                        file_path=file_path,
+                        status="generating"
+                    )
+
+                    # Collect events from file generation
                     async for event in self._execute_writer_for_single_file(
                         config, context, file_path, file_description, system_prompt
                     ):
-                        yield event
+                        events.append(event)
 
-                    # Mark file as complete - include file_content so frontend can display it
-                    # Get the content from the last created file
-                    file_content_for_event = ""
-                    file_size = 0
+                    # Get file content
                     for fc in reversed(context.files_created):
                         if fc.get('path') == file_path:
-                            file_content_for_event = fc.get('content', '')
-                            file_size = len(file_content_for_event.encode('utf-8'))
+                            file_content = fc.get('content', '')
                             break
 
-                    # ============================================================
-                    # STEP 2: Mark file as COMPLETED in database (enables resume)
-                    # ============================================================
+                    # Mark as completed
                     await self.update_file_generation_status(
                         project_id=context.project_id,
                         file_path=file_path,
                         status="completed",
-                        size_bytes=file_size
+                        size_bytes=len(file_content.encode('utf-8')) if file_content else 0
                     )
-
-                    yield OrchestratorEvent(
-                        type=EventType.FILE_OPERATION,
-                        data={
-                            "operation": "create",
-                            "path": file_path,
-                            "operation_status": "complete",
-                            "file_content": file_content_for_event,
-                            "file_number": file_index,
-                            "total_files": len(files_to_generate),
-                            "generation_status": "completed"
-                        }
-                    )
+                    success = True
 
                 except Exception as e:
                     logger.error(f"[Writer] Error generating {file_path}: {e}")
-
-                    # ============================================================
-                    # STEP 3: Mark file as FAILED in database (enables retry)
-                    # ============================================================
+                    error_msg = str(e)
                     await self.update_file_generation_status(
                         project_id=context.project_id,
                         file_path=file_path,
                         status="failed"
                     )
 
+                return {
+                    "success": success,
+                    "events": events,
+                    "file_path": file_path,
+                    "file_content": file_content,
+                    "file_index": file_index,
+                    "error": error_msg
+                }
+
+            # Process files in batches
+            total_files = len(files_to_generate)
+            for batch_start in range(0, total_files, PARALLEL_BATCH_SIZE):
+                batch_end = min(batch_start + PARALLEL_BATCH_SIZE, total_files)
+                batch_files = files_to_generate[batch_start:batch_end]
+                batch_indices = list(range(batch_start + 1, batch_end + 1))
+
+                # Emit batch start
+                file_paths_in_batch = [f.get('path', '') for f in batch_files]
+                yield OrchestratorEvent(
+                    type=EventType.STATUS,
+                    data={
+                        "message": f"Generating batch {batch_start//PARALLEL_BATCH_SIZE + 1}: {', '.join(file_paths_in_batch[:3])}...",
+                        "batch_files": file_paths_in_batch,
+                        "batch_start": batch_start + 1,
+                        "batch_end": batch_end,
+                        "total_files": total_files
+                    }
+                )
+
+                # Emit file start events for all files in batch
+                for i, file_info in enumerate(batch_files):
+                    file_path = file_info.get('path', '')
+                    file_index = batch_start + i + 1
                     yield OrchestratorEvent(
-                        type=EventType.ERROR,
+                        type=EventType.FILE_OPERATION,
                         data={
-                            "message": f"Failed to generate {file_path}",
-                            "error": str(e),
-                            "file_path": file_path,
-                            "generation_status": "failed"
+                            "operation": "create",
+                            "path": file_path,
+                            "operation_status": "in_progress",
+                            "file_number": file_index,
+                            "total_files": total_files,
+                            "description": file_info.get('description', ''),
+                            "generation_status": "generating"
                         }
                     )
 
-                # Small delay between files for better UX and rate limiting
-                await asyncio.sleep(0.3)
+                # Generate all files in batch IN PARALLEL
+                tasks = [
+                    generate_single_file(file_info, batch_start + i + 1)
+                    for i, file_info in enumerate(batch_files)
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                # Process results and yield events
+                for result in results:
+                    if isinstance(result, Exception):
+                        logger.error(f"[Writer] Batch task failed: {result}")
+                        continue
+
+                    file_path = result.get("file_path", "")
+                    file_index = result.get("file_index", 0)
+
+                    # Yield collected events from this file
+                    for event in result.get("events", []):
+                        yield event
+
+                    # Yield completion or error event
+                    if result.get("success"):
+                        yield OrchestratorEvent(
+                            type=EventType.FILE_OPERATION,
+                            data={
+                                "operation": "create",
+                                "path": file_path,
+                                "operation_status": "complete",
+                                "file_content": result.get("file_content", ""),
+                                "file_number": file_index,
+                                "total_files": total_files,
+                                "generation_status": "completed"
+                            }
+                        )
+                    else:
+                        yield OrchestratorEvent(
+                            type=EventType.ERROR,
+                            data={
+                                "message": f"Failed to generate {file_path}",
+                                "error": result.get("error", "Unknown error"),
+                                "file_path": file_path,
+                                "generation_status": "failed"
+                            }
+                        )
+
+                # Small delay between batches for rate limiting
+                if batch_end < total_files:
+                    await asyncio.sleep(0.5)
 
             # ============================================================
             # RETRY FAILED SAVES: Try to save files that failed initially
