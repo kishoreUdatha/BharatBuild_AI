@@ -765,6 +765,7 @@ class ExecutionContext:
     """Shared context across workflow execution"""
     project_id: str
     user_request: str
+    user_id: Optional[str] = None  # User ID for file operations (user_id/project_id path structure)
     current_step: int = 0
     total_steps: int = 0
     files_created: List[Dict[str, Any]] = None
@@ -1506,7 +1507,14 @@ class DynamicOrchestrator:
         # ============== COMPLEXITY KEYWORDS ==============
         minimal_keywords = keywords.get('minimal', ["landing page", "landing", "single page"])
         simple_keywords = keywords.get('simple', ["simple", "basic", "quick", "portfolio", "mvp"])
-        complex_keywords = keywords.get('complex', ["full platform", "full stack", "with auth", "enterprise"])
+        complex_keywords = keywords.get('complex', [
+            "full platform", "full stack", "with auth", "enterprise",
+            "marketplace", "multi-vendor", "vendor platform", "seller platform",
+            "admin dashboard", "user management", "payment", "checkout",
+            "orders", "cart", "inventory", "multi-user", "saas",
+            "e-commerce platform", "ecommerce platform", "online store platform",
+            "multi-role", "authentication", "authorization"
+        ])
 
         # ============== MOBILE APPS (Flutter/React Native) ==============
         if is_mobile:
@@ -2170,6 +2178,7 @@ class DynamicOrchestrator:
         context = ExecutionContext(
             project_id=project_id,
             user_request=user_request,
+            user_id=user_id,  # Pass user_id for file operations
             metadata=metadata or {}
         )
 
@@ -2897,9 +2906,11 @@ class DynamicOrchestrator:
             }
 
             # Create context for file generation
+            user_id = metadata.get("user_id") if metadata else None
             context = ExecutionContext(
                 project_id=project_id,
                 user_request=user_request,
+                user_id=user_id,  # Pass user_id for file operations
                 metadata=metadata
             )
             context.plan = resume_info.get("context", {}).get("plan", {})
@@ -2987,6 +2998,7 @@ class DynamicOrchestrator:
         context = ExecutionContext(
             project_id=project_id,
             user_request="Resume incomplete file generation",
+            user_id=user_id,  # Pass user_id for file operations
             metadata={"user_id": user_id, "is_resume": True}
         )
         context.plan = plan

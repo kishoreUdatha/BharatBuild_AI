@@ -101,6 +101,34 @@ def AsyncSessionLocal():
     return get_session_local()()
 
 
+# Async context manager for session usage
+class async_session:
+    """
+    Async context manager for database sessions.
+
+    Usage:
+        async with async_session() as session:
+            result = await session.execute(...)
+    """
+    def __init__(self):
+        self._session = None
+
+    async def __aenter__(self):
+        self._session = get_session_local()()
+        return self._session
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._session:
+            if exc_type is None:
+                # Only commit if there are pending changes
+                if self._session.new or self._session.dirty or self._session.deleted:
+                    await self._session.commit()
+            else:
+                await self._session.rollback()
+            await self._session.close()
+        return False
+
+
 # Dependency to get DB session
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Get database session - only commits if there are pending changes"""

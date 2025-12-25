@@ -448,11 +448,11 @@ class Settings(BaseSettings):
     # ==========================================
     # Project Complexity File Limits
     # ==========================================
-    FILE_LIMIT_MINIMAL: int = 5
-    FILE_LIMIT_SIMPLE: int = 8
-    FILE_LIMIT_INTERMEDIATE: int = 15
-    FILE_LIMIT_INTERMEDIATE_BACKEND: int = 20
-    FILE_LIMIT_COMPLEX: int = 40
+    FILE_LIMIT_MINIMAL: int = 8
+    FILE_LIMIT_SIMPLE: int = 15
+    FILE_LIMIT_INTERMEDIATE: int = 30
+    FILE_LIMIT_INTERMEDIATE_BACKEND: int = 45
+    FILE_LIMIT_COMPLEX: int = 60
 
     # Technology-specific limits
     FILE_LIMIT_FLUTTER_SIMPLE: int = 20
