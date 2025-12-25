@@ -853,17 +853,54 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Download current task definitions
+      - name: Get current sandbox EC2 private IP
+        id: sandbox-ip
+        run: |
+          # Fetch the current sandbox EC2 instance private IP
+          SANDBOX_IP=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=*sandbox*" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].PrivateIpAddress' \
+            --output text)
+
+          if [ -z "$SANDBOX_IP" ] || [ "$SANDBOX_IP" == "None" ]; then
+            echo "::warning::Could not find sandbox EC2 instance, using fallback"
+            SANDBOX_IP="10.0.1.146"
+          fi
+
+          echo "sandbox_ip=$SANDBOX_IP" >> $GITHUB_OUTPUT
+          echo "Sandbox EC2 Private IP: $SANDBOX_IP"
+
+      - name: Download and update task definitions
         run: |
           # Download backend task definition
           aws ecs describe-task-definition \
             --task-definition bharatbuild-backend \
-            --query 'taskDefinition' > backend-task-def.json || echo "{}" > backend-task-def.json
+            --query 'taskDefinition' > backend-task-def-raw.json || echo "{}" > backend-task-def-raw.json
 
           # Download frontend task definition
           aws ecs describe-task-definition \
             --task-definition bharatbuild-frontend \
             --query 'taskDefinition' > frontend-task-def.json || echo "{}" > frontend-task-def.json
+
+          # Update SANDBOX_DOCKER_HOST with current EC2 IP in backend task definition
+          SANDBOX_IP="${{ steps.sandbox-ip.outputs.sandbox_ip }}"
+          echo "Updating SANDBOX_DOCKER_HOST to tcp://${SANDBOX_IP}:2375"
+
+          # Use jq to update the environment variable
+          cat backend-task-def-raw.json | jq --arg ip "$SANDBOX_IP" '
+            .containerDefinitions[0].environment = [
+              .containerDefinitions[0].environment[] |
+              if .name == "SANDBOX_DOCKER_HOST" then
+                .value = "tcp://\($ip):2375"
+              else
+                .
+              end
+            ]
+          ' > backend-task-def.json
+
+          # Verify the update
+          echo "Updated SANDBOX_DOCKER_HOST:"
+          cat backend-task-def.json | jq '.containerDefinitions[0].environment[] | select(.name == "SANDBOX_DOCKER_HOST")'
 
       - name: Update backend task definition
         id: task-def-backend
