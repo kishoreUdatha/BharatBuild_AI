@@ -3266,94 +3266,160 @@ Ensure every import in every file has a corresponding file in the plan.
         # Stream tokens from Claude with keepalive to prevent timeout
         logger.info("[Planner] Starting token stream with Bolt XML parser...")
 
-        # Keepalive settings - send every 15 seconds to prevent CloudFront/ALB timeout
-        # CloudFront has 60s timeout, but browser EventSource may have 30s timeout
-        PLANNER_KEEPALIVE_INTERVAL = 15.0  # seconds
+        # Keepalive settings - send every 10 seconds to prevent CloudFront/ALB timeout
+        # CloudFront has 60s timeout, browser EventSource may have 30s timeout
+        PLANNER_KEEPALIVE_INTERVAL = 10.0  # seconds
         chunk_count = 0
         keepalive_count = 0
 
-        # Create async iterator from generator
-        stream_iter = self.claude_client.generate_stream(
-            prompt=user_prompt,
-            system_prompt=system_prompt,
-            model=config.model,
-            max_tokens=config.max_tokens,
-            temperature=config.temperature
-        ).__aiter__()
+        # Use asyncio.Queue for concurrent streaming + keepalive
+        # This approach works because the queue.get() can properly timeout
+        # unlike asyncio.wait_for on async generator __anext__()
+        event_queue: asyncio.Queue = asyncio.Queue()
+        streaming_done = asyncio.Event()
 
-        streaming_complete = False
-        while not streaming_complete:
+        async def stream_claude_chunks():
+            """Background task to stream chunks from Claude into the queue"""
+            nonlocal chunk_count
             try:
-                # Wait for next chunk with timeout
-                chunk = await asyncio.wait_for(
-                    stream_iter.__anext__(),
-                    timeout=PLANNER_KEEPALIVE_INTERVAL
-                )
-                chunk_count += 1
+                async for chunk in self.claude_client.generate_stream(
+                    prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    model=config.model,
+                    max_tokens=config.max_tokens,
+                    temperature=config.temperature
+                ):
+                    chunk_count += 1
+                    await event_queue.put(("chunk", chunk))
+                # Signal stream completion
+                await event_queue.put(("done", None))
+            except Exception as e:
+                logger.error(f"[Planner] Claude streaming error: {e}")
+                await event_queue.put(("error", str(e)))
+            finally:
+                streaming_done.set()
 
-                # Check for token usage marker at end of stream
-                if chunk.startswith("__TOKEN_USAGE__:"):
-                    parts = chunk.split(":")
-                    if len(parts) >= 4:
-                        input_tokens = int(parts[1])
-                        output_tokens = int(parts[2])
-                        model_used = parts[3]
-                        context.track_tokens(
-                            input_tokens, output_tokens, model_used,
-                            agent_type="planner",
-                            operation="plan_project"
+        async def send_keepalives():
+            """Background task to send periodic keepalive events"""
+            nonlocal keepalive_count
+            while not streaming_done.is_set():
+                try:
+                    # Wait for interval or until streaming completes
+                    await asyncio.wait_for(
+                        streaming_done.wait(),
+                        timeout=PLANNER_KEEPALIVE_INTERVAL
+                    )
+                    # If we get here, streaming completed - stop sending keepalives
+                    break
+                except asyncio.TimeoutError:
+                    # Timeout means we should send a keepalive
+                    keepalive_count += 1
+                    logger.info(f"[Planner] Sending keepalive #{keepalive_count} (waiting for Claude, chunks: {chunk_count})")
+                    await event_queue.put(("keepalive", keepalive_count))
+
+        # Start background tasks
+        stream_task = asyncio.create_task(stream_claude_chunks())
+        keepalive_task = asyncio.create_task(send_keepalives())
+
+        try:
+            streaming_complete = False
+            while not streaming_complete:
+                try:
+                    # Get next event from queue with timeout
+                    event_type, event_data = await asyncio.wait_for(
+                        event_queue.get(),
+                        timeout=PLANNER_KEEPALIVE_INTERVAL * 3  # Longer timeout as backup
+                    )
+
+                    if event_type == "keepalive":
+                        yield OrchestratorEvent(
+                            type=EventType.STATUS,
+                            data={
+                                "message": f"Planning project structure... (analyzing)",
+                                "keepalive": True,
+                                "keepalive_count": event_data,
+                                "chunks_received": chunk_count
+                            }
                         )
-                        logger.info(f"[Planner] Token usage tracked: {input_tokens}+{output_tokens}={input_tokens+output_tokens} ({model_used})")
-                    continue  # Don't process marker as content
+                        continue
 
-                # Feed chunk to Bolt XML parser (incremental parsing with lxml)
-                xml_parser.feed(chunk)
+                    if event_type == "done":
+                        streaming_complete = True
+                        logger.info(f"[Planner] Streaming complete, received {chunk_count} chunks")
+                        continue
 
-                # Check if <plan> tag has closed (DOM built automatically by lxml)
-                if plan_dom is None and xml_parser.has_complete_tag('plan'):
-                    plan_dom = xml_parser.get_element('plan')  # lxml Element
-                    plan_xml = xml_parser.get_text()
+                    if event_type == "error":
+                        logger.error(f"[Planner] Stream error: {event_data}")
+                        raise Exception(f"Claude streaming failed: {event_data}")
 
-                    logger.info("[Bolt XML Parser] [OK] <plan> tag closed - DOM built with lxml")
+                    # Process chunk
+                    chunk = event_data
 
-                    # Validate DOM against schema
-                    if plan_dom is not None:
-                        # Convert lxml Element to string for validation
-                        plan_xml_str = etree.tostring(plan_dom, encoding='unicode')
-                        validation = PlanXMLSchema.validate(plan_xml_str)
+                    # Check for token usage marker at end of stream
+                    if chunk.startswith("__TOKEN_USAGE__:"):
+                        parts = chunk.split(":")
+                        if len(parts) >= 4:
+                            input_tokens = int(parts[1])
+                            output_tokens = int(parts[2])
+                            model_used = parts[3]
+                            context.track_tokens(
+                                input_tokens, output_tokens, model_used,
+                                agent_type="planner",
+                                operation="plan_project"
+                            )
+                            logger.info(f"[Planner] Token usage tracked: {input_tokens}+{output_tokens}={input_tokens+output_tokens} ({model_used})")
+                        continue  # Don't process marker as content
 
-                        if validation['valid']:
-                            logger.info("[Schema] [OK] Plan DOM passed schema validation")
-                        else:
-                            logger.error(f"[Schema] [FAIL] Plan DOM failed validation: {validation['errors']}")
+                    # Feed chunk to Bolt XML parser (incremental parsing with lxml)
+                    xml_parser.feed(chunk)
 
-                        # Log warnings
-                        for warning in validation.get('warnings', []):
-                            logger.warning(f"[Schema] {warning}")
+                    # Check if <plan> tag has closed (DOM built automatically by lxml)
+                    if plan_dom is None and xml_parser.has_complete_tag('plan'):
+                        plan_dom = xml_parser.get_element('plan')  # lxml Element
+                        plan_xml = xml_parser.get_text()
 
-                        # Parse lxml DOM to extract data
-                        parsed_data = self._parse_xml_from_lxml_dom(plan_dom)
+                        logger.info("[Bolt XML Parser] [OK] <plan> tag closed - DOM built with lxml")
 
-            except asyncio.TimeoutError:
-                # Send keepalive to prevent connection timeout
-                keepalive_count += 1
-                logger.info(f"[Planner] Sending keepalive #{keepalive_count} (waiting for Claude, chunks: {chunk_count})")
-                yield OrchestratorEvent(
-                    type=EventType.STATUS,
-                    data={
-                        "message": f"Planning project structure... (analyzing)",
-                        "keepalive": True,
-                        "keepalive_count": keepalive_count,
-                        "chunks_received": chunk_count
-                    }
-                )
-                # Continue waiting for more chunks
-                continue
+                        # Validate DOM against schema
+                        if plan_dom is not None:
+                            # Convert lxml Element to string for validation
+                            plan_xml_str = etree.tostring(plan_dom, encoding='unicode')
+                            validation = PlanXMLSchema.validate(plan_xml_str)
 
-            except StopAsyncIteration:
-                # Stream completed
-                streaming_complete = True
-                logger.info(f"[Planner] Streaming complete, received {chunk_count} chunks")
+                            if validation['valid']:
+                                logger.info("[Schema] [OK] Plan DOM passed schema validation")
+                            else:
+                                logger.error(f"[Schema] [FAIL] Plan DOM failed validation: {validation['errors']}")
+
+                            # Log warnings
+                            for warning in validation.get('warnings', []):
+                                logger.warning(f"[Schema] {warning}")
+
+                            # Parse lxml DOM to extract data
+                            parsed_data = self._parse_xml_from_lxml_dom(plan_dom)
+
+                except asyncio.TimeoutError:
+                    # Backup timeout - queue get timed out
+                    keepalive_count += 1
+                    logger.warning(f"[Planner] Queue timeout, sending backup keepalive #{keepalive_count}")
+                    yield OrchestratorEvent(
+                        type=EventType.STATUS,
+                        data={
+                            "message": f"Planning project structure... (waiting for AI)",
+                            "keepalive": True,
+                            "keepalive_count": keepalive_count,
+                            "chunks_received": chunk_count
+                        }
+                    )
+
+        finally:
+            # Cleanup: cancel keepalive task and wait for stream task
+            keepalive_task.cancel()
+            try:
+                await keepalive_task
+            except asyncio.CancelledError:
+                pass
+            # Don't cancel stream_task - let it complete naturally or error out
 
         # If DOM wasn't built during streaming, try full buffer
         if plan_dom is None:
