@@ -1212,14 +1212,143 @@ class DynamicOrchestrator:
             return await self._temp_storage.write_file_async(session_id, file_path, content)
         return False
 
+    async def update_file_generation_status(
+        self,
+        project_id: str,
+        file_path: str,
+        status: str,
+        s3_key: str = None,
+        content_hash: str = None,
+        size_bytes: int = 0,
+        error_message: str = None,
+        max_retries: int = 3
+    ) -> bool:
+        """
+        Update the generation status of a file in the database with retry logic.
+
+        Args:
+            project_id: Project UUID
+            file_path: File path
+            status: Status string (PLANNED, GENERATING, COMPLETED, FAILED, SKIPPED)
+            s3_key: S3 key if file was uploaded
+            content_hash: Content hash if file was saved
+            size_bytes: File size in bytes
+            error_message: Error message if status is FAILED
+            max_retries: Maximum retry attempts for transient failures
+
+        Returns:
+            True if status was updated successfully
+        """
+        import asyncio
+
+        # Validate inputs
+        if not project_id or not file_path:
+            logger.error(f"[FileStatus] Invalid input: project_id={project_id}, file_path={file_path}")
+            return False
+
+        # Validate and normalize status
+        valid_statuses = ['planned', 'generating', 'completed', 'failed', 'skipped']
+        status_lower = status.lower() if status else 'failed'
+        if status_lower not in valid_statuses:
+            logger.warning(f"[FileStatus] Invalid status '{status}', defaulting to 'failed'")
+            status_lower = 'failed'
+
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                from app.core.database import AsyncSessionLocal
+                from app.models.project_file import ProjectFile, FileGenerationStatus
+                from sqlalchemy import select
+                from sqlalchemy.exc import IntegrityError, OperationalError
+
+                # Map string to enum
+                status_enum = FileGenerationStatus(status_lower)
+
+                async with AsyncSessionLocal() as session:
+                    try:
+                        # Find the file record
+                        result = await session.execute(
+                            select(ProjectFile)
+                            .where(ProjectFile.project_id == project_id)
+                            .where(ProjectFile.path == file_path)
+                        )
+                        file_record = result.scalar_one_or_none()
+
+                        if file_record:
+                            # Update existing record
+                            file_record.generation_status = status_enum
+                            if s3_key:
+                                file_record.s3_key = s3_key
+                            if content_hash:
+                                file_record.content_hash = content_hash
+                            if size_bytes:
+                                file_record.size_bytes = size_bytes
+
+                            await session.commit()
+                            logger.debug(f"[FileStatus] ✓ Updated {file_path} to {status}")
+                            return True
+                        else:
+                            # Create new record if not found (edge case: file not in plan)
+                            logger.info(f"[FileStatus] File record not found for {file_path}, creating new")
+                            new_file = ProjectFile(
+                                project_id=project_id,
+                                path=file_path,
+                                name=file_path.split('/')[-1] if '/' in file_path else file_path,
+                                generation_status=status_enum,
+                                s3_key=s3_key,
+                                content_hash=content_hash,
+                                size_bytes=size_bytes or 0,
+                                is_folder=False
+                            )
+                            session.add(new_file)
+                            await session.commit()
+                            logger.debug(f"[FileStatus] ✓ Created and set {file_path} to {status}")
+                            return True
+
+                    except IntegrityError as ie:
+                        await session.rollback()
+                        logger.warning(f"[FileStatus] IntegrityError for {file_path}, may already exist: {ie}")
+                        # Try to update existing on integrity error (race condition)
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(0.5)
+                            continue
+                        return False
+
+                    except OperationalError as oe:
+                        await session.rollback()
+                        last_error = oe
+                        if attempt < max_retries - 1:
+                            delay = 0.5 * (2 ** attempt)
+                            logger.warning(f"[FileStatus] DB operational error, retrying in {delay}s: {oe}")
+                            await asyncio.sleep(delay)
+                            continue
+                        logger.error(f"[FileStatus] ✗ DB operational error after {max_retries} attempts: {oe}")
+                        return False
+
+            except ValueError as ve:
+                logger.error(f"[FileStatus] Invalid status enum value '{status}': {ve}")
+                return False
+
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    delay = 0.5 * (2 ** attempt)
+                    logger.warning(f"[FileStatus] Attempt {attempt + 1}/{max_retries} failed for {file_path}: {e}. Retrying in {delay}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"[FileStatus] ✗ Failed to update status for {file_path} after {max_retries} attempts: {e}")
+
+        return False
+
     async def save_file(self, project_id: str, file_path: str, content: str, session_id: str = None, user_id: str = None) -> bool:
         """
-        Save file - routes to all configured storage layers.
+        Save file - routes to all configured storage layers with retry logic.
 
         4-Layer Storage:
-        - Layer 1: Sandbox (C:/tmp/sandbox/workspace/{user_id}/{project_id}/) - for runtime/preview
+        - Layer 1: Sandbox (EC2: /tmp/sandbox/workspace/{user_id}/{project_id}/) - for runtime/preview
         - Layer 2: Permanent storage (USER_PROJECTS_PATH) or temp session
-        - Layer 3: Database (PostgreSQL) - for project recovery after sandbox cleanup
+        - Layer 3: Database (PostgreSQL) + S3 - for project recovery after sandbox cleanup
         - Layer 4: Checkpoint tracking for resume capability
 
         Args:
@@ -1230,56 +1359,96 @@ class DynamicOrchestrator:
             user_id: User identifier for user-scoped storage (like Bolt.new)
 
         Returns:
-            True if saved successfully
+            True if saved successfully to all critical layers
         """
-        success = False
+        import asyncio
+
+        layer1_success = False
+        layer2_success = False
+        layer3_success = False
 
         # LAYER 1: Always write to sandbox for runtime/preview
         # Path: /workspace/{user_id}/{project_id}/ (like Bolt.new)
-        try:
-            await self._unified_storage.write_to_sandbox(project_id, file_path, content, user_id)
-            logger.debug(f"[Layer1-Sandbox] Saved: {user_id or 'anon'}/{project_id}/{file_path}")
-        except Exception as e:
-            logger.warning(f"[Layer1-Sandbox] Failed to save {file_path}: {e}")
+        # This is CRITICAL for immediate preview functionality
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                layer1_success = await self._unified_storage.write_to_sandbox(project_id, file_path, content, user_id)
+                if layer1_success:
+                    logger.info(f"[Layer1-Sandbox] ✓ Saved: {user_id or 'anon'}/{project_id}/{file_path}")
+                    break
+                else:
+                    logger.warning(f"[Layer1-Sandbox] Attempt {attempt + 1}/{max_retries} returned False for {file_path}")
+            except Exception as e:
+                logger.warning(f"[Layer1-Sandbox] Attempt {attempt + 1}/{max_retries} failed for {file_path}: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(0.5 * (attempt + 1))  # Exponential backoff
+
+        if not layer1_success:
+            logger.error(f"[Layer1-Sandbox] ✗ FAILED after {max_retries} attempts: {file_path}")
 
         # LAYER 2: Write to permanent storage or temp session
-        if self.use_temp_storage and session_id and self._temp_storage:
-            # Ephemeral mode - write to temp session
-            success = await self._temp_storage.write_file_async(session_id, file_path, content)
-        else:
-            # Permanent mode - write to file_manager (USER_PROJECTS_PATH)
-            await self.file_manager.create_file(project_id, file_path, content, user_id=user_id)
-            success = True
-
-        # LAYER 3: Save to database for project recovery (NEW!)
-        # This enables users to recover projects after sandbox cleanup
         try:
-            logger.info(f"[Layer3-Database] Saving file: project_id={project_id}, path={file_path}, size={len(content)} bytes")
-            db_saved = await self._unified_storage.save_to_database(project_id, file_path, content)
-            if db_saved:
-                logger.info(f"[Layer3-Database] SUCCESS: {project_id}/{file_path}")
+            if self.use_temp_storage and session_id and self._temp_storage:
+                # Ephemeral mode - write to temp session
+                layer2_success = await self._temp_storage.write_file_async(session_id, file_path, content)
             else:
-                logger.error(f"[Layer3-Database] FAILED (returned False): {project_id}/{file_path}")
-        except Exception as db_err:
-            logger.error(f"[Layer3-Database] EXCEPTION saving {file_path}: {db_err}", exc_info=True)
+                # Permanent mode - write to file_manager (USER_PROJECTS_PATH)
+                result = await self.file_manager.create_file(project_id, file_path, content, user_id=user_id)
+                layer2_success = result.get('success', False) if isinstance(result, dict) else True
+
+            if layer2_success:
+                logger.debug(f"[Layer2-Storage] ✓ Saved: {project_id}/{file_path}")
+        except Exception as e:
+            logger.warning(f"[Layer2-Storage] ✗ Failed to save {file_path}: {e}")
+
+        # LAYER 3: Save to database + S3 for project recovery
+        # This is CRITICAL for project switching and restoration
+        # Retry with exponential backoff
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"[Layer3-DB+S3] Attempt {attempt + 1}/{max_retries}: project_id={project_id}, path={file_path}, size={len(content)} bytes")
+                layer3_success = await self._unified_storage.save_to_database(project_id, file_path, content)
+
+                if layer3_success:
+                    logger.info(f"[Layer3-DB+S3] ✓ SUCCESS: {project_id}/{file_path}")
+                    break
+                else:
+                    logger.warning(f"[Layer3-DB+S3] Attempt {attempt + 1}/{max_retries} returned False for {file_path}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(1.0 * (attempt + 1))  # Longer backoff for DB/S3
+            except Exception as db_err:
+                logger.error(f"[Layer3-DB+S3] Attempt {attempt + 1}/{max_retries} exception for {file_path}: {db_err}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1.0 * (attempt + 1))
+
+        if not layer3_success:
+            logger.error(f"[Layer3-DB+S3] ✗ FAILED after {max_retries} attempts: {file_path} - PROJECT RESTORE WILL FAIL!")
 
         # LAYER 4: Track file in checkpoint for resume capability
-        if success:
-            try:
-                file_type = "config" if file_path.endswith(('.json', '.yml', '.yaml', '.env')) else \
-                           "backend" if '/backend/' in file_path or file_path.endswith('.py') else \
-                           "frontend" if '/frontend/' in file_path or file_path.endswith(('.tsx', '.jsx', '.ts', '.js')) else \
-                           "other"
-                await checkpoint_service.add_generated_file(
-                    project_id=project_id,
-                    file_path=file_path,
-                    file_type=file_type,
-                    size_bytes=len(content.encode('utf-8'))
-                )
-            except Exception as cp_err:
-                logger.debug(f"[Layer4-Checkpoint] Failed to track file {file_path}: {cp_err}")
+        try:
+            file_type = "config" if file_path.endswith(('.json', '.yml', '.yaml', '.env')) else \
+                       "backend" if '/backend/' in file_path or file_path.endswith('.py') else \
+                       "frontend" if '/frontend/' in file_path or file_path.endswith(('.tsx', '.jsx', '.ts', '.js')) else \
+                       "other"
+            await checkpoint_service.add_generated_file(
+                project_id=project_id,
+                file_path=file_path,
+                file_type=file_type,
+                size_bytes=len(content.encode('utf-8'))
+            )
+            logger.debug(f"[Layer4-Checkpoint] ✓ Tracked: {file_path}")
+        except Exception as cp_err:
+            logger.debug(f"[Layer4-Checkpoint] Failed to track file {file_path}: {cp_err}")
 
-        return success
+        # Log overall status
+        overall_success = layer1_success and layer3_success  # Layer 1 & 3 are critical
+        if overall_success:
+            logger.info(f"[SaveFile] ✓ Complete: {file_path} (L1={layer1_success}, L2={layer2_success}, L3={layer3_success})")
+        else:
+            logger.error(f"[SaveFile] ✗ Incomplete: {file_path} (L1={layer1_success}, L2={layer2_success}, L3={layer3_success})")
+
+        return overall_success
 
     def get_session_files(self, session_id: str) -> list:
         """Get list of files in a temp session"""
@@ -2005,6 +2174,24 @@ class DynamicOrchestrator:
         self._current_memory_agent = memory_agent
 
         # ============================================================
+        # RESUME FLOW: Load saved plan from database if resuming
+        # This allows writer to continue with original plan and file descriptions
+        # ============================================================
+        if metadata and metadata.get("is_resume"):
+            saved_plan = metadata.get("saved_plan")
+            if saved_plan:
+                context.plan = saved_plan
+                context.project_name = metadata.get("project_name", "")
+                context.project_description = metadata.get("project_description", "")
+                logger.info(f"[Resume] Loaded saved plan with {len(saved_plan.get('files', []))} files")
+
+                # Also load existing files into context for reference
+                existing_files = metadata.get("existing_files", [])
+                if existing_files:
+                    context.files_created = [{"path": f} for f in existing_files]
+                    logger.info(f"[Resume] Pre-loaded {len(existing_files)} completed files into context")
+
+        # ============================================================
         # AUTO-FIX FLOW: Handle FIX intent with auto-collected context
         # This is triggered when user reports a problem in simple terms
         # (e.g., "page is blank", "it's not working", "fix this error")
@@ -2207,6 +2394,9 @@ class DynamicOrchestrator:
 
                 # Execute step with retries
                 step_result = None
+                step_timeout = step.timeout or 120  # Default 120 seconds
+                step_success = False
+
                 for attempt in range(step.retry_count):
                     try:
                         yield OrchestratorEvent(
@@ -2215,24 +2405,43 @@ class DynamicOrchestrator:
                                 "agent": step.agent_type,
                                 "name": step.name,
                                 "description": step.description,
-                                "attempt": attempt + 1
+                                "attempt": attempt + 1,
+                                "max_attempts": step.retry_count,
+                                "timeout": step_timeout
                             },
                             agent=step.agent_type,
                             step=step_index
                         )
 
-                        # Execute agent
+                        # Execute agent with timeout tracking
+                        # Note: We can't use asyncio.wait_for directly on async generators
+                        # Instead, we track start time and check periodically
+                        step_start_time = asyncio.get_event_loop().time()
+                        event_count = 0
+                        last_event_time = step_start_time
+
                         async for event in self._execute_agent(step.agent_type, context):
                             event.step = step_index
                             event.agent = step.agent_type
                             yield event
+                            event_count += 1
+                            last_event_time = asyncio.get_event_loop().time()
+
+                            # Check for timeout (only if no events for a while)
+                            elapsed = last_event_time - step_start_time
+                            if elapsed > step_timeout:
+                                raise asyncio.TimeoutError(f"Step {step.name} timed out after {step_timeout}s")
+
+                        step_success = True
 
                         yield OrchestratorEvent(
                             type=EventType.AGENT_COMPLETE,
                             data={
                                 "agent": step.agent_type,
                                 "name": step.name,
-                                "success": True
+                                "success": True,
+                                "events_processed": event_count,
+                                "duration_seconds": round(asyncio.get_event_loop().time() - step_start_time, 2)
                             },
                             agent=step.agent_type,
                             step=step_index
@@ -2251,8 +2460,54 @@ class DynamicOrchestrator:
 
                         break  # Success, exit retry loop
 
+                    except asyncio.TimeoutError as te:
+                        logger.error(f"Step {step_index} attempt {attempt + 1} timed out: {te}")
+
+                        if attempt == step.retry_count - 1:
+                            # Final attempt timed out
+                            context.errors.append({
+                                "step": step_index,
+                                "agent": step.agent_type,
+                                "error": f"Timeout: {str(te)}",
+                                "timeout": True
+                            })
+                            yield OrchestratorEvent(
+                                type=EventType.ERROR,
+                                data={
+                                    "message": f"Step {step.name} timed out after {step.retry_count} attempts",
+                                    "error": str(te),
+                                    "timeout": True
+                                },
+                                agent=step.agent_type,
+                                step=step_index
+                            )
+                        else:
+                            # Retry with timeout warning
+                            yield OrchestratorEvent(
+                                type=EventType.WARNING,
+                                data={
+                                    "message": f"Step {step.name} timed out, retrying...",
+                                    "attempt": attempt + 2,
+                                    "timeout": True
+                                },
+                                step=step_index
+                            )
+                            await asyncio.sleep(min(2 ** attempt, 10))  # Exponential backoff, max 10s
+
+                    except asyncio.CancelledError:
+                        logger.warning(f"Step {step_index} was cancelled")
+                        yield OrchestratorEvent(
+                            type=EventType.WARNING,
+                            data={
+                                "message": f"Step {step.name} was cancelled",
+                                "cancelled": True
+                            },
+                            step=step_index
+                        )
+                        raise  # Re-raise to stop the workflow
+
                     except Exception as e:
-                        logger.error(f"Step {step_index} attempt {attempt + 1} failed: {e}")
+                        logger.error(f"Step {step_index} attempt {attempt + 1} failed: {e}", exc_info=True)
 
                         if attempt == step.retry_count - 1:
                             # Final attempt failed
@@ -2276,11 +2531,18 @@ class DynamicOrchestrator:
                                 type=EventType.WARNING,
                                 data={
                                     "message": f"Retrying {step.name}...",
-                                    "attempt": attempt + 2
+                                    "attempt": attempt + 2,
+                                    "error": str(e)[:100]  # Include brief error in retry message
                                 },
                                 step=step_index
                             )
-                            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                            await asyncio.sleep(min(2 ** attempt, 10))  # Exponential backoff, max 10s
+
+                # Log step completion status
+                if step_success:
+                    logger.info(f"[Workflow] Step {step_index} ({step.name}) completed successfully")
+                else:
+                    logger.warning(f"[Workflow] Step {step_index} ({step.name}) failed after {step.retry_count} attempts")
 
             # LAYER 2: Upload to S3 on completion (if configured)
             s3_zip_key = None
@@ -2310,14 +2572,20 @@ class DynamicOrchestrator:
                     ]
 
                     # Update project record
-                    # Build update values - mark as PARTIAL_COMPLETED (code done, documents pending)
-                    # Project becomes COMPLETED only after documents are generated
+                    # Check if academic documents were generated - if so, mark as COMPLETED
+                    # Otherwise mark as PARTIAL_COMPLETED (code done, documents pending/skipped)
+                    academic_docs_generated = context.metadata.get("academic_docs_generated", False) if context.metadata else False
+                    final_status = ProjectStatus.COMPLETED if academic_docs_generated else ProjectStatus.PARTIAL_COMPLETED
+                    logger.info(f"[Layer3-PostgreSQL] Setting project status to {final_status.value} (academic_docs_generated={academic_docs_generated})")
+
                     update_values = {
-                        'status': ProjectStatus.PARTIAL_COMPLETED,
+                        'status': final_status,
                         's3_path': self._unified_storage.get_s3_prefix(str(user_id), project_id) if user_id else None,
                         's3_zip_key': s3_zip_key,
                         'plan_json': context.plan if hasattr(context, 'plan') else None,
                         'file_index': file_index,
+                        # Set completed_at if project is fully completed
+                        'completed_at': datetime.now() if final_status == ProjectStatus.COMPLETED else None,
                         'progress': 100
                     }
                     
@@ -2912,6 +3180,10 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
         # CRITICAL: Update project title in database IMMEDIATELY after planner extracts it
         # This fixes the bug where dropdown shows "New App" instead of actual project name
         if project_name and context.project_id:
+            # ============================================================
+            # STEP 1: Save project metadata (title, description, plan_json)
+            # ============================================================
+            project_saved = False
             try:
                 from app.core.database import async_session
                 from app.models.project import Project
@@ -2922,15 +3194,97 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
                     if project_description:
                         update_values['description'] = project_description
 
+                    # CRITICAL: Save plan_json to database for project retrieval
+                    # This enables loading the plan when user switches back to this project
+                    if context.plan:
+                        update_values['plan_json'] = context.plan
+                        logger.info(f"[Planner] Saving plan_json to DB: {len(context.plan.get('files', []))} files, {len(context.plan.get('features', []))} features")
+
                     await db.execute(
                         update(Project)
                         .where(Project.id == context.project_id)
                         .values(**update_values)
                     )
                     await db.commit()
-                    logger.info(f"[Planner] Updated project title in DB: '{project_name}' for {context.project_id}")
+                    project_saved = True
+                    logger.info(f"[Planner] ✓ Updated project in DB: title='{project_name}', plan_json={'saved' if context.plan else 'none'}")
+
             except Exception as e:
-                logger.warning(f"[Planner] Failed to update project title in DB: {e}")
+                logger.error(f"[Planner] ✗ Failed to update project metadata in DB: {e}", exc_info=True)
+                # Continue even if metadata save fails - we can retry later
+
+            # ============================================================
+            # STEP 2: Save planned files to ProjectFile table (separate transaction)
+            # This is in a separate try block so project metadata save doesn't affect it
+            # ============================================================
+            if project_saved and context.plan and context.plan.get('files'):
+                try:
+                    from app.core.database import async_session
+                    from app.models.project_file import ProjectFile, FileGenerationStatus
+                    from sqlalchemy import select
+
+                    async with async_session() as db:
+                        planned_files = context.plan['files']
+                        files_saved = 0
+                        files_failed = 0
+
+                        for order, file_info in enumerate(planned_files, 1):
+                            try:
+                                file_path = file_info.get('path', '')
+                                if not file_path:
+                                    continue
+
+                                # Validate file path
+                                if '..' in file_path or file_path.startswith('/'):
+                                    logger.warning(f"[Planner] Skipping invalid file path: {file_path}")
+                                    continue
+
+                                file_name = file_path.split('/')[-1]
+                                if not file_name:
+                                    continue
+
+                                # Check if file already exists
+                                existing = await db.execute(
+                                    select(ProjectFile)
+                                    .where(ProjectFile.project_id == context.project_id)
+                                    .where(ProjectFile.path == file_path)
+                                )
+                                existing_file = existing.scalar_one_or_none()
+
+                                if existing_file:
+                                    # Update existing to PLANNED status
+                                    existing_file.generation_status = FileGenerationStatus.PLANNED
+                                    existing_file.generation_order = order
+                                else:
+                                    # Create new file record with PLANNED status
+                                    planned_file = ProjectFile(
+                                        project_id=context.project_id,
+                                        path=file_path,
+                                        name=file_name,
+                                        language=self._unified_storage._detect_language(file_name),
+                                        generation_status=FileGenerationStatus.PLANNED,
+                                        generation_order=order,
+                                        is_folder=False,
+                                        size_bytes=0
+                                    )
+                                    db.add(planned_file)
+                                files_saved += 1
+
+                            except Exception as file_err:
+                                files_failed += 1
+                                logger.warning(f"[Planner] Failed to save planned file {file_info.get('path', 'unknown')}: {file_err}")
+                                continue  # Continue with next file
+
+                        # Commit all file records
+                        await db.commit()
+                        logger.info(f"[Planner] ✓ Saved {files_saved} planned files to DB (failed: {files_failed})")
+
+                        # Store planned files count in context for progress tracking
+                        context.metadata['total_planned_files'] = files_saved
+
+                except Exception as e:
+                    logger.error(f"[Planner] ✗ Failed to save planned files to DB: {e}", exc_info=True)
+                    # Continue generation even if file tracking fails
 
         # NEW: Handle file-based plan format
         if use_file_mode:
@@ -3021,6 +3375,57 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
         files_to_generate = context.plan.get('files', []) if context.plan else []
         tasks = context.plan.get('tasks', []) if context.plan else []
 
+        # ============================================================
+        # RESUME HANDLING: Filter out already completed files
+        # When resuming, only generate files that haven't been completed
+        # ============================================================
+        is_resume = context.metadata.get('is_resume', False)
+        if is_resume and files_to_generate:
+            # Get list of already completed files from metadata
+            existing_file_paths = set(context.metadata.get('existing_files', []))
+            pending_file_paths = set(context.metadata.get('pending_files', []))
+
+            if existing_file_paths or pending_file_paths:
+                # Filter to only pending files (using either explicit pending list or excluding existing)
+                if pending_file_paths:
+                    # Use explicit pending list if available
+                    files_to_generate = [f for f in files_to_generate if f.get('path') in pending_file_paths]
+                else:
+                    # Otherwise exclude existing files
+                    files_to_generate = [f for f in files_to_generate if f.get('path') not in existing_file_paths]
+
+                logger.info(f"[Writer-Resume] Filtered to {len(files_to_generate)} pending files (skipping {len(existing_file_paths)} completed)")
+
+            # Also query database for files that need generation (PLANNED or FAILED status)
+            if not files_to_generate:
+                try:
+                    from app.core.database import AsyncSessionLocal
+                    from app.models.project_file import ProjectFile, FileGenerationStatus
+                    from sqlalchemy import select
+
+                    async with AsyncSessionLocal() as session:
+                        result = await session.execute(
+                            select(ProjectFile)
+                            .where(ProjectFile.project_id == context.project_id)
+                            .where(ProjectFile.generation_status.in_([
+                                FileGenerationStatus.PLANNED,
+                                FileGenerationStatus.FAILED,
+                                FileGenerationStatus.GENERATING  # Retry files that were in progress when interrupted
+                            ]))
+                            .order_by(ProjectFile.generation_order.asc())
+                        )
+                        pending_db_files = result.scalars().all()
+
+                        if pending_db_files:
+                            files_to_generate = [
+                                {"path": f.path, "description": f"Resume: {f.name}"}
+                                for f in pending_db_files
+                            ]
+                            logger.info(f"[Writer-Resume] Found {len(files_to_generate)} pending files from database")
+
+                except Exception as db_err:
+                    logger.warning(f"[Writer-Resume] Database query failed, using plan files: {db_err}")
+
         # FILE-BY-FILE MODE (NEW - like Bolt.new)
         if files_to_generate:
             logger.info(f"[Writer] ⚡ File-by-file mode: generating {len(files_to_generate)} files one at a time")
@@ -3043,6 +3448,15 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
                 if not file_path:
                     continue
 
+                # ============================================================
+                # STEP 1: Mark file as GENERATING in database (enables resume)
+                # ============================================================
+                await self.update_file_generation_status(
+                    project_id=context.project_id,
+                    file_path=file_path,
+                    status="generating"
+                )
+
                 # Emit file start event
                 yield OrchestratorEvent(
                     type=EventType.FILE_OPERATION,
@@ -3052,7 +3466,8 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
                         "operation_status": "in_progress",
                         "file_number": file_index,
                         "total_files": len(files_to_generate),
-                        "description": file_description
+                        "description": file_description,
+                        "generation_status": "generating"
                     }
                 )
 
@@ -3071,10 +3486,22 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
                     # Mark file as complete - include file_content so frontend can display it
                     # Get the content from the last created file
                     file_content_for_event = ""
+                    file_size = 0
                     for fc in reversed(context.files_created):
                         if fc.get('path') == file_path:
                             file_content_for_event = fc.get('content', '')
+                            file_size = len(file_content_for_event.encode('utf-8'))
                             break
+
+                    # ============================================================
+                    # STEP 2: Mark file as COMPLETED in database (enables resume)
+                    # ============================================================
+                    await self.update_file_generation_status(
+                        project_id=context.project_id,
+                        file_path=file_path,
+                        status="completed",
+                        size_bytes=file_size
+                    )
 
                     yield OrchestratorEvent(
                         type=EventType.FILE_OPERATION,
@@ -3084,25 +3511,94 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
                             "operation_status": "complete",
                             "file_content": file_content_for_event,
                             "file_number": file_index,
-                            "total_files": len(files_to_generate)
+                            "total_files": len(files_to_generate),
+                            "generation_status": "completed"
                         }
                     )
 
                 except Exception as e:
                     logger.error(f"[Writer] Error generating {file_path}: {e}")
+
+                    # ============================================================
+                    # STEP 3: Mark file as FAILED in database (enables retry)
+                    # ============================================================
+                    await self.update_file_generation_status(
+                        project_id=context.project_id,
+                        file_path=file_path,
+                        status="failed"
+                    )
+
                     yield OrchestratorEvent(
                         type=EventType.ERROR,
                         data={
                             "message": f"Failed to generate {file_path}",
                             "error": str(e),
-                            "file_path": file_path
+                            "file_path": file_path,
+                            "generation_status": "failed"
                         }
                     )
 
                 # Small delay between files for better UX and rate limiting
                 await asyncio.sleep(0.3)
 
-            logger.info(f"[Writer] [OK] File-by-file generation complete: {len(context.files_created)} files created")
+            # ============================================================
+            # RETRY FAILED SAVES: Try to save files that failed initially
+            # This handles transient S3/DB errors during generation
+            # ============================================================
+            failed_saves = [f for f in context.files_created if f.get('saved') == False]
+            if failed_saves:
+                logger.info(f"[Writer] Retrying {len(failed_saves)} files that failed to save...")
+
+                for retry_file in failed_saves:
+                    try:
+                        retry_path = retry_file.get('path', '')
+                        retry_content = retry_file.get('content', '')
+
+                        if retry_path and retry_content:
+                            retry_success = await self.save_file(
+                                project_id=context.project_id,
+                                file_path=retry_path,
+                                content=retry_content,
+                                session_id=context.metadata.get("session_id"),
+                                user_id=context.metadata.get("user_id")
+                            )
+
+                            if retry_success:
+                                retry_file['saved'] = True
+                                logger.info(f"[Writer] ✓ Retry successful for: {retry_path}")
+
+                                # Update file status to completed
+                                await self.update_file_generation_status(
+                                    project_id=context.project_id,
+                                    file_path=retry_path,
+                                    status="completed",
+                                    size_bytes=len(retry_content.encode('utf-8'))
+                                )
+                            else:
+                                logger.warning(f"[Writer] ✗ Retry failed for: {retry_path}")
+                                # Mark as failed so resume can pick it up
+                                await self.update_file_generation_status(
+                                    project_id=context.project_id,
+                                    file_path=retry_path,
+                                    status="failed"
+                                )
+                    except Exception as retry_err:
+                        logger.error(f"[Writer] Error during save retry: {retry_err}")
+
+                # Count final results
+                still_failed = [f for f in context.files_created if f.get('saved') == False]
+                if still_failed:
+                    logger.warning(f"[Writer] {len(still_failed)} files still failed after retry")
+                    yield OrchestratorEvent(
+                        type=EventType.WARNING,
+                        data={
+                            "message": f"{len(still_failed)} files could not be saved. You can use Resume to retry.",
+                            "failed_files": [f.get('path') for f in still_failed],
+                            "can_resume": True
+                        }
+                    )
+
+            logger.info(f"[Writer] ✓ File-by-file generation complete: {len(context.files_created)} files created")
             return
 
         # TASK-BASED MODE (Legacy - for backward compatibility)
@@ -3270,7 +3766,9 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
                 # Save file immediately (uses temp storage if enabled)
                 session_id = context.metadata.get("session_id")
                 user_id = context.metadata.get("user_id")
-                await self.save_file(
+
+                # CRITICAL: Check if save was successful
+                save_success = await self.save_file(
                     project_id=context.project_id,
                     file_path=extracted_path,
                     content=file_content,
@@ -3278,25 +3776,45 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
                     user_id=user_id
                 )
 
-                context.files_created.append({
-                    'path': extracted_path,
-                    'content': file_content
-                })
+                if save_success:
+                    context.files_created.append({
+                        'path': extracted_path,
+                        'content': file_content,
+                        'saved': True
+                    })
 
-                # Emit file content event with project_id for proper isolation
-                yield OrchestratorEvent(
-                    type=EventType.FILE_CONTENT,
-                    data={
-                        "path": extracted_path,
-                        "content": file_content,
-                        "status": "complete",
-                        "project_id": context.project_id  # For file isolation in frontend
-                    }
-                )
-                # Reset keepalive timer after yielding an event
-                last_event_time = time.time()
+                    # Emit file content event with project_id for proper isolation
+                    yield OrchestratorEvent(
+                        type=EventType.FILE_CONTENT,
+                        data={
+                            "path": extracted_path,
+                            "content": file_content,
+                            "status": "complete",
+                            "project_id": context.project_id  # For file isolation in frontend
+                        }
+                    )
+                    # Reset keepalive timer after yielding an event
+                    last_event_time = time.time()
+                    logger.info(f"[Writer] ✓ File saved: {extracted_path} ({len(file_content)} chars)")
+                else:
+                    # Save failed - still add to context but mark as not saved
+                    context.files_created.append({
+                        'path': extracted_path,
+                        'content': file_content,
+                        'saved': False
+                    })
 
-                logger.info(f"[Writer] [OK] File saved: {extracted_path} ({len(file_content)} chars)")
+                    # Emit warning but don't fail the entire generation
+                    yield OrchestratorEvent(
+                        type=EventType.WARNING,
+                        data={
+                            "message": f"File {extracted_path} generated but save failed - will retry",
+                            "path": extracted_path,
+                            "can_retry": True
+                        }
+                    )
+                    last_event_time = time.time()
+                    logger.warning(f"[Writer] ✗ File generated but save failed: {extracted_path}")
 
         # Check for incomplete file in buffer
         if streaming_buffer.has_partial_tag():
@@ -3316,24 +3834,30 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
                         if partial_content.strip():
                             cleaned_content = partial_content.strip('\n')
                             salvaged_content = f"// WARNING: This file may be incomplete\n{cleaned_content}"
-                            await self.save_file(
+
+                            # Check save result for partial file
+                            salvage_success = await self.save_file(
                                 project_id=context.project_id,
                                 file_path=partial_path,
                                 content=salvaged_content,
                                 session_id=context.metadata.get("session_id"),
                                 user_id=context.metadata.get("user_id")
                             )
+
                             context.files_created.append({
                                 'path': partial_path,
                                 'content': salvaged_content,
-                                'partial': True
+                                'partial': True,
+                                'saved': salvage_success
                             })
 
                             yield OrchestratorEvent(
                                 type=EventType.WARNING,
                                 data={
-                                    "message": f"File {partial_path} may be incomplete",
-                                    "path": partial_path
+                                    "message": f"File {partial_path} may be incomplete" + (" (save failed)" if not salvage_success else ""),
+                                    "path": partial_path,
+                                    "partial": True,
+                                    "saved": salvage_success
                                 }
                             )
                 except Exception as e:
@@ -5529,24 +6053,27 @@ Stream code in chunks for real-time display.
         import asyncio
 
         # Determine documentation type based on subscription tier AND user role
-        # Documents are ONLY generated for PRO plan students
+        # Documents are ONLY generated for PRO plan students/faculty
         user_role = context.metadata.get("user_role", "").lower() if context.metadata else ""
         subscription_tier = context.metadata.get("subscription_tier", "FREE").upper() if context.metadata else "FREE"
+        plan_type = context.metadata.get("plan_type", "free").lower() if context.metadata else "free"
 
-        # Check if user is a student with PRO plan
-        is_student = user_role == "student"
+        # Check if user is a student or faculty
+        is_student = user_role in ["student", "faculty"]
+
         # Check for PRO/Premium plan - handle various plan name formats
-        # "PRO", "PREMIUM", "Premium (Token Purchase)", etc.
+        # Check both plan_type (enum: 'pro', 'enterprise') and subscription_tier (name: 'PRO', 'Premium', etc.)
         is_pro_plan = (
-            subscription_tier in ["PRO", "PREMIUM", "ENTERPRISE"] or
+            plan_type in ["pro", "enterprise"] or
+            subscription_tier in ["PRO", "PREMIUM", "ENTERPRISE", "UNLIMITED"] or
             "PREMIUM" in subscription_tier.upper() or
             "PRO" in subscription_tier.upper()
         )
 
-        # Academic documents only for PRO plan students
+        # Academic documents only for PRO plan students/faculty
         is_academic = is_student and is_pro_plan
 
-        logger.info(f"[Documenter] Subscription check - tier={subscription_tier}, role={user_role}, is_pro={is_pro_plan}, is_student={is_student}")
+        logger.info(f"[Documenter] Subscription check - tier={subscription_tier}, plan_type={plan_type}, role={user_role}, is_pro={is_pro_plan}, is_student={is_student}")
 
         # Update context.project_type if generating academic docs
         if is_academic:
@@ -6102,6 +6629,13 @@ htmlcov
                 type=EventType.STATUS,
                 data={"message": f"Academic documentation complete ({doc_count} documents in {elapsed:.0f}s - PARALLEL mode)"}
             )
+
+            # Set flag to indicate academic documents were generated
+            # This is used to mark project as COMPLETED instead of PARTIAL_COMPLETED
+            if doc_count > 0:
+                context.metadata["academic_docs_generated"] = True
+                context.metadata["doc_count"] = doc_count
+                logger.info(f"[Documenter] Set academic_docs_generated=True, doc_count={doc_count}")
 
         except asyncio.TimeoutError:
             logger.error("[Documenter] Academic documentation generation timed out")

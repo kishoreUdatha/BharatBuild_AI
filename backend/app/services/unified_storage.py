@@ -204,10 +204,25 @@ class UnifiedStorageService:
         content: str,
         user_id: Optional[str] = None
     ) -> bool:
-        """Write a file to the sandbox workspace (EC2 sandbox if SANDBOX_DOCKER_HOST is set)"""
+        """
+        Write a file to the sandbox workspace.
+
+        - If SANDBOX_DOCKER_HOST is set: Writes to remote EC2 sandbox via Docker
+        - Otherwise: Writes to local sandbox path
+
+        Args:
+            project_id: Project UUID
+            file_path: Relative file path
+            content: File content
+            user_id: User ID for path scoping
+
+        Returns:
+            True if file was written successfully
+        """
         try:
             # Prevent path traversal
             if '..' in file_path:
+                logger.error(f"[Sandbox] Path traversal detected: {file_path}")
                 raise ValueError("Path traversal detected")
 
             # SANITIZE XML FILES: Ensure <?xml declaration is on line 1
@@ -221,6 +236,7 @@ class UnifiedStorageService:
             sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
             if sandbox_docker_host:
                 # Write to REMOTE EC2 sandbox using Docker
+                logger.debug(f"[Sandbox] Using remote EC2 sandbox: {sandbox_docker_host}")
                 return await self._write_to_remote_sandbox(project_id, file_path, content, user_id)
 
             # Local sandbox (ECS or development)
@@ -231,10 +247,11 @@ class UnifiedStorageService:
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
 
-            logger.debug(f"Wrote to sandbox: {project_id}/{file_path}")
+            logger.info(f"[Sandbox] ✓ Wrote to local sandbox: {user_id or 'anon'}/{project_id}/{file_path} ({len(content)} bytes)")
             return True
+
         except Exception as e:
-            logger.error(f"Failed to write to sandbox: {e}")
+            logger.error(f"[Sandbox] ✗ Failed to write {file_path}: {e}", exc_info=True)
             return False
 
     async def _write_to_remote_sandbox(
@@ -242,11 +259,33 @@ class UnifiedStorageService:
         project_id: str,
         file_path: str,
         content: str,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        max_retries: int = 3
     ) -> bool:
-        """Write a file to REMOTE EC2 sandbox using Docker container"""
+        """
+        Write a file to REMOTE EC2 sandbox using Docker container with retry logic.
+
+        Uses alpine container with base64 encoding to handle special characters.
+        Volume mount: /tmp/sandbox/workspace on EC2 host.
+
+        Retry behavior:
+            - Retries on Docker API errors and connection errors
+            - Exponential backoff: 1s, 2s, 4s...
+            - Max 3 retries by default
+
+        Args:
+            project_id: Project UUID
+            file_path: Relative file path
+            content: File content
+            user_id: User ID for path scoping
+            max_retries: Maximum retry attempts
+
+        Returns:
+            True if file was written successfully to EC2
+        """
         import docker
         import base64
+        import asyncio
 
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
 
@@ -259,30 +298,78 @@ class UnifiedStorageService:
         full_path = f"{workspace_path}/{file_path}"
         dir_path = "/".join(full_path.rsplit("/", 1)[:-1]) if "/" in file_path else workspace_path
 
-        try:
-            # Connect to remote Docker on EC2
-            docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+        last_exception = None
 
-            # Encode content as base64 to handle special characters
-            content_b64 = base64.b64encode(content.encode('utf-8')).decode('ascii')
+        for attempt in range(max_retries):
+            try:
+                # Connect to remote Docker on EC2
+                docker_client = docker.DockerClient(base_url=sandbox_docker_host)
 
-            # Create directory and write file using alpine container
-            write_script = f"mkdir -p {dir_path} && echo '{content_b64}' | base64 -d > {full_path}"
+                # Encode content as base64 to handle special characters safely
+                content_b64 = base64.b64encode(content.encode('utf-8')).decode('ascii')
 
-            docker_client.containers.run(
-                image="alpine:latest",
-                command=f"sh -c \"{write_script}\"",
-                volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
-                remove=True,
-                detach=False,
-            )
+                # Create directory and write file using alpine container
+                # Using printf instead of echo for better compatibility
+                write_script = f"mkdir -p {dir_path} && printf '%s' '{content_b64}' | base64 -d > {full_path}"
 
-            logger.debug(f"[RemoteWrite] Wrote to EC2 sandbox: {project_id}/{file_path}")
-            return True
+                try:
+                    docker_client.containers.run(
+                        image="alpine:latest",
+                        command=f"sh -c \"{write_script}\"",
+                        volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                        remove=True,
+                        detach=False,
+                    )
+                except docker.errors.ImageNotFound:
+                    logger.warning("[RemoteWrite] Alpine image not found, pulling...")
+                    docker_client.images.pull("alpine:latest")
+                    # Retry after pulling
+                    docker_client.containers.run(
+                        image="alpine:latest",
+                        command=f"sh -c \"{write_script}\"",
+                        volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                        remove=True,
+                        detach=False,
+                    )
 
-        except Exception as e:
-            logger.error(f"[RemoteWrite] Failed to write to EC2 sandbox: {e}")
-            return False
+                logger.info(f"[RemoteWrite] ✓ Wrote to EC2 sandbox: {user_id or 'anon'}/{project_id}/{file_path} ({len(content)} bytes)")
+                return True
+
+            except docker.errors.ContainerError as ce:
+                last_exception = ce
+                error_msg = ce.stderr.decode() if ce.stderr else str(ce)
+                if attempt < max_retries - 1:
+                    delay = 1.0 * (2 ** attempt)
+                    logger.warning(f"[RemoteWrite] Attempt {attempt + 1}/{max_retries} failed for {file_path}: {error_msg}. Retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"[RemoteWrite] ✗ All {max_retries} attempts failed for {file_path}: {error_msg}")
+
+            except docker.errors.APIError as ae:
+                last_exception = ae
+                if attempt < max_retries - 1:
+                    delay = 1.0 * (2 ** attempt)
+                    logger.warning(f"[RemoteWrite] Attempt {attempt + 1}/{max_retries} Docker API error for {file_path}: {ae}. Retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"[RemoteWrite] ✗ All {max_retries} attempts failed for {file_path}: {ae}")
+
+            except (ConnectionError, TimeoutError) as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    delay = 1.0 * (2 ** attempt)
+                    logger.warning(f"[RemoteWrite] Attempt {attempt + 1}/{max_retries} connection error for {file_path}: {e}. Retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"[RemoteWrite] ✗ All {max_retries} attempts failed for {file_path}: {e}")
+
+            except Exception as e:
+                logger.error(f"[RemoteWrite] ✗ Unexpected error for {file_path}: {e}", exc_info=True)
+                return False
+
+        # All retries exhausted
+        logger.error(f"[RemoteWrite] ✗ Failed to write to EC2 sandbox after {max_retries} attempts: {file_path}")
+        return False
 
     async def read_from_sandbox(
         self,
@@ -746,8 +833,11 @@ class UnifiedStorageService:
         Save file metadata to PostgreSQL database, content to S3 (Layer 3).
 
         This enables project recovery after sandbox cleanup.
-        - Content: Always stored in S3
+        - Content: Always stored in S3 FIRST (verified before DB commit)
         - Metadata: Stored in PostgreSQL (path, name, size, hash, s3_key)
+
+        CRITICAL: S3 upload is verified before database commit.
+        If S3 upload fails, database is NOT updated (transaction rollback).
 
         Args:
             project_id: Project UUID string
@@ -756,8 +846,11 @@ class UnifiedStorageService:
             language: Optional language override
 
         Returns:
-            True if saved successfully
+            True if BOTH S3 upload AND database save succeeded
         """
+        s3_key = None
+        s3_upload_verified = False
+
         try:
             # Import here to avoid circular imports
             from app.core.database import AsyncSessionLocal
@@ -784,70 +877,111 @@ class UnifiedStorageService:
             if not language:
                 language = self._detect_language(file_name)
 
-            # Always store content in S3, only metadata in database
-            async with AsyncSessionLocal() as session:
-                # Check if file already exists - cast to string to handle UUID/VARCHAR mismatch
-                from sqlalchemy import cast, String as SQLString
-                result = await session.execute(
-                    select(ProjectFile)
-                    .where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid)
-                    .where(ProjectFile.path == file_path)
-                )
-                existing_file = result.scalar_one_or_none()
-
-                # Always upload to S3
+            # ==================== STEP 1: UPLOAD TO S3 FIRST ====================
+            # S3 upload MUST succeed before we touch the database
+            try:
+                logger.info(f"[Layer3-S3] Uploading to S3: {project_id}/{file_path} ({size_bytes} bytes)")
                 upload_result = await storage_service.upload_file(
                     project_id,
                     file_path,
                     content_bytes
                 )
                 s3_key = upload_result.get('s3_key')
-                content_inline = None  # Never store content inline
-                is_inline = False  # Always use S3
 
-                if existing_file:
-                    # Update existing file
-                    old_s3_key = existing_file.s3_key
+                # VERIFY S3 upload succeeded
+                if not s3_key:
+                    logger.error(f"[Layer3-S3] ✗ S3 upload returned no s3_key for {file_path}")
+                    return False
 
-                    existing_file.content_inline = content_inline
-                    existing_file.s3_key = s3_key
-                    existing_file.content_hash = content_hash
-                    existing_file.size_bytes = size_bytes
-                    existing_file.is_inline = is_inline
-                    existing_file.language = language
+                # Verify the key format is correct
+                if not s3_key.startswith('projects/'):
+                    logger.error(f"[Layer3-S3] ✗ Invalid s3_key format: {s3_key}")
+                    return False
 
-                    # Delete old S3 file if storage method changed
-                    if old_s3_key and old_s3_key != s3_key:
-                        try:
-                            await storage_service.delete_file(old_s3_key)
-                        except Exception:
-                            pass  # Ignore cleanup errors
-                else:
-                    # Create new file record
-                    new_file = ProjectFile(
-                        project_id=project_uuid,
-                        path=file_path,
-                        name=file_name,
-                        language=language,
-                        s3_key=s3_key,
-                        content_hash=content_hash,
-                        size_bytes=size_bytes,
-                        content_inline=content_inline,
-                        is_inline=is_inline,
-                        is_folder=False,
-                        parent_path=parent_path
+                s3_upload_verified = True
+                logger.info(f"[Layer3-S3] ✓ Uploaded: {s3_key}")
+
+            except Exception as s3_err:
+                logger.error(f"[Layer3-S3] ✗ S3 upload FAILED for {file_path}: {s3_err}", exc_info=True)
+                return False
+
+            # ==================== STEP 2: SAVE METADATA TO DATABASE ====================
+            # Only proceed if S3 upload was verified
+            if not s3_upload_verified:
+                logger.error(f"[Layer3-DB] Skipping database save - S3 upload not verified for {file_path}")
+                return False
+
+            async with AsyncSessionLocal() as session:
+                try:
+                    # Check if file already exists - cast to string to handle UUID/VARCHAR mismatch
+                    from sqlalchemy import cast, String as SQLString
+                    result = await session.execute(
+                        select(ProjectFile)
+                        .where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid)
+                        .where(ProjectFile.path == file_path)
                     )
-                    session.add(new_file)
+                    existing_file = result.scalar_one_or_none()
 
-                    # Create parent folders if needed
-                    await self._ensure_parent_folders_db(session, project_uuid, file_path)
+                    content_inline = None  # Never store content inline
+                    is_inline = False  # Always use S3
 
-                await session.commit()
-                logger.debug(f"[Layer3-DB] Saved: {project_id}/{file_path} (S3, {size_bytes}b)")
-                return True
+                    if existing_file:
+                        # Update existing file
+                        old_s3_key = existing_file.s3_key
+
+                        existing_file.content_inline = content_inline
+                        existing_file.s3_key = s3_key
+                        existing_file.content_hash = content_hash
+                        existing_file.size_bytes = size_bytes
+                        existing_file.is_inline = is_inline
+                        existing_file.language = language
+
+                        logger.debug(f"[Layer3-DB] Updating existing file record: {file_path}")
+
+                        # Delete old S3 file if storage method changed
+                        if old_s3_key and old_s3_key != s3_key:
+                            try:
+                                await storage_service.delete_file(old_s3_key)
+                                logger.debug(f"[Layer3-S3] Deleted old S3 file: {old_s3_key}")
+                            except Exception:
+                                pass  # Ignore cleanup errors
+                    else:
+                        # Create new file record
+                        new_file = ProjectFile(
+                            project_id=project_uuid,
+                            path=file_path,
+                            name=file_name,
+                            language=language,
+                            s3_key=s3_key,
+                            content_hash=content_hash,
+                            size_bytes=size_bytes,
+                            content_inline=content_inline,
+                            is_inline=is_inline,
+                            is_folder=False,
+                            parent_path=parent_path
+                        )
+                        session.add(new_file)
+                        logger.debug(f"[Layer3-DB] Creating new file record: {file_path}")
+
+                        # Create parent folders if needed
+                        await self._ensure_parent_folders_db(session, project_uuid, file_path)
+
+                    # Commit transaction
+                    await session.commit()
+                    logger.info(f"[Layer3-DB] ✓ Saved metadata: {project_id}/{file_path} (s3_key={s3_key[:50]}...)")
+                    return True
+
+                except Exception as db_err:
+                    # Rollback on database error
+                    await session.rollback()
+                    logger.error(f"[Layer3-DB] ✗ Database error for {file_path}, rolled back: {db_err}", exc_info=True)
+
+                    # NOTE: S3 file is orphaned at this point, but that's acceptable
+                    # as orphaned files can be cleaned up later, and content is preserved
+                    return False
 
         except Exception as e:
-            logger.error(f"[Layer3-DB] Failed to save {file_path}: {e}", exc_info=True)
+            logger.error(f"[Layer3-DB] ✗ Unexpected error saving {file_path}: {e}", exc_info=True)
             return False
 
     async def _ensure_parent_folders_db(self, session, project_uuid: str, file_path: str):
@@ -1015,12 +1149,18 @@ class UnifiedStorageService:
         from sqlalchemy import select, cast, String as SQLString
 
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
-        s3_bucket = os.environ.get("AWS_S3_BUCKET", "bharatbuild-storage-930030325663")
-        aws_region = os.environ.get("AWS_REGION", "ap-south-1")
+        # CRITICAL: Use the SAME bucket as storage_service to ensure consistency
+        # storage_service uses settings.effective_bucket_name for uploads
+        s3_bucket = settings.effective_bucket_name
+        aws_region = settings.AWS_REGION or "ap-south-1"
+
+        logger.info(f"[RemoteRestore] Using S3 bucket: {s3_bucket}, region: {aws_region}")
         workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}" if user_id else f"/tmp/sandbox/workspace/{project_id}"
 
         try:
             project_uuid = str(UUID(project_id))
+            logger.info(f"[RemoteRestore] Querying database for project: {project_uuid}")
+
             async with AsyncSessionLocal() as session:
                 result = await session.execute(
                     select(ProjectFile).where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid).where(ProjectFile.is_folder == False)
@@ -1028,30 +1168,66 @@ class UnifiedStorageService:
                 file_records = result.scalars().all()
 
             if not file_records:
+                logger.warning(f"[RemoteRestore] No files found in database for project {project_id}")
+                return []
+
+            # Count files with s3_key
+            files_with_s3 = [f for f in file_records if f.s3_key]
+            logger.info(f"[RemoteRestore] Found {len(file_records)} files in DB, {len(files_with_s3)} have S3 keys")
+
+            if not files_with_s3:
+                logger.error(f"[RemoteRestore] No files have S3 keys! Files were not uploaded to S3.")
                 return []
 
             docker_client = docker.DockerClient(base_url=sandbox_docker_host)
             restore_commands = [f"mkdir -p {workspace_path}"]
-            for f in file_records:
-                if f.s3_key:
-                    fp = f"{workspace_path}/{f.path}"
-                    dp = "/".join(fp.rsplit("/", 1)[:-1]) if "/" in f.path else workspace_path
-                    restore_commands.extend([f"mkdir -p {dp}", f"aws s3 cp s3://{s3_bucket}/{f.s3_key} {fp}"])
+            for f in files_with_s3:
+                fp = f"{workspace_path}/{f.path}"
+                dp = "/".join(fp.rsplit("/", 1)[:-1]) if "/" in f.path else workspace_path
+                restore_commands.extend([f"mkdir -p {dp}", f"aws s3 cp s3://{s3_bucket}/{f.s3_key} {fp}"])
 
-            logger.info(f"[RemoteRestore] Restoring {len(file_records)} files to {workspace_path}")
+            logger.info(f"[RemoteRestore] Restoring {len(files_with_s3)} files to {workspace_path}")
+            logger.debug(f"[RemoteRestore] Sample S3 keys: {[f.s3_key for f in files_with_s3[:3]]}")
+
             # amazon/aws-cli image has entrypoint set to 'aws', so we override it
             # When entrypoint="/bin/sh", command should be ["-c", script] not ["/bin/sh", "-c", script]
             restore_script = ' && '.join(restore_commands)
-            docker_client.containers.run(
-                "amazon/aws-cli:latest",
-                ["-c", restore_script],  # Just the args for /bin/sh
-                entrypoint="/bin/sh",    # Override entrypoint to use shell
-                volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
-                environment={"AWS_REGION": aws_region}, remove=True, detach=False, network_mode="host"
-            )
-            return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in file_records if f.s3_key]
+
+            try:
+                output = docker_client.containers.run(
+                    "amazon/aws-cli:latest",
+                    ["-c", restore_script],  # Just the args for /bin/sh
+                    entrypoint="/bin/sh",    # Override entrypoint to use shell
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    environment={"AWS_REGION": aws_region},
+                    remove=True,
+                    detach=False,
+                    network_mode="host"
+                )
+                if output:
+                    logger.debug(f"[RemoteRestore] Docker output: {output.decode()[:500]}")
+            except docker.errors.ContainerError as ce:
+                logger.error(f"[RemoteRestore] Docker container error: {ce.stderr.decode() if ce.stderr else ce}")
+                return []
+            except docker.errors.ImageNotFound:
+                logger.error(f"[RemoteRestore] Docker image 'amazon/aws-cli:latest' not found. Pulling...")
+                docker_client.images.pull("amazon/aws-cli:latest")
+                # Retry after pulling
+                docker_client.containers.run(
+                    "amazon/aws-cli:latest",
+                    ["-c", restore_script],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    environment={"AWS_REGION": aws_region},
+                    remove=True,
+                    detach=False,
+                    network_mode="host"
+                )
+
+            logger.info(f"[RemoteRestore] Successfully restored {len(files_with_s3)} files to EC2 sandbox")
+            return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in files_with_s3]
         except Exception as e:
-            logger.error(f"[RemoteRestore] Failed: {e}", exc_info=True)
+            logger.error(f"[RemoteRestore] Failed to restore project {project_id}: {e}", exc_info=True)
             return []
 
 

@@ -820,4 +820,165 @@ async def sync_files_legacy(
 ):
     """Legacy: Redirect to sandbox bulk write"""
     return await write_multiple_to_sandbox(request, current_user)
-# Trigger reload
+
+
+# ==================== DIAGNOSTIC ENDPOINTS ====================
+
+@router.get("/debug/{project_id}")
+async def debug_project_files(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Debug endpoint to check what files exist in database for a project.
+
+    Returns:
+    - project_files: List of files in project_files table with s3_keys
+    - sandbox_exists: Whether sandbox exists locally
+    - project_record: Project metadata from projects table
+    - all_projects: List of all user's projects (to check if project_id matches)
+    """
+    from app.core.database import AsyncSessionLocal
+    from uuid import UUID
+    from sqlalchemy import cast, String as SQLString
+
+    try:
+        user_id = str(current_user.id)
+
+        # Check ProjectFile table - try multiple query formats
+        file_records = []
+        files_with_s3 = 0
+        files_without_s3 = 0
+
+        try:
+            async with AsyncSessionLocal() as session:
+                # Try exact match first
+                logger.info(f"[Debug] Querying ProjectFile with project_id='{project_id}'")
+                result = await session.execute(
+                    select(ProjectFile).where(cast(ProjectFile.project_id, SQLString(36)) == str(project_id))
+                )
+                db_files = result.scalars().all()
+                logger.info(f"[Debug] Found {len(db_files)} files with exact match")
+
+                # If no files found, check if there are ANY files in the table
+                if len(db_files) == 0:
+                    total_result = await session.execute(select(func.count(ProjectFile.id)))
+                    total_files = total_result.scalar()
+                    logger.warning(f"[Debug] No files for {project_id}, but {total_files} total files in ProjectFile table")
+
+                    # Get sample project_ids to compare
+                    sample_result = await session.execute(
+                        select(ProjectFile.project_id).distinct().limit(10)
+                    )
+                    sample_ids = [str(r) for r in sample_result.scalars().all()]
+                    logger.warning(f"[Debug] Sample project_ids in ProjectFile: {sample_ids}")
+
+                for f in db_files:
+                    has_s3 = bool(f.s3_key)
+                    if has_s3:
+                        files_with_s3 += 1
+                    else:
+                        files_without_s3 += 1
+
+                    file_records.append({
+                        "id": str(f.id),
+                        "path": f.path,
+                        "name": f.name,
+                        "is_folder": f.is_folder,
+                        "s3_key": f.s3_key[:50] + "..." if f.s3_key and len(f.s3_key) > 50 else f.s3_key,
+                        "has_s3_key": has_s3,
+                        "size_bytes": f.size_bytes,
+                        "created_at": f.created_at.isoformat() if f.created_at else None
+                    })
+        except Exception as e:
+            logger.error(f"[Debug] Error querying ProjectFile: {e}")
+            file_records = [{"error": str(e)}]
+
+        # Check Project record
+        project_record = None
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(Project).where(cast(Project.id, SQLString(36)) == str(project_id))
+                )
+                project = result.scalar_one_or_none()
+                if project:
+                    project_record = {
+                        "id": str(project.id),
+                        "title": project.title,
+                        "status": project.status.value if project.status else None,
+                        "s3_path": project.s3_path,
+                        "has_file_index": bool(project.file_index),
+                        "file_index_count": len(project.file_index) if project.file_index else 0,
+                        "user_id": str(project.user_id),
+                        "created_at": project.created_at.isoformat() if project.created_at else None
+                    }
+                else:
+                    logger.warning(f"[Debug] Project {project_id} not found in projects table")
+        except Exception as e:
+            logger.error(f"[Debug] Error querying Project: {e}")
+            project_record = {"error": str(e)}
+
+        # Get ALL projects for this user (to help identify correct project_id)
+        all_user_projects = []
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(Project).where(cast(Project.user_id, SQLString(36)) == user_id).order_by(Project.created_at.desc()).limit(10)
+                )
+                projects = result.scalars().all()
+                for p in projects:
+                    # Count files for this project
+                    file_count_result = await session.execute(
+                        select(func.count(ProjectFile.id)).where(cast(ProjectFile.project_id, SQLString(36)) == str(p.id))
+                    )
+                    file_count = file_count_result.scalar() or 0
+
+                    all_user_projects.append({
+                        "id": str(p.id),
+                        "title": p.title,
+                        "status": p.status.value if p.status else None,
+                        "file_count": file_count,
+                        "created_at": p.created_at.isoformat() if p.created_at else None
+                    })
+        except Exception as e:
+            logger.error(f"[Debug] Error getting user projects: {e}")
+
+        # Check sandbox existence
+        sandbox_exists = await unified_storage.sandbox_exists(project_id, user_id)
+        sandbox_files = []
+        if sandbox_exists:
+            try:
+                files = await unified_storage.list_sandbox_files(project_id, user_id)
+                sandbox_files = [f.path for f in unified_storage._flatten_tree(files) if f.type == 'file']
+            except Exception as e:
+                sandbox_files = [f"Error: {e}"]
+
+        return {
+            "project_id": project_id,
+            "user_id": user_id,
+            "summary": {
+                "total_db_files": len(file_records),
+                "files_with_s3_key": files_with_s3,
+                "files_without_s3_key": files_without_s3,
+                "sandbox_exists": sandbox_exists,
+                "sandbox_file_count": len(sandbox_files),
+                "project_exists_in_db": project_record is not None
+            },
+            "project_record": project_record,
+            "project_files": file_records[:20],  # Limit to first 20
+            "sandbox_files": sandbox_files[:20],  # Limit to first 20
+            "all_user_projects": all_user_projects,  # Shows all user's projects with file counts
+            "storage_config": {
+                "bucket_name": storage_service._bucket_name,
+                "use_minio": settings.USE_MINIO
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"[Debug] Error: {e}", exc_info=True)
+        return {
+            "error": str(e),
+            "project_id": project_id
+        }

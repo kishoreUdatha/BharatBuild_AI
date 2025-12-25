@@ -22,7 +22,7 @@ import io
 from app.core.database import get_db
 from app.core.logging_config import logger
 from app.models.user import User
-from app.models.project import Project
+from app.models.project import Project, ProjectStatus
 from app.modules.auth.dependencies import get_current_user, get_optional_user
 from app.modules.auth.feature_flags import require_feature
 from app.modules.orchestrator.dynamic_orchestrator import dynamic_orchestrator, ExecutionContext, OrchestratorEvent
@@ -180,14 +180,25 @@ async def run_project(
     """
     Run/execute a generated project in Docker container
 
-    This endpoint:
-    1. Creates project directory if needed
-    2. Auto-generates Dockerfile if missing
-    3. Builds Docker image
-    4. Runs container with port mapping
-    5. Detects running port from logs
-    6. Returns preview URL for iframe embedding
+    This endpoint streams progress for:
+    1. Checking project status
+    2. Creating/preparing container
+    3. Restoring project files (if needed)
+    4. Installing dependencies
+    5. Starting dev server
+    6. Returns preview URL when ready
+
+    If project has no generated files, returns error without running commands.
     """
+    # Validate project_id format (UUID)
+    import re
+    uuid_pattern = re.compile(r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$', re.IGNORECASE)
+    if not uuid_pattern.match(project_id):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_project_id", "message": "Invalid project ID format"}
+        )
+
     # Verify project ownership (skip if no auth in dev mode)
     if current_user and not await verify_project_ownership(project_id, current_user, db):
         raise HTTPException(
@@ -195,82 +206,60 @@ async def run_project(
             detail="Project not found"
         )
 
+    # Get user_id for the streaming function
+    user_id = str(current_user.id) if current_user else None
+
     try:
-        # Touch the project to keep it alive during execution
-        touch_project(project_id)
+        # Check if project has been generated (has files in database)
+        from app.models.project_file import ProjectFile
+        files_result = await db.execute(
+            select(ProjectFile).where(ProjectFile.project_id == project_id).limit(1)
+        )
+        has_files = files_result.scalar_one_or_none() is not None
+    except Exception as db_err:
+        logger.error(f"[Execution] Database error checking files: {db_err}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "database_error", "message": "Failed to check project files"}
+        )
 
-        # Get project path - uses async version that handles EC2 sandbox
-        user_id = str(current_user.id) if current_user else None
-        sandbox_docker_host = _os.environ.get("SANDBOX_DOCKER_HOST")
+    if not has_files:
+        try:
+            # Check if project exists
+            project_result = await db.execute(
+                select(Project).where(Project.id == project_id)
+            )
+            project = project_result.scalar_one_or_none()
+        except Exception as db_err:
+            logger.error(f"[Execution] Database error checking project: {db_err}")
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "database_error", "message": "Failed to check project status"}
+            )
 
-        # Use async path getter that handles EC2 restore
-        project_path = await get_project_path_async(project_id, user_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
 
-        # For EC2 sandbox, we trust the async getter already restored if needed
-        # For local sandbox, do additional checks
-        if not sandbox_docker_host:
-            # Check if sandbox needs restoration (files might have been cleaned up)
-            needs_restore = False
-            if not project_path.exists():
-                needs_restore = True
-            else:
-                # Check if project has actual content - look for any project files
-                has_package = (project_path / "package.json").exists()  # Node.js
-                has_pom = (project_path / "pom.xml").exists()  # Java/Maven
-                has_gradle = (project_path / "build.gradle").exists() or (project_path / "build.gradle.kts").exists()  # Gradle
-                has_requirements = (project_path / "requirements.txt").exists()  # Python
-                has_go_mod = (project_path / "go.mod").exists()  # Go
-                has_cargo = (project_path / "Cargo.toml").exists()  # Rust
-                has_src = (project_path / "src").exists()  # Generic src folder
+        if project.status in [ProjectStatus.DRAFT, ProjectStatus.PROCESSING]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "project_not_ready",
+                    "message": "Project has not been generated yet. Please generate the project first.",
+                    "status": project.status.value
+                }
+            )
 
-                # Check if directory is essentially empty (no project files)
-                has_any_project_file = has_package or has_pom or has_gradle or has_requirements or has_go_mod or has_cargo or has_src
+    try:
+        # Touch the project to keep it alive during execution (non-fatal if fails)
+        try:
+            touch_project(project_id)
+        except Exception as touch_err:
+            logger.warning(f"[Execution] touch_project failed in endpoint: {touch_err}")
 
-                if not has_any_project_file:
-                    # Directory exists but has no recognizable project files - restore
-                    needs_restore = True
-                    logger.info(f"[Execution] Sandbox appears empty, will restore from database")
-
-            if needs_restore:
-                logger.info(f"[Execution] Restoring project {project_id} from database...")
-                restored_files = await unified_storage.restore_project_from_database(project_id, user_id)
-                if restored_files:
-                    logger.info(f"[Execution] Restored {len(restored_files)} files")
-                    # Update project_path after restore
-                    project_path = await get_project_path_async(project_id, user_id)
-                else:
-                    logger.warning(f"[Execution] No files restored from database")
-
-            if not project_path.exists():
-                logger.error(f"[Execution] Project not found: {project_id}")
-                raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
-        else:
-            # For EC2 sandbox, check if sandbox exists remotely
-            exists_on_ec2 = await unified_storage.sandbox_exists(project_id, user_id)
-            if not exists_on_ec2:
-                # RESTORE FILES FROM S3/DATABASE TO EC2 SANDBOX
-                # This happens when user clicks "Run" on a project that was cleaned up
-                logger.info(f"[Execution] Sandbox missing on EC2, restoring from S3/DB for {project_id}")
-                try:
-                    restored_files = await unified_storage.restore_project_from_database(project_id, user_id)
-                    if restored_files:
-                        logger.info(f"[Execution] Restored {len(restored_files)} files to EC2 sandbox")
-                    else:
-                        logger.error(f"[Execution] No files found in database for {project_id}")
-                        raise HTTPException(status_code=404, detail=f"Project {project_id} has no files")
-                except HTTPException:
-                    raise
-                except Exception as e:
-                    logger.error(f"[Execution] Failed to restore project to EC2: {e}")
-                    raise HTTPException(status_code=500, detail=f"Failed to restore project files: {str(e)}")
-
-        logger.info(f"[Execution] Running project from: {project_path}")
-        logger.info(f"[Execution] Path has frontend: {(project_path / 'frontend').exists()}")
-        logger.info(f"[Execution] Path has backend: {(project_path / 'backend').exists()}")
-
-        # Stream Docker execution
+        # Stream Docker execution with progress
         return StreamingResponse(
-            _execute_docker_stream(project_id, project_path),
+            _execute_docker_stream_with_progress(project_id, user_id, db),
             media_type="text/event-stream"
         )
 
@@ -524,6 +513,300 @@ def _get_available_port(start_port: int = 3001) -> int:
         except OSError:
             port += 1
     return start_port
+
+
+async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db):
+    """
+    Execute project with step-by-step progress streaming.
+
+    Flow:
+    1. Check project status
+    2. Prepare/create container
+    3. Restore project files (if needed)
+    4. Install dependencies
+    5. Start dev server
+    6. Return preview URL
+
+    All steps are streamed to the frontend for terminal display.
+    """
+    from pathlib import Path
+    import re
+
+    def emit(event_type: str, message: str = None, data: dict = None):
+        """Helper to create SSE event"""
+        event = {"type": event_type}
+        if message:
+            event["message"] = message
+        if data:
+            event["data"] = data
+        return f"data: {json.dumps(event)}\n\n"
+
+    def safe_parse_port(url: str, default: int = 3000) -> int:
+        """Safely extract port from URL, with fallback"""
+        try:
+            if not url:
+                return default
+            port_match = re.search(r':(\d+)', url)
+            if port_match:
+                port = int(port_match.group(1))
+                # Validate port range
+                if 1 <= port <= 65535:
+                    return port
+            return default
+        except (ValueError, AttributeError):
+            return default
+
+    try:
+        # Validate inputs
+        if not project_id:
+            yield emit("error", "Invalid project ID")
+            return
+
+        # Handle user_id being None (anonymous/dev mode)
+        effective_user_id = user_id or "anonymous"
+
+        # ==================== STEP 1: Check Project Status ====================
+        yield emit("step", "Checking project status...", {"step": 1, "total": 5, "phase": "checking"})
+        yield emit("output", "[1/5] Checking project status...")
+
+        sandbox_docker_host = _os.environ.get("SANDBOX_DOCKER_HOST")
+        project_path = None
+        needs_restore = False
+        restored_count = 0
+
+        # Check if sandbox exists
+        if sandbox_docker_host:
+            # Remote EC2 sandbox
+            try:
+                exists_on_ec2 = await unified_storage.sandbox_exists(project_id, effective_user_id)
+            except asyncio.TimeoutError:
+                logger.warning(f"[Execution] sandbox_exists timed out for {project_id}")
+                yield emit("output", "  Warning: Sandbox check timed out, will attempt restore")
+                exists_on_ec2 = False
+            except Exception as sandbox_err:
+                logger.warning(f"[Execution] sandbox_exists check failed: {sandbox_err}")
+                yield emit("output", "  Warning: Could not check sandbox, will attempt restore")
+                exists_on_ec2 = False
+
+            if exists_on_ec2:
+                yield emit("output", "  Project files found in sandbox")
+                project_path = unified_storage.get_sandbox_path(project_id, effective_user_id)
+            else:
+                yield emit("output", "  Project files not in sandbox, will restore from database")
+                needs_restore = True
+        else:
+            # Local sandbox
+            try:
+                project_path = unified_storage.get_sandbox_path(project_id, effective_user_id)
+                if project_path and project_path.exists():
+                    # Check if it has actual files
+                    has_package = (project_path / "package.json").exists()
+                    has_requirements = (project_path / "requirements.txt").exists()
+                    has_src = (project_path / "src").exists()
+                    has_index = (project_path / "index.html").exists()
+                    has_any_file = has_package or has_requirements or has_src or has_index
+
+                    if has_any_file:
+                        yield emit("output", "  Project files found in sandbox")
+                    else:
+                        yield emit("output", "  Sandbox empty, will restore from database")
+                        needs_restore = True
+                else:
+                    yield emit("output", "  Sandbox not found, will restore from database")
+                    needs_restore = True
+            except Exception as path_err:
+                logger.warning(f"[Execution] Error checking local sandbox: {path_err}")
+                yield emit("output", "  Warning: Could not check sandbox, will attempt restore")
+                needs_restore = True
+
+        yield emit("step_complete", "Project status checked", {"step": 1})
+
+        # ==================== STEP 2: Create/Prepare Container ====================
+        yield emit("step", "Preparing container environment...", {"step": 2, "total": 5, "phase": "container"})
+        yield emit("output", "\n[2/5] Preparing container environment...")
+
+        # Touch project to keep alive
+        try:
+            touch_project(project_id)
+        except Exception as touch_err:
+            logger.warning(f"[Execution] touch_project failed: {touch_err}")
+            # Non-fatal, continue anyway
+
+        yield emit("output", "  Container environment ready")
+        yield emit("step_complete", "Container prepared", {"step": 2})
+
+        # ==================== STEP 3: Restore Project Files (if needed) ====================
+        if needs_restore:
+            yield emit("step", "Restoring project files...", {"step": 3, "total": 5, "phase": "restore"})
+            yield emit("output", "\n[3/5] Restoring project files from database...")
+
+            try:
+                # Get file count first
+                from app.models.project_file import ProjectFile
+                from app.core.database import async_session
+
+                total_files = 0
+                try:
+                    async with async_session() as restore_db:
+                        from sqlalchemy import select, func
+                        count_result = await restore_db.execute(
+                            select(func.count(ProjectFile.id)).where(ProjectFile.project_id == project_id)
+                        )
+                        total_files = count_result.scalar() or 0
+                except Exception as count_err:
+                    logger.warning(f"[Execution] Could not get file count: {count_err}")
+                    total_files = 0  # Continue anyway
+
+                if total_files > 0:
+                    yield emit("output", f"  Found {total_files} files in database")
+                else:
+                    yield emit("output", "  Checking database for files...")
+
+                # Restore files with timeout protection
+                try:
+                    restored_files = await asyncio.wait_for(
+                        unified_storage.restore_project_from_database(project_id, effective_user_id),
+                        timeout=120.0  # 2 minute timeout for restore
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(f"[Execution] Restore timed out for {project_id}")
+                    yield emit("error", "Project restore timed out. Please try again.")
+                    return
+
+                if restored_files:
+                    restored_count = len(restored_files)
+                    yield emit("output", f"  Restored {restored_count}/{total_files or restored_count} files to sandbox")
+                    project_path = unified_storage.get_sandbox_path(project_id, effective_user_id)
+                    yield emit("step_complete", f"Restored {restored_count} files", {"step": 3, "files_restored": restored_count})
+                else:
+                    yield emit("error", "No files found in database. Please regenerate the project.")
+                    yield emit("output", "  ERROR: No files to restore")
+                    return
+
+            except asyncio.TimeoutError:
+                # Already handled above, but just in case
+                yield emit("error", "Project restore timed out. Please try again.")
+                return
+            except Exception as restore_err:
+                logger.error(f"[Execution] Restore failed: {restore_err}", exc_info=True)
+                yield emit("error", f"Failed to restore project files: {str(restore_err)}")
+                return
+        else:
+            yield emit("step", "Project files ready", {"step": 3, "total": 5, "phase": "restore"})
+            yield emit("output", "\n[3/5] Project files already in sandbox")
+            yield emit("step_complete", "Files ready", {"step": 3, "files_restored": 0})
+
+        # ==================== STEP 4 & 5: Install & Run ====================
+        yield emit("step", "Installing dependencies and starting server...", {"step": 4, "total": 5, "phase": "install"})
+        yield emit("output", "\n[4/5] Installing dependencies...")
+
+        # Verify project_path is set before running
+        if project_path is None:
+            logger.error(f"[Execution] project_path is None for project {project_id}")
+            yield emit("error", "Internal error: Project path not set. Please try again.")
+            return
+
+        # Verify project_path exists or can be created
+        try:
+            from pathlib import Path
+            if isinstance(project_path, str):
+                project_path = Path(project_path)
+        except Exception as path_err:
+            logger.error(f"[Execution] Invalid project_path: {path_err}")
+            yield emit("error", "Internal error: Invalid project path.")
+            return
+
+        # Now execute Docker with the existing function
+        server_started = False
+        preview_url = None
+        docker_error = None
+        output_count = 0
+        max_outputs = 10000  # Prevent infinite loops
+
+        try:
+            async for output in docker_executor.run_project(project_id, project_path, effective_user_id):
+                output_count += 1
+                if output_count > max_outputs:
+                    logger.warning(f"[Execution] Max output count reached for {project_id}")
+                    break
+
+                # Skip None or non-string outputs
+                if output is None:
+                    continue
+                if not isinstance(output, str):
+                    try:
+                        output = str(output)
+                    except Exception:
+                        continue
+
+                # Check for server started markers
+                if output.startswith("__SERVER_STARTED__:") or output.startswith("_PREVIEW_URL_:"):
+                    try:
+                        if output.startswith("__SERVER_STARTED__:"):
+                            preview_url = output.split(":", 1)[1].strip()
+                        else:
+                            preview_url = output.split("_PREVIEW_URL_:", 1)[1].strip()
+                        server_started = True
+
+                        port = safe_parse_port(preview_url, 3000)
+
+                        yield emit("step", "Starting dev server...", {"step": 5, "total": 5, "phase": "server"})
+                        yield emit("output", "\n[5/5] Starting dev server...")
+                        yield emit("output", f"  Server started on port {port}")
+                        yield emit("server_started", None, {"port": port, "preview_url": preview_url})
+                        yield emit("step_complete", "Server running", {"step": 5})
+                    except Exception as parse_err:
+                        logger.warning(f"[Execution] Error parsing server started marker: {parse_err}")
+                        # Continue anyway
+
+                elif "_PREVIEW_URL_:" in output:
+                    try:
+                        url_match = re.search(r'_PREVIEW_URL_:(.+?)(?:\n|$)', output)
+                        if url_match:
+                            preview_url = url_match.group(1).strip()
+                            server_started = True
+                            port = safe_parse_port(preview_url, 3000)
+                            yield emit("server_started", None, {"port": port, "preview_url": preview_url})
+
+                        clean_output = re.sub(r'_PREVIEW_URL_:.+?(?:\n|$)', '', output).strip()
+                        if clean_output:
+                            yield emit("output", clean_output)
+                    except Exception as parse_err:
+                        logger.warning(f"[Execution] Error parsing preview URL: {parse_err}")
+                        yield emit("output", output.strip())
+                else:
+                    # Regular output - show in terminal
+                    try:
+                        stripped = output.strip()
+                        if stripped:
+                            yield emit("output", stripped)
+                    except Exception:
+                        pass  # Skip malformed output
+
+        except asyncio.CancelledError:
+            logger.info(f"[Execution] Docker execution cancelled for {project_id}")
+            yield emit("error", "Execution was cancelled.")
+            return
+        except Exception as docker_err:
+            logger.error(f"[Execution] Docker executor error for {project_id}: {docker_err}", exc_info=True)
+            docker_error = str(docker_err)
+            yield emit("output", f"  Error: {docker_error}")
+
+        # Send completion event
+        if docker_error:
+            yield emit("error", f"Execution failed: {docker_error}")
+        elif server_started and preview_url:
+            yield emit("complete", "Server running", {"preview_url": preview_url, "success": True})
+        else:
+            yield emit("step_complete", "Build completed", {"step": 4})
+            yield emit("complete", "Execution completed", {"success": True})
+
+    except asyncio.CancelledError:
+        logger.info(f"[Execution] Stream cancelled for {project_id}")
+        yield emit("error", "Execution was cancelled.")
+    except Exception as e:
+        logger.error(f"Execution error for {project_id}: {e}", exc_info=True)
+        yield emit("error", str(e))
 
 
 async def _execute_docker_stream(project_id: str, project_path):

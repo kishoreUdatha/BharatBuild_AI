@@ -147,6 +147,51 @@ async def resume_project(
     """
     user_id = str(current_user.id)
 
+    # Verify project ownership
+    try:
+        project_result = await db.execute(
+            select(Project).where(Project.id == project_id)
+        )
+        project = project_result.scalar_one_or_none()
+
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found"
+            )
+
+        if str(project.user_id) != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found"
+            )
+
+        # Check if project is currently being generated (prevent duplicate runs)
+        if project.status == ProjectStatus.PROCESSING:
+            from datetime import datetime, timedelta
+            stale_threshold = timedelta(minutes=10)
+            if project.updated_at:
+                time_since_update = datetime.utcnow() - project.updated_at
+                if time_since_update < stale_threshold:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "generation_in_progress",
+                            "message": "Project generation is currently in progress. Please wait for it to complete.",
+                            "can_resume": False
+                        }
+                    )
+                else:
+                    logger.warning(f"[SmartResume] Stale PROCESSING project {project_id}, allowing resume")
+    except HTTPException:
+        raise
+    except Exception as db_err:
+        logger.error(f"[SmartResume] Database error checking project: {db_err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to verify project"
+        )
+
     # Check file generation status first
     files_complete, completed_count, total_count = await check_files_complete(db, project_id)
 

@@ -122,8 +122,15 @@ async def create_project(
     )
 
     db.add(project)
-    await db.commit()
-    await db.refresh(project)
+    try:
+        await db.commit()
+        await db.refresh(project)
+    except Exception as db_err:
+        logger.error(f"[Projects] Failed to create project: {db_err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create project. Please try again."
+        )
 
     logger.info(f"Project created: {project.id} in workspace {workspace.id}")
 
@@ -432,10 +439,27 @@ async def get_project_metadata(
 
     # Get files from database (ProjectFile table) - METADATA ONLY, NO CONTENT
     # Cast column to String(36) to handle UUID/VARCHAR mismatch
+    logger.info(f"[Metadata] Querying ProjectFile for project_id='{project_id}'")
     db_result = await db.execute(
         select(ProjectFile).where(cast(ProjectFile.project_id, String(36)) == str(project_id))
     )
     project_files = db_result.scalars().all()
+    logger.info(f"[Metadata] Found {len(project_files)} files in database for project {project_id}")
+
+    # DEBUG: If no files, check if there are files under different formats
+    if len(project_files) == 0:
+        # Check how many total files are in the ProjectFile table
+        total_count_result = await db.execute(select(func.count(ProjectFile.id)))
+        total_count = total_count_result.scalar()
+        logger.warning(f"[Metadata] ⚠️ No files found for {project_id}! Total files in DB: {total_count}")
+
+        # Check if project_id exists with any files (might be format mismatch)
+        sample_result = await db.execute(
+            select(ProjectFile.project_id).distinct().limit(5)
+        )
+        sample_ids = [str(r) for r in sample_result.scalars().all()]
+        logger.warning(f"[Metadata] Sample project_ids in DB: {sample_ids}")
+        logger.warning(f"[Metadata] Looking for: '{project_id}' (type: {type(project_id)})")
 
     # Build hierarchical file tree with hashes
     def build_file_tree(files) -> List[FileTreeItem]:
@@ -632,7 +656,14 @@ async def execute_project(
     # Update status
     project.status = ProjectStatus.PROCESSING
     project.progress = 0
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as db_err:
+        logger.error(f"[Projects] Failed to start generation: {db_err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to start generation. Please try again."
+        )
 
     # Execute in background (in production, use Celery)
     # background_tasks.add_task(execute_project_task, project.id)
@@ -668,8 +699,15 @@ async def delete_project(
     background_tasks.add_task(cleanup_project_database, project_id_str)
 
     # Delete project record
-    await db.delete(project)
-    await db.commit()
+    try:
+        await db.delete(project)
+        await db.commit()
+    except Exception as db_err:
+        logger.error(f"[Projects] Failed to delete project: {db_err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete project. Please try again."
+        )
 
     logger.info(f"Project deleted: {project.id} (database cleanup scheduled)")
 
@@ -1000,7 +1038,14 @@ async def save_project_permanently(
 
     # Update project record
     project.is_saved = True
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as db_err:
+        logger.error(f"[Projects] Failed to save project permanently: {db_err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save project. Please try again."
+        )
 
     logger.info(f"Project saved permanently: {project_id_str}")
 

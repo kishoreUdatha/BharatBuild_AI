@@ -762,7 +762,9 @@ async def execute_workflow(
             logger.info(f"[Execute Workflow] User role: {enhanced_metadata['user_role']}")
             # Add subscription tier - documents only generated for PRO plan students
             enhanced_metadata["subscription_tier"] = user_limits.plan_name if user_limits else "FREE"
-            logger.info(f"[Execute Workflow] Subscription tier: {enhanced_metadata['subscription_tier']}")
+            # Add plan_type enum for reliable document generation check
+            enhanced_metadata["plan_type"] = user_limits.plan_type.value if user_limits and user_limits.plan_type else "free"
+            logger.info(f"[Execute Workflow] Subscription tier: {enhanced_metadata['subscription_tier']}, plan_type: {enhanced_metadata.get('plan_type')}")
             logger.info(f"[Execute Workflow] Added user_id={enhanced_metadata['user_id']} to metadata")
             # Add file limit for FREE users (3 files only)
             if max_files_limit:
@@ -805,154 +807,87 @@ async def execute_workflow(
                     # Encode to bytes for proper streaming
                     yield event.encode('utf-8')
 
-                # Update project status on code completion if authenticated
-                # Mark as PARTIAL_COMPLETED (code done, documents pending)
+                # ==================== PROJECT STATUS NOTE ====================
+                # Project status is now set INSIDE execute_workflow() in dynamic_orchestrator.py
+                # - COMPLETED: If academic documents were generated (PRO student)
+                # - PARTIAL_COMPLETED: If documents were skipped (non-PRO or non-student)
+                # We don't overwrite the status here to avoid undoing the COMPLETED status.
+                # ================================================================
+
+                # ==================== DOCUMENT GENERATION NOTE ====================
+                # Documents are generated as part of the DOCUMENTER workflow step
+                # in dynamic_orchestrator.py -> _execute_documenter() -> _execute_academic_documenter()
+                # This runs for students with PRO/PREMIUM/ENTERPRISE subscription.
+                # No duplicate generation needed here.
+                #
+                # For RESUME flow, documents are generated separately in the resume endpoint
+                # since the DOCUMENTER workflow step doesn't run during resume.
+                # ================================================================
+
+            except asyncio.CancelledError:
+                # Client disconnected during generation
+                logger.warning(f"[Generation] Client disconnected for project {actual_project_id}")
+                if db_project:
+                    try:
+                        # Mark as partial so user can resume
+                        db_project.status = ProjectStatus.PARTIAL_COMPLETED
+                        await db.commit()
+                    except Exception:
+                        pass
+                # Try to send cancellation event
+                try:
+                    cancel_event = {
+                        "type": "cancelled",
+                        "data": {
+                            "message": "Generation interrupted. You can resume later.",
+                            "can_resume": True,
+                            "project_id": actual_project_id
+                        }
+                    }
+                    yield f"data: {json.dumps(cancel_event)}\n\n".encode('utf-8')
+                except Exception:
+                    pass
+                raise
+
+            except (ConnectionError, TimeoutError) as conn_err:
+                # Network error during generation
+                logger.error(f"[Generation] Connection error for project {actual_project_id}: {conn_err}")
                 if db_project:
                     try:
                         db_project.status = ProjectStatus.PARTIAL_COMPLETED
                         await db.commit()
-                        logger.info(f"Project {db_project.id} marked as PARTIAL_COMPLETED (code generation done)")
-                    except Exception as e:
-                        logger.warning(f"Failed to update project status: {e}")
-
-                # ==================== AUTO DOCUMENT GENERATION ====================
-                # Automatically generate documents after code generation completes
-                if db_project and current_user:
-                    try:
-                        from app.modules.agents.chunked_document_agent import chunked_document_agent, DocumentType
-                        from app.models.document import DocumentType as DBDocumentType
-
-                        # Send document generation starting event
-                        doc_start_event = {
-                            "type": "documents_starting",
-                            "data": {
-                                "message": "Code generation complete. Starting document generation...",
-                                "documents": ["SRS", "Project Report", "PPT", "Viva Q&A"]
-                            },
-                            "step": None,
-                            "agent": "document_generator",
-                            "timestamp": None
+                    except Exception:
+                        pass
+                try:
+                    error_event = {
+                        "type": "error",
+                        "data": {
+                            "message": "Connection error. You can resume when connection is restored.",
+                            "error": str(conn_err),
+                            "can_resume": True
                         }
-                        yield f"data: {json.dumps(doc_start_event)}\n\n".encode('utf-8')
-                        await asyncio.sleep(0.01)
-
-                        # Documents to generate in order
-                        documents_to_generate = [
-                            ("srs", "SRS Document", DocumentType.SRS, DBDocumentType.SRS),
-                            ("report", "Project Report", DocumentType.PROJECT_REPORT, DBDocumentType.REPORT),
-                            ("ppt", "Presentation", DocumentType.PPT, DBDocumentType.PPT),
-                            ("viva", "Viva Q&A", DocumentType.VIVA_QA, DBDocumentType.VIVA_QA),
-                        ]
-
-                        for doc_key, doc_name, doc_type, db_doc_type in documents_to_generate:
-                            try:
-                                # Send document start event
-                                doc_event = {
-                                    "type": "document_generating",
-                                    "data": {
-                                        "document": doc_name,
-                                        "key": doc_key,
-                                        "message": f"Generating {doc_name}..."
-                                    },
-                                    "step": None,
-                                    "agent": "document_generator",
-                                    "timestamp": None
-                                }
-                                yield f"data: {json.dumps(doc_event)}\n\n".encode('utf-8')
-                                await asyncio.sleep(0.01)
-
-                                # Generate document with streaming progress
-                                async for event in chunked_document_agent.generate_document_streaming(
-                                    project_id=actual_project_id,
-                                    doc_type=doc_type,
-                                    db=db
-                                ):
-                                    # Forward document generation events
-                                    doc_progress_event = {
-                                        "type": "document_progress",
-                                        "data": {
-                                            "document": doc_name,
-                                            "key": doc_key,
-                                            **event
-                                        },
-                                        "step": None,
-                                        "agent": "document_generator",
-                                        "timestamp": None
-                                    }
-                                    yield f"data: {json.dumps(doc_progress_event)}\n\n".encode('utf-8')
-                                    await asyncio.sleep(0.01)
-
-                                # Send document complete event
-                                doc_complete_event = {
-                                    "type": "document_complete",
-                                    "data": {
-                                        "document": doc_name,
-                                        "key": doc_key,
-                                        "message": f"{doc_name} generated successfully"
-                                    },
-                                    "step": None,
-                                    "agent": "document_generator",
-                                    "timestamp": None
-                                }
-                                yield f"data: {json.dumps(doc_complete_event)}\n\n".encode('utf-8')
-                                await asyncio.sleep(0.01)
-
-                                logger.info(f"[AutoDocs] Generated {doc_name} for project {actual_project_id}")
-
-                            except Exception as doc_err:
-                                logger.error(f"[AutoDocs] Error generating {doc_name}: {doc_err}")
-                                doc_error_event = {
-                                    "type": "document_error",
-                                    "data": {
-                                        "document": doc_name,
-                                        "key": doc_key,
-                                        "error": str(doc_err)
-                                    },
-                                    "step": None,
-                                    "agent": "document_generator",
-                                    "timestamp": None
-                                }
-                                yield f"data: {json.dumps(doc_error_event)}\n\n".encode('utf-8')
-                                await asyncio.sleep(0.01)
-
-                        # Mark project as COMPLETED after all documents generated
-                        db_project.status = ProjectStatus.COMPLETED
-                        db_project.completed_at = datetime.utcnow()
-                        await db.commit()
-                        logger.info(f"[AutoDocs] Project {db_project.id} marked as COMPLETED (code + documents done)")
-
-                        # Send all documents complete event
-                        all_docs_event = {
-                            "type": "all_documents_complete",
-                            "data": {
-                                "message": "All documents generated successfully!",
-                                "project_status": "COMPLETED"
-                            },
-                            "step": None,
-                            "agent": "document_generator",
-                            "timestamp": None
-                        }
-                        yield f"data: {json.dumps(all_docs_event)}\n\n".encode('utf-8')
-                        await asyncio.sleep(0.01)
-
-                    except Exception as doc_gen_err:
-                        logger.error(f"[AutoDocs] Document generation failed: {doc_gen_err}")
-                        # Don't fail the whole workflow - code is already generated
-                        doc_fail_event = {
-                            "type": "documents_failed",
-                            "data": {
-                                "error": str(doc_gen_err),
-                                "message": "Document generation failed. You can retry from the project page."
-                            },
-                            "step": None,
-                            "agent": "document_generator",
-                            "timestamp": None
-                        }
-                        yield f"data: {json.dumps(doc_fail_event)}\n\n".encode('utf-8')
-                        await asyncio.sleep(0.01)
+                    }
+                    yield f"data: {json.dumps(error_event)}\n\n".encode('utf-8')
+                except Exception:
+                    pass
+                raise
 
             except Exception as e:
-                logger.error(f"Error in workflow execution: {e}")
+                logger.error(f"Error in workflow execution: {e}", exc_info=True)
+                # Send error event to frontend
+                try:
+                    error_event = {
+                        "type": "error",
+                        "data": {
+                            "message": f"Generation failed: {str(e)[:100]}",
+                            "error": str(e),
+                            "can_resume": True
+                        }
+                    }
+                    yield f"data: {json.dumps(error_event)}\n\n".encode('utf-8')
+                except Exception:
+                    pass
+
                 # Update project status on failure
                 if db_project:
                     try:
@@ -976,6 +911,9 @@ async def execute_workflow(
         )
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        logger.warning(f"[Generation] Request cancelled for project {request.project_id}")
+        raise HTTPException(status_code=499, detail="Client closed request")
     except Exception as e:
         logger.error(f"Failed to start workflow execution: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -1026,10 +964,72 @@ async def resume_generation(
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
+        # ============================================================
+        # EDGE CASE 1: Check if project has a saved plan
+        # Without plan_json, we can't know what files to generate
+        # ============================================================
+        if not project.plan_json:
+            logger.warning(f"[Resume] Project {request.project_id} has no saved plan")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "no_plan",
+                    "message": "This project has no saved plan. Please start a new generation.",
+                    "can_regenerate": True
+                }
+            )
+
+        # ============================================================
+        # EDGE CASE 2: Check if project is already completed
+        # ============================================================
+        if project.status == ProjectStatus.COMPLETED:
+            logger.info(f"[Resume] Project {request.project_id} is already completed")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "already_completed",
+                    "message": "This project is already completed. No files need to be generated.",
+                    "project_status": "completed"
+                }
+            )
+
+        # ============================================================
+        # EDGE CASE 3: Check if project is currently being generated
+        # Block resume if generation is actively in progress
+        # ============================================================
+        if project.status == ProjectStatus.PROCESSING:
+            # Check if the project is actively being generated
+            # A project is considered "stale" if it's been PROCESSING for more than 10 minutes
+            # (likely a crashed/abandoned generation)
+            from datetime import timedelta
+            stale_threshold = timedelta(minutes=10)
+            is_stale = False
+
+            if project.updated_at:
+                time_since_update = datetime.utcnow() - project.updated_at
+                is_stale = time_since_update > stale_threshold
+                logger.info(f"[Resume] Project {request.project_id} PROCESSING status age: {time_since_update}, stale={is_stale}")
+
+            if not is_stale:
+                # Project is actively being generated - block resume
+                logger.warning(f"[Resume] Project {request.project_id} is currently being generated - blocking resume")
+                raise HTTPException(
+                    status_code=409,  # Conflict
+                    detail={
+                        "error": "generation_in_progress",
+                        "message": "Project generation is currently in progress. Please wait for it to complete or cancel the current generation first.",
+                        "project_status": "processing",
+                        "can_resume": False
+                    }
+                )
+            else:
+                # Stale PROCESSING status - likely a crashed generation, allow resume
+                logger.info(f"[Resume] Project {request.project_id} has stale PROCESSING status, allowing resume")
+
         # Get existing files for this project
         # CRITICAL: Only consider files WITH CONTENT as "existing" (not empty placeholder entries)
         # This fixes the bug where resume skips files that were planned but never generated
-        from app.models.project_file import ProjectFile
+        from app.models.project_file import ProjectFile, FileGenerationStatus
         files_result = await db.execute(
             select(ProjectFile).where(ProjectFile.project_id == request.project_id)
         )
@@ -1040,8 +1040,45 @@ async def resume_generation(
         existing_file_paths = [f.path for f in existing_files if f.path]
 
         # Count files that need to be generated (no content yet)
+        # Include files with PLANNED, GENERATING (interrupted), or FAILED status
         pending_files = [f for f in all_files if not f.content_inline and not f.s3_key and f.path]
         pending_file_paths = [f.path for f in pending_files]
+
+        # Also check for failed files that need retry
+        failed_files = [f for f in all_files if f.generation_status == FileGenerationStatus.FAILED]
+        if failed_files:
+            for ff in failed_files:
+                if ff.path not in pending_file_paths:
+                    pending_file_paths.append(ff.path)
+            logger.info(f"[Resume] Including {len(failed_files)} failed files for retry")
+
+        # ============================================================
+        # EDGE CASE 4: No pending files but project not marked complete
+        # This can happen if generation completed but status wasn't updated
+        # ============================================================
+        if not pending_file_paths and existing_file_paths:
+            logger.info(f"[Resume] All files generated, marking project as complete")
+            project.status = ProjectStatus.PARTIAL_COMPLETED
+            await db.commit()
+            raise HTTPException(
+                status_code=200,  # Not an error - just informing
+                detail={
+                    "error": "no_pending_files",
+                    "message": f"All {len(existing_file_paths)} files have been generated.",
+                    "completed_files": len(existing_file_paths),
+                    "project_status": "partial_completed"
+                }
+            )
+
+        # ============================================================
+        # EDGE CASE 5: No files at all (plan exists but no files in DB)
+        # Need to extract files from plan_json
+        # ============================================================
+        if not all_files and project.plan_json:
+            plan_files = project.plan_json.get('files', [])
+            if plan_files:
+                pending_file_paths = [f.get('path') for f in plan_files if f.get('path')]
+                logger.info(f"[Resume] No DB files found, using {len(pending_file_paths)} files from plan_json")
 
         logger.info(f"[Resume] Project {request.project_id}: {len(existing_file_paths)} completed files, {len(pending_file_paths)} pending files")
 
@@ -1069,7 +1106,7 @@ Generate the remaining {len(pending_file_paths)} files needed to complete this p
         user_limits = await get_user_limits(current_user, db)
         max_files_limit = user_limits.max_files_per_project
 
-        # Build metadata
+        # Build metadata - include plan_json so writer knows file descriptions
         metadata = {
             "user_id": str(current_user.id),
             "user_email": current_user.email,
@@ -1078,7 +1115,11 @@ Generate the remaining {len(pending_file_paths)} files needed to complete this p
             "existing_files": existing_file_paths,
             "existing_file_count": len(existing_file_paths),
             "pending_files": pending_file_paths,
-            "pending_file_count": len(pending_file_paths)
+            "pending_file_count": len(pending_file_paths),
+            # CRITICAL: Pass the saved plan so writer has file descriptions
+            "saved_plan": project.plan_json if project.plan_json else None,
+            "project_name": project.title,
+            "project_description": project.description
         }
 
         # Add file limit if applicable (for FREE users)
@@ -1102,14 +1143,92 @@ Generate the remaining {len(pending_file_paths)} files needed to complete this p
             try:
                 touch_project(request.project_id)
 
-                async for event in event_generator(
-                    user_request=resume_context,
-                    project_id=request.project_id,
-                    workflow_name="bolt_standard",
-                    metadata=metadata,
-                    tracker=None
-                ):
-                    yield event.encode('utf-8')
+                # ============================================================
+                # STEP 1: Send RESUME_INFO event with completed + pending files
+                # This allows the frontend to show progress immediately
+                # ============================================================
+                resume_info_event = {
+                    "type": "resume_info",
+                    "data": {
+                        "project_id": request.project_id,
+                        "project_name": project.title,
+                        "completed_count": len(existing_file_paths),
+                        "pending_count": len(pending_file_paths),
+                        "completed_files": existing_file_paths,
+                        "pending_files": pending_file_paths,
+                        "message": f"Resuming: {len(existing_file_paths)} completed, {len(pending_file_paths)} remaining"
+                    }
+                }
+                yield f"data: {json.dumps(resume_info_event)}\n\n".encode('utf-8')
+                logger.info(f"[Resume] Sent resume_info event: {len(existing_file_paths)} completed, {len(pending_file_paths)} pending")
+
+                # ============================================================
+                # STEP 2: Send completed files to frontend so user sees progress
+                # Each completed file is sent as a FILE_OPERATION event
+                # ============================================================
+                from app.services.storage_service import storage_service
+
+                for idx, completed_file in enumerate(existing_files, 1):
+                    try:
+                        # Get file content from S3 or inline
+                        file_content = ""
+                        if completed_file.s3_key:
+                            content_bytes = await storage_service.download_file(completed_file.s3_key)
+                            if content_bytes:
+                                file_content = content_bytes.decode('utf-8', errors='replace')
+                        elif completed_file.content_inline:
+                            file_content = completed_file.content_inline
+
+                        # Send file to frontend
+                        completed_event = {
+                            "type": "file_operation",
+                            "data": {
+                                "operation": "restore",
+                                "path": completed_file.path,
+                                "name": completed_file.name,
+                                "operation_status": "complete",
+                                "file_content": file_content,
+                                "file_number": idx,
+                                "total_files": len(existing_files) + len(pending_file_paths),
+                                "generation_status": "completed",
+                                "is_resumed": True
+                            }
+                        }
+                        yield f"data: {json.dumps(completed_event)}\n\n".encode('utf-8')
+
+                    except Exception as fe:
+                        logger.warning(f"[Resume] Failed to load completed file {completed_file.path}: {fe}")
+
+                logger.info(f"[Resume] Sent {len(existing_files)} completed files to frontend")
+
+                # ============================================================
+                # STEP 3: Continue generating remaining files
+                # ============================================================
+                if pending_file_paths:
+                    status_event = {
+                        "type": "status",
+                        "data": {"message": f"Continuing generation... {len(pending_file_paths)} files remaining"}
+                    }
+                    yield f"data: {json.dumps(status_event)}\n\n".encode('utf-8')
+
+                    async for event in event_generator(
+                        user_request=resume_context,
+                        project_id=request.project_id,
+                        workflow_name="bolt_standard",
+                        metadata=metadata,
+                        tracker=None
+                    ):
+                        yield event.encode('utf-8')
+                else:
+                    # All files already completed
+                    complete_event = {
+                        "type": "complete",
+                        "data": {
+                            "message": "All files already generated!",
+                            "total_files": len(existing_file_paths)
+                        }
+                    }
+                    yield f"data: {json.dumps(complete_event)}\n\n".encode('utf-8')
 
                 # Update project status on code completion
                 # Mark as PARTIAL_COMPLETED (code done, documents pending)
@@ -1117,10 +1236,238 @@ Generate the remaining {len(pending_file_paths)} files needed to complete this p
                 await db.commit()
                 logger.info(f"Project {project.id} marked as PARTIAL_COMPLETED after resume")
 
+                # ==================== AUTO DOCUMENT GENERATION (RESUME) ====================
+                # Generate documents for eligible students with PRO subscription
+                user_role = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+                plan_type = user_limits.plan_type.value if user_limits and user_limits.plan_type else "free"
+                subscription_tier = user_limits.plan_name if user_limits else "FREE"
+
+                is_student = user_role.lower() in ['student', 'faculty']
+                is_premium_plan = plan_type.lower() in ['pro', 'enterprise'] or subscription_tier.upper() in ['PRO', 'PREMIUM', 'ENTERPRISE', 'UNLIMITED']
+                is_eligible_for_docs = is_student and is_premium_plan
+
+                logger.info(f"[Resume AutoDocs] Eligibility: user_role='{user_role}', plan_type='{plan_type}', is_eligible={is_eligible_for_docs}")
+
+                if is_eligible_for_docs:
+                    try:
+                        from app.modules.agents.chunked_document_agent import chunked_document_agent, DocumentType
+                        from app.models.document import DocumentType as DBDocumentType
+
+                        # Send document generation starting event
+                        doc_start_event = {
+                            "type": "documents_starting",
+                            "data": {
+                                "message": "Code generation complete. Starting document generation...",
+                                "documents": ["SRS", "Project Report", "PPT", "Viva Q&A"]
+                            },
+                            "step": None,
+                            "agent": "document_generator",
+                            "timestamp": None
+                        }
+                        yield f"data: {json.dumps(doc_start_event)}\n\n".encode('utf-8')
+                        await asyncio.sleep(0.01)
+
+                        # Documents to generate
+                        documents_to_generate = [
+                            ("srs", "SRS Document", DocumentType.SRS, DBDocumentType.SRS),
+                            ("report", "Project Report", DocumentType.PROJECT_REPORT, DBDocumentType.REPORT),
+                            ("ppt", "Presentation", DocumentType.PPT, DBDocumentType.PPT),
+                            ("viva", "Viva Q&A", DocumentType.VIVA_QA, DBDocumentType.VIVA_QA),
+                        ]
+
+                        for doc_key, doc_name, doc_type, db_doc_type in documents_to_generate:
+                            try:
+                                doc_event = {
+                                    "type": "document_generating",
+                                    "data": {
+                                        "document": doc_name,
+                                        "key": doc_key,
+                                        "message": f"Generating {doc_name}..."
+                                    },
+                                    "step": None,
+                                    "agent": "document_generator",
+                                    "timestamp": None
+                                }
+                                yield f"data: {json.dumps(doc_event)}\n\n".encode('utf-8')
+                                await asyncio.sleep(0.01)
+
+                                async for event in chunked_document_agent.generate_document_streaming(
+                                    project_id=request.project_id,
+                                    doc_type=doc_type,
+                                    db=db
+                                ):
+                                    doc_progress_event = {
+                                        "type": "document_progress",
+                                        "data": {
+                                            "document": doc_name,
+                                            "key": doc_key,
+                                            **event
+                                        },
+                                        "step": None,
+                                        "agent": "document_generator",
+                                        "timestamp": None
+                                    }
+                                    yield f"data: {json.dumps(doc_progress_event)}\n\n".encode('utf-8')
+                                    await asyncio.sleep(0.01)
+
+                                doc_complete_event = {
+                                    "type": "document_complete",
+                                    "data": {
+                                        "document": doc_name,
+                                        "key": doc_key,
+                                        "message": f"{doc_name} generated successfully"
+                                    },
+                                    "step": None,
+                                    "agent": "document_generator",
+                                    "timestamp": None
+                                }
+                                yield f"data: {json.dumps(doc_complete_event)}\n\n".encode('utf-8')
+                                await asyncio.sleep(0.01)
+
+                                logger.info(f"[Resume AutoDocs] Generated {doc_name} for project {request.project_id}")
+
+                            except Exception as doc_err:
+                                logger.error(f"[Resume AutoDocs] Error generating {doc_name}: {doc_err}")
+                                doc_error_event = {
+                                    "type": "document_error",
+                                    "data": {
+                                        "document": doc_name,
+                                        "key": doc_key,
+                                        "error": str(doc_err)
+                                    },
+                                    "step": None,
+                                    "agent": "document_generator",
+                                    "timestamp": None
+                                }
+                                yield f"data: {json.dumps(doc_error_event)}\n\n".encode('utf-8')
+                                await asyncio.sleep(0.01)
+
+                        # Mark project as COMPLETED after all documents generated
+                        project.status = ProjectStatus.COMPLETED
+                        project.completed_at = datetime.utcnow()
+                        await db.commit()
+                        logger.info(f"[Resume AutoDocs] Project {project.id} marked as COMPLETED")
+
+                        # Send all documents complete event
+                        all_docs_event = {
+                            "type": "all_documents_complete",
+                            "data": {
+                                "message": "All documents generated successfully!",
+                                "project_status": "COMPLETED"
+                            },
+                            "step": None,
+                            "agent": "document_generator",
+                            "timestamp": None
+                        }
+                        yield f"data: {json.dumps(all_docs_event)}\n\n".encode('utf-8')
+                        await asyncio.sleep(0.01)
+
+                    except Exception as doc_gen_err:
+                        logger.error(f"[Resume AutoDocs] Document generation failed: {doc_gen_err}")
+                        doc_fail_event = {
+                            "type": "documents_failed",
+                            "data": {
+                                "error": str(doc_gen_err),
+                                "message": "Document generation failed. You can retry from the project page."
+                            },
+                            "step": None,
+                            "agent": "document_generator",
+                            "timestamp": None
+                        }
+                        yield f"data: {json.dumps(doc_fail_event)}\n\n".encode('utf-8')
+                        await asyncio.sleep(0.01)
+                else:
+                    # User not eligible for documents - send notification
+                    if not is_student:
+                        reason = f"Document generation is only available for students. Your role: {user_role}"
+                    elif not is_premium_plan:
+                        reason = f"Document generation requires PRO or Premium subscription. Your plan: {subscription_tier}"
+                    else:
+                        reason = "Document generation requires student role with PRO subscription."
+
+                    logger.info(f"[Resume AutoDocs] Skipping documents: {reason}")
+                    doc_upgrade_event = {
+                        "type": "documents_require_upgrade",
+                        "data": {
+                            "message": reason,
+                            "current_plan": subscription_tier,
+                            "user_role": user_role,
+                            "upgrade_url": "/billing/plans"
+                        },
+                        "step": None,
+                        "agent": "document_generator",
+                        "timestamp": None
+                    }
+                    yield f"data: {json.dumps(doc_upgrade_event)}\n\n".encode('utf-8')
+                    await asyncio.sleep(0.01)
+
+            except asyncio.CancelledError:
+                # Client disconnected - mark project for potential resume
+                logger.warning(f"[Resume] Client disconnected for project {request.project_id}")
+                try:
+                    project.status = ProjectStatus.PARTIAL_COMPLETED  # Allow resume
+                    await db.commit()
+                except Exception:
+                    pass
+                # Send cancellation event before closing
+                try:
+                    cancel_event = {
+                        "type": "cancelled",
+                        "data": {
+                            "message": "Connection interrupted. You can resume later.",
+                            "can_resume": True
+                        }
+                    }
+                    yield f"data: {json.dumps(cancel_event)}\n\n".encode('utf-8')
+                except Exception:
+                    pass
+                raise
+
+            except (ConnectionError, TimeoutError) as conn_err:
+                # Network error - mark for resume
+                logger.error(f"[Resume] Connection error for project {request.project_id}: {conn_err}")
+                try:
+                    project.status = ProjectStatus.PARTIAL_COMPLETED  # Allow resume
+                    await db.commit()
+                except Exception:
+                    pass
+                # Send error event
+                try:
+                    error_event = {
+                        "type": "error",
+                        "data": {
+                            "message": "Connection error. You can resume when connection is restored.",
+                            "error": str(conn_err),
+                            "can_resume": True
+                        }
+                    }
+                    yield f"data: {json.dumps(error_event)}\n\n".encode('utf-8')
+                except Exception:
+                    pass
+                raise
+
             except Exception as e:
-                logger.error(f"Error in resume generation: {e}")
-                project.status = ProjectStatus.FAILED
-                await db.commit()
+                logger.error(f"Error in resume generation: {e}", exc_info=True)
+                # Send error event to frontend before failing
+                try:
+                    error_event = {
+                        "type": "error",
+                        "data": {
+                            "message": f"Generation failed: {str(e)[:100]}",
+                            "error": str(e),
+                            "can_resume": True
+                        }
+                    }
+                    yield f"data: {json.dumps(error_event)}\n\n".encode('utf-8')
+                except Exception:
+                    pass
+
+                # Mark project as failed but allow resume
+                try:
+                    project.status = ProjectStatus.FAILED
+                    await db.commit()
+                except Exception as db_err:
+                    logger.error(f"[Resume] Failed to update project status: {db_err}")
                 raise
 
         return StreamingResponse(
@@ -1136,6 +1483,9 @@ Generate the remaining {len(pending_file_paths)} files needed to complete this p
 
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        logger.warning(f"[Resume] Request cancelled for project {request.project_id}")
+        raise HTTPException(status_code=499, detail="Client closed request")
     except Exception as e:
         logger.error(f"Failed to resume generation: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
