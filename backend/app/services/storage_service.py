@@ -1,6 +1,7 @@
 """
 Storage Service - Handles file storage in S3/MinIO
 Optimized for 100K+ users with intelligent caching
+With retry logic for resilient operations
 """
 
 import boto3
@@ -9,9 +10,61 @@ from botocore.exceptions import ClientError
 import hashlib
 from typing import Optional, BinaryIO
 import io
+import asyncio
+import time
+from functools import wraps
 
 from app.core.config import settings
 from app.core.logging_config import logger
+
+
+def retry_with_backoff(max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 30.0):
+    """
+    Decorator for retry logic with exponential backoff.
+
+    Args:
+        max_retries: Maximum number of retry attempts
+        base_delay: Initial delay in seconds
+        max_delay: Maximum delay cap in seconds
+    """
+    def decorator(func):
+        @wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return await func(*args, **kwargs)
+                except (ClientError, ConnectionError, TimeoutError) as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        delay = min(base_delay * (2 ** attempt), max_delay)
+                        logger.warning(f"[S3-Retry] Attempt {attempt + 1}/{max_retries} failed: {e}. Retrying in {delay:.1f}s...")
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.error(f"[S3-Retry] All {max_retries} attempts failed: {e}")
+            raise last_exception
+
+        @wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except (ClientError, ConnectionError, TimeoutError) as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        delay = min(base_delay * (2 ** attempt), max_delay)
+                        logger.warning(f"[S3-Retry] Attempt {attempt + 1}/{max_retries} failed: {e}. Retrying in {delay:.1f}s...")
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"[S3-Retry] All {max_retries} attempts failed: {e}")
+            raise last_exception
+
+        # Return appropriate wrapper based on function type
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        return sync_wrapper
+    return decorator
 
 
 class StorageService:
@@ -150,74 +203,123 @@ class StorageService:
         project_id: str,
         file_path: str,
         content: bytes,
-        content_type: str = 'text/plain'
+        content_type: str = 'text/plain',
+        max_retries: int = 3
     ) -> dict:
         """
-        Upload file to S3/MinIO
+        Upload file to S3/MinIO with retry logic.
 
         Returns:
             dict with s3_key, content_hash, size_bytes
+
+        Retry behavior:
+            - Retries on ClientError, ConnectionError, TimeoutError
+            - Exponential backoff: 1s, 2s, 4s...
+            - Max 3 retries by default
         """
         content_hash = self.calculate_hash(content)
         s3_key = self.generate_s3_key(project_id, file_path, content_hash)
         size_bytes = len(content)
 
+        client = self._get_client()
+
+        # Check if file already exists (deduplication) - no retry needed
         try:
-            client = self._get_client()
-
-            # Check if file already exists (deduplication)
-            try:
-                client.head_object(Bucket=self._bucket_name, Key=s3_key)
-                logger.debug(f"File already exists (deduplicated): {s3_key}")
-                return {
-                    's3_key': s3_key,
-                    'content_hash': content_hash,
-                    'size_bytes': size_bytes,
-                    'deduplicated': True
-                }
-            except ClientError:
-                pass  # File doesn't exist, proceed with upload
-
-            # Upload file
-            client.put_object(
-                Bucket=self._bucket_name,
-                Key=s3_key,
-                Body=content,
-                ContentType=content_type,
-                Metadata={
-                    'project_id': project_id,
-                    'file_path': file_path,
-                    'content_hash': content_hash
-                }
-            )
-
-            logger.info(f"Uploaded file to S3: {s3_key} ({size_bytes} bytes)")
-
+            client.head_object(Bucket=self._bucket_name, Key=s3_key)
+            logger.debug(f"File already exists (deduplicated): {s3_key}")
             return {
                 's3_key': s3_key,
                 'content_hash': content_hash,
                 'size_bytes': size_bytes,
-                'deduplicated': False
+                'deduplicated': True
             }
+        except ClientError:
+            pass  # File doesn't exist, proceed with upload
 
-        except Exception as e:
-            logger.error(f"Failed to upload file to S3: {e}")
-            raise
+        # Upload file with retry logic
+        last_exception = None
+        for attempt in range(max_retries):
+            try:
+                client.put_object(
+                    Bucket=self._bucket_name,
+                    Key=s3_key,
+                    Body=content,
+                    ContentType=content_type,
+                    Metadata={
+                        'project_id': project_id,
+                        'file_path': file_path,
+                        'content_hash': content_hash
+                    }
+                )
 
-    async def download_file(self, s3_key: str) -> Optional[bytes]:
-        """Download file from S3/MinIO"""
-        try:
-            client = self._get_client()
-            response = client.get_object(Bucket=self._bucket_name, Key=s3_key)
-            content = response['Body'].read()
-            logger.debug(f"Downloaded file from S3: {s3_key}")
-            return content
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchKey':
-                logger.warning(f"File not found in S3: {s3_key}")
-                return None
-            logger.error(f"Failed to download file from S3: {e}")
-            raise
+                logger.info(f"[S3-Upload] ✓ Uploaded: {s3_key} ({size_bytes} bytes)")
+
+                return {
+                    's3_key': s3_key,
+                    'content_hash': content_hash,
+                    'size_bytes': size_bytes,
+                    'deduplicated': False
+                }
+
+            except (ClientError, ConnectionError, TimeoutError) as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    delay = 1.0 * (2 ** attempt)  # 1s, 2s, 4s
+                    logger.warning(f"[S3-Upload] Attempt {attempt + 1}/{max_retries} failed for {file_path}: {e}. Retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"[S3-Upload] ✗ All {max_retries} attempts failed for {file_path}: {e}")
+
+            except Exception as e:
+                logger.error(f"[S3-Upload] ✗ Unexpected error uploading {file_path}: {e}")
+                raise
+
+        # If we get here, all retries failed
+        raise last_exception
+
+    async def download_file(self, s3_key: str, max_retries: int = 3) -> Optional[bytes]:
+        """
+        Download file from S3/MinIO with retry logic.
+
+        Retry behavior:
+            - Retries on transient errors (ConnectionError, TimeoutError)
+            - Does NOT retry on NoSuchKey (file doesn't exist)
+            - Exponential backoff: 1s, 2s, 4s...
+        """
+        client = self._get_client()
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                response = client.get_object(Bucket=self._bucket_name, Key=s3_key)
+                content = response['Body'].read()
+                logger.debug(f"[S3-Download] ✓ Downloaded: {s3_key}")
+                return content
+
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'NoSuchKey':
+                    logger.warning(f"[S3-Download] File not found: {s3_key}")
+                    return None  # Don't retry - file doesn't exist
+                last_exception = e
+                if attempt < max_retries - 1:
+                    delay = 1.0 * (2 ** attempt)
+                    logger.warning(f"[S3-Download] Attempt {attempt + 1}/{max_retries} failed for {s3_key}: {e}. Retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"[S3-Download] ✗ All {max_retries} attempts failed for {s3_key}: {e}")
+
+            except (ConnectionError, TimeoutError) as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    delay = 1.0 * (2 ** attempt)
+                    logger.warning(f"[S3-Download] Attempt {attempt + 1}/{max_retries} failed for {s3_key}: {e}. Retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"[S3-Download] ✗ All {max_retries} attempts failed for {s3_key}: {e}")
+
+        if last_exception:
+            raise last_exception
+        return None
 
     async def delete_file(self, s3_key: str) -> bool:
         """Delete file from S3/MinIO"""
