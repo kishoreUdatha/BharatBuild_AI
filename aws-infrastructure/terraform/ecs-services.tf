@@ -205,6 +205,65 @@ resource "aws_route53_record" "app_www" {
 }
 
 # =============================================================================
+# API Subdomain (api.bharatbuild.ai) - Direct to ALB, bypassing CloudFront
+# This eliminates CloudFront HTTP/2 buffering issues for SSE streaming
+# =============================================================================
+
+resource "aws_route53_record" "api" {
+  count   = var.domain_name != "" && var.route53_zone_exists ? 1 : 0
+  zone_id = data.aws_route53_zone.main[0].zone_id
+  name    = "api.${var.domain_name}"
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.main.dns_name
+    zone_id                = aws_lb.main.zone_id
+    evaluate_target_health = true
+  }
+}
+
+# HTTPS listener rule for api subdomain - forwards ALL traffic to backend
+# No path pattern needed since entire subdomain is for API
+resource "aws_lb_listener_rule" "api_subdomain_https" {
+  count        = var.domain_name != "" && var.route53_zone_exists ? 1 : 0
+  listener_arn = aws_lb_listener.https[0].arn
+  priority     = 40  # Higher priority than path-based rules, changed from 50 to avoid conflict
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.backend.arn
+  }
+
+  condition {
+    host_header {
+      values = ["api.${var.domain_name}"]
+    }
+  }
+}
+
+# HTTP listener rule for api subdomain - redirect to HTTPS
+resource "aws_lb_listener_rule" "api_subdomain_http" {
+  count        = var.domain_name != "" && var.route53_zone_exists ? 1 : 0
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 40  # Changed from 50 to avoid conflict
+
+  action {
+    type = "redirect"
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
+  }
+
+  condition {
+    host_header {
+      values = ["api.${var.domain_name}"]
+    }
+  }
+}
+
+# =============================================================================
 # Backend Task Definition
 # =============================================================================
 
@@ -315,8 +374,9 @@ resource "aws_ecs_task_definition" "frontend" {
 
     environment = [
       { name = "NODE_ENV", value = "production" },
-      { name = "NEXT_PUBLIC_API_URL", value = var.domain_name != "" ? "https://${var.domain_name}/api/v1" : "http://${aws_lb.main.dns_name}/api/v1" },
-      { name = "NEXT_PUBLIC_WS_URL", value = var.domain_name != "" ? "wss://${var.domain_name}/ws" : "ws://${aws_lb.main.dns_name}/ws" },
+      # Use api subdomain to bypass CloudFront and eliminate SSE buffering issues
+      { name = "NEXT_PUBLIC_API_URL", value = var.domain_name != "" ? "https://api.${var.domain_name}/api/v1" : "http://${aws_lb.main.dns_name}/api/v1" },
+      { name = "NEXT_PUBLIC_WS_URL", value = var.domain_name != "" ? "wss://api.${var.domain_name}/ws" : "ws://${aws_lb.main.dns_name}/ws" },
       { name = "NEXT_PUBLIC_APP_DOMAIN", value = var.domain_name != "" ? var.domain_name : aws_lb.main.dns_name },
       { name = "NEXT_PUBLIC_APP_URL", value = var.domain_name != "" ? "https://${var.domain_name}" : "http://${aws_lb.main.dns_name}" },
       { name = "NEXT_PUBLIC_GOOGLE_CLIENT_ID", value = "248732150405-onocm8nddrfi6khku4pc867b0g163o11.apps.googleusercontent.com" },
