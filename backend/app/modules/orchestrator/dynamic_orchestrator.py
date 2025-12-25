@@ -2940,6 +2940,180 @@ class DynamicOrchestrator:
             }
         }
 
+    async def resume_incomplete_files(
+        self,
+        project_id: str,
+        incomplete_files: List[Dict[str, Any]],
+        plan: Dict[str, Any],
+        user_id: str = None
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Resume generation of incomplete files only.
+
+        This is called when files exist in DB with status != COMPLETED.
+        Uses the saved plan to regenerate only the missing files.
+
+        Args:
+            project_id: Project identifier
+            incomplete_files: List of files to generate (from get_incomplete_files)
+            plan: Saved plan_json from database
+            user_id: User identifier for storage paths
+
+        Yields:
+            Dict events for SSE streaming
+        """
+        logger.info(f"[ResumeIncomplete] Starting for {project_id} with {len(incomplete_files)} files")
+
+        yield {
+            "type": "status",
+            "data": {
+                "message": f"Resuming generation of {len(incomplete_files)} incomplete files",
+                "files": [f["path"] for f in incomplete_files]
+            }
+        }
+
+        # Create minimal context for file generation
+        context = ExecutionContext(
+            project_id=project_id,
+            user_request="Resume incomplete file generation",
+            metadata={"user_id": user_id, "is_resume": True}
+        )
+        context.plan = plan
+
+        # Get file descriptions from plan
+        plan_files = plan.get("files", [])
+        file_descriptions = {f.get("path"): f.get("description", "") for f in plan_files}
+
+        # Generate each incomplete file
+        for idx, file_info in enumerate(incomplete_files):
+            file_path = file_info["path"]
+            file_status = file_info["status"]
+
+            yield {
+                "type": "file_start",
+                "data": {
+                    "path": file_path,
+                    "index": idx + 1,
+                    "total": len(incomplete_files),
+                    "previous_status": file_status
+                }
+            }
+
+            # Update status to GENERATING
+            try:
+                from app.core.database import async_session
+                from app.models.project_file import ProjectFile, FileGenerationStatus
+                from sqlalchemy import update
+                from uuid import UUID as UUID_type
+
+                async with async_session() as db:
+                    await db.execute(
+                        update(ProjectFile)
+                        .where(ProjectFile.project_id == UUID_type(str(project_id)))
+                        .where(ProjectFile.path == file_path)
+                        .values(generation_status=FileGenerationStatus.GENERATING)
+                    )
+                    await db.commit()
+            except Exception as e:
+                logger.warning(f"[ResumeIncomplete] Could not update status: {e}")
+
+            # Get description for this file
+            description = file_descriptions.get(file_path, f"Generate {file_path}")
+
+            # Generate file using Claude
+            try:
+                from anthropic import AsyncAnthropic
+                client = AsyncAnthropic()
+
+                # Build prompt for single file generation
+                prompt = f"""Generate the complete content for this file:
+
+File: {file_path}
+Description: {description}
+
+Project Context:
+{plan.get('raw', '')[:2000]}
+
+Generate ONLY the file content, no explanations. Output the complete, working code."""
+
+                file_content = ""
+                async with client.messages.stream(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=8000,
+                    messages=[{"role": "user", "content": prompt}]
+                ) as stream:
+                    async for text in stream.text_stream:
+                        file_content += text
+                        yield {
+                            "type": "file_chunk",
+                            "data": {"path": file_path, "chunk": text}
+                        }
+
+                # Save file to all storage layers
+                save_success = await self.save_file(
+                    project_id=project_id,
+                    file_path=file_path,
+                    content=file_content,
+                    user_id=user_id
+                )
+
+                if save_success:
+                    # Update status to COMPLETED
+                    try:
+                        async with async_session() as db:
+                            await db.execute(
+                                update(ProjectFile)
+                                .where(ProjectFile.project_id == UUID_type(str(project_id)))
+                                .where(ProjectFile.path == file_path)
+                                .values(generation_status=FileGenerationStatus.COMPLETED)
+                            )
+                            await db.commit()
+                    except Exception as e:
+                        logger.warning(f"[ResumeIncomplete] Could not update to COMPLETED: {e}")
+
+                    yield {
+                        "type": "file_complete",
+                        "data": {
+                            "path": file_path,
+                            "size": len(file_content),
+                            "saved": True
+                        }
+                    }
+                    logger.info(f"[ResumeIncomplete] ✓ File completed: {file_path}")
+                else:
+                    # Update status to FAILED
+                    try:
+                        async with async_session() as db:
+                            await db.execute(
+                                update(ProjectFile)
+                                .where(ProjectFile.project_id == UUID_type(str(project_id)))
+                                .where(ProjectFile.path == file_path)
+                                .values(generation_status=FileGenerationStatus.FAILED)
+                            )
+                            await db.commit()
+                    except Exception as e:
+                        logger.warning(f"[ResumeIncomplete] Could not update to FAILED: {e}")
+
+                    yield {
+                        "type": "file_error",
+                        "data": {"path": file_path, "error": "Save failed"}
+                    }
+
+            except Exception as gen_err:
+                logger.error(f"[ResumeIncomplete] Generation failed for {file_path}: {gen_err}")
+                yield {
+                    "type": "file_error",
+                    "data": {"path": file_path, "error": str(gen_err)}
+                }
+
+        yield {
+            "type": "resume_completed",
+            "data": {
+                "project_id": project_id,
+                "message": f"Completed generation of {len(incomplete_files)} files"
+            }
+        }
+
     async def _execute_agent(
         self,
         agent_type: AgentType,
@@ -3816,6 +3990,27 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
                 session_id = context.metadata.get("session_id")
                 user_id = context.metadata.get("user_id")
 
+                # ============================================================
+                # INCREMENTAL SAVE: Update status to GENERATING before save
+                # This ensures we can resume from this point if disconnected
+                # ============================================================
+                try:
+                    from app.core.database import async_session
+                    from app.models.project_file import ProjectFile, FileGenerationStatus
+                    from sqlalchemy import update
+                    from uuid import UUID as UUID_type
+
+                    async with async_session() as status_db:
+                        await status_db.execute(
+                            update(ProjectFile)
+                            .where(ProjectFile.project_id == UUID_type(str(context.project_id)))
+                            .where(ProjectFile.path == extracted_path)
+                            .values(generation_status=FileGenerationStatus.GENERATING)
+                        )
+                        await status_db.commit()
+                except Exception as status_err:
+                    logger.warning(f"[Writer] Could not update status to GENERATING: {status_err}")
+
                 # CRITICAL: Check if save was successful
                 save_success = await self.save_file(
                     project_id=context.project_id,
@@ -3831,6 +4026,23 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
                         'content': file_content,
                         'saved': True
                     })
+
+                    # ============================================================
+                    # INCREMENTAL SAVE: Update status to COMPLETED after save
+                    # File is now safely stored in S3 and can be restored
+                    # ============================================================
+                    try:
+                        async with async_session() as status_db:
+                            await status_db.execute(
+                                update(ProjectFile)
+                                .where(ProjectFile.project_id == UUID_type(str(context.project_id)))
+                                .where(ProjectFile.path == extracted_path)
+                                .values(generation_status=FileGenerationStatus.COMPLETED)
+                            )
+                            await status_db.commit()
+                        logger.info(f"[Writer] ✓ File status COMPLETED: {extracted_path}")
+                    except Exception as status_err:
+                        logger.warning(f"[Writer] Could not update status to COMPLETED: {status_err}")
 
                     # Emit file content event with project_id for proper isolation
                     yield OrchestratorEvent(

@@ -60,6 +60,35 @@ async def check_files_complete(db: AsyncSession, project_id: str) -> tuple[bool,
     return completed == len(files), completed, len(files)
 
 
+async def get_incomplete_files(db: AsyncSession, project_id: str) -> list:
+    """
+    Get files that need to be generated (status != COMPLETED).
+
+    Returns list of dicts with file info for regeneration:
+    - PLANNED: Never started
+    - GENERATING: Started but interrupted
+    - FAILED: Attempted but failed
+    """
+    result = await db.execute(
+        select(ProjectFile).where(
+            ProjectFile.project_id == project_id,
+            ProjectFile.is_folder == False,
+            ProjectFile.generation_status != FileGenerationStatus.COMPLETED
+        ).order_by(ProjectFile.generation_order)
+    )
+    files = result.scalars().all()
+
+    return [
+        {
+            "path": f.path,
+            "name": f.name,
+            "status": f.generation_status.value if f.generation_status else "unknown",
+            "order": f.generation_order or 0
+        }
+        for f in files
+    ]
+
+
 async def get_pending_documents(db: AsyncSession, project_id: str) -> list:
     """Get list of documents that haven't been generated yet."""
     result = await db.execute(
@@ -220,30 +249,73 @@ async def resume_project(
         try:
             # PHASE 1: Check and complete file generation if needed
             if not files_complete and total_count > 0:
-                # Files still pending - resume file generation
-                checkpoint = await checkpoint_service.get_checkpoint(project_id)
+                # Get list of incomplete files (PLANNED, GENERATING, FAILED)
+                incomplete_files = await get_incomplete_files(db, project_id)
 
-                if checkpoint and checkpoint.get("user_id") == user_id:
-                    resume_info = await checkpoint_service.get_resume_point(project_id)
-                    await checkpoint_service.mark_resumed(project_id)
+                if incomplete_files:
+                    yield f"data: {json.dumps({'type': 'resume_started', 'data': {'phase': 'files', 'project_id': project_id, 'completed': completed_count, 'total': total_count, 'pending_files': len(incomplete_files)}})}\n\n"
 
-                    yield f"data: {json.dumps({'type': 'resume_started', 'data': {'phase': 'files', 'project_id': project_id, 'completed': completed_count, 'total': total_count}})}\n\n"
+                    logger.info(f"[SmartResume] Found {len(incomplete_files)} incomplete files to generate")
 
-                    from app.modules.orchestrator.dynamic_orchestrator import dynamic_orchestrator
+                    # Get project plan for context
+                    project_result = await db.execute(
+                        select(Project).where(Project.id == project_id)
+                    )
+                    project = project_result.scalar_one_or_none()
+                    plan_json = project.plan_json if project else None
 
-                    async for event in dynamic_orchestrator.resume_workflow(
-                        project_id=project_id,
-                        resume_info=resume_info,
-                        checkpoint_service=checkpoint_service
-                    ):
-                        yield f"data: {json.dumps(event)}\n\n"
-                        await asyncio.sleep(0.01)
+                    if plan_json:
+                        # Use orchestrator to regenerate only incomplete files
+                        from app.modules.orchestrator.dynamic_orchestrator import dynamic_orchestrator
 
-                    await checkpoint_service.mark_completed(project_id)
+                        # Build resume context with only incomplete files
+                        resume_info = {
+                            "incomplete_files": incomplete_files,
+                            "plan": plan_json,
+                            "user_id": user_id,
+                            "context": {
+                                "project_id": project_id,
+                                "plan": plan_json,
+                                "files_to_generate": [f["path"] for f in incomplete_files]
+                            }
+                        }
 
-                    yield f"data: {json.dumps({'type': 'files_completed', 'data': {'project_id': project_id, 'message': 'All files generated'}})}\n\n"
+                        async for event in dynamic_orchestrator.resume_incomplete_files(
+                            project_id=project_id,
+                            incomplete_files=incomplete_files,
+                            plan=plan_json,
+                            user_id=user_id
+                        ):
+                            yield f"data: {json.dumps(event)}\n\n"
+                            await asyncio.sleep(0.01)
+
+                        yield f"data: {json.dumps({'type': 'files_completed', 'data': {'project_id': project_id, 'message': 'All files generated'}})}\n\n"
+                    else:
+                        # No plan_json - check for checkpoint
+                        checkpoint = await checkpoint_service.get_checkpoint(project_id)
+
+                        if checkpoint and checkpoint.get("user_id") == user_id:
+                            resume_info = await checkpoint_service.get_resume_point(project_id)
+                            await checkpoint_service.mark_resumed(project_id)
+
+                            from app.modules.orchestrator.dynamic_orchestrator import dynamic_orchestrator
+
+                            async for event in dynamic_orchestrator.resume_workflow(
+                                project_id=project_id,
+                                resume_info=resume_info,
+                                checkpoint_service=checkpoint_service
+                            ):
+                                yield f"data: {json.dumps(event)}\n\n"
+                                await asyncio.sleep(0.01)
+
+                            await checkpoint_service.mark_completed(project_id)
+
+                            yield f"data: {json.dumps({'type': 'files_completed', 'data': {'project_id': project_id, 'message': 'All files generated'}})}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'type': 'error', 'data': {'error': 'no_plan', 'message': 'No plan found. Please regenerate the project.'}})}\n\n"
+                            return
                 else:
-                    yield f"data: {json.dumps({'type': 'info', 'data': {'message': 'No checkpoint found, checking file status...'}})}\n\n"
+                    yield f"data: {json.dumps({'type': 'info', 'data': {'message': 'No incomplete files found'}})}\n\n"
 
             # Re-check files after generation
             files_complete_now, _, _ = await check_files_complete(db, project_id)
