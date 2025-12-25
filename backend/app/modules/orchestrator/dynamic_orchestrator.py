@@ -3828,18 +3828,21 @@ Ensure every import in every file has a corresponding file in the plan.
                 }
             )
 
-            # Helper function to generate a single file and collect events
+            # REAL-TIME EVENT STREAMING: Use queue to yield events immediately
+            # instead of collecting them (which caused 30s timeout)
+            event_queue: asyncio.Queue = asyncio.Queue()
+
+            # Helper function to generate a single file and stream events to queue
             async def generate_single_file(file_info: Dict, file_index: int) -> Dict:
-                """Generate a single file and return results (for parallel execution)"""
+                """Generate a single file and stream events to queue in real-time"""
                 file_path = file_info.get('path', '')
                 file_description = file_info.get('description', '')
-                events = []
                 success = False
                 file_content = ""
                 error_msg = None
 
                 if not file_path:
-                    return {"success": False, "events": [], "file_path": ""}
+                    return {"success": False, "file_path": ""}
 
                 try:
                     # Mark as generating
@@ -3849,11 +3852,11 @@ Ensure every import in every file has a corresponding file in the plan.
                         status="generating"
                     )
 
-                    # Collect events from file generation
+                    # Stream events to queue in REAL-TIME (not collecting!)
                     async for event in self._execute_writer_for_single_file(
                         config, context, file_path, file_description, system_prompt
                     ):
-                        events.append(event)
+                        await event_queue.put(("event", event))
 
                     # Get file content
                     for fc in reversed(context.files_created):
@@ -3881,7 +3884,6 @@ Ensure every import in every file has a corresponding file in the plan.
 
                 return {
                     "success": success,
-                    "events": events,
                     "file_path": file_path,
                     "file_content": file_content,
                     "file_index": file_index,
@@ -3925,25 +3927,66 @@ Ensure every import in every file has a corresponding file in the plan.
                         }
                     )
 
-                # Generate all files in batch IN PARALLEL
-                tasks = [
-                    generate_single_file(file_info, batch_start + i + 1)
-                    for i, file_info in enumerate(batch_files)
-                ]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                # Generate all files in batch IN PARALLEL with REAL-TIME event streaming
+                # Use create_task + queue to yield events as they happen (not after batch)
+                batch_done = asyncio.Event()
+                active_tasks = []
+                batch_results = []
 
-                # Process results and yield events
-                for result in results:
+                async def run_and_store_result(file_info: Dict, file_index: int):
+                    """Run file generation and store result"""
+                    result = await generate_single_file(file_info, file_index)
+                    batch_results.append(result)
+                    return result
+
+                # Start all file generation tasks
+                for i, file_info in enumerate(batch_files):
+                    task = asyncio.create_task(
+                        run_and_store_result(file_info, batch_start + i + 1)
+                    )
+                    active_tasks.append(task)
+
+                # Signal when all tasks complete
+                async def signal_batch_done():
+                    await asyncio.gather(*active_tasks, return_exceptions=True)
+                    await event_queue.put(("batch_done", None))
+
+                asyncio.create_task(signal_batch_done())
+
+                # Read from queue and yield events in REAL-TIME
+                batch_complete = False
+                while not batch_complete:
+                    try:
+                        msg_type, msg_data = await asyncio.wait_for(
+                            event_queue.get(),
+                            timeout=15.0  # Keepalive timeout
+                        )
+
+                        if msg_type == "batch_done":
+                            batch_complete = True
+                        elif msg_type == "event":
+                            yield msg_data
+
+                    except asyncio.TimeoutError:
+                        # Send keepalive if queue is empty for too long
+                        yield OrchestratorEvent(
+                            type=EventType.STATUS,
+                            data={
+                                "message": f"Generating files... (batch {batch_start//PARALLEL_BATCH_SIZE + 1})",
+                                "keepalive": True,
+                                "batch": batch_start//PARALLEL_BATCH_SIZE + 1,
+                                "_p": "." * 2048  # Padding for CloudFront
+                            }
+                        )
+
+                # Process results for completion events
+                for result in batch_results:
                     if isinstance(result, Exception):
                         logger.error(f"[Writer] Batch task failed: {result}")
                         continue
 
                     file_path = result.get("file_path", "")
                     file_index = result.get("file_index", 0)
-
-                    # Yield collected events from this file
-                    for event in result.get("events", []):
-                        yield event
 
                     # Yield completion or error event
                     if result.get("success"):
