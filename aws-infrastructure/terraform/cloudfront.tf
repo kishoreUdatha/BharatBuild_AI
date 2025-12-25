@@ -23,7 +23,8 @@ resource "aws_cloudfront_distribution" "main" {
       https_port               = 443
       origin_protocol_policy   = "http-only"
       origin_ssl_protocols     = ["TLSv1.2"]
-      # 60 seconds max for read timeout; ALB idle timeout handles SSE (300s)
+      # 60 seconds is the max for CloudFront origin_read_timeout
+      # Backend sends keepalive events every 30 seconds to prevent timeout
       origin_read_timeout      = 60
       # 60 seconds is the max allowed for keepalive
       origin_keepalive_timeout = 60

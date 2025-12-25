@@ -2545,6 +2545,13 @@ class DynamicOrchestrator:
                     logger.warning(f"[Workflow] Step {step_index} ({step.name}) failed after {step.retry_count} attempts")
 
             # LAYER 2: Upload to S3 on completion (if configured)
+            # Yield progress event to keep SSE connection alive during S3 upload
+            yield OrchestratorEvent(
+                type=EventType.PROGRESS,
+                data={"message": "Saving project to cloud storage...", "phase": "s3_upload"},
+                step=len(workflow.steps)
+            )
+
             s3_zip_key = None
             user_id = metadata.get("user_id") if metadata else None
             if user_id:
@@ -2555,10 +2562,22 @@ class DynamicOrchestrator:
                     )
                     if s3_zip_key:
                         logger.info(f"[Layer2-S3] Uploaded project ZIP: {s3_zip_key}")
+                        yield OrchestratorEvent(
+                            type=EventType.PROGRESS,
+                            data={"message": "Project saved to cloud", "phase": "s3_upload_complete", "s3_key": s3_zip_key},
+                            step=len(workflow.steps)
+                        )
                 except Exception as s3_err:
                     logger.warning(f"[Layer2-S3] Failed to upload to S3: {s3_err}")
 
             # LAYER 3: Update PostgreSQL with metadata
+            # Yield progress event to keep SSE connection alive during DB update
+            yield OrchestratorEvent(
+                type=EventType.PROGRESS,
+                data={"message": "Updating project metadata...", "phase": "db_update"},
+                step=len(workflow.steps)
+            )
+
             try:
                 from app.core.database import async_session
                 from app.models.project import Project, ProjectStatus
@@ -2610,6 +2629,13 @@ class DynamicOrchestrator:
                     logger.info(f"[Layer3-PostgreSQL] Updated project metadata for {project_id}")
             except Exception as db_err:
                 logger.warning(f"[Layer3-PostgreSQL] Failed to update project: {db_err}")
+
+            # Yield progress event after DB update
+            yield OrchestratorEvent(
+                type=EventType.PROGRESS,
+                data={"message": "Finalizing project...", "phase": "finalizing"},
+                step=len(workflow.steps)
+            )
 
             # Save token usage to database
             if user_id and context.total_tokens > 0:
