@@ -463,8 +463,10 @@ class DockerSandboxService:
                     if port_mapping:
                         for pm in port_mapping:
                             used.add(int(pm["HostPort"]))
-        except:
-            pass
+        except (KeyError, TypeError, ValueError) as e:
+            logger.debug(f"Error getting used ports: {e}")
+        except Exception as e:
+            logger.warning(f"Unexpected error getting used ports: {type(e).__name__}: {e}")
 
         return used
 
@@ -510,8 +512,10 @@ class DockerSandboxService:
                             container.stop(timeout=5)
                             container.remove(force=True)
                             removed += 1
-                    except:
-                        pass
+                    except (ValueError, TypeError) as e:
+                        logger.debug(f"Error parsing container created_at: {e}")
+                    except Exception as e:
+                        logger.warning(f"Error processing stale container: {type(e).__name__}: {e}")
 
             logger.info(f"Cleaned up {removed} stale sandboxes")
             return removed

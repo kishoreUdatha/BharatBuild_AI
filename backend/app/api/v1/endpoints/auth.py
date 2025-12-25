@@ -1070,8 +1070,23 @@ async def forgot_password(
     # For beta, we return the token in response (temporary)
     # TODO: Implement email sending
 
+    # SECURITY FIX: Never expose tokens in response - send via email only
+    # In production, the token is sent via email. Removed beta token exposure.
+    try:
+        email_sent = await email_service.send_password_reset_email(
+            to_email=user.email,
+            user_name=user.full_name,
+            reset_token=reset_token
+        )
+        if email_sent:
+            logger.info(f"[Auth] Password reset email sent to {user.email}")
+        else:
+            logger.warning(f"[Auth] Failed to send password reset email to {user.email}")
+    except Exception as email_err:
+        logger.error(f"[Auth] Error sending password reset email: {email_err}")
+
     return PasswordResetResponse(
-        message=f"Password reset link has been sent to your email. Token (for beta testing): {reset_token[:50]}...",
+        message="If an account with that email exists, you will receive password reset instructions.",
         success=True
     )
 

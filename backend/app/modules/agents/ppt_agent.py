@@ -98,8 +98,9 @@ Include all important aspects of the project.
                 content = content.split("```")[1].split("```")[0].strip()
 
             slides = json.loads(content)
-        except:
+        except (json.JSONDecodeError, IndexError, TypeError) as e:
             # Fallback: return raw content
+            logger.warning(f"Could not parse PPT content as JSON: {e}")
             slides = [
                 {
                     "title": title,

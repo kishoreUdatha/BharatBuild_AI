@@ -242,7 +242,8 @@ class SandboxReconstructionService:
                         return "express"
                     else:
                         return "node"
-            except:
+            except (json.JSONDecodeError, IOError, OSError, KeyError) as e:
+                logger.debug(f"Could not parse package.json for framework detection: {e}")
                 return "node"
 
         elif os.path.exists(os.path.join(workspace_path, "requirements.txt")):

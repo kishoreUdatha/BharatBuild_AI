@@ -106,8 +106,9 @@ Include questions that examiners commonly ask.
                 content = content.split("```")[1].split("```")[0].strip()
 
             qa_pairs = json.loads(content)
-        except:
+        except (json.JSONDecodeError, IndexError, TypeError) as e:
             # Fallback
+            logger.warning(f"Could not parse Viva Q&A content as JSON: {e}")
             qa_pairs = [
                 {
                     "question": "Q&A content could not be parsed",

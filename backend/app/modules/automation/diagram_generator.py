@@ -465,7 +465,8 @@ class UMLDiagramGenerator:
             plt.savefig(output_path, dpi=100, bbox_inches='tight')
             plt.close()
             return True
-        except:
+        except Exception as e:
+            logger.warning(f"Could not generate diagram: {e}")
             return False
 
 

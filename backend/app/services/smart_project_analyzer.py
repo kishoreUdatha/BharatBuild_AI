@@ -330,8 +330,8 @@ class SmartProjectAnalyzer:
                     pkg = json.load(f)
                     deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
                     has_react = "react" in deps
-            except:
-                pass
+            except (json.JSONDecodeError, IOError, OSError, KeyError) as e:
+                logger.debug(f"Could not parse frontend package.json: {e}")
 
         if has_react:
             if has_spring:
@@ -378,8 +378,8 @@ class SmartProjectAnalyzer:
                 # Check for Svelte
                 if "svelte" in deps:
                     return Technology.SVELTE
-        except:
-            pass
+        except (json.JSONDecodeError, IOError, OSError, KeyError) as e:
+            logger.debug(f"Could not parse package.json for frontend detection: {e}")
 
         return Technology.UNKNOWN
 
@@ -419,8 +419,8 @@ class SmartProjectAnalyzer:
 
                     if "@nestjs/core" in deps:
                         return Technology.NESTJS
-            except:
-                pass
+            except (json.JSONDecodeError, IOError, OSError, KeyError) as e:
+                logger.debug(f"Could not parse package.json for technology detection: {e}")
 
         # Check for Python projects
         if (project_path / "requirements.txt").exists() or (project_path / "pyproject.toml").exists():
@@ -437,8 +437,8 @@ class SmartProjectAnalyzer:
                             return Technology.FLASK
                         if "streamlit" in content.lower():
                             return Technology.STREAMLIT
-                except:
-                    pass
+                except (IOError, OSError) as e:
+                    logger.debug(f"Could not read main.py for technology detection: {e}")
                 return Technology.FASTAPI  # Default Python web
             if (project_path / "app.py").exists():
                 # Check requirements.txt for streamlit before defaulting to Flask
@@ -449,8 +449,8 @@ class SmartProjectAnalyzer:
                             reqs = f.read().lower()
                             if "streamlit" in reqs:
                                 return Technology.STREAMLIT
-                    except:
-                        pass
+                    except (IOError, OSError) as e:
+                        logger.debug(f"Could not read requirements.txt: {e}")
                 # Also check app.py content
                 try:
                     with open(project_path / "app.py") as f:
@@ -459,8 +459,8 @@ class SmartProjectAnalyzer:
                             return Technology.STREAMLIT
                         if "flask" in content:
                             return Technology.FLASK
-                except:
-                    pass
+                except (IOError, OSError) as e:
+                    logger.debug(f"Could not read app.py: {e}")
                 return Technology.FLASK  # Default for app.py
             return Technology.PYTHON_SCRIPT
 
@@ -687,8 +687,8 @@ class SmartProjectAnalyzer:
                     pkg = json.load(f)
                     deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
                     return "tailwindcss" in deps
-            except:
-                pass
+            except (json.JSONDecodeError, IOError, OSError, KeyError) as e:
+                logger.debug(f"Could not check package.json for Tailwind: {e}")
         return False
 
     async def _generate_fix_for_missing(

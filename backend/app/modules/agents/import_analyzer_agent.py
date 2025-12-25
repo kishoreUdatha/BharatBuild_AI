@@ -52,7 +52,8 @@ class ImportAnalyzerAgent:
         try:
             with open(prompt_path, 'r') as f:
                 return f.read()
-        except:
+        except (IOError, OSError, FileNotFoundError) as e:
+            logger.debug(f"Could not load system prompt from {prompt_path}: {e}")
             return "Analyze code. Be concise. Report: Location, Severity, Issue, Fix."
 
     def _estimate_tokens(self, text: str) -> int:

@@ -920,7 +920,8 @@ def _detect_project_type(project_path) -> dict:
                     project_info["framework"] = "vue"
                 else:
                     project_info["framework"] = "nodejs"
-        except:
+        except (json.JSONDecodeError, IOError, OSError) as e:
+            logger.debug(f"Could not parse package.json: {e}")
             project_info["framework"] = "nodejs"
 
     # Check for Python/Backend
@@ -938,8 +939,8 @@ def _detect_project_type(project_path) -> dict:
                     project_info["framework"] = "flask"
                 elif "django" in reqs:
                     project_info["framework"] = "django"
-        except:
-            pass
+        except (IOError, OSError) as e:
+            logger.debug(f"Could not read requirements.txt: {e}")
 
     # Check for simple HTML
     if (project_path / "index.html").exists():

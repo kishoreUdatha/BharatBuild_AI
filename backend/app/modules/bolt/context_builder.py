@@ -216,8 +216,8 @@ class BoltContextBuilder:
                     stack.append('Tailwind CSS')
                 if 'vite' in deps:
                     stack.append('Vite')
-            except:
-                pass
+            except (json.JSONDecodeError, IOError, OSError, KeyError) as e:
+                logger.debug(f"Could not parse package.json for tech stack: {e}")
 
         # Detect from extensions
         has_ext = lambda ext: any(f['path'].endswith(ext) for f in files)
@@ -365,8 +365,8 @@ class BoltContextBuilder:
                     **pkg.get('dependencies', {}),
                     **pkg.get('devDependencies', {})
                 }
-            except:
-                pass
+            except (json.JSONDecodeError, TypeError, KeyError) as e:
+                logger.debug(f"Could not parse package.json dependencies: {e}")
 
         return None
 

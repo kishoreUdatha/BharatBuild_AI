@@ -754,6 +754,12 @@ class WorkflowStep:
     hidden: bool = False  # If True, step runs but doesn't show in UI progress
 
 
+# Per-file generation timeout (prevents indefinite hangs on complex files)
+# Complex files like cart.tsx, dashboard.tsx can take longer, but should never hang forever
+SINGLE_FILE_GENERATION_TIMEOUT = 120  # seconds (2 minutes per file max)
+SINGLE_FILE_RETRY_COUNT = 2  # Number of retries before marking as failed
+
+
 @dataclass
 class ExecutionContext:
     """Shared context across workflow execution"""
@@ -1894,8 +1900,13 @@ class DynamicOrchestrator:
             # Extract project_name from lxml DOM
             project_name_elem = dom.find('project_name')
             if project_name_elem is not None:
-                result['project_name'] = project_name_elem.text.strip() if project_name_elem.text else None
-                logger.info(f"[lxml DOM Parser] Extracted project_name: {result['project_name']}")
+                raw_name = project_name_elem.text
+                if raw_name:
+                    result['project_name'] = raw_name.strip()
+                    logger.info(f"[lxml DOM Parser] Extracted project_name: '{result['project_name']}' (raw: '{raw_name[:50]}...' len={len(raw_name)})")
+                else:
+                    result['project_name'] = None
+                    logger.warning(f"[lxml DOM Parser] project_name element found but text is None/empty")
 
             # Extract project_description from lxml DOM
             project_desc_elem = dom.find('project_description')
@@ -3364,12 +3375,15 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
         features = context.plan.get('features', []) if context.plan else []
 
         if project_name:
-            logger.info(f"[OK] Claude suggested project name: {project_name}")
+            logger.info(f"[Planner] Claude suggested project name: '{project_name}' (len={len(project_name)})")
+            # Validate project name - check for truncation issues
+            if len(project_name) < 3:
+                logger.warning(f"[Planner] Project name too short: '{project_name}' - possible truncation")
             context.project_name = project_name  # Save to context for DOCUMENTER
         else:
             # Fallback: extract from user request only if Claude didn't suggest one
             project_name = self._extract_project_name_from_request(context.user_request)
-            logger.info(f"[FALLBACK] Extracted project name from request: {project_name}")
+            logger.info(f"[Planner] [FALLBACK] Extracted project name from request: '{project_name}'")
             context.project_name = project_name
         
         # Save project metadata to context for downstream use (DOCUMENTER, etc.)
@@ -3377,9 +3391,10 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
             context.project_description = project_description
         context.features = features
 
-        # CRITICAL: Update project title in database IMMEDIATELY after planner extracts it
-        # This fixes the bug where dropdown shows "New App" instead of actual project name
-        if project_name and context.project_id:
+        # CRITICAL: Update project metadata in database IMMEDIATELY after planner completes
+        # This includes plan_json which is REQUIRED for resume functionality
+        # NOTE: We save even if project_name is not extracted - plan_json is more important
+        if context.project_id:
             # ============================================================
             # STEP 1: Save project metadata (title, description, plan_json)
             # ============================================================
@@ -3402,15 +3417,30 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
                         break  # Can't proceed without valid UUID
 
                     async with async_session() as db:
-                        update_values = {'title': project_name}
+                        # Build update values - plan_json is ALWAYS included if available
+                        update_values = {}
+
+                        # Project name (optional but nice to have)
+                        if project_name:
+                            update_values['title'] = project_name
+                            logger.info(f"[Planner] Saving title to DB: '{project_name}' (first_char='{project_name[0] if project_name else 'N/A'}')")
+
+                        # Project description (optional)
                         if project_description:
                             update_values['description'] = project_description
 
-                        # CRITICAL: Save plan_json to database for project retrieval
-                        # This enables loading the plan when user switches back to this project
+                        # CRITICAL: Save plan_json to database for resume functionality
+                        # This is REQUIRED - without this, resume will fail with "no_plan" error
                         if context.plan:
                             update_values['plan_json'] = context.plan
                             logger.info(f"[Planner] Saving plan_json to DB (attempt {save_attempt + 1}): {len(context.plan.get('files', []))} files, {len(context.plan.get('features', []))} features")
+                        else:
+                            logger.warning(f"[Planner] No plan to save for project {context.project_id}")
+
+                        # Skip DB update if no values to update
+                        if not update_values:
+                            logger.warning(f"[Planner] No values to update for project {context.project_id}")
+                            break
 
                         result = await db.execute(
                             update(Project)
@@ -3421,10 +3451,12 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
 
                         # Check if any rows were updated
                         if result.rowcount == 0:
-                            logger.warning(f"[Planner] No rows updated for project {project_uuid} - project may not exist")
+                            logger.warning(f"[Planner] No rows updated for project {project_uuid} - project may not exist in DB")
+                            # Try one more thing - maybe project_id doesn't match
+                            logger.info(f"[Planner] Checking if project exists with id={project_uuid}")
                         else:
                             project_saved = True
-                            logger.info(f"[Planner] ✓ Updated project in DB: title='{project_name}', plan_json={'saved' if context.plan else 'none'}, rows_affected={result.rowcount}")
+                            logger.info(f"[Planner] ✓ Plan saved to DB: title='{project_name or 'untitled'}', files={len(context.plan.get('files', []))}, rows_affected={result.rowcount}")
                             break  # Success, exit retry loop
 
                 except Exception as e:
@@ -3435,6 +3467,15 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
 
             if not project_saved:
                 logger.error(f"[Planner] CRITICAL: Failed to save plan_json after {max_save_retries} attempts for project {context.project_id}")
+                # Emit warning event so user knows resume might not work
+                yield OrchestratorEvent(
+                    type=EventType.WARNING,
+                    data={
+                        "message": "Plan save failed - Resume may not work if disconnected. Please wait for generation to complete.",
+                        "critical": True,
+                        "can_resume": False
+                    }
+                )
 
             # ============================================================
             # STEP 2: Save planned files to ProjectFile table (separate transaction)
@@ -3906,6 +3947,11 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
         - One API call per file
         - Max ~8K output tokens per file (plenty for any single file)
         - No risk of truncation or incomplete files
+
+        TIMEOUT PROTECTION:
+        - Each file has a maximum generation time (SINGLE_FILE_GENERATION_TIMEOUT)
+        - If timeout occurs, file is marked as FAILED for resume to pick up
+        - Prevents indefinite hangs on complex files like cart.tsx
         """
 
         # Build color theme instruction if user specified colors
@@ -3933,7 +3979,7 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
         # Initialize Bolt streaming buffer
         streaming_buffer = BoltStreamingBuffer(tag='file')
 
-        logger.info(f"[Writer] Generating single file: {file_path}")
+        logger.info(f"[Writer] Generating single file: {file_path} (timeout: {SINGLE_FILE_GENERATION_TIMEOUT}s)")
 
         # Track time for keepalive events
         # CloudFront has a 60-second origin read timeout, so send keepalive every 25 seconds
@@ -3941,141 +3987,192 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
         # because Claude streams tokens continuously but we only yield when file is complete
         import time
         last_event_time = time.time()
+        generation_start_time = time.time()
         KEEPALIVE_INTERVAL = 25  # seconds
+        file_generated = False
 
-        async for chunk in self.claude_client.generate_stream(
-            prompt=user_prompt,
-            system_prompt=system_prompt,
-            model=config.model,
-            max_tokens=config.max_tokens,
-            temperature=config.temperature
-        ):
-            # Check if we need to send keepalive (time since last yielded event)
-            current_time = time.time()
-            if current_time - last_event_time >= KEEPALIVE_INTERVAL:
-                last_event_time = current_time
-                logger.info(f"[Writer] Sending keepalive during {file_path} generation")
-                yield OrchestratorEvent(
-                    type=EventType.STATUS,
-                    data={
-                        "message": f"Generating {file_path}...",
-                        "file": file_path,
-                        "keepalive": True
-                    }
-                )
-            # Check for token usage marker at end of stream
-            if chunk.startswith("__TOKEN_USAGE__:"):
-                parts = chunk.split(":")
-                if len(parts) >= 4:
-                    input_tokens = int(parts[1])
-                    output_tokens = int(parts[2])
-                    model_used = parts[3]
-                    context.track_tokens(
-                        input_tokens, output_tokens, model_used,
-                        agent_type="writer",
-                        operation="generate_file",
-                        file_path=file_path
-                    )
-                    logger.info(f"[Writer] Token usage tracked: {input_tokens}+{output_tokens}={input_tokens+output_tokens} ({model_used})")
-                continue  # Don't process marker as content
-
-            # Feed chunk to buffer and extract complete files
-            complete_files = streaming_buffer.feed_chunk(chunk)
-
-            for file_data in complete_files:
-                extracted_path = file_data['path']
-                file_content = file_data['content']
-
-                # Save file immediately (uses temp storage if enabled)
-                session_id = context.metadata.get("session_id")
-                user_id = context.metadata.get("user_id")
-
-                # ============================================================
-                # INCREMENTAL SAVE: Update status to GENERATING before save
-                # This ensures we can resume from this point if disconnected
-                # ============================================================
-                try:
-                    from app.core.database import async_session
-                    from app.models.project_file import ProjectFile, FileGenerationStatus
-                    from sqlalchemy import update
-                    from uuid import UUID as UUID_type
-
-                    async with async_session() as status_db:
-                        await status_db.execute(
-                            update(ProjectFile)
-                            .where(ProjectFile.project_id == UUID_type(str(context.project_id)))
-                            .where(ProjectFile.path == extracted_path)
-                            .values(generation_status=FileGenerationStatus.GENERATING)
+        try:
+            # Wrap file generation with timeout to prevent indefinite hangs
+            async with asyncio.timeout(SINGLE_FILE_GENERATION_TIMEOUT):
+                async for chunk in self.claude_client.generate_stream(
+                    prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    model=config.model,
+                    max_tokens=config.max_tokens,
+                    temperature=config.temperature
+                ):
+                    # Check if we need to send keepalive (time since last yielded event)
+                    current_time = time.time()
+                    if current_time - last_event_time >= KEEPALIVE_INTERVAL:
+                        last_event_time = current_time
+                        logger.info(f"[Writer] Sending keepalive during {file_path} generation")
+                        yield OrchestratorEvent(
+                            type=EventType.STATUS,
+                            data={
+                                "message": f"Generating {file_path}...",
+                                "file": file_path,
+                                "keepalive": True
+                            }
                         )
-                        await status_db.commit()
-                except Exception as status_err:
-                    logger.warning(f"[Writer] Could not update status to GENERATING: {status_err}")
-
-                # CRITICAL: Check if save was successful
-                save_success = await self.save_file(
-                    project_id=context.project_id,
-                    file_path=extracted_path,
-                    content=file_content,
-                    session_id=session_id,
-                    user_id=user_id
-                )
-
-                if save_success:
-                    context.files_created.append({
-                        'path': extracted_path,
-                        'content': file_content,
-                        'saved': True
-                    })
-
-                    # ============================================================
-                    # INCREMENTAL SAVE: Update status to COMPLETED after save
-                    # File is now safely stored in S3 and can be restored
-                    # ============================================================
-                    try:
-                        async with async_session() as status_db:
-                            await status_db.execute(
-                                update(ProjectFile)
-                                .where(ProjectFile.project_id == UUID_type(str(context.project_id)))
-                                .where(ProjectFile.path == extracted_path)
-                                .values(generation_status=FileGenerationStatus.COMPLETED)
+                    # Check for token usage marker at end of stream
+                    if chunk.startswith("__TOKEN_USAGE__:"):
+                        parts = chunk.split(":")
+                        if len(parts) >= 4:
+                            input_tokens = int(parts[1])
+                            output_tokens = int(parts[2])
+                            model_used = parts[3]
+                            context.track_tokens(
+                                input_tokens, output_tokens, model_used,
+                                agent_type="writer",
+                                operation="generate_file",
+                                file_path=file_path
                             )
-                            await status_db.commit()
-                        logger.info(f"[Writer] ✓ File status COMPLETED: {extracted_path}")
-                    except Exception as status_err:
-                        logger.warning(f"[Writer] Could not update status to COMPLETED: {status_err}")
+                            logger.info(f"[Writer] Token usage tracked: {input_tokens}+{output_tokens}={input_tokens+output_tokens} ({model_used})")
+                        continue  # Don't process marker as content
 
-                    # Emit file content event with project_id for proper isolation
-                    yield OrchestratorEvent(
-                        type=EventType.FILE_CONTENT,
-                        data={
-                            "path": extracted_path,
-                            "content": file_content,
-                            "status": "complete",
-                            "project_id": context.project_id  # For file isolation in frontend
-                        }
-                    )
-                    # Reset keepalive timer after yielding an event
-                    last_event_time = time.time()
-                    logger.info(f"[Writer] ✓ File saved: {extracted_path} ({len(file_content)} chars)")
-                else:
-                    # Save failed - still add to context but mark as not saved
-                    context.files_created.append({
-                        'path': extracted_path,
-                        'content': file_content,
-                        'saved': False
-                    })
+                    # Feed chunk to buffer and extract complete files
+                    complete_files = streaming_buffer.feed_chunk(chunk)
 
-                    # Emit warning but don't fail the entire generation
-                    yield OrchestratorEvent(
-                        type=EventType.WARNING,
-                        data={
-                            "message": f"File {extracted_path} generated but save failed - will retry",
-                            "path": extracted_path,
-                            "can_retry": True
-                        }
+                    for file_data in complete_files:
+                        extracted_path = file_data['path']
+                        file_content = file_data['content']
+                        file_generated = True
+
+                        # Save file immediately (uses temp storage if enabled)
+                        session_id = context.metadata.get("session_id")
+                        user_id = context.metadata.get("user_id")
+
+                        # ============================================================
+                        # INCREMENTAL SAVE: Update status to GENERATING before save
+                        # This ensures we can resume from this point if disconnected
+                        # ============================================================
+                        try:
+                            from app.core.database import async_session
+                            from app.models.project_file import ProjectFile, FileGenerationStatus
+                            from sqlalchemy import update
+                            from uuid import UUID as UUID_type
+
+                            async with async_session() as status_db:
+                                await status_db.execute(
+                                    update(ProjectFile)
+                                    .where(ProjectFile.project_id == UUID_type(str(context.project_id)))
+                                    .where(ProjectFile.path == extracted_path)
+                                    .values(generation_status=FileGenerationStatus.GENERATING)
+                                )
+                                await status_db.commit()
+                        except Exception as status_err:
+                            logger.warning(f"[Writer] Could not update status to GENERATING: {status_err}")
+
+                        # CRITICAL: Check if save was successful
+                        save_success = await self.save_file(
+                            project_id=context.project_id,
+                            file_path=extracted_path,
+                            content=file_content,
+                            session_id=session_id,
+                            user_id=user_id
+                        )
+
+                        if save_success:
+                            context.files_created.append({
+                                'path': extracted_path,
+                                'content': file_content,
+                                'saved': True
+                            })
+
+                            # ============================================================
+                            # INCREMENTAL SAVE: Update status to COMPLETED after save
+                            # File is now safely stored in S3 and can be restored
+                            # ============================================================
+                            try:
+                                async with async_session() as status_db:
+                                    await status_db.execute(
+                                        update(ProjectFile)
+                                        .where(ProjectFile.project_id == UUID_type(str(context.project_id)))
+                                        .where(ProjectFile.path == extracted_path)
+                                        .values(generation_status=FileGenerationStatus.COMPLETED)
+                                    )
+                                    await status_db.commit()
+                                logger.info(f"[Writer] ✓ File status COMPLETED: {extracted_path}")
+                            except Exception as status_err:
+                                logger.warning(f"[Writer] Could not update status to COMPLETED: {status_err}")
+
+                            # Emit file content event with project_id for proper isolation
+                            yield OrchestratorEvent(
+                                type=EventType.FILE_CONTENT,
+                                data={
+                                    "path": extracted_path,
+                                    "content": file_content,
+                                    "status": "complete",
+                                    "project_id": context.project_id  # For file isolation in frontend
+                                }
+                            )
+                            # Reset keepalive timer after yielding an event
+                            last_event_time = time.time()
+                            logger.info(f"[Writer] ✓ File saved: {extracted_path} ({len(file_content)} chars)")
+                        else:
+                            # Save failed - still add to context but mark as not saved
+                            context.files_created.append({
+                                'path': extracted_path,
+                                'content': file_content,
+                                'saved': False
+                            })
+
+                            # Emit warning but don't fail the entire generation
+                            yield OrchestratorEvent(
+                                type=EventType.WARNING,
+                                data={
+                                    "message": f"File {extracted_path} generated but save failed - will retry",
+                                    "path": extracted_path,
+                                    "can_retry": True
+                                }
+                            )
+                            last_event_time = time.time()
+                            logger.warning(f"[Writer] ✗ File generated but save failed: {extracted_path}")
+
+            # Log successful generation
+            generation_time = time.time() - generation_start_time
+            logger.info(f"[Writer] ✓ File {file_path} generated in {generation_time:.1f}s")
+
+        except asyncio.TimeoutError:
+            # ============================================================
+            # TIMEOUT HANDLING: Mark file as FAILED for resume to pick up
+            # This prevents indefinite hangs on complex files
+            # ============================================================
+            generation_time = time.time() - generation_start_time
+            logger.error(f"[Writer] ✗ TIMEOUT generating {file_path} after {generation_time:.1f}s (limit: {SINGLE_FILE_GENERATION_TIMEOUT}s)")
+
+            # Mark file as FAILED in database so resume can regenerate it
+            try:
+                from app.core.database import async_session
+                from app.models.project_file import ProjectFile, FileGenerationStatus
+                from sqlalchemy import update
+                from uuid import UUID as UUID_type
+
+                async with async_session() as status_db:
+                    await status_db.execute(
+                        update(ProjectFile)
+                        .where(ProjectFile.project_id == UUID_type(str(context.project_id)))
+                        .where(ProjectFile.path == file_path)
+                        .values(generation_status=FileGenerationStatus.FAILED)
                     )
-                    last_event_time = time.time()
-                    logger.warning(f"[Writer] ✗ File generated but save failed: {extracted_path}")
+                    await status_db.commit()
+                logger.info(f"[Writer] Marked {file_path} as FAILED for resume")
+            except Exception as status_err:
+                logger.warning(f"[Writer] Could not mark file as FAILED: {status_err}")
+
+            # Emit timeout error event
+            yield OrchestratorEvent(
+                type=EventType.WARNING,
+                data={
+                    "message": f"File {file_path} generation timed out after {SINGLE_FILE_GENERATION_TIMEOUT}s. Use Resume to retry.",
+                    "path": file_path,
+                    "timeout": True,
+                    "can_resume": True
+                }
+            )
+
+            # Don't raise - continue with next file
+            return
 
         # Check for incomplete file in buffer
         if streaming_buffer.has_partial_tag():

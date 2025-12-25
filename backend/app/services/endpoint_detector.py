@@ -186,8 +186,8 @@ class EndpointDetector:
                     return "fastify"
                 elif "koa" in deps:
                     return "koa"
-            except:
-                pass
+            except (json.JSONDecodeError, IOError, OSError, KeyError) as e:
+                logger.debug(f"Could not detect backend framework from package.json: {e}")
 
         return "unknown"
 
@@ -805,8 +805,8 @@ class EndpointDetector:
                     return "oauth2"
                 if any(ind in content for ind in session_indicators):
                     return "session"
-            except:
-                pass
+            except (IOError, OSError) as e:
+                logger.debug(f"Could not read file for auth type detection: {e}")
 
         return "none"
 

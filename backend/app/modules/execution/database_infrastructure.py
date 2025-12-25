@@ -556,8 +556,8 @@ class DatabaseInfrastructure:
                             "size_bytes": size,
                             "size_mb": round(size / (1024 * 1024), 2)
                         }
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Could not get PostgreSQL stats: {e}")
 
         # MySQL stats
         if self._mysql_pool:
@@ -575,8 +575,8 @@ class DatabaseInfrastructure:
                                 "size_bytes": result[0],
                                 "size_mb": round(result[0] / (1024 * 1024), 2)
                             }
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Could not get MySQL stats: {e}")
 
         # MongoDB stats
         if self._mongo_client:
@@ -588,8 +588,8 @@ class DatabaseInfrastructure:
                     "size_mb": round(db_stats.get("dataSize", 0) / (1024 * 1024), 2),
                     "collections": db_stats.get("collections", 0)
                 }
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Could not get MongoDB stats: {e}")
 
         return stats
 
@@ -705,8 +705,8 @@ def detect_database_type(project_path: str) -> DatabaseType:
                     return DatabaseType.MYSQL
                 elif "postgresql" in content or "psycopg" in content or "pg" in content:
                     return DatabaseType.POSTGRESQL
-            except:
-                pass
+            except (IOError, OSError) as e:
+                logger.debug(f"Could not read file for DB type detection: {e}")
 
     # Default to PostgreSQL
     return DatabaseType.POSTGRESQL
