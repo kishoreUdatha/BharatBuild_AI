@@ -68,6 +68,9 @@ async def get_incomplete_files(db: AsyncSession, project_id: str) -> list:
     - PLANNED: Never started
     - GENERATING: Started but interrupted
     - FAILED: Attempted but failed
+
+    Also includes has_s3_key flag - if True, file content exists in S3
+    and only needs status update (no regeneration needed).
     """
     result = await db.execute(
         select(ProjectFile).where(
@@ -78,15 +81,44 @@ async def get_incomplete_files(db: AsyncSession, project_id: str) -> list:
     )
     files = result.scalars().all()
 
-    return [
-        {
+    incomplete = []
+    for f in files:
+        incomplete.append({
             "path": f.path,
             "name": f.name,
             "status": f.generation_status.value if f.generation_status else "unknown",
-            "order": f.generation_order or 0
-        }
-        for f in files
-    ]
+            "order": f.generation_order or 0,
+            "has_s3_key": bool(f.s3_key),  # If True, content already in S3
+            "s3_key": f.s3_key  # For restoration without regeneration
+        })
+
+    return incomplete
+
+
+async def fix_orphaned_s3_files(db: AsyncSession, project_id: str) -> int:
+    """
+    Fix files where S3 upload succeeded but DB status wasn't updated.
+    These files have s3_key but status != COMPLETED.
+
+    Returns number of files fixed.
+    """
+    from sqlalchemy import update
+
+    result = await db.execute(
+        update(ProjectFile)
+        .where(ProjectFile.project_id == project_id)
+        .where(ProjectFile.is_folder == False)
+        .where(ProjectFile.s3_key != None)
+        .where(ProjectFile.generation_status != FileGenerationStatus.COMPLETED)
+        .values(generation_status=FileGenerationStatus.COMPLETED)
+    )
+    await db.commit()
+
+    fixed_count = result.rowcount
+    if fixed_count > 0:
+        logger.info(f"[Resume] Fixed {fixed_count} orphaned S3 files for project {project_id}")
+
+    return fixed_count
 
 
 async def get_pending_documents(db: AsyncSession, project_id: str) -> list:
@@ -247,15 +279,29 @@ async def resume_project(
     async def smart_resume_generator():
         """Smart generator that handles both file and document generation"""
         try:
+            # PHASE 0: Fix orphaned S3 files (S3 saved but status not updated)
+            # This handles cases where S3 upload succeeded but DB commit failed
+            fixed_count = await fix_orphaned_s3_files(db, project_id)
+            if fixed_count > 0:
+                yield f"data: {json.dumps({'type': 'info', 'data': {'message': f'Fixed {fixed_count} files already saved to S3'}})}\n\n"
+
             # PHASE 1: Check and complete file generation if needed
             if not files_complete and total_count > 0:
                 # Get list of incomplete files (PLANNED, GENERATING, FAILED)
                 incomplete_files = await get_incomplete_files(db, project_id)
 
-                if incomplete_files:
-                    yield f"data: {json.dumps({'type': 'resume_started', 'data': {'phase': 'files', 'project_id': project_id, 'completed': completed_count, 'total': total_count, 'pending_files': len(incomplete_files)}})}\n\n"
+                # Separate files that need regeneration from those already in S3
+                files_with_s3 = [f for f in incomplete_files if f.get("has_s3_key")]
+                files_need_generation = [f for f in incomplete_files if not f.get("has_s3_key")]
 
-                    logger.info(f"[SmartResume] Found {len(incomplete_files)} incomplete files to generate")
+                if files_with_s3:
+                    # These files are already in S3, just need status update
+                    yield f"data: {json.dumps({'type': 'info', 'data': {'message': f'{len(files_with_s3)} files already in S3, updating status...'}})}\n\n"
+
+                if files_need_generation:
+                    yield f"data: {json.dumps({'type': 'resume_started', 'data': {'phase': 'files', 'project_id': project_id, 'completed': completed_count, 'total': total_count, 'pending_files': len(files_need_generation), 'already_in_s3': len(files_with_s3)}})}\n\n"
+
+                    logger.info(f"[SmartResume] Found {len(files_need_generation)} files to regenerate ({len(files_with_s3)} already in S3)")
 
                     # Get project plan for context
                     project_result = await db.execute(
@@ -265,24 +311,12 @@ async def resume_project(
                     plan_json = project.plan_json if project else None
 
                     if plan_json:
-                        # Use orchestrator to regenerate only incomplete files
+                        # Use orchestrator to regenerate only files WITHOUT s3_key
                         from app.modules.orchestrator.dynamic_orchestrator import dynamic_orchestrator
-
-                        # Build resume context with only incomplete files
-                        resume_info = {
-                            "incomplete_files": incomplete_files,
-                            "plan": plan_json,
-                            "user_id": user_id,
-                            "context": {
-                                "project_id": project_id,
-                                "plan": plan_json,
-                                "files_to_generate": [f["path"] for f in incomplete_files]
-                            }
-                        }
 
                         async for event in dynamic_orchestrator.resume_incomplete_files(
                             project_id=project_id,
-                            incomplete_files=incomplete_files,
+                            incomplete_files=files_need_generation,  # Only files without S3 content
                             plan=plan_json,
                             user_id=user_id
                         ):

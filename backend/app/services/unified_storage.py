@@ -936,6 +936,11 @@ class UnifiedStorageService:
                         existing_file.is_inline = is_inline
                         existing_file.language = language
 
+                        # CRITICAL: Update generation_status to COMPLETED
+                        # This marks the file as successfully generated and saved
+                        from app.models.project_file import FileGenerationStatus
+                        existing_file.generation_status = FileGenerationStatus.COMPLETED
+
                         logger.debug(f"[Layer3-DB] Updating existing file record: {file_path}")
 
                         # Delete old S3 file if storage method changed
@@ -946,7 +951,8 @@ class UnifiedStorageService:
                             except Exception:
                                 pass  # Ignore cleanup errors
                     else:
-                        # Create new file record
+                        # Create new file record with COMPLETED status
+                        from app.models.project_file import FileGenerationStatus
                         new_file = ProjectFile(
                             project_id=project_uuid,
                             path=file_path,
@@ -958,7 +964,8 @@ class UnifiedStorageService:
                             content_inline=content_inline,
                             is_inline=is_inline,
                             is_folder=False,
-                            parent_path=parent_path
+                            parent_path=parent_path,
+                            generation_status=FileGenerationStatus.COMPLETED  # Mark as completed
                         )
                         session.add(new_file)
                         logger.debug(f"[Layer3-DB] Creating new file record: {file_path}")
