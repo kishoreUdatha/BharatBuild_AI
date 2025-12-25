@@ -3209,35 +3209,58 @@ RESPECT THE FILE LIMIT: Generate at most {complexity_info['max_files']} files.
             # ============================================================
             # STEP 1: Save project metadata (title, description, plan_json)
             # ============================================================
+            # CRITICAL: This MUST succeed to enable resume functionality
             project_saved = False
-            try:
-                from app.core.database import async_session
-                from app.models.project import Project
-                from sqlalchemy import update
+            max_save_retries = 3
 
-                async with async_session() as db:
-                    update_values = {'title': project_name}
-                    if project_description:
-                        update_values['description'] = project_description
+            for save_attempt in range(max_save_retries):
+                try:
+                    from app.core.database import async_session
+                    from app.models.project import Project
+                    from sqlalchemy import update
+                    from uuid import UUID as UUID_type
 
-                    # CRITICAL: Save plan_json to database for project retrieval
-                    # This enables loading the plan when user switches back to this project
-                    if context.plan:
-                        update_values['plan_json'] = context.plan
-                        logger.info(f"[Planner] Saving plan_json to DB: {len(context.plan.get('files', []))} files, {len(context.plan.get('features', []))} features")
+                    # Convert project_id to UUID for proper matching
+                    try:
+                        project_uuid = UUID_type(str(context.project_id))
+                    except (ValueError, TypeError) as uuid_err:
+                        logger.error(f"[Planner] Invalid project_id format: {context.project_id} - {uuid_err}")
+                        break  # Can't proceed without valid UUID
 
-                    await db.execute(
-                        update(Project)
-                        .where(Project.id == context.project_id)
-                        .values(**update_values)
-                    )
-                    await db.commit()
-                    project_saved = True
-                    logger.info(f"[Planner] ✓ Updated project in DB: title='{project_name}', plan_json={'saved' if context.plan else 'none'}")
+                    async with async_session() as db:
+                        update_values = {'title': project_name}
+                        if project_description:
+                            update_values['description'] = project_description
 
-            except Exception as e:
-                logger.error(f"[Planner] ✗ Failed to update project metadata in DB: {e}", exc_info=True)
-                # Continue even if metadata save fails - we can retry later
+                        # CRITICAL: Save plan_json to database for project retrieval
+                        # This enables loading the plan when user switches back to this project
+                        if context.plan:
+                            update_values['plan_json'] = context.plan
+                            logger.info(f"[Planner] Saving plan_json to DB (attempt {save_attempt + 1}): {len(context.plan.get('files', []))} files, {len(context.plan.get('features', []))} features")
+
+                        result = await db.execute(
+                            update(Project)
+                            .where(Project.id == project_uuid)
+                            .values(**update_values)
+                        )
+                        await db.commit()
+
+                        # Check if any rows were updated
+                        if result.rowcount == 0:
+                            logger.warning(f"[Planner] No rows updated for project {project_uuid} - project may not exist")
+                        else:
+                            project_saved = True
+                            logger.info(f"[Planner] ✓ Updated project in DB: title='{project_name}', plan_json={'saved' if context.plan else 'none'}, rows_affected={result.rowcount}")
+                            break  # Success, exit retry loop
+
+                except Exception as e:
+                    logger.error(f"[Planner] ✗ Failed to update project metadata (attempt {save_attempt + 1}/{max_save_retries}): {e}", exc_info=True)
+                    if save_attempt < max_save_retries - 1:
+                        await asyncio.sleep(1)  # Wait before retry
+                    # Continue to next retry attempt
+
+            if not project_saved:
+                logger.error(f"[Planner] CRITICAL: Failed to save plan_json after {max_save_retries} attempts for project {context.project_id}")
 
             # ============================================================
             # STEP 2: Save planned files to ProjectFile table (separate transaction)
