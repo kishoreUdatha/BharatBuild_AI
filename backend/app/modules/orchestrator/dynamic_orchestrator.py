@@ -1051,9 +1051,9 @@ class WorkflowEngine:
                 timeout=180,
                 retry_count=1,
                 stream_output=True,
-                # Run for any project with build files (improved condition)
-                condition=lambda ctx: len(ctx.files_created) > 0 and any(
-                    any(build_file in (f.get("path") or "") for build_file in
+                # Run for any project with build files (improved condition with type safety)
+                condition=lambda ctx: isinstance(ctx.files_created, list) and len(ctx.files_created) > 0 and any(
+                    any(build_file in (f.get("path") or "" if isinstance(f, dict) else str(f)) for build_file in
                         ["package.json", "requirements.txt", "pom.xml", "build.gradle", "Cargo.toml", "go.mod"])
                     for f in ctx.files_created
                 )
@@ -1066,7 +1066,7 @@ class WorkflowEngine:
                 timeout=300,
                 retry_count=2,
                 stream_output=True,
-                condition=lambda ctx: len(ctx.errors) > 0
+                condition=lambda ctx: isinstance(ctx.errors, list) and len(ctx.errors) > 0
             ),
             # Re-run after fixes to verify they work - Hidden from UI
             WorkflowStep(
@@ -1077,7 +1077,7 @@ class WorkflowEngine:
                 retry_count=1,
                 stream_output=True,
                 hidden=True,  # Hide from UI - internal verification
-                condition=lambda ctx: len(ctx.files_modified) > 0 and any(f.get("operation") == "fix" for f in ctx.files_modified)
+                condition=lambda ctx: isinstance(ctx.files_modified, list) and len(ctx.files_modified) > 0 and any(f.get("operation") == "fix" for f in ctx.files_modified if isinstance(f, dict))
             ),
             # Documenter: Generate documentation (SRS, UML, Reports, etc.)
             # For students: Full docs (Project Report, SRS, PPT, Viva Q&A)
@@ -2394,23 +2394,30 @@ class DynamicOrchestrator:
 
                 context.current_step = step_index
 
-                # Check step condition (if any)
-                if step.condition and not step.condition(context):
-                    logger.info(f"Skipping step {step_index}: {step.name} (condition not met)")
-                    # Send AGENT_COMPLETE event to mark skipped step as complete in UI
-                    yield OrchestratorEvent(
-                        type=EventType.AGENT_COMPLETE,
-                        data={
-                            "agent": step.agent_type,
-                            "name": step.name,
-                            "success": True,
-                            "skipped": True,
-                            "details": "Skipped - not needed for this project"
-                        },
-                        agent=step.agent_type,
-                        step=step_index
-                    )
-                    continue
+                # Check step condition (if any) with error handling
+                if step.condition:
+                    try:
+                        condition_result = step.condition(context)
+                    except Exception as cond_err:
+                        logger.warning(f"[Workflow] Step {step_index} condition error: {cond_err}, skipping step")
+                        condition_result = False  # Skip step if condition evaluation fails
+
+                    if not condition_result:
+                        logger.info(f"Skipping step {step_index}: {step.name} (condition not met)")
+                        # Send AGENT_COMPLETE event to mark skipped step as complete in UI
+                        yield OrchestratorEvent(
+                            type=EventType.AGENT_COMPLETE,
+                            data={
+                                "agent": step.agent_type,
+                                "name": step.name,
+                                "success": True,
+                                "skipped": True,
+                                "details": "Skipped - not needed for this project"
+                            },
+                            agent=step.agent_type,
+                            step=step_index
+                        )
+                        continue
 
                 # Execute step with retries
                 step_result = None
@@ -6509,6 +6516,11 @@ Stream code in chunks for real-time display.
         import re
         endpoints = []
 
+        # Type safety: handle bool/None/invalid types
+        if not isinstance(files_created, list):
+            logger.warning(f"[Documenter] _extract_api_endpoints_from_files received non-list: {type(files_created)}")
+            return endpoints
+
         # Patterns for different frameworks
         patterns = [
             # FastAPI/Flask patterns
@@ -6561,6 +6573,11 @@ Stream code in chunks for real-time display.
         """
         import re
         tables = []
+
+        # Type safety: handle bool/None/invalid types
+        if not isinstance(files_created, list):
+            logger.warning(f"[Documenter] _extract_database_tables_from_files received non-list: {type(files_created)}")
+            return tables
 
         # Patterns for different ORMs/frameworks
         patterns = [
@@ -7062,12 +7079,12 @@ htmlcov
 
         # Extract API endpoints from generated files (look for route definitions)
         api_endpoints = getattr(context, 'api_endpoints', []) or []
-        if not api_endpoints and context.files_created:
+        if not api_endpoints and isinstance(context.files_created, list) and len(context.files_created) > 0:
             api_endpoints = self._extract_api_endpoints_from_files(context.files_created)
 
         # Extract database tables from generated files (look for model definitions)
         database_tables = getattr(context, 'database_tables', []) or []
-        if not database_tables and context.files_created:
+        if not database_tables and isinstance(context.files_created, list) and len(context.files_created) > 0:
             database_tables = self._extract_database_tables_from_files(context.files_created)
 
         # Safely get files_created as list (handle bool/None cases)
