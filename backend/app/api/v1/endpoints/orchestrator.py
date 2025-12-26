@@ -83,51 +83,95 @@ optional_security = HTTPBearer(auto_error=False)
 
 async def with_keepalive(async_iterator: AsyncIterator[T], project_id: str) -> AsyncIterator[T]:
     """
-    Wrap an async iterator with SSE keepalive support.
+    Wrap an async iterator with SSE keepalive support using CONCURRENT background task.
 
-    CloudFront has a 60-second origin read timeout. When Claude is processing
-    (thinking/generating), no events are yielded, causing CloudFront to timeout.
+    This uses an asyncio.Queue to merge events from:
+    1. The main workflow event stream
+    2. A background keepalive task that sends keepalives every 0.5 seconds
 
-    This wrapper sends keepalive events at two intervals:
-    1. AGGRESSIVE PHASE (first 30s): Every 3 seconds to establish connection reliably
-    2. NORMAL PHASE (after 30s): Every 10 seconds for ongoing connection
-
-    Keepalive events are SSE comments (: keepalive) which are ignored by EventSource
-    but keep the connection alive.
+    The background task ensures keepalives are sent CONTINUOUSLY, not just after timeouts.
+    This prevents race conditions where the client disconnects before the timeout fires.
     """
     import time
     start_time = time.time()
 
-    # Use aiter to make the async iterator work with anext
-    ait = async_iterator.__aiter__()
+    # Queue to merge events and keepalives
+    event_queue: asyncio.Queue = asyncio.Queue()
+    stream_done = asyncio.Event()
+    keepalive_count = 0
 
-    while True:
+    async def stream_events():
+        """Background task to stream events from the async iterator into the queue"""
         try:
-            # Determine timeout based on connection age
-            elapsed = time.time() - start_time
-            if elapsed < SSE_KEEPALIVE_AGGRESSIVE_DURATION:
-                # Aggressive phase: use shorter interval
-                timeout = SSE_KEEPALIVE_INITIAL_INTERVAL
-            else:
-                # Normal phase: use standard interval
-                timeout = SSE_KEEPALIVE_INTERVAL
+            async for event in async_iterator:
+                await event_queue.put(("event", event))
+            await event_queue.put(("done", None))
+        except asyncio.CancelledError:
+            logger.debug(f"[SSE Keepalive] Stream task cancelled for {project_id}")
+            await event_queue.put(("cancelled", None))
+        except Exception as e:
+            logger.error(f"[SSE Keepalive] Stream error for {project_id}: {e}")
+            await event_queue.put(("error", str(e)))
+        finally:
+            stream_done.set()
 
-            # Try to get the next event with the dynamic timeout
-            event = await asyncio.wait_for(
-                ait.__anext__(),
-                timeout=timeout
-            )
-            yield event
-        except asyncio.TimeoutError:
-            # No event received within timeout - send keepalive
-            # SSE comment format (: comment) is ignored by browser EventSource
-            # but keeps the TCP connection alive
-            elapsed = time.time() - start_time
-            logger.debug(f"[SSE Keepalive] Sending keepalive for project {project_id} (elapsed: {elapsed:.1f}s)")
-            yield None  # Signal to send keepalive
-        except StopAsyncIteration:
-            # Iterator exhausted
-            break
+    async def send_keepalives():
+        """Background task to send keepalives every 0.5 seconds"""
+        nonlocal keepalive_count
+        while not stream_done.is_set():
+            try:
+                # Wait 0.5 seconds or until stream is done
+                await asyncio.wait_for(stream_done.wait(), timeout=0.5)
+                break  # Stream is done
+            except asyncio.TimeoutError:
+                # Send keepalive
+                keepalive_count += 1
+                elapsed = time.time() - start_time
+                logger.debug(f"[SSE Keepalive] #{keepalive_count} for {project_id} (elapsed: {elapsed:.1f}s)")
+                await event_queue.put(("keepalive", keepalive_count))
+
+    # Start both tasks concurrently
+    stream_task = asyncio.create_task(stream_events())
+    keepalive_task = asyncio.create_task(send_keepalives())
+
+    try:
+        while True:
+            try:
+                # Get next item from queue with a long timeout (backup)
+                event_type, event_data = await asyncio.wait_for(
+                    event_queue.get(),
+                    timeout=30.0  # Backup timeout - should never trigger with 0.5s keepalives
+                )
+
+                if event_type == "event":
+                    yield event_data
+                elif event_type == "keepalive":
+                    yield None  # Signal to send keepalive
+                elif event_type == "done":
+                    break
+                elif event_type == "cancelled":
+                    break
+                elif event_type == "error":
+                    logger.error(f"[SSE Keepalive] Error in stream: {event_data}")
+                    break
+
+            except asyncio.TimeoutError:
+                # Backup keepalive if queue times out
+                logger.warning(f"[SSE Keepalive] Queue timeout for {project_id}, sending backup keepalive")
+                yield None
+    finally:
+        # Clean up tasks
+        stream_done.set()
+        keepalive_task.cancel()
+        stream_task.cancel()
+        try:
+            await keepalive_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await stream_task
+        except asyncio.CancelledError:
+            pass
 
 
 async def get_or_create_project(
