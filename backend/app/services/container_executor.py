@@ -368,17 +368,25 @@ class ContainerExecutor:
 
                 # Mount the parent sandbox directory to ensure we can see the project
                 parent_mount = "/tmp/sandbox/workspace"
-                result = self.docker_client.containers.run(
-                    "alpine:latest",
-                    ["-c", list_script],
-                    entrypoint="/bin/sh",
-                    remove=True,
-                    volumes={parent_mount: {"bind": parent_mount, "mode": "ro"}},
-                    stderr=True  # Capture stderr for debugging
-                )
 
-                # Result includes both stdout and stderr when stderr=True
-                output = result.decode('utf-8').strip() if result else ""
+                # Use create + start + logs pattern instead of run() for better TCP reliability
+                # The run() method with remove=True has race condition issues over TCP
+                container = self.docker_client.containers.create(
+                    "alpine:latest",
+                    command=["-c", list_script],
+                    entrypoint="/bin/sh",
+                    volumes={parent_mount: {"bind": parent_mount, "mode": "ro"}},
+                )
+                try:
+                    container.start()
+                    container.wait(timeout=30)  # Wait for completion
+                    # Get logs after container has finished
+                    output = container.logs(stdout=True, stderr=True).decode('utf-8').strip()
+                finally:
+                    try:
+                        container.remove(force=True)
+                    except Exception:
+                        pass
                 # Filter out debug lines (starting with ===) to get just filenames
                 files = [f for f in output.split('\n') if f and not f.startswith('===') and not f.startswith('Directory') and not f.startswith('Parent')]
                 logger.info(f"[ContainerExecutor] Found {len(files)} files: {files[:5]}")
@@ -432,14 +440,23 @@ class ContainerExecutor:
                         # Check for frontend/package.json using a simple test command
                         check_script = f'test -f "{path_str}/frontend/package.json" && echo "frontend_exists" && test -f "{path_str}/frontend/vite.config.ts" && echo "vite_exists" || true'
                         logger.info(f"[ContainerExecutor] Running frontend check: {check_script[:80]}...")
-                        result = self.docker_client.containers.run(
+
+                        # Use create + start + logs pattern for TCP reliability
+                        container = self.docker_client.containers.create(
                             "alpine:latest",
-                            ["-c", check_script],
+                            command=["-c", check_script],
                             entrypoint="/bin/sh",
-                            remove=True,
                             volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}}
                         )
-                        output = result.decode('utf-8').strip() if result else ""
+                        try:
+                            container.start()
+                            container.wait(timeout=30)
+                            output = container.logs(stdout=True, stderr=True).decode('utf-8').strip()
+                        finally:
+                            try:
+                                container.remove(force=True)
+                            except Exception:
+                                pass
                         logger.info(f"[ContainerExecutor] Frontend check output: '{output}'")
                         if "frontend_exists" in output:
                             frontend_detected = True
