@@ -1320,12 +1320,32 @@ class UnifiedStorageService:
             except Exception as cred_err:
                 logger.warning(f"[RemoteRestore] Failed to get boto3 credentials: {cred_err}")
 
-            logger.debug(f"[RemoteRestore] Sample download commands: {download_commands[:2]}")
+            # Log sample download commands for debugging
+            logger.info(f"[RemoteRestore] Sample download commands: {download_commands[:2]}")
+            logger.info(f"[RemoteRestore] workspace_path: {workspace_path}")
+            logger.info(f"[RemoteRestore] user_id passed to restore: {user_id}")
+
+            # Add error capturing to the restore script
+            # Redirect stderr to stdout so we can see any errors
+            restore_script_with_logging = f"""
+                echo "[RESTORE] Starting restore to {workspace_path}"
+                echo "[RESTORE] Creating directories..."
+                {mkdir_script}
+                echo "[RESTORE] Directories created"
+                echo "[RESTORE] Downloading {len(download_commands)} files..."
+                set +e  # Don't exit on error
+                {download_script}
+                DOWNLOAD_EXIT=$?
+                set -e
+                echo "[RESTORE] Download completed with exit code: $DOWNLOAD_EXIT"
+                echo "[RESTORE] Files in workspace:"
+                ls -la {workspace_path} 2>&1 | head -15 || echo "[RESTORE] Failed to list workspace"
+            """
 
             try:
                 output = docker_client.containers.run(
                     "amazon/aws-cli:latest",
-                    ["-c", restore_script],  # Just the args for /bin/sh
+                    ["-c", restore_script_with_logging],  # Use enhanced script with logging
                     entrypoint="/bin/sh",    # Override entrypoint to use shell
                     volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
                     environment=container_env,
@@ -1334,7 +1354,8 @@ class UnifiedStorageService:
                     network_mode="host"
                 )
                 if output:
-                    logger.debug(f"[RemoteRestore] Docker output: {output.decode()[:500]}")
+                    restore_output = output.decode()
+                    logger.info(f"[RemoteRestore] Docker restore output:\n{restore_output[:1000]}")
             except docker.errors.ContainerError as ce:
                 logger.error(f"[RemoteRestore] Docker container error: {ce.stderr.decode() if ce.stderr else ce}")
                 return []
@@ -1342,9 +1363,9 @@ class UnifiedStorageService:
                 logger.info(f"[RemoteRestore] Docker image 'amazon/aws-cli:latest' not found. Pulling...")
                 docker_client.images.pull("amazon/aws-cli:latest")
                 # Retry after pulling
-                docker_client.containers.run(
+                retry_output = docker_client.containers.run(
                     "amazon/aws-cli:latest",
-                    ["-c", restore_script],
+                    ["-c", restore_script_with_logging],
                     entrypoint="/bin/sh",
                     volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
                     environment=container_env,  # Use proper credentials
@@ -1352,21 +1373,27 @@ class UnifiedStorageService:
                     detach=False,
                     network_mode="host"
                 )
+                if retry_output:
+                    logger.info(f"[RemoteRestore] Docker restore output (after pull):\n{retry_output.decode()[:1000]}")
 
-            # Verify files were restored
+            # Verify files were restored with detailed listing
             try:
                 verify_output = docker_client.containers.run(
                     "alpine:latest",
-                    ["-c", f"ls {workspace_path} 2>/dev/null | wc -l"],
+                    ["-c", f"echo 'Path: {workspace_path}' && ls -la {workspace_path} 2>&1 | head -20"],
                     entrypoint="/bin/sh",
                     volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
                     remove=True,
                     detach=False
                 )
-                restored_count = int(verify_output.decode().strip() or "0")
+                listing = verify_output.decode().strip() if verify_output else "No output"
+                logger.info(f"[RemoteRestore] Verification listing:\n{listing}")
+                # Count files from listing (skip first 3 lines: path, total, . and ..)
+                lines = [l for l in listing.split('\n') if l and not l.startswith('Path:') and not l.startswith('total')]
+                restored_count = len(lines)
                 logger.info(f"[RemoteRestore] Verified {restored_count} items in workspace after restore")
                 if restored_count == 0:
-                    logger.error(f"[RemoteRestore] FAILED - No files found after restore! Check S3 access and credentials.")
+                    logger.error(f"[RemoteRestore] FAILED - No files found after restore! Workspace: {workspace_path}")
             except Exception as verify_err:
                 logger.warning(f"[RemoteRestore] Could not verify restore: {verify_err}")
 
