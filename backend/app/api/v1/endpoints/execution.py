@@ -9,6 +9,7 @@ This module provides Docker-based project execution with:
 
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse, Response
+from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from pydantic import BaseModel
@@ -257,17 +258,15 @@ async def run_project(
         except Exception as touch_err:
             logger.warning(f"[Execution] touch_project failed in endpoint: {touch_err}")
 
-        # Stream Docker execution with progress
-        # Critical SSE headers to prevent proxy buffering (CloudFront, ALB, nginx)
-        return StreamingResponse(
+        # Stream Docker execution with progress using sse-starlette
+        # EventSourceResponse handles keepalive pings automatically
+        return EventSourceResponse(
             _execute_docker_stream_with_progress(project_id, user_id, db),
-            media_type="text/event-stream",
+            ping=1,  # Send ping every 1 second to keep connection alive
+            ping_message_factory=lambda: {"comment": "keepalive"},
             headers={
                 "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",  # Disable nginx buffering
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Content-Type, Authorization",
             }
         )
 
@@ -527,8 +526,8 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
     """
     Execute project with step-by-step progress streaming.
 
-    Uses inline execution with frequent yields to maintain SSE connection.
-    Keepalive comments are yielded during long-running operations.
+    Uses sse-starlette EventSourceResponse for proper SSE handling.
+    Yields dictionaries that get converted to SSE events automatically.
 
     Flow:
     1. Check project status
@@ -544,15 +543,15 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
     import re
 
     def emit(event_type: str, message: str = None, data: dict = None):
-        """Helper to create SSE event"""
+        """Helper to create SSE event dict for sse-starlette"""
         event = {"type": event_type}
         if message:
             event["message"] = message
-            # Also put message in 'content' for frontend compatibility
             event["content"] = message
         if data:
             event["data"] = data
-        return f"data: {json.dumps(event)}\n\n"
+        # Return dict with 'data' key for EventSourceResponse
+        return {"data": json.dumps(event)}
 
     def safe_parse_port(url: str, default: int = 3000) -> int:
         """Safely extract port from URL, with fallback"""
@@ -569,13 +568,9 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
             return default
 
     try:
-        # CRITICAL: Send multiple initial events to establish connection
-        yield ": SSE stream initialized\n\n"
+        # Send initial events immediately
         yield emit("output", "🖥️ Running directly on server...")
         yield emit("output", f"📂 Project ID: {project_id}")
-
-        # Force flush by yielding keepalive
-        yield ": keepalive\n\n"
 
         # Small delay to ensure events are flushed
         await asyncio.sleep(0.01)
@@ -593,7 +588,7 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
         # ==================== STEP 1: Check Project Status ====================
         yield emit("step", "Checking project status...", {"step": 1, "total": 5, "phase": "checking"})
         yield emit("output", "[1/5] Checking project status...")
-        yield ": keepalive\n\n"
+        # keepalive handled by EventSourceResponse ping
 
         sandbox_docker_host = _os.environ.get("SANDBOX_DOCKER_HOST")
         project_path = None
@@ -645,7 +640,7 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                 needs_restore = True
 
         yield emit("step_complete", "Project status checked", {"step": 1})
-        yield ": keepalive\n\n"
+        # keepalive handled by EventSourceResponse ping
 
         # ==================== STEP 2: Create/Prepare Container ====================
         yield emit("step", "Preparing container environment...", {"step": 2, "total": 5, "phase": "container"})
@@ -658,13 +653,13 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
 
         yield emit("output", "  Container environment ready")
         yield emit("step_complete", "Container prepared", {"step": 2})
-        yield ": keepalive\n\n"
+        # keepalive handled by EventSourceResponse ping
 
         # ==================== STEP 3: Restore Project Files (if needed) ====================
         if needs_restore:
             yield emit("step", "Restoring project files...", {"step": 3, "total": 5, "phase": "restore"})
             yield emit("output", "\n[3/5] Restoring project files from database...")
-            yield ": keepalive\n\n"
+            # keepalive handled by EventSourceResponse ping
 
             try:
                 from app.models.project_file import ProjectFile
@@ -686,24 +681,9 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                     yield emit("output", f"  Found {total_files} files in database")
                 else:
                     yield emit("output", "  Checking database for files...")
-                yield ": keepalive\n\n"
 
-                # Restore files with keepalive during long operation
-                async def restore_with_keepalive():
-                    return await unified_storage.restore_project_from_database(project_id, effective_user_id)
-
-                # Start restore
-                restore_task = asyncio.create_task(restore_with_keepalive())
-
-                # Yield keepalives while waiting
-                while not restore_task.done():
-                    try:
-                        await asyncio.wait_for(asyncio.shield(restore_task), timeout=1.0)
-                    except asyncio.TimeoutError:
-                        yield ": keepalive\n\n"
-                        continue
-
-                restored_files = await restore_task
+                # Restore files - EventSourceResponse handles keepalive automatically
+                restored_files = await unified_storage.restore_project_from_database(project_id, effective_user_id)
 
                 if restored_files:
                     restored_count = len(restored_files)
@@ -727,12 +707,12 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
             yield emit("output", "\n[3/5] Project files already in sandbox")
             yield emit("step_complete", "Files ready", {"step": 3, "files_restored": 0})
 
-        yield ": keepalive\n\n"
+        # keepalive handled by EventSourceResponse ping
 
         # ==================== STEP 4 & 5: Install & Run ====================
         yield emit("step", "Installing dependencies and starting server...", {"step": 4, "total": 5, "phase": "install"})
         yield emit("output", "\n[4/5] Installing dependencies...")
-        yield ": keepalive\n\n"
+        # keepalive handled by EventSourceResponse ping
 
         if project_path is None:
             logger.error(f"[Execution] project_path is None for project {project_id}")
@@ -753,7 +733,6 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
         docker_error = None
         output_count = 0
         max_outputs = 10000
-        last_keepalive = asyncio.get_event_loop().time()
 
         try:
             async for output in docker_executor.run_project(project_id, project_path, effective_user_id):
@@ -761,12 +740,6 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                 if output_count > max_outputs:
                     logger.warning(f"[Execution] Max output count reached for {project_id}")
                     break
-
-                # Send keepalive every second
-                current_time = asyncio.get_event_loop().time()
-                if current_time - last_keepalive >= 1.0:
-                    yield ": keepalive\n\n"
-                    last_keepalive = current_time
 
                 if output is None:
                     continue

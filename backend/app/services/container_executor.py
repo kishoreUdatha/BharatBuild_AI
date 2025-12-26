@@ -347,12 +347,14 @@ class ContainerExecutor:
         if sandbox_docker_host and self.docker_client:
             # Remote mode: use Docker to list files on EC2
             try:
-                logger.info(f"[ContainerExecutor] Remote mode: listing files via Docker on {project_path}")
+                # CRITICAL: Convert Path to string for Docker SDK compatibility
+                path_str = str(project_path)
+                logger.info(f"[ContainerExecutor] Remote mode: listing files via Docker on {path_str}")
                 result = self.docker_client.containers.run(
                     "alpine:latest",
-                    f"ls -1 {project_path}",
+                    f"ls -1 {path_str}",
                     remove=True,
-                    volumes={project_path: {"bind": project_path, "mode": "ro"}}
+                    volumes={path_str: {"bind": path_str, "mode": "ro"}}
                 )
                 files = result.decode('utf-8').strip().split('\n') if result else []
                 logger.info(f"[ContainerExecutor] Found {len(files)} files: {files[:5]}")
@@ -375,7 +377,7 @@ class ContainerExecutor:
             # Also check package.json for vite dependency
             try:
                 import json
-                pkg_path = os.path.join(project_path, "package.json")
+                pkg_path = os.path.join(str(project_path), "package.json")
                 if os.path.exists(pkg_path):
                     with open(pkg_path, 'r') as f:
                         pkg = json.load(f)
@@ -388,6 +390,35 @@ class ContainerExecutor:
                 logger.warning(f"[ContainerExecutor] Error reading package.json: {e}")
 
             return Technology.NODEJS
+
+        # Multi-folder project detection: check frontend/ subdirectory
+        if "frontend" in files:
+            # Check if frontend has package.json (full-stack project with separate frontend)
+            try:
+                frontend_pkg_path = os.path.join(str(project_path), "frontend", "package.json")
+                # For remote mode, we can't directly check files, so check via Docker
+                sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+                if sandbox_docker_host and self.docker_client:
+                    try:
+                        result = self.docker_client.containers.run(
+                            "alpine:latest",
+                            f"test -f {str(project_path)}/frontend/package.json && echo 'exists'",
+                            remove=True,
+                            volumes={str(project_path): {"bind": str(project_path), "mode": "ro"}}
+                        )
+                        if result and b"exists" in result:
+                            logger.info(f"[ContainerExecutor] Detected multi-folder project with frontend/package.json")
+                            # Store subdirectory info for container creation
+                            self._frontend_subdir = True
+                            return Technology.NODEJS_VITE  # Most modern frontends use Vite
+                    except Exception as e:
+                        logger.debug(f"[ContainerExecutor] Failed to check frontend/package.json: {e}")
+                elif os.path.exists(frontend_pkg_path):
+                    logger.info(f"[ContainerExecutor] Detected multi-folder project with frontend/package.json")
+                    self._frontend_subdir = True
+                    return Technology.NODEJS_VITE
+            except Exception as e:
+                logger.debug(f"[ContainerExecutor] Error checking frontend subdirectory: {e}")
 
         # Java detection
         if "pom.xml" in files or "build.gradle" in files or "build.gradle.kts" in files:
@@ -512,13 +543,23 @@ class ContainerExecutor:
             # Create container WITH port mapping for nginx gateway routing
             # nginx on port 8080 routes /sandbox/{port}/ to localhost:{port}
             # This allows ECS to reach container via EC2_IP:8080/sandbox/{host_port}/
+            # CRITICAL: Convert Path to string for Docker SDK compatibility
+            path_str = str(project_path)
+
+            # Determine working directory - use /app/frontend for multi-folder projects
+            working_dir = "/app"
+            if getattr(self, '_frontend_subdir', False):
+                working_dir = "/app/frontend"
+                self._frontend_subdir = False  # Reset for next project
+                logger.info(f"[ContainerExecutor] Using frontend subdirectory: {working_dir}")
+
             container = self.docker_client.containers.run(
                 image=config.image,
                 name=container_name,
                 detach=True,
-                working_dir="/app",
+                working_dir=working_dir,
                 volumes={
-                    project_path: {"bind": "/app", "mode": "rw"}
+                    path_str: {"bind": "/app", "mode": "rw"}
                 },
                 ports={f"{config.port}/tcp": host_port},  # Map container port to host port
                 network="bharatbuild-sandbox",
