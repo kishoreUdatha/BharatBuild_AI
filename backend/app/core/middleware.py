@@ -36,6 +36,7 @@ STREAMING_PATHS: Set[str] = {
     "/api/v1/generate/stream",
     "/api/v1/logs/stream",
     "/api/v1/preview/",
+    "/api/v1/execution/run/",
 }
 
 
