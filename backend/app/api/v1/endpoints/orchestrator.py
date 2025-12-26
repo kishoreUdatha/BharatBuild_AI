@@ -23,9 +23,12 @@ from datetime import datetime
 
 T = TypeVar('T')
 
-# SSE Keepalive interval (seconds) - CloudFront has 60s timeout, browser may timeout earlier
-# Send keepalive every 10s to prevent 30s browser/proxy disconnects
-SSE_KEEPALIVE_INTERVAL = 10
+# SSE Keepalive intervals (seconds)
+# CloudFront has 60s timeout, but browsers/proxies may timeout earlier
+# Use aggressive initial keepalive (3s) to establish connection, then normal interval (10s)
+SSE_KEEPALIVE_INITIAL_INTERVAL = 3  # First 30 seconds: send keepalive every 3s
+SSE_KEEPALIVE_INTERVAL = 10  # After 30 seconds: send keepalive every 10s
+SSE_KEEPALIVE_AGGRESSIVE_DURATION = 30  # Duration of aggressive keepalive phase
 
 from app.modules.orchestrator.dynamic_orchestrator import (
     DynamicOrchestrator,
@@ -85,28 +88,42 @@ async def with_keepalive(async_iterator: AsyncIterator[T], project_id: str) -> A
     CloudFront has a 60-second origin read timeout. When Claude is processing
     (thinking/generating), no events are yielded, causing CloudFront to timeout.
 
-    This wrapper sends keepalive events every SSE_KEEPALIVE_INTERVAL seconds
-    when no events are received from the source iterator.
+    This wrapper sends keepalive events at two intervals:
+    1. AGGRESSIVE PHASE (first 30s): Every 3 seconds to establish connection reliably
+    2. NORMAL PHASE (after 30s): Every 10 seconds for ongoing connection
 
     Keepalive events are SSE comments (: keepalive) which are ignored by EventSource
     but keep the connection alive.
     """
+    import time
+    start_time = time.time()
+
     # Use aiter to make the async iterator work with anext
     ait = async_iterator.__aiter__()
 
     while True:
         try:
-            # Try to get the next event with a timeout
+            # Determine timeout based on connection age
+            elapsed = time.time() - start_time
+            if elapsed < SSE_KEEPALIVE_AGGRESSIVE_DURATION:
+                # Aggressive phase: use shorter interval
+                timeout = SSE_KEEPALIVE_INITIAL_INTERVAL
+            else:
+                # Normal phase: use standard interval
+                timeout = SSE_KEEPALIVE_INTERVAL
+
+            # Try to get the next event with the dynamic timeout
             event = await asyncio.wait_for(
                 ait.__anext__(),
-                timeout=SSE_KEEPALIVE_INTERVAL
+                timeout=timeout
             )
             yield event
         except asyncio.TimeoutError:
             # No event received within timeout - send keepalive
             # SSE comment format (: comment) is ignored by browser EventSource
             # but keeps the TCP connection alive
-            logger.debug(f"[SSE Keepalive] Sending keepalive for project {project_id}")
+            elapsed = time.time() - start_time
+            logger.debug(f"[SSE Keepalive] Sending keepalive for project {project_id} (elapsed: {elapsed:.1f}s)")
             yield None  # Signal to send keepalive
         except StopAsyncIteration:
             # Iterator exhausted
@@ -777,6 +794,31 @@ async def execute_workflow(
         # Create a wrapper that yields bytes to ensure proper streaming
         async def byte_generator():
             try:
+                # ==================== IMMEDIATE CONNECTION ESTABLISHMENT ====================
+                # Send an immediate keepalive + connection event to ensure the SSE connection
+                # is established before any processing begins. This prevents timeout issues
+                # where CloudFront/browser may close the connection if no data is received
+                # within the first few seconds.
+                # ============================================================================
+
+                # 1. Send SSE comment keepalive immediately (ignored by EventSource but establishes connection)
+                yield b": connection-init\n\n"
+
+                # 2. Send connection_established event immediately
+                connection_event = {
+                    "type": "connection_established",
+                    "data": {
+                        "project_id": actual_project_id,
+                        "message": "SSE connection established",
+                        "keepalive_interval": SSE_KEEPALIVE_INITIAL_INTERVAL
+                    },
+                    "step": None,
+                    "agent": None,
+                    "timestamp": None
+                }
+                yield f"data: {json.dumps(connection_event)}\n\n".encode('utf-8')
+                logger.info(f"[Execute Workflow] Sent immediate connection event for {actual_project_id}")
+
                 # Touch the project to reset its idle timer (keep alive during activity)
                 touch_project(actual_project_id)
                 logger.info(f"[Execute Workflow] Touched project {actual_project_id} to keep alive")
@@ -1142,6 +1184,25 @@ Generate the remaining {len(pending_file_paths)} files needed to complete this p
         # Create SSE generator
         async def byte_generator():
             try:
+                # ==================== IMMEDIATE CONNECTION ESTABLISHMENT ====================
+                # Send an immediate keepalive + connection event to prevent timeout issues
+                # ============================================================================
+                yield b": connection-init\n\n"
+
+                connection_event = {
+                    "type": "connection_established",
+                    "data": {
+                        "project_id": request.project_id,
+                        "message": "SSE connection established for resume",
+                        "keepalive_interval": SSE_KEEPALIVE_INITIAL_INTERVAL
+                    },
+                    "step": None,
+                    "agent": None,
+                    "timestamp": None
+                }
+                yield f"data: {json.dumps(connection_event)}\n\n".encode('utf-8')
+                logger.info(f"[Resume] Sent immediate connection event for {request.project_id}")
+
                 touch_project(request.project_id)
 
                 # ============================================================
