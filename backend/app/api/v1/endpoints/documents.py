@@ -381,13 +381,18 @@ async def download_document(
     # First, try to find document in database (S3 stored)
     target_doc_type = doc_type_map.get(document_type)
     if target_doc_type:
+        # Join with Project to filter by user_id for proper isolation
         doc_result = await db.execute(
-            select(Document).where(
+            select(Document)
+            .join(Project, Document.project_id == Project.id)
+            .where(
                 Document.project_id == str(project_id),
-                Document.doc_type == target_doc_type
+                Document.doc_type == target_doc_type,
+                Project.user_id == str(current_user.id)  # User isolation
             ).order_by(Document.created_at.desc())
         )
-        document = doc_result.scalar_one_or_none()
+        # Use .first() to get most recent document when multiple exist (e.g., regenerated docs)
+        document = doc_result.scalars().first()
 
         if document and document.file_path:
             logger.info(f"[DocDownload] Found document in DB: {document.file_name}, path: {document.file_path}")
