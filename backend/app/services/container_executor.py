@@ -516,18 +516,32 @@ class ContainerExecutor:
         if not self.docker_client:
             return False, "Docker client not initialized", None
 
+        # Auto-detect technology FIRST (before container reuse check)
+        # This ensures _frontend_subdir flag is set correctly
+        if technology is None:
+            technology = self.detect_technology(project_path)
+
+        # Check if multi-folder project - need to force recreate container with correct working_dir
+        is_frontend_subdir = getattr(self, '_frontend_subdir', False)
+
         # ===== OPTIMIZATION: Try to reuse existing container =====
+        # BUT: Skip reuse if multi-folder project detected (needs correct working_dir)
         existing_container = await self._get_existing_container(project_id)
-        if existing_container:
+        if existing_container and not is_frontend_subdir:
             reused, message, port = await self._reuse_container(existing_container, project_id, user_id)
             if reused:
                 return True, message, port
             # If reuse failed, continue to create new container
             logger.info(f"[ContainerExecutor] Container reuse failed, creating new: {message}")
-
-        # Auto-detect technology if not provided
-        if technology is None:
-            technology = self.detect_technology(project_path)
+        elif existing_container and is_frontend_subdir:
+            # Multi-folder project needs correct working_dir - remove old container
+            logger.info(f"[ContainerExecutor] Multi-folder project: removing old container for fresh start")
+            try:
+                if existing_container.status == "running":
+                    existing_container.stop(timeout=5)
+                existing_container.remove(force=True)
+            except Exception as e:
+                logger.warning(f"[ContainerExecutor] Failed to remove old container: {e}")
 
         if technology == Technology.UNKNOWN:
             return False, "Could not detect project technology", None
