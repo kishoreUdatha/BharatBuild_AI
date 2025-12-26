@@ -66,7 +66,7 @@ hyperopt==0.2.7
 # Data Science & Analysis
 # ============================================
 numpy==1.26.4
-pandas==2.2.0
+pandas==2.1.4
 scipy==1.12.0
 polars==0.20.7
 dask==2024.1.1
@@ -109,14 +109,14 @@ librosa==0.10.1
 soundfile==0.12.1
 speechrecognition==3.10.1
 pydub==0.25.1
-openai-whisper==20231117
+# openai-whisper==20231117  # Requires triton<3, incompatible with torch>=2.6
 
 # ============================================
 # MLOps & Experiment Tracking
 # ============================================
-mlflow==2.10.2
-wandb==0.16.3
-tensorboard==2.15.1
+mlflow>=2.17.0  # Supports protobuf>=5 for tensorflow>=2.18
+wandb>=0.18.0  # Supports protobuf>=5 for tensorflow>=2.18
+tensorboard>=2.18.0  # Match tensorflow version for protobuf compatibility
 dvc==3.42.0
 
 # ============================================
@@ -160,16 +160,16 @@ bentoml==1.2.2
 # AutoML
 # ============================================
 # auto-sklearn==0.15.0;platform_system!="Windows"  # Requires old scikit-learn<0.25, incompatible with modern ML stack
-autogluon==1.0.0;platform_system!="Windows"
+# autogluon==1.0.0;platform_system!="Windows"  # Requires torch<2.1, incompatible with torch>=2.6
 # pycaret==3.2.0  # Requires matplotlib<=3.6, incompatible with modern stack
 flaml==2.1.1
 
 # ============================================
 # Reinforcement Learning
 # ============================================
-gymnasium==0.29.1
-stable-baselines3==2.2.1
-ray[rllib]==2.9.2
+gymnasium==0.28.1
+stable-baselines3==2.1.0
+ray==2.6.3  # Without [rllib] extra to avoid gymnasium conflict; autogluon just needs base ray
 
 # ============================================
 # Time Series
@@ -275,6 +275,7 @@ bcrypt==4.1.2
 fastapi-cors==0.0.6
 slowapi==0.1.9
 websockets==12.0
+sse-starlette==2.1.0
 
 # ============================================
 # Docker Integration
