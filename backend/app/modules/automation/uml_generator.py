@@ -580,10 +580,15 @@ class UMLGenerator:
         user_id: str = None
     ) -> str:
         """
-        Generate ER Diagram
+        Generate ER Diagram with columns, types, and relationships
 
         Args:
-            entities: List of {name, attributes, primary_key, foreign_keys} dicts
+            entities: List of dicts with:
+                - name: Table name
+                - columns: List of {name, type} dicts
+                - attributes: List of column names (fallback)
+                - primary_key: Primary key column name
+                - relationships: List of {column, references, type} dicts
 
         Returns:
             Path to generated PNG
@@ -599,26 +604,47 @@ class UMLGenerator:
         cols = min(3, num_entities)
         rows = (num_entities + cols - 1) // cols
 
-        entity_width = 220
-        entity_height = 160
+        entity_width = 250
+        entity_height = 180
 
         x_spacing = (self.WIDTH - 100) // max(cols, 1)
         y_spacing = (self.HEIGHT - 120) // max(rows, 1)
 
         entity_positions = {}
+        entity_fks = {}  # Track foreign keys for relationship drawing
 
         for i, entity in enumerate(entities[:6]):
             col = i % cols
             row = i // cols
 
-            x = 100 + col * x_spacing
-            y = 100 + row * y_spacing
+            x = 80 + col * x_spacing
+            y = 80 + row * y_spacing
 
             name = entity.get('name', f'Entity{i}')
-            attributes = entity.get('attributes', [])[:6]
-            pk = entity.get('primary_key', 'id')
+            # Use columns if available, fall back to attributes
+            columns = entity.get('columns', [])
+            if not columns:
+                # Convert attributes list to column dicts
+                attrs = entity.get('attributes', [])[:6]
+                columns = [{'name': a, 'type': 'String'} for a in attrs]
+            columns = columns[:7]  # Limit to 7 columns
 
-            # Entity box
+            pk = entity.get('primary_key', 'id')
+            relationships = entity.get('relationships', [])
+
+            # Store FK info for relationship drawing
+            for rel in relationships:
+                ref_table = rel.get('references', '')
+                if ref_table:
+                    if name not in entity_fks:
+                        entity_fks[name] = []
+                    entity_fks[name].append(ref_table)
+
+            # Calculate dynamic height based on columns
+            attr_height = max(len(columns) * 18 + 20, 80)
+            entity_height = 35 + attr_height
+
+            # Entity header box
             draw.rectangle(
                 [x, y, x + entity_width, y + 35],
                 fill=self.COLORS['class_header'],
@@ -633,7 +659,7 @@ class UMLGenerator:
                 anchor="mm"
             )
 
-            # Attributes
+            # Attributes box
             draw.rectangle(
                 [x, y + 35, x + entity_width, y + entity_height],
                 fill=self.COLORS['background'],
@@ -641,30 +667,85 @@ class UMLGenerator:
                 width=2
             )
 
-            for j, attr in enumerate(attributes):
-                prefix = "PK " if attr == pk else "   "
+            # Draw columns with types
+            for j, col in enumerate(columns):
+                col_name = col.get('name', col) if isinstance(col, dict) else str(col)
+                col_type = col.get('type', '') if isinstance(col, dict) else ''
+
+                # Check if this is a PK or FK
+                is_pk = col_name.lower() == pk.lower() or col_name.lower() == 'id'
+                is_fk = col_name.lower().endswith('_id') and col_name.lower() != 'id'
+
+                if is_pk:
+                    prefix = "PK "
+                    color = (0, 100, 0)  # Dark green for PK
+                elif is_fk:
+                    prefix = "FK "
+                    color = (0, 0, 139)  # Dark blue for FK
+                else:
+                    prefix = "   "
+                    color = self.COLORS['text']
+
+                # Format: column_name : type
+                type_str = f" : {col_type[:12]}" if col_type else ""
                 draw.text(
                     (x + 10, y + 45 + j * 18),
-                    f"{prefix}{attr}",
-                    fill=self.COLORS['text'],
+                    f"{prefix}{col_name[:15]}{type_str}",
+                    fill=color,
                     font=self.font_small
                 )
 
-            entity_positions[name] = (x + entity_width // 2, y + entity_height // 2)
+            entity_positions[name] = {
+                'center': (x + entity_width // 2, y + entity_height // 2),
+                'left': (x, y + entity_height // 2),
+                'right': (x + entity_width, y + entity_height // 2),
+                'top': (x + entity_width // 2, y),
+                'bottom': (x + entity_width // 2, y + entity_height)
+            }
 
-        # Draw relationships between entities
-        entity_names = list(entity_positions.keys())
-        for i in range(len(entity_names) - 1):
-            e1 = entity_names[i]
-            e2 = entity_names[i + 1]
-            if e1 in entity_positions and e2 in entity_positions:
-                p1 = entity_positions[e1]
-                p2 = entity_positions[e2]
-                draw.line([p1, p2], fill=self.COLORS['arrow'], width=2)
+        # Draw actual relationships based on foreign keys
+        drawn_rels = set()
+        for entity_name, fk_targets in entity_fks.items():
+            if entity_name not in entity_positions:
+                continue
+            for target in fk_targets:
+                # Find matching target entity (case-insensitive)
+                target_key = None
+                for ent_name in entity_positions.keys():
+                    if ent_name.lower() == target.lower():
+                        target_key = ent_name
+                        break
+
+                if target_key and (entity_name, target_key) not in drawn_rels:
+                    p1 = entity_positions[entity_name]['right']
+                    p2 = entity_positions[target_key]['left']
+
+                    # Draw relationship line
+                    draw.line([p1, p2], fill=self.COLORS['arrow'], width=2)
+
+                    # Draw crow's foot (many) on FK side
+                    self._draw_crow_foot(draw, p1, 'left')
+
+                    # Draw single line (one) on PK side
+                    self._draw_one_marker(draw, p2, 'right')
+
+                    drawn_rels.add((entity_name, target_key))
+                    drawn_rels.add((target_key, entity_name))
+
+        # If no explicit relationships, draw based on naming conventions
+        if not entity_fks:
+            entity_names = list(entity_positions.keys())
+            for i, e1 in enumerate(entity_names):
+                for e2 in entity_names[i+1:]:
+                    # Check if e1 might reference e2 (e.g., user_id in Order -> User)
+                    if e2.lower() + '_id' in str(entities[i].get('columns', [])).lower():
+                        p1 = entity_positions[e1]['center']
+                        p2 = entity_positions[e2]['center']
+                        draw.line([p1, p2], fill=self.COLORS['arrow'], width=2)
 
         # Title
         draw.text(
-            (self.WIDTH // 2, 30),
+            (self.WIDTH // 2, 25),
             "Entity Relationship Diagram",
             fill=self.COLORS['primary'],
             font=self.font_bold,
@@ -677,6 +758,32 @@ class UMLGenerator:
         img.save(str(filepath))
 
         return str(filepath)
+
+    def _draw_crow_foot(self, draw, point, direction='left'):
+        """Draw crow's foot notation (many) for ER relationships"""
+        x, y = point
+        size = 10
+
+        if direction == 'left':
+            # Draw three lines from point spreading left
+            draw.line([(x, y), (x - size, y - size)], fill=self.COLORS['arrow'], width=2)
+            draw.line([(x, y), (x - size, y)], fill=self.COLORS['arrow'], width=2)
+            draw.line([(x, y), (x - size, y + size)], fill=self.COLORS['arrow'], width=2)
+        else:
+            # Draw three lines from point spreading right
+            draw.line([(x, y), (x + size, y - size)], fill=self.COLORS['arrow'], width=2)
+            draw.line([(x, y), (x + size, y)], fill=self.COLORS['arrow'], width=2)
+            draw.line([(x, y), (x + size, y + size)], fill=self.COLORS['arrow'], width=2)
+
+    def _draw_one_marker(self, draw, point, direction='right'):
+        """Draw one-side marker (single line) for ER relationships"""
+        x, y = point
+        size = 10
+
+        if direction == 'right':
+            draw.line([(x, y - size), (x, y + size)], fill=self.COLORS['arrow'], width=2)
+        else:
+            draw.line([(x, y - size), (x, y + size)], fill=self.COLORS['arrow'], width=2)
 
     def generate_dfd(
         self,
@@ -982,6 +1089,13 @@ class UMLGenerator:
             data_stores=data_stores,
             external_entities=external_entities,
             data_flows=data_flows
+        )
+
+        # 7. System Architecture Diagram - Shows three-tier architecture with tech stack
+        diagrams['architecture'] = self.generate_system_architecture_diagram(
+            project_data=project_data,
+            project_id=project_id,
+            user_id=user_id
         )
 
         logger.info(f"[UMLGenerator] Generated {len(diagrams)} diagrams for {project_name}")
@@ -1309,25 +1423,92 @@ class UMLGenerator:
         return classes
 
     def _extract_entities_from_project(self, project_data: Dict) -> List[Dict]:
-        """Extract entity info from project data"""
+        """Extract entity info from project data with columns and relationships"""
         entities = []
 
         tables = project_data.get('database_tables', [])
         for table in tables[:6]:
-            name = table if isinstance(table, str) else table.get('name', 'Entity')
-            entities.append({
-                'name': name,
-                'attributes': ['id', 'name', 'description', 'created_at', 'updated_at'],
-                'primary_key': 'id'
-            })
+            if isinstance(table, str):
+                # Simple string table name - use defaults
+                entities.append({
+                    'name': table,
+                    'columns': [
+                        {'name': 'id', 'type': 'UUID'},
+                        {'name': 'name', 'type': 'String'},
+                        {'name': 'created_at', 'type': 'DateTime'},
+                        {'name': 'updated_at', 'type': 'DateTime'}
+                    ],
+                    'primary_key': 'id',
+                    'relationships': []
+                })
+            elif isinstance(table, dict):
+                # Rich table data with columns and relationships
+                name = table.get('name', 'Entity')
+                columns = table.get('columns', [])
+                relationships = table.get('relationships', [])
 
-        # Default entities
+                # If no columns extracted, use defaults based on table name
+                if not columns:
+                    columns = [
+                        {'name': 'id', 'type': 'UUID'},
+                        {'name': f'{name.lower()}_name', 'type': 'String'},
+                        {'name': 'description', 'type': 'Text'},
+                        {'name': 'created_at', 'type': 'DateTime'},
+                        {'name': 'updated_at', 'type': 'DateTime'}
+                    ]
+                    # Add common FK based on entity type
+                    if name.lower() not in ['user', 'admin', 'settings']:
+                        columns.append({'name': 'user_id', 'type': 'UUID'})
+                        relationships.append({
+                            'column': 'user_id',
+                            'references': 'User',
+                            'type': 'many_to_one'
+                        })
+
+                entities.append({
+                    'name': name,
+                    'columns': columns,
+                    'primary_key': 'id',
+                    'relationships': relationships
+                })
+
+        # Default entities based on project type
         if not entities:
-            entities = [
-                {'name': 'User', 'attributes': ['id', 'name', 'email', 'password_hash'], 'primary_key': 'id'},
-                {'name': 'Project', 'attributes': ['id', 'title', 'description', 'user_id'], 'primary_key': 'id'},
-                {'name': 'Document', 'attributes': ['id', 'name', 'content', 'project_id'], 'primary_key': 'id'},
-            ]
+            project_name = project_data.get('project_name', '').lower()
+            features_str = ' '.join(str(f).lower() for f in project_data.get('features', []))
+
+            # E-commerce defaults
+            if 'shop' in project_name or 'store' in project_name or 'ecommerce' in features_str:
+                entities = [
+                    {'name': 'User', 'columns': [
+                        {'name': 'id', 'type': 'UUID'}, {'name': 'email', 'type': 'String'},
+                        {'name': 'password_hash', 'type': 'String'}, {'name': 'role', 'type': 'Enum'}
+                    ], 'primary_key': 'id', 'relationships': []},
+                    {'name': 'Product', 'columns': [
+                        {'name': 'id', 'type': 'UUID'}, {'name': 'name', 'type': 'String'},
+                        {'name': 'price', 'type': 'Decimal'}, {'name': 'vendor_id', 'type': 'UUID'}
+                    ], 'primary_key': 'id', 'relationships': [{'column': 'vendor_id', 'references': 'Vendor', 'type': 'many_to_one'}]},
+                    {'name': 'Order', 'columns': [
+                        {'name': 'id', 'type': 'UUID'}, {'name': 'user_id', 'type': 'UUID'},
+                        {'name': 'total', 'type': 'Decimal'}, {'name': 'status', 'type': 'Enum'}
+                    ], 'primary_key': 'id', 'relationships': [{'column': 'user_id', 'references': 'User', 'type': 'many_to_one'}]},
+                ]
+            else:
+                # Generic defaults
+                entities = [
+                    {'name': 'User', 'columns': [
+                        {'name': 'id', 'type': 'UUID'}, {'name': 'name', 'type': 'String'},
+                        {'name': 'email', 'type': 'String'}, {'name': 'password_hash', 'type': 'String'}
+                    ], 'primary_key': 'id', 'relationships': []},
+                    {'name': 'Project', 'columns': [
+                        {'name': 'id', 'type': 'UUID'}, {'name': 'title', 'type': 'String'},
+                        {'name': 'description', 'type': 'Text'}, {'name': 'user_id', 'type': 'UUID'}
+                    ], 'primary_key': 'id', 'relationships': [{'column': 'user_id', 'references': 'User', 'type': 'many_to_one'}]},
+                    {'name': 'Document', 'columns': [
+                        {'name': 'id', 'type': 'UUID'}, {'name': 'name', 'type': 'String'},
+                        {'name': 'content', 'type': 'Text'}, {'name': 'project_id', 'type': 'UUID'}
+                    ], 'primary_key': 'id', 'relationships': [{'column': 'project_id', 'references': 'Project', 'type': 'many_to_one'}]},
+                ]
 
         return entities
 

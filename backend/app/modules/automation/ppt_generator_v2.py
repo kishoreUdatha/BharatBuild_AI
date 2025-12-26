@@ -17,6 +17,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import os
 import tempfile
+from io import BytesIO
 
 from pptx import Presentation
 from pptx.util import Inches, Pt, Cm
@@ -87,32 +88,28 @@ class PPTGeneratorV2:
             for section in sections:
                 await self._add_section_slides(section, project_data)
 
-            # Determine output directory - prefer project docs folder with user isolation
-            if project_id:
-                output_dir = settings.get_project_docs_dir(project_id, user_id)
-            else:
-                output_dir = settings.GENERATED_DIR / "presentations"
-            output_dir.mkdir(parents=True, exist_ok=True)
-
             project_name = project_data.get('project_name', 'Presentation')
             filename = f"{project_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
-            file_path = output_dir / filename
 
-            self.prs.save(str(file_path))
-
-            logger.info(f"[PPTGenerator] Created presentation: {file_path}")
-
-            # Save to S3 and PostgreSQL if project_id and user_id are available
+            # Save to S3 and PostgreSQL directly from memory (no local files)
             if project_id and user_id:
                 try:
                     from app.services.document_storage_service import document_storage
 
-                    save_result = await document_storage.save_document(
+                    # Save presentation to BytesIO buffer (no local file)
+                    buffer = BytesIO()
+                    self.prs.save(buffer)
+                    buffer.seek(0)
+                    content = buffer.read()
+
+                    save_result = await document_storage.save_document_from_bytes(
                         user_id=user_id,
                         project_id=project_id,
-                        local_file_path=str(file_path),
+                        content=content,
+                        file_name=filename,
                         title=f"{project_name} - Presentation",
                         doc_type='ppt',
+                        content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                         extra_metadata={
                             'project_name': project_name,
                             'document_type': 'ppt',
@@ -122,11 +119,19 @@ class PPTGeneratorV2:
 
                     if save_result:
                         logger.info(f"[PPTGenerator] Saved to S3+DB: {save_result.get('s3_key')}")
+                        # Return S3 key as the "path" (no local file created)
+                        return save_result.get('s3_key', filename)
                     else:
                         logger.warning(f"[PPTGenerator] Failed to save to cloud storage")
                 except Exception as e:
                     logger.error(f"[PPTGenerator] Error saving to S3+DB: {e}")
 
+            # Fallback: save locally only if no project/user (shouldn't happen in production)
+            output_dir = settings.GENERATED_DIR / "presentations"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            file_path = output_dir / filename
+            self.prs.save(str(file_path))
+            logger.info(f"[PPTGenerator] Created local presentation (fallback): {file_path}")
             return str(file_path)
 
         except Exception as e:

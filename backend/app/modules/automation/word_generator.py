@@ -19,6 +19,7 @@ import os
 import tempfile
 import re
 import asyncio
+from io import BytesIO
 
 from docx import Document
 from docx.shared import Inches, Pt, Cm, RGBColor
@@ -134,32 +135,28 @@ class WordDocumentGenerator:
             # Add table of contents (placeholder - Word will update)
             self._update_toc_fields()
 
-            # Determine output directory - prefer project docs folder with user isolation
-            if project_id:
-                output_dir = settings.get_project_docs_dir(project_id, user_id)
-            else:
-                output_dir = settings.GENERATED_DIR / "documents"
-            output_dir.mkdir(parents=True, exist_ok=True)
-
             project_name = project_data.get('project_name', 'Document')
             filename = f"{project_name}_{document_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
-            file_path = output_dir / filename
 
-            self.document.save(str(file_path))
-
-            logger.info(f"[WordGenerator] Created document: {file_path}")
-
-            # Save to S3 and PostgreSQL if project_id and user_id are available
+            # Save to S3 and PostgreSQL directly from memory (no local files)
             if project_id and user_id:
                 try:
                     from app.services.document_storage_service import document_storage
 
-                    save_result = await document_storage.save_document(
+                    # Save document to BytesIO buffer (no local file)
+                    buffer = BytesIO()
+                    self.document.save(buffer)
+                    buffer.seek(0)
+                    content = buffer.read()
+
+                    save_result = await document_storage.save_document_from_bytes(
                         user_id=user_id,
                         project_id=project_id,
-                        local_file_path=str(file_path),
+                        content=content,
+                        file_name=filename,
                         title=f"{project_name} - {document_type.upper()}",
                         doc_type=document_type,
+                        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         extra_metadata={
                             'project_name': project_name,
                             'document_type': document_type,
@@ -169,11 +166,19 @@ class WordDocumentGenerator:
 
                     if save_result:
                         logger.info(f"[WordGenerator] Saved to S3+DB: {save_result.get('s3_key')}")
+                        # Return S3 key as the "path" (no local file created)
+                        return save_result.get('s3_key', filename)
                     else:
                         logger.warning(f"[WordGenerator] Failed to save to cloud storage")
                 except Exception as e:
                     logger.error(f"[WordGenerator] Error saving to S3+DB: {e}")
 
+            # Fallback: save locally only if no project/user (shouldn't happen in production)
+            output_dir = settings.GENERATED_DIR / "documents"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            file_path = output_dir / filename
+            self.document.save(str(file_path))
+            logger.info(f"[WordGenerator] Created local document (fallback): {file_path}")
             return str(file_path)
 
         except Exception as e:

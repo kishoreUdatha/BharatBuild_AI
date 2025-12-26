@@ -365,6 +365,92 @@ class DocumentStorageService:
             'db_saved': True
         }
 
+    async def save_document_from_bytes(
+        self,
+        user_id: str,
+        project_id: str,
+        content: bytes,
+        file_name: str,
+        title: str,
+        doc_type: str,
+        content_type: str = None,
+        extra_metadata: Dict = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Save document directly from bytes (in-memory) to S3 and PostgreSQL.
+        No local file creation required.
+
+        Args:
+            user_id: User UUID
+            project_id: Project UUID
+            content: Document content as bytes
+            file_name: File name (e.g., 'Report.docx')
+            title: Document title
+            doc_type: Document type (word, ppt, diagrams, srs, etc.)
+            content_type: MIME type (auto-detected if not provided)
+            extra_metadata: Additional metadata
+
+        Returns:
+            Dict with document_id, s3_key, file_url or None on failure
+        """
+        try:
+            if not user_id:
+                logger.error("[DocStorage] user_id is required for document upload")
+                return None
+
+            # Auto-detect content type
+            if not content_type:
+                content_type = self._get_content_type(file_name)
+
+            # Map doc_type to S3 folder
+            s3_folder = self._map_doc_type_to_folder(doc_type)
+
+            # Generate S3 key WITH USER ISOLATION
+            s3_key = f"{self.s3_prefix}/{user_id}/{project_id}/{s3_folder}/{file_name}"
+
+            # 1. Upload directly to S3 from bytes
+            await self._upload_to_s3_direct(s3_key, content, content_type)
+
+            # Get presigned URL for access
+            file_url = await storage_service.get_presigned_url(s3_key)
+
+            logger.info(f"[DocStorage] Uploaded from bytes to S3: {s3_key} ({len(content)} bytes)")
+
+            # 2. Save metadata to PostgreSQL
+            doc_id = await self.save_document_to_db(
+                user_id=user_id,
+                project_id=project_id,
+                title=title,
+                doc_type=doc_type,
+                file_name=file_name,
+                file_url=file_url,
+                s3_key=s3_key,
+                file_size=len(content),
+                mime_type=content_type,
+                extra_metadata=extra_metadata
+            )
+
+            if not doc_id:
+                logger.warning(f"[DocStorage] S3 upload succeeded but DB save failed for {title}")
+                return {
+                    's3_key': s3_key,
+                    'file_url': file_url,
+                    'size_bytes': len(content),
+                    'db_saved': False
+                }
+
+            return {
+                'document_id': doc_id,
+                's3_key': s3_key,
+                'file_url': file_url,
+                'size_bytes': len(content),
+                'db_saved': True
+            }
+
+        except Exception as e:
+            logger.error(f"[DocStorage] Failed to save from bytes: {e}", exc_info=True)
+            return None
+
     async def save_diagram(
         self,
         user_id: str,

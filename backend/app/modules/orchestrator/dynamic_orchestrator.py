@@ -6617,10 +6617,11 @@ Stream code in chunks for real-time display.
     def _extract_database_tables_from_files(self, files_created: List) -> List[Dict]:
         """
         Extract database table/model definitions from generated code files.
-        Looks for model classes, table definitions, etc.
+        Extracts table names, columns, data types, and foreign key relationships.
         """
         import re
         tables = []
+        table_contents = {}  # Store content for relationship extraction
 
         # Type safety: handle bool/None/invalid types
         if not isinstance(files_created, list):
@@ -6628,7 +6629,7 @@ Stream code in chunks for real-time display.
             return tables
 
         # Patterns for different ORMs/frameworks
-        patterns = [
+        class_patterns = [
             # SQLAlchemy
             (r'class\s+(\w+)\s*\([^)]*(?:Base|Model)[^)]*\)', 'sqlalchemy'),
             # Django
@@ -6642,6 +6643,26 @@ Stream code in chunks for real-time display.
             # SQL CREATE TABLE
             (r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\']?(\w+)[`"\']?', 'sql'),
         ]
+
+        # Column extraction patterns
+        column_patterns = {
+            'sqlalchemy': r'(\w+)\s*=\s*Column\s*\(\s*(\w+)',
+            'django': r'(\w+)\s*=\s*models\.(\w+Field)',
+            'prisma': r'(\w+)\s+(\w+)(?:\?|\[\])?(?:\s+@|$|\n)',
+            'typeorm': r'@Column\s*\([^)]*\)\s*(\w+)\s*:\s*(\w+)',
+            'mongoose': r'(\w+)\s*:\s*\{\s*type\s*:\s*(\w+)',
+            'sql': r'[`"\']?(\w+)[`"\']?\s+(VARCHAR|INT|TEXT|BOOLEAN|DATE|TIMESTAMP|UUID|SERIAL)',
+        }
+
+        # Foreign key patterns
+        fk_patterns = {
+            'sqlalchemy': r'(\w+)\s*=\s*Column\s*\([^)]*ForeignKey\s*\([\'"](\w+)\.(\w+)[\'"]',
+            'django': r'(\w+)\s*=\s*models\.ForeignKey\s*\(\s*[\'"]?(\w+)[\'"]?',
+            'prisma': r'(\w+)\s+(\w+)\s+@relation',
+            'typeorm': r'@ManyToOne|@OneToMany|@OneToOne.*\(\s*\(\s*\)\s*=>\s*(\w+)',
+            'mongoose': r'(\w+)\s*:\s*\{\s*type\s*:\s*.*?ref\s*:\s*[\'"](\w+)[\'"]',
+            'sql': r'FOREIGN\s+KEY\s*\(\s*[`"\']?(\w+)[`"\']?\s*\)\s*REFERENCES\s+[`"\']?(\w+)[`"\']?',
+        }
 
         for file_info in files_created:
             if isinstance(file_info, dict):
@@ -6657,27 +6678,64 @@ Stream code in chunks for real-time display.
             if not any(ext in file_path for ext in ['.py', '.js', '.ts', '.java', '.prisma', '.sql']):
                 continue
 
-            for pattern, orm_type in patterns:
-                matches = re.findall(pattern, content, re.IGNORECASE)
+            for pattern, orm_type in class_patterns:
+                matches = re.findall(pattern, content, re.IGNORECASE | re.MULTILINE)
                 for table_name in matches:
                     # Skip common base classes
                     if table_name.lower() in ['base', 'model', 'basemodel', 'entity']:
                         continue
+
+                    # Extract columns for this table
+                    columns = []
+                    relationships = []
+
+                    # Find class/model body content
+                    class_pattern = rf'class\s+{table_name}\s*\([^)]*\)\s*:\s*(.*?)(?=\nclass\s|\Z)'
+                    class_match = re.search(class_pattern, content, re.DOTALL | re.IGNORECASE)
+                    class_content = class_match.group(1) if class_match else content
+
+                    # Extract columns
+                    if orm_type in column_patterns:
+                        col_matches = re.findall(column_patterns[orm_type], class_content, re.IGNORECASE)
+                        for col_match in col_matches[:10]:  # Limit columns
+                            col_name = col_match[0] if isinstance(col_match, tuple) else col_match
+                            col_type = col_match[1] if isinstance(col_match, tuple) and len(col_match) > 1 else 'String'
+                            # Clean up common type names
+                            col_type = col_type.replace('Field', '').replace('Column', '')
+                            columns.append({'name': col_name, 'type': col_type})
+
+                    # Extract foreign keys / relationships
+                    if orm_type in fk_patterns:
+                        fk_matches = re.findall(fk_patterns[orm_type], class_content, re.IGNORECASE)
+                        for fk_match in fk_matches[:5]:  # Limit relationships
+                            if isinstance(fk_match, tuple) and len(fk_match) >= 2:
+                                rel_table = fk_match[1] if len(fk_match) > 1 else fk_match[0]
+                                relationships.append({
+                                    'column': fk_match[0],
+                                    'references': rel_table,
+                                    'type': 'many_to_one'
+                                })
+
                     tables.append({
                         "name": table_name,
                         "type": orm_type,
-                        "file": file_path
+                        "file": file_path,
+                        "columns": columns if columns else [
+                            {'name': 'id', 'type': 'UUID'},
+                            {'name': 'created_at', 'type': 'DateTime'},
+                            {'name': 'updated_at', 'type': 'DateTime'}
+                        ],
+                        "relationships": relationships
                     })
 
-        # Remove duplicates
-        seen = set()
-        unique_tables = []
+        # Remove duplicates, keeping the one with most columns
+        seen = {}
         for table in tables:
-            if table['name'] not in seen:
-                seen.add(table['name'])
-                unique_tables.append(table)
+            name = table['name']
+            if name not in seen or len(table.get('columns', [])) > len(seen[name].get('columns', [])):
+                seen[name] = table
 
-        return unique_tables[:15]  # Limit to 15 tables
+        return list(seen.values())[:15]  # Limit to 15 tables
 
     async def _execute_documenter(
         self,
