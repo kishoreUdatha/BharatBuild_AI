@@ -475,16 +475,15 @@ class ContainerExecutor:
             # 2. Browser requests: /api/v1/preview/{project_id}/src/main.tsx
             # 3. CloudFront routes /api/* → ALB → ECS backend preview_proxy.py
             # 4. Backend proxies to Traefik: /api/v1/preview/{project_id}/src/main.tsx (FULL path)
-            # 5. Traefik matches PathPrefix and forwards WITHOUT stripping
-            # 6. Vite with --base=/api/v1/preview/{project_id}/ matches and serves the file
+            # nginx gateway routing: /sandbox/{port}/* -> localhost:{port}/*
+            # Container receives requests at root path, no --base needed
 
-            # Build run command - Vite needs --base for correct asset URL generation AND request matching
+            # Build run command - NO --base flag, nginx handles path routing
             run_command = config.run_command
             if technology == Technology.NODEJS_VITE:
-                # Use full path so Vite matches incoming requests correctly
-                full_base = f"/api/v1/preview/{project_id}/"
-                run_command = f"npm run dev -- --host 0.0.0.0 --no-open --base={full_base}"
-                logger.info(f"[ContainerExecutor] Using Vite with base path: {full_base}")
+                # Vite serves at root path, nginx handles the /sandbox/{port} routing
+                run_command = f"npm run dev -- --host 0.0.0.0 --port 5173"
+                logger.info(f"[ContainerExecutor] Using Vite at root path (nginx gateway routing)")
 
             # Traefik routes /api/v1/preview/{project_id}/... to container
             # NO stripPrefix - Vite expects the full path to match its --base
@@ -510,7 +509,9 @@ class ContainerExecutor:
                 **traefik_labels
             }
 
-            # Create container - NO port mapping needed! Traefik handles routing via Docker network
+            # Create container WITH port mapping for nginx gateway routing
+            # nginx on port 8080 routes /sandbox/{port}/ to localhost:{port}
+            # This allows ECS to reach container via EC2_IP:8080/sandbox/{host_port}/
             container = self.docker_client.containers.run(
                 image=config.image,
                 name=container_name,
@@ -519,8 +520,8 @@ class ContainerExecutor:
                 volumes={
                     project_path: {"bind": "/app", "mode": "rw"}
                 },
-                # NO ports parameter - Traefik routes via Docker internal IPs
-                network="bharatbuild-sandbox",  # Must be on same network as Traefik
+                ports={f"{config.port}/tcp": host_port},  # Map container port to host port
+                network="bharatbuild-sandbox",
                 mem_limit=config.memory_limit,
                 cpu_period=100000,
                 cpu_quota=int(config.cpu_limit * 100000),
@@ -533,21 +534,22 @@ class ContainerExecutor:
                 labels=all_labels
             )
 
-            # Track container (no host_port - routing via Traefik gateway)
+            # Track container with host_port for nginx gateway routing
             self.active_containers[project_id] = {
                 "container_id": container.id,
                 "container_name": container_name,
                 "user_id": user_id,
                 "technology": technology.value,
                 "internal_port": config.port,  # Container's internal port (5173, 3000, etc.)
+                "host_port": host_port,  # EC2 host port for nginx routing
                 "created_at": datetime.utcnow(),
                 "expires_at": datetime.utcnow() + timedelta(seconds=config.timeout_seconds)
             }
 
-            logger.info(f"[ContainerExecutor] Container {container_name} started (internal port: {config.port})")
+            logger.info(f"[ContainerExecutor] Container {container_name} started (host_port: {host_port}, internal: {config.port})")
 
-            # Return internal_port instead of host_port - routing via Traefik gateway
-            return True, f"Container started successfully", config.port
+            # Return host_port for nginx gateway routing
+            return True, f"Container started successfully", host_port
 
         except APIError as e:
             logger.error(f"[ContainerExecutor] Docker API error: {e}")
