@@ -419,6 +419,7 @@ class ContainerExecutor:
         # Multi-folder project detection: check frontend/ subdirectory
         # This handles fullstack projects where frontend is in a subdirectory
         if "frontend" in files or not files:
+            logger.info(f"[ContainerExecutor] Checking for multi-folder project (files empty or has frontend/)")
             # Check if frontend has package.json (full-stack project with separate frontend)
             # If file listing failed (empty), still try to detect frontend/ structure
             try:
@@ -428,16 +429,9 @@ class ContainerExecutor:
                 # For remote mode, check via Docker
                 if sandbox_docker_host and self.docker_client:
                     try:
-                        # Check for frontend/package.json
-                        check_script = f"""
-                            if [ -f "{path_str}/frontend/package.json" ]; then
-                                echo "frontend_exists"
-                                # Check for vite config
-                                if [ -f "{path_str}/frontend/vite.config.ts" ] || [ -f "{path_str}/frontend/vite.config.js" ]; then
-                                    echo "vite_exists"
-                                fi
-                            fi
-                        """
+                        # Check for frontend/package.json using a simple test command
+                        check_script = f'test -f "{path_str}/frontend/package.json" && echo "frontend_exists" && test -f "{path_str}/frontend/vite.config.ts" && echo "vite_exists" || true'
+                        logger.info(f"[ContainerExecutor] Running frontend check: {check_script[:80]}...")
                         result = self.docker_client.containers.run(
                             "alpine:latest",
                             ["-c", check_script],
@@ -446,6 +440,7 @@ class ContainerExecutor:
                             volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}}
                         )
                         output = result.decode('utf-8').strip() if result else ""
+                        logger.info(f"[ContainerExecutor] Frontend check output: '{output}'")
                         if "frontend_exists" in output:
                             frontend_detected = True
                             logger.info(f"[ContainerExecutor] Detected multi-folder project with frontend/package.json")
@@ -454,8 +449,18 @@ class ContainerExecutor:
                             if "vite_exists" in output:
                                 return Technology.NODEJS_VITE
                             return Technology.NODEJS
+                        elif not output and not files:
+                            # Docker SDK might be returning empty - assume multi-folder as fallback
+                            logger.warning(f"[ContainerExecutor] Docker SDK returned empty, assuming multi-folder project")
+                            self._frontend_subdir = True
+                            return Technology.NODEJS_VITE
                     except Exception as e:
-                        logger.debug(f"[ContainerExecutor] Failed to check frontend/package.json via Docker: {e}")
+                        logger.warning(f"[ContainerExecutor] Failed to check frontend/package.json via Docker: {e}")
+                        # Fallback: assume multi-folder if Docker commands fail and no files detected
+                        if not files:
+                            logger.info(f"[ContainerExecutor] Docker check failed, assuming multi-folder project as fallback")
+                            self._frontend_subdir = True
+                            return Technology.NODEJS_VITE
                 elif os.path.exists(frontend_pkg_path):
                     logger.info(f"[ContainerExecutor] Detected multi-folder project with frontend/package.json (local)")
                     self._frontend_subdir = True
@@ -465,7 +470,7 @@ class ContainerExecutor:
                         return Technology.NODEJS_VITE
                     return Technology.NODEJS
             except Exception as e:
-                logger.debug(f"[ContainerExecutor] Error checking frontend subdirectory: {e}")
+                logger.warning(f"[ContainerExecutor] Error checking frontend subdirectory: {e}")
 
         # Java detection
         if "pom.xml" in files or "build.gradle" in files or "build.gradle.kts" in files:
