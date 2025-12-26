@@ -1017,6 +1017,30 @@ class ContainerExecutor:
 
         yield f"🔍 Detecting project technology...\n"
 
+        # DEBUG: Log exact path being used
+        path_str = str(project_path)
+        logger.info(f"[ContainerExecutor] run_project called with project_path={path_str}, user_id={user_id}")
+        yield f"  📁 Using path: {path_str}\n"
+
+        # DEBUG: Verify files exist before detect_technology
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+        if sandbox_docker_host and self.docker_client:
+            try:
+                verify_script = f"echo '=== Pre-detect check ===' && ls -la {path_str} 2>&1 | head -10"
+                verify_output = self.docker_client.containers.run(
+                    "alpine:latest",
+                    ["-c", verify_script],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    remove=True
+                )
+                pre_listing = verify_output.decode('utf-8').strip() if verify_output else "No output"
+                logger.info(f"[ContainerExecutor] Pre-detect file listing:\n{pre_listing}")
+                yield f"  🔍 Pre-detect check:\n{pre_listing}\n"
+            except Exception as pre_err:
+                logger.warning(f"[ContainerExecutor] Pre-detect check failed: {pre_err}")
+                yield f"  ⚠️ Pre-detect check failed: {pre_err}\n"
+
         # Detect technology
         technology = self.detect_technology(project_path)
         if technology == Technology.UNKNOWN:
