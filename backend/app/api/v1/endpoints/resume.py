@@ -43,54 +43,142 @@ DOCUMENT_GENERATION_ORDER = [
 async def check_files_complete(db: AsyncSession, project_id: str) -> tuple[bool, int, int]:
     """
     Check if all planned files are generated.
+
+    This function checks BOTH:
+    1. Files in DB have status = COMPLETED with actual content (size_bytes > 0)
+    2. All files from plan_json exist in DB
+
     Returns: (all_complete, completed_count, total_count)
     """
+    from app.models.project import Project
+
+    # Get files from database
     result = await db.execute(
         select(ProjectFile).where(
             ProjectFile.project_id == project_id,
             ProjectFile.is_folder == False
         )
     )
-    files = result.scalars().all()
+    db_files = result.scalars().all()
 
-    if not files:
+    # Get plan_json to check for missing files
+    project_result = await db.execute(
+        select(Project).where(Project.id == project_id)
+    )
+    project = project_result.scalar_one_or_none()
+    plan_json = project.plan_json if project else None
+
+    # Get files from plan
+    plan_files = []
+    if plan_json and isinstance(plan_json, dict):
+        plan_files = plan_json.get('files', [])
+
+    plan_file_paths = {f.get('path') for f in plan_files if f.get('path')}
+    db_file_paths = {f.path for f in db_files}
+
+    # Find files in plan but not in DB (missing files)
+    missing_from_db = plan_file_paths - db_file_paths
+
+    if not db_files and not plan_files:
         return False, 0, 0
 
-    completed = sum(1 for f in files if f.generation_status == FileGenerationStatus.COMPLETED)
-    return completed == len(files), completed, len(files)
+    # Count completed files (must have COMPLETED status AND actual content)
+    completed = sum(
+        1 for f in db_files
+        if f.generation_status == FileGenerationStatus.COMPLETED and f.size_bytes > 0
+    )
+
+    # Total = files in DB + files missing from DB
+    total_count = len(db_files) + len(missing_from_db)
+
+    # All complete only if no missing files AND all DB files are completed with content
+    all_complete = len(missing_from_db) == 0 and completed == len(db_files) and len(db_files) > 0
+
+    if missing_from_db:
+        logger.warning(f"[Resume] Found {len(missing_from_db)} files in plan but missing from DB: {list(missing_from_db)[:5]}...")
+
+    return all_complete, completed, total_count
 
 
 async def get_incomplete_files(db: AsyncSession, project_id: str) -> list:
     """
-    Get files that need to be generated (status != COMPLETED).
+    Get files that need to be generated.
 
-    Returns list of dicts with file info for regeneration:
-    - PLANNED: Never started
-    - GENERATING: Started but interrupted
-    - FAILED: Attempted but failed
+    This includes:
+    1. Files with status != COMPLETED
+    2. Files with COMPLETED status but size_bytes = 0 (empty content)
+    3. Files in plan_json but missing from database entirely
 
-    Also includes has_s3_key flag - if True, file content exists in S3
-    and only needs status update (no regeneration needed).
+    Returns list of dicts with file info for regeneration.
+    has_s3_key is only True if file has BOTH s3_key AND size_bytes > 0.
     """
+    from app.models.project import Project
+
+    # Get all non-folder files from database
     result = await db.execute(
         select(ProjectFile).where(
             ProjectFile.project_id == project_id,
-            ProjectFile.is_folder == False,
-            ProjectFile.generation_status != FileGenerationStatus.COMPLETED
+            ProjectFile.is_folder == False
         ).order_by(ProjectFile.generation_order)
     )
-    files = result.scalars().all()
+    db_files = result.scalars().all()
+    db_file_paths = {f.path for f in db_files}
+
+    # Get plan_json to find missing files
+    project_result = await db.execute(
+        select(Project).where(Project.id == project_id)
+    )
+    project = project_result.scalar_one_or_none()
+    plan_json = project.plan_json if project else None
 
     incomplete = []
-    for f in files:
-        incomplete.append({
-            "path": f.path,
-            "name": f.name,
-            "status": f.generation_status.value if f.generation_status else "unknown",
-            "order": f.generation_order or 0,
-            "has_s3_key": bool(f.s3_key),  # If True, content already in S3
-            "s3_key": f.s3_key  # For restoration without regeneration
-        })
+
+    # 1. Check DB files for incomplete ones
+    for f in db_files:
+        needs_regeneration = False
+        reason = ""
+
+        if f.generation_status != FileGenerationStatus.COMPLETED:
+            # Status is not COMPLETED
+            needs_regeneration = True
+            reason = f.generation_status.value if f.generation_status else "unknown"
+        elif f.size_bytes == 0 or f.size_bytes is None:
+            # COMPLETED but no content (empty file)
+            needs_regeneration = True
+            reason = "empty_content"
+            logger.warning(f"[Resume] File {f.path} marked COMPLETED but has no content (size=0)")
+
+        if needs_regeneration:
+            # Only trust has_s3_key if size_bytes > 0
+            has_valid_s3_content = bool(f.s3_key) and f.size_bytes and f.size_bytes > 0
+            incomplete.append({
+                "path": f.path,
+                "name": f.name,
+                "status": reason,
+                "order": f.generation_order or 0,
+                "has_s3_key": has_valid_s3_content,
+                "s3_key": f.s3_key if has_valid_s3_content else None
+            })
+
+    # 2. Check for files in plan but missing from DB entirely
+    if plan_json and isinstance(plan_json, dict):
+        plan_files = plan_json.get('files', [])
+        for idx, pf in enumerate(plan_files):
+            file_path = pf.get('path')
+            if file_path and file_path not in db_file_paths:
+                logger.warning(f"[Resume] File {file_path} in plan but missing from DB - will regenerate")
+                incomplete.append({
+                    "path": file_path,
+                    "name": file_path.split('/')[-1] if '/' in file_path else file_path,
+                    "status": "missing_from_db",
+                    "order": idx,
+                    "has_s3_key": False,
+                    "s3_key": None,
+                    "description": pf.get('description', '')
+                })
+
+    # Sort by order
+    incomplete.sort(key=lambda x: x.get('order', 0))
 
     return incomplete
 
@@ -98,17 +186,22 @@ async def get_incomplete_files(db: AsyncSession, project_id: str) -> list:
 async def fix_orphaned_s3_files(db: AsyncSession, project_id: str) -> int:
     """
     Fix files where S3 upload succeeded but DB status wasn't updated.
-    These files have s3_key but status != COMPLETED.
+    These files have s3_key AND size_bytes > 0 (actual content) but status != COMPLETED.
+
+    IMPORTANT: Only marks as COMPLETED if size_bytes > 0 to ensure content actually exists.
+    Files with s3_key but size_bytes = 0 are likely incomplete/failed uploads.
 
     Returns number of files fixed.
     """
     from sqlalchemy import update
 
+    # Only fix files that have BOTH s3_key AND actual content (size_bytes > 0)
     result = await db.execute(
         update(ProjectFile)
         .where(ProjectFile.project_id == project_id)
         .where(ProjectFile.is_folder == False)
         .where(ProjectFile.s3_key != None)
+        .where(ProjectFile.size_bytes > 0)  # CRITICAL: Ensure content actually exists
         .where(ProjectFile.generation_status != FileGenerationStatus.COMPLETED)
         .values(generation_status=FileGenerationStatus.COMPLETED)
     )
