@@ -258,15 +258,30 @@ async def run_project(
         except Exception as touch_err:
             logger.warning(f"[Execution] touch_project failed in endpoint: {touch_err}")
 
-        # Stream Docker execution with progress using sse-starlette
-        # EventSourceResponse handles keepalive pings automatically
-        return EventSourceResponse(
-            _execute_docker_stream_with_progress(project_id, user_id, db),
-            ping=1,  # Send ping every 1 second to keep connection alive
-            ping_message_factory=lambda: {"comment": "keepalive"},
+        # Stream Docker execution with progress
+        # Use StreamingResponse with manual SSE formatting
+        async def sse_generator():
+            """Wrapper that formats events as SSE and adds keepalive"""
+            try:
+                async for event in _execute_docker_stream_with_progress(project_id, user_id, db):
+                    if isinstance(event, dict) and "data" in event:
+                        yield f"data: {event['data']}\n\n"
+                    elif isinstance(event, str):
+                        yield event
+                    # Yield immediately to flush
+                    await asyncio.sleep(0)
+            except Exception as e:
+                logger.error(f"[SSE] Generator error: {e}", exc_info=True)
+                yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+
+        return StreamingResponse(
+            sse_generator(),
+            media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-store, must-revalidate",
-                "X-Accel-Buffering": "no",  # Disable nginx buffering
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "Transfer-Encoding": "chunked",
             }
         )
 
