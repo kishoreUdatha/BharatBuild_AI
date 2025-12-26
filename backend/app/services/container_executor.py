@@ -993,7 +993,8 @@ class ContainerExecutor:
             logger.info(f"[ContainerExecutor] Preview URL generated: {preview_url}")
             yield f"📍 Preview URL: {preview_url}\n\n"
 
-            # Stream logs
+            # Stream logs using async-compatible approach
+            # The Docker SDK's logs() is synchronous, so we use a queue-based async pattern
             server_started = False
             start_patterns = [
                 r"Local:\s*http://\S+:(\d+)",
@@ -1006,31 +1007,88 @@ class ContainerExecutor:
                 r"compiled successfully",  # Webpack
             ]
 
-            for log in container.logs(stream=True, follow=True):
+            # Use asyncio queue for thread-safe async log streaming
+            log_queue: asyncio.Queue = asyncio.Queue()
+
+            # Get the current event loop BEFORE starting thread
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
+
+            def stream_logs_sync():
+                """Synchronous log streaming in separate thread"""
                 try:
-                    line = log.decode('utf-8', errors='ignore').strip()
-                    if line:
-                        yield f"{line}\n"
+                    for log in container.logs(stream=True, follow=True, timestamps=False):
+                        try:
+                            line = log.decode('utf-8', errors='ignore').strip()
+                            if line:
+                                # Put log line in queue (thread-safe)
+                                asyncio.run_coroutine_threadsafe(
+                                    log_queue.put(line),
+                                    loop
+                                )
+                        except Exception as decode_err:
+                            logger.debug(f"[ContainerExecutor] Log decode error: {decode_err}")
+                            continue
+                except Exception as e:
+                    logger.error(f"[ContainerExecutor] Log streaming thread error: {e}")
+                finally:
+                    # Signal completion
+                    asyncio.run_coroutine_threadsafe(
+                        log_queue.put(None),  # Sentinel value
+                        loop
+                    )
 
-                        # Check for server start patterns
-                        if not server_started:
-                            for pattern in start_patterns:
-                                match = re.search(pattern, line, re.IGNORECASE)
-                                if match:
-                                    server_started = True
-                                    logger.info(f"[ContainerExecutor] Server started! Pattern matched: {pattern}")
-                                    yield f"\n{'='*50}\n"
-                                    yield f"🚀 SERVER STARTED!\n"
-                                    yield f"Preview URL: {preview_url}\n"
-                                    yield f"{'='*50}\n\n"
-                                    # Emit both markers for compatibility
-                                    yield f"__SERVER_STARTED__:{preview_url}\n"
-                                    yield f"_PREVIEW_URL_:{preview_url}\n"
-                                    break
+            # Start log streaming in background thread
+            import concurrent.futures
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            log_future = executor.submit(stream_logs_sync)
 
-                except Exception as decode_err:
-                    logger.debug(f"[ContainerExecutor] Log decode error: {decode_err}")
+            # Process logs from queue asynchronously
+            timeout_seconds = 120  # 2 minute timeout for server to start
+            start_time = loop.time()
+
+            while True:
+                try:
+                    # Wait for log with timeout
+                    line = await asyncio.wait_for(log_queue.get(), timeout=5.0)
+
+                    if line is None:
+                        # Stream ended
+                        break
+
+                    yield f"{line}\n"
+
+                    # Check for server start patterns
+                    if not server_started:
+                        for pattern in start_patterns:
+                            match = re.search(pattern, line, re.IGNORECASE)
+                            if match:
+                                server_started = True
+                                logger.info(f"[ContainerExecutor] Server started! Pattern matched: {pattern}")
+                                yield f"\n{'='*50}\n"
+                                yield f"🚀 SERVER STARTED!\n"
+                                yield f"Preview URL: {preview_url}\n"
+                                yield f"{'='*50}\n\n"
+                                # Emit both markers for compatibility
+                                yield f"__SERVER_STARTED__:{preview_url}\n"
+                                yield f"_PREVIEW_URL_:{preview_url}\n"
+                                break
+
+                except asyncio.TimeoutError:
+                    # No log for 5 seconds - check if we've timed out or server started
+                    elapsed = loop.time() - start_time
+                    if elapsed > timeout_seconds and not server_started:
+                        logger.warning(f"[ContainerExecutor] Timeout waiting for server start")
+                        yield f"\n⚠️ Timeout waiting for server. Container may still be starting...\n"
+                        break
+                    # Send keepalive
+                    yield f"  ⏳ Waiting for server... ({int(elapsed)}s)\n"
                     continue
+
+            # Cleanup
+            executor.shutdown(wait=False)
 
             # If we exited the loop without detecting server start, still emit the URL
             if not server_started and preview_url:
