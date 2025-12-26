@@ -1088,8 +1088,8 @@ class WorkflowEngine:
                 timeout=300,
                 retry_count=2,
                 stream_output=True,
-                # Run for ALL projects that have files created
-                condition=lambda ctx: len(ctx.files_created) > 0
+                # Run for ALL projects that have files created (safely handle bool/None)
+                condition=lambda ctx: isinstance(ctx.files_created, list) and len(ctx.files_created) > 0
             ),
         ]
 
@@ -1151,8 +1151,8 @@ class WorkflowEngine:
                 timeout=300,
                 retry_count=2,
                 stream_output=True,
-                # Run for ALL projects that created files
-                condition=lambda ctx: len(ctx.files_created) > 0
+                # Run for ALL projects that created files (safely handle bool/None)
+                condition=lambda ctx: isinstance(ctx.files_created, list) and len(ctx.files_created) > 0
             ),
         ]
 
@@ -6688,9 +6688,10 @@ Stream code in chunks for real-time display.
         )
 
         # Detect project type for Docker generation
-        tech_stack = context.tech_stack or []
-        files_created = context.files_created or []
-        file_paths = [f.get("path", "") if isinstance(f, dict) else f for f in files_created]
+        # Handle cases where tech_stack or files_created might be None, bool, or unexpected types
+        tech_stack = context.tech_stack if isinstance(context.tech_stack, (dict, list)) else {}
+        files_created = context.files_created if isinstance(context.files_created, list) else []
+        file_paths = [f.get("path", "") if isinstance(f, dict) else str(f) for f in files_created]
 
         # Detect framework
         has_package_json = any("package.json" in p for p in file_paths)
@@ -7069,18 +7070,23 @@ htmlcov
         if not database_tables and context.files_created:
             database_tables = self._extract_database_tables_from_files(context.files_created)
 
+        # Safely get files_created as list (handle bool/None cases)
+        safe_files_created = context.files_created if isinstance(context.files_created, list) else []
+        safe_tech_stack = context.tech_stack if isinstance(context.tech_stack, (dict, list)) else {}
+        safe_features = context.features if isinstance(context.features, list) else []
+
         project_data = {
             "project_name": actual_project_name,
             "project_type": context.project_type or "web_application",
             "description": context.project_description or context.user_request,
             "plan": context.plan.get("raw", "") if context.plan else "",
-            "files": context.files_created,
-            "tech_stack": context.tech_stack or {},
-            "technologies": context.tech_stack or {},  # Alias for compatibility
-            "features": context.features or [],
+            "files": safe_files_created,
+            "tech_stack": safe_tech_stack,
+            "technologies": safe_tech_stack,  # Alias for compatibility
+            "features": safe_features,
             "api_endpoints": api_endpoints,
             "database_tables": database_tables,
-            "code_files": context.files_created or []
+            "code_files": safe_files_created
         }
 
         # Fetch user details for document generation
