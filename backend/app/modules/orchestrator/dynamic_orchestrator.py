@@ -1029,7 +1029,7 @@ class WorkflowEngine:
                 agent_type=AgentType.WRITER,
                 name="Writing Code",
                 description="Creating all project files and code",
-                timeout=300,
+                timeout=3600,  # 1 hour - increased for large projects with many files
                 retry_count=2,
                 stream_output=True
             ),
