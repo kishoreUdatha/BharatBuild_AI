@@ -350,14 +350,40 @@ class ContainerExecutor:
                 # CRITICAL: Convert Path to string for Docker SDK compatibility
                 path_str = str(project_path)
                 logger.info(f"[ContainerExecutor] Remote mode: listing files via Docker on {path_str}")
+
+                # Use shell script to handle errors gracefully and list files
+                # Also check parent directory to debug path issues
+                list_script = f"""
+                    echo "=== Checking path: {path_str} ===" >&2
+                    if [ -d "{path_str}" ]; then
+                        echo "Directory exists" >&2
+                        ls -1 "{path_str}"
+                    else
+                        echo "Directory does NOT exist" >&2
+                        echo "Parent contents:" >&2
+                        ls -la "$(dirname "{path_str}")" >&2 2>/dev/null || echo "Parent also missing" >&2
+                        exit 0
+                    fi
+                """
+
+                # Mount the parent sandbox directory to ensure we can see the project
+                parent_mount = "/tmp/sandbox/workspace"
                 result = self.docker_client.containers.run(
                     "alpine:latest",
-                    f"ls -1 {path_str}",
+                    ["-c", list_script],
+                    entrypoint="/bin/sh",
                     remove=True,
-                    volumes={path_str: {"bind": path_str, "mode": "ro"}}
+                    volumes={parent_mount: {"bind": parent_mount, "mode": "ro"}},
+                    stderr=True  # Capture stderr for debugging
                 )
-                files = result.decode('utf-8').strip().split('\n') if result else []
+
+                # Result includes both stdout and stderr when stderr=True
+                output = result.decode('utf-8').strip() if result else ""
+                # Filter out debug lines (starting with ===) to get just filenames
+                files = [f for f in output.split('\n') if f and not f.startswith('===') and not f.startswith('Directory') and not f.startswith('Parent')]
                 logger.info(f"[ContainerExecutor] Found {len(files)} files: {files[:5]}")
+                if not files:
+                    logger.warning(f"[ContainerExecutor] No files found. Full output: {output[:500]}")
             except Exception as e:
                 logger.warning(f"[ContainerExecutor] Failed to list remote files: {e}")
                 # Default to Node.js for most generated projects
@@ -970,11 +996,16 @@ class ContainerExecutor:
 
         This is the main entry point for remote Docker execution.
         Handles container creation, log streaming, and server detection.
+        Logs are also stored in LogBus for auto-fixer context.
         """
         import re
         import asyncio
+        from app.services.log_bus import get_log_bus
 
         user_id = user_id or "anonymous"
+
+        # Get LogBus for this project to store logs for auto-fixer
+        log_bus = get_log_bus(project_id)
 
         # Ensure Docker client is initialized
         if not self.docker_client:
@@ -1003,6 +1034,24 @@ class ContainerExecutor:
         yield f"🐳 Preparing container...\n"
         yield f"  📁 Project path: {project_path}\n"
         yield f"  🔌 Container port: {config.port}\n"
+
+        # DEBUG: Verify files exist at project_path before container creation
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+        if sandbox_docker_host and self.docker_client:
+            try:
+                verify_output = self.docker_client.containers.run(
+                    "alpine:latest",
+                    ["-c", f"ls -la {project_path} 2>&1 | head -20"],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    remove=True
+                )
+                listing = verify_output.decode('utf-8').strip() if verify_output else "No output"
+                yield f"  🔍 Files in path:\n{listing}\n"
+                logger.info(f"[ContainerExecutor] DEBUG: Files at {project_path}:\n{listing}")
+            except Exception as verify_err:
+                yield f"  ⚠️ Could not verify files: {verify_err}\n"
+                logger.warning(f"[ContainerExecutor] DEBUG: File verification failed: {verify_err}")
 
         # Create or reuse container
         success, message, host_port = await self.create_container(
@@ -1127,12 +1176,17 @@ class ContainerExecutor:
 
                     yield f"{line}\n"
 
+                    # Store log in LogBus for auto-fixer context
+                    log_bus.add_docker_log(line)
+
                     # Check for FATAL ERROR patterns first (Bolt-style)
                     if not has_fatal_error and not server_started:
                         for pattern in error_patterns:
                             if re.search(pattern, line, re.IGNORECASE):
                                 has_fatal_error = True
                                 error_lines.append(line)
+                                # Mark as error in LogBus
+                                log_bus.add_docker_error(line)
                                 logger.error(f"[ContainerExecutor] Fatal error detected: {pattern}")
                                 # Continue collecting a few more error lines for context
                                 break
@@ -1141,6 +1195,8 @@ class ContainerExecutor:
                     if has_fatal_error and len(error_lines) < 5:
                         if line not in error_lines:
                             error_lines.append(line)
+                            # Store error context lines
+                            log_bus.add_docker_error(line)
 
                     # Check for server start patterns (only if no fatal error)
                     if not server_started and not has_fatal_error:
@@ -1156,6 +1212,8 @@ class ContainerExecutor:
                                 # Emit markers for frontend to enable preview
                                 yield f"__SERVER_STARTED__:{preview_url}\n"
                                 yield f"_PREVIEW_URL_:{preview_url}\n"
+                                # Log success in LogBus
+                                log_bus.add_docker_log(f"Server started successfully - Preview URL: {preview_url}")
                                 break
 
                 except asyncio.TimeoutError:
@@ -1165,6 +1223,7 @@ class ContainerExecutor:
                         logger.warning(f"[ContainerExecutor] Timeout waiting for server start")
                         yield f"\n⚠️ Timeout waiting for server. Container may still be starting...\n"
                         yield f"__ERROR__:Server startup timeout after {timeout_seconds}s\n"
+                        log_bus.add_docker_error(f"Server startup timeout after {timeout_seconds}s")
                         break
                     # Send keepalive
                     yield f"  ⏳ Waiting for server... ({int(elapsed)}s)\n"
@@ -1183,6 +1242,8 @@ class ContainerExecutor:
                     yield f"🔴 {err_line}\n"
                 yield f"\n💡 Fix the error and try again.\n"
                 yield f"__ERROR__:Fatal error detected - preview not available\n"
+                # Store fatal error summary in LogBus for auto-fixer
+                log_bus.add_build_error(f"Fatal error: {error_lines[0] if error_lines else 'Unknown error'}")
             # If we exited the loop without detecting server start and no error
             elif not server_started and preview_url:
                 logger.warning(f"[ContainerExecutor] Server start not detected, emitting URL anyway")
@@ -1191,6 +1252,7 @@ class ContainerExecutor:
 
         except Exception as e:
             logger.error(f"[ContainerExecutor] Error streaming logs: {e}")
+            log_bus.add_docker_error(f"Error streaming logs: {e}")
             yield f"ERROR: Failed to stream logs: {e}\n"
 
 
