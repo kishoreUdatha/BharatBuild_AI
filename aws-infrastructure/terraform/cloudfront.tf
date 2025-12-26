@@ -75,7 +75,7 @@ resource "aws_cloudfront_distribution" "main" {
     compress               = true
   }
 
-  # API cache behavior (no caching)
+  # API cache behavior (no caching, no compression for SSE streaming)
   ordered_cache_behavior {
     path_pattern     = "/api/*"
     allowed_methods  = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
@@ -95,6 +95,9 @@ resource "aws_cloudfront_distribution" "main" {
     min_ttl                = 0
     default_ttl            = 0
     max_ttl                = 0
+    # CRITICAL: Disable compression for API to prevent SSE buffering
+    # CloudFront buffers responses for compression, breaking real-time SSE streams
+    compress               = false
   }
 
   # WebSocket behavior

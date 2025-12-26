@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "WebSearch"
+      "WebSearch",
+      "Bash(MSYS_NO_PATHCONV=1 aws logs:*)",
+      "Bash(MSYS_NO_PATHCONV=1 aws ssm send-command:*)",
+      "Bash(git push:*)",
+      "Bash(MSYS_NO_PATHCONV=1 aws ecs describe-services:*)",
+      "Bash(docker build:*)",
+      "Bash(MSYS_NO_PATHCONV=1 aws ssm get-command-invocation:*)"
     ]
   }
 }

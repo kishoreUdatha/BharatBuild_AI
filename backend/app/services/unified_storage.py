@@ -1296,8 +1296,31 @@ class UnifiedStorageService:
 
             download_script = ' && '.join(parallel_download) if parallel_download else "echo 'No files to download'"
 
-            # Combined script: create dirs, then parallel download
+            # Combined script: create dirs, then parallel download with error handling
             restore_script = f"{mkdir_script} && {download_script}"
+
+            # Get AWS credentials using boto3 (works with ECS task role, EC2 instance profile, env vars)
+            # This ensures we always have valid credentials to pass to the remote Docker container
+            import boto3
+            container_env = {"AWS_REGION": aws_region, "AWS_DEFAULT_REGION": aws_region}
+
+            try:
+                # Get credentials from boto3's credential chain (handles all AWS credential sources)
+                session = boto3.Session()
+                credentials = session.get_credentials()
+                if credentials:
+                    frozen_credentials = credentials.get_frozen_credentials()
+                    container_env["AWS_ACCESS_KEY_ID"] = frozen_credentials.access_key
+                    container_env["AWS_SECRET_ACCESS_KEY"] = frozen_credentials.secret_key
+                    if frozen_credentials.token:
+                        container_env["AWS_SESSION_TOKEN"] = frozen_credentials.token
+                    logger.info(f"[RemoteRestore] Using boto3 credentials for S3 access")
+                else:
+                    logger.warning(f"[RemoteRestore] No AWS credentials available from boto3")
+            except Exception as cred_err:
+                logger.warning(f"[RemoteRestore] Failed to get boto3 credentials: {cred_err}")
+
+            logger.debug(f"[RemoteRestore] Sample download commands: {download_commands[:2]}")
 
             try:
                 output = docker_client.containers.run(
@@ -1305,7 +1328,7 @@ class UnifiedStorageService:
                     ["-c", restore_script],  # Just the args for /bin/sh
                     entrypoint="/bin/sh",    # Override entrypoint to use shell
                     volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
-                    environment={"AWS_REGION": aws_region},
+                    environment=container_env,
                     remove=True,
                     detach=False,
                     network_mode="host"
@@ -1316,7 +1339,7 @@ class UnifiedStorageService:
                 logger.error(f"[RemoteRestore] Docker container error: {ce.stderr.decode() if ce.stderr else ce}")
                 return []
             except docker.errors.ImageNotFound:
-                logger.error(f"[RemoteRestore] Docker image 'amazon/aws-cli:latest' not found. Pulling...")
+                logger.info(f"[RemoteRestore] Docker image 'amazon/aws-cli:latest' not found. Pulling...")
                 docker_client.images.pull("amazon/aws-cli:latest")
                 # Retry after pulling
                 docker_client.containers.run(
@@ -1324,11 +1347,28 @@ class UnifiedStorageService:
                     ["-c", restore_script],
                     entrypoint="/bin/sh",
                     volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
-                    environment={"AWS_REGION": aws_region},
+                    environment=container_env,  # Use proper credentials
                     remove=True,
                     detach=False,
                     network_mode="host"
                 )
+
+            # Verify files were restored
+            try:
+                verify_output = docker_client.containers.run(
+                    "alpine:latest",
+                    ["-c", f"ls {workspace_path} 2>/dev/null | wc -l"],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    remove=True,
+                    detach=False
+                )
+                restored_count = int(verify_output.decode().strip() or "0")
+                logger.info(f"[RemoteRestore] Verified {restored_count} items in workspace after restore")
+                if restored_count == 0:
+                    logger.error(f"[RemoteRestore] FAILED - No files found after restore! Check S3 access and credentials.")
+            except Exception as verify_err:
+                logger.warning(f"[RemoteRestore] Could not verify restore: {verify_err}")
 
             logger.info(f"[RemoteRestore] Successfully restored {len(files_with_s3)} files to EC2 sandbox")
             return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in files_with_s3]
