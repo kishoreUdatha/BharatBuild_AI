@@ -336,19 +336,19 @@ class ContainerExecutor:
 
         Detection priority:
         1. package.json -> Node.js
-        2. pom.xml or build.gradle -> Java
-        3. requirements.txt or pyproject.toml -> Python
-        4. go.mod -> Go
+        2. frontend/package.json -> Multi-folder project (frontend subdir)
+        3. pom.xml or build.gradle -> Java
+        4. requirements.txt or pyproject.toml -> Python
+        5. go.mod -> Go
         """
         files = []
+        path_str = str(project_path)
 
         # Check if we're using remote Docker (files are on EC2, not local ECS)
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
         if sandbox_docker_host and self.docker_client:
             # Remote mode: use Docker to list files on EC2
             try:
-                # CRITICAL: Convert Path to string for Docker SDK compatibility
-                path_str = str(project_path)
                 logger.info(f"[ContainerExecutor] Remote mode: listing files via Docker on {path_str}")
 
                 # Use shell script to handle errors gracefully and list files
@@ -386,8 +386,7 @@ class ContainerExecutor:
                     logger.warning(f"[ContainerExecutor] No files found. Full output: {output[:500]}")
             except Exception as e:
                 logger.warning(f"[ContainerExecutor] Failed to list remote files: {e}")
-                # Default to Node.js for most generated projects
-                return Technology.NODEJS
+                files = []
         else:
             # Local mode: use os.listdir
             files = os.listdir(project_path) if os.path.exists(project_path) else []
@@ -403,7 +402,7 @@ class ContainerExecutor:
             # Also check package.json for vite dependency
             try:
                 import json
-                pkg_path = os.path.join(str(project_path), "package.json")
+                pkg_path = os.path.join(path_str, "package.json")
                 if os.path.exists(pkg_path):
                     with open(pkg_path, 'r') as f:
                         pkg = json.load(f)
@@ -418,31 +417,53 @@ class ContainerExecutor:
             return Technology.NODEJS
 
         # Multi-folder project detection: check frontend/ subdirectory
-        if "frontend" in files:
+        # This handles fullstack projects where frontend is in a subdirectory
+        if "frontend" in files or not files:
             # Check if frontend has package.json (full-stack project with separate frontend)
+            # If file listing failed (empty), still try to detect frontend/ structure
             try:
-                frontend_pkg_path = os.path.join(str(project_path), "frontend", "package.json")
-                # For remote mode, we can't directly check files, so check via Docker
-                sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+                frontend_pkg_path = os.path.join(path_str, "frontend", "package.json")
+                frontend_detected = False
+
+                # For remote mode, check via Docker
                 if sandbox_docker_host and self.docker_client:
                     try:
+                        # Check for frontend/package.json
+                        check_script = f"""
+                            if [ -f "{path_str}/frontend/package.json" ]; then
+                                echo "frontend_exists"
+                                # Check for vite config
+                                if [ -f "{path_str}/frontend/vite.config.ts" ] || [ -f "{path_str}/frontend/vite.config.js" ]; then
+                                    echo "vite_exists"
+                                fi
+                            fi
+                        """
                         result = self.docker_client.containers.run(
                             "alpine:latest",
-                            f"test -f {str(project_path)}/frontend/package.json && echo 'exists'",
+                            ["-c", check_script],
+                            entrypoint="/bin/sh",
                             remove=True,
-                            volumes={str(project_path): {"bind": str(project_path), "mode": "ro"}}
+                            volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}}
                         )
-                        if result and b"exists" in result:
+                        output = result.decode('utf-8').strip() if result else ""
+                        if "frontend_exists" in output:
+                            frontend_detected = True
                             logger.info(f"[ContainerExecutor] Detected multi-folder project with frontend/package.json")
                             # Store subdirectory info for container creation
                             self._frontend_subdir = True
-                            return Technology.NODEJS_VITE  # Most modern frontends use Vite
+                            if "vite_exists" in output:
+                                return Technology.NODEJS_VITE
+                            return Technology.NODEJS
                     except Exception as e:
-                        logger.debug(f"[ContainerExecutor] Failed to check frontend/package.json: {e}")
+                        logger.debug(f"[ContainerExecutor] Failed to check frontend/package.json via Docker: {e}")
                 elif os.path.exists(frontend_pkg_path):
-                    logger.info(f"[ContainerExecutor] Detected multi-folder project with frontend/package.json")
+                    logger.info(f"[ContainerExecutor] Detected multi-folder project with frontend/package.json (local)")
                     self._frontend_subdir = True
-                    return Technology.NODEJS_VITE
+                    # Check for vite config in frontend/
+                    if os.path.exists(os.path.join(path_str, "frontend", "vite.config.ts")) or \
+                       os.path.exists(os.path.join(path_str, "frontend", "vite.config.js")):
+                        return Technology.NODEJS_VITE
+                    return Technology.NODEJS
             except Exception as e:
                 logger.debug(f"[ContainerExecutor] Error checking frontend subdirectory: {e}")
 
@@ -1022,33 +1043,24 @@ class ContainerExecutor:
         logger.info(f"[ContainerExecutor] run_project called with project_path={path_str}, user_id={user_id}")
         yield f"  📁 Using path: {path_str}\n"
 
-        # DEBUG: Verify files exist before detect_technology
-        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
-        if sandbox_docker_host and self.docker_client:
-            try:
-                verify_script = f"echo '=== Pre-detect check ===' && ls -la {path_str} 2>&1 | head -10"
-                verify_output = self.docker_client.containers.run(
-                    "alpine:latest",
-                    ["-c", verify_script],
-                    entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
-                    remove=True
-                )
-                pre_listing = verify_output.decode('utf-8').strip() if verify_output else "No output"
-                logger.info(f"[ContainerExecutor] Pre-detect file listing:\n{pre_listing}")
-                yield f"  🔍 Pre-detect check:\n{pre_listing}\n"
-            except Exception as pre_err:
-                logger.warning(f"[ContainerExecutor] Pre-detect check failed: {pre_err}")
-                yield f"  ⚠️ Pre-detect check failed: {pre_err}\n"
+        # Reset frontend subdir flag before detection
+        self._frontend_subdir = False
 
-        # Detect technology
+        # Detect technology (this will set self._frontend_subdir if frontend/ exists)
         technology = self.detect_technology(project_path)
+
+        # Log detection result
         if technology == Technology.UNKNOWN:
             # Default to Node.js for unknown projects
             technology = Technology.NODEJS
             yield f"  ⚠️ Could not detect technology, defaulting to Node.js\n"
         else:
             yield f"  📦 Detected: {technology.value}\n"
+
+        # Show if multi-folder project detected
+        if getattr(self, '_frontend_subdir', False):
+            yield f"  📂 Multi-folder project detected - using frontend/ subdirectory\n"
+            logger.info(f"[ContainerExecutor] Multi-folder project: will use /app/frontend as working dir")
 
         config = TECHNOLOGY_CONFIGS.get(technology)
         if not config:
@@ -1057,25 +1069,9 @@ class ContainerExecutor:
 
         yield f"🐳 Preparing container...\n"
         yield f"  📁 Project path: {project_path}\n"
+        working_dir = "/app/frontend" if getattr(self, '_frontend_subdir', False) else "/app"
+        yield f"  📂 Working dir: {working_dir}\n"
         yield f"  🔌 Container port: {config.port}\n"
-
-        # DEBUG: Verify files exist at project_path before container creation
-        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
-        if sandbox_docker_host and self.docker_client:
-            try:
-                verify_output = self.docker_client.containers.run(
-                    "alpine:latest",
-                    ["-c", f"ls -la {project_path} 2>&1 | head -20"],
-                    entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
-                    remove=True
-                )
-                listing = verify_output.decode('utf-8').strip() if verify_output else "No output"
-                yield f"  🔍 Files in path:\n{listing}\n"
-                logger.info(f"[ContainerExecutor] DEBUG: Files at {project_path}:\n{listing}")
-            except Exception as verify_err:
-                yield f"  ⚠️ Could not verify files: {verify_err}\n"
-                logger.warning(f"[ContainerExecutor] DEBUG: File verification failed: {verify_err}")
 
         # Create or reuse container
         success, message, host_port = await self.create_container(
