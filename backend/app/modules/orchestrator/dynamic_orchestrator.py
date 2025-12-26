@@ -1029,7 +1029,7 @@ class WorkflowEngine:
                 agent_type=AgentType.WRITER,
                 name="Writing Code",
                 description="Creating all project files and code",
-                timeout=3600,  # 1 hour - increased for large projects with many files
+                timeout=300,  # 5 min (legacy) - actual protection is 60s inactivity timeout
                 retry_count=2,
                 stream_output=True
             ),
@@ -2440,24 +2440,34 @@ class DynamicOrchestrator:
                             step=step_index
                         )
 
-                        # Execute agent with timeout tracking
-                        # Note: We can't use asyncio.wait_for directly on async generators
-                        # Instead, we track start time and check periodically
+                        # Execute agent with inactivity timeout tracking
+                        # For streaming agents (writer/planner), we track time since LAST event
+                        # This prevents false timeouts when operations proceed normally but take time
+                        # Individual operations (per-file generation) have their own timeouts
                         step_start_time = asyncio.get_event_loop().time()
                         event_count = 0
                         last_event_time = step_start_time
+
+                        # Inactivity timeout: 60 seconds without any events triggers timeout
+                        # This is separate from step_timeout which is for legacy/non-streaming use
+                        INACTIVITY_TIMEOUT = 60  # seconds
 
                         async for event in self._execute_agent(step.agent_type, context):
                             event.step = step_index
                             event.agent = step.agent_type
                             yield event
                             event_count += 1
-                            last_event_time = asyncio.get_event_loop().time()
 
-                            # Check for timeout (only if no events for a while)
-                            elapsed = last_event_time - step_start_time
-                            if elapsed > step_timeout:
-                                raise asyncio.TimeoutError(f"Step {step.name} timed out after {step_timeout}s")
+                            # Reset inactivity timer on each event
+                            current_time = asyncio.get_event_loop().time()
+                            time_since_last_event = current_time - last_event_time
+                            last_event_time = current_time
+
+                            # Check for inactivity timeout (no events for too long)
+                            # This catches stuck agents while allowing long-running operations with activity
+                            if time_since_last_event > INACTIVITY_TIMEOUT:
+                                total_elapsed = current_time - step_start_time
+                                raise asyncio.TimeoutError(f"Step {step.name} inactive for {time_since_last_event:.0f}s (total: {total_elapsed:.0f}s)")
 
                         step_success = True
 
