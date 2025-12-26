@@ -721,8 +721,8 @@ class ContainerExecutor:
         """Find an available port for container mapping"""
         import socket
 
-        # Get all used host ports from active containers
-        used_ports = {info.get("host_port", 0) for info in self.active_containers.values()}
+        # Get all used host ports from active containers (check both "host_port" and "port" keys)
+        used_ports = {info.get("host_port") or info.get("port", 0) for info in self.active_containers.values()}
 
         for port in range(start, end):
             if port in used_ports:
