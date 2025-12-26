@@ -3039,26 +3039,48 @@ class DynamicOrchestrator:
                 }
             }
 
-            # Update status to GENERATING
+            # Update or create file record with GENERATING status
             try:
                 from app.core.database import async_session
                 from app.models.project_file import ProjectFile, FileGenerationStatus
-                from sqlalchemy import update
+                from sqlalchemy import update, select
                 from uuid import UUID as UUID_type
 
                 async with async_session() as db:
-                    await db.execute(
-                        update(ProjectFile)
+                    # Check if file exists in DB
+                    existing = await db.execute(
+                        select(ProjectFile)
                         .where(ProjectFile.project_id == UUID_type(str(project_id)))
                         .where(ProjectFile.path == file_path)
-                        .values(generation_status=FileGenerationStatus.GENERATING)
                     )
+                    existing_file = existing.scalar_one_or_none()
+
+                    if existing_file:
+                        # Update existing file
+                        await db.execute(
+                            update(ProjectFile)
+                            .where(ProjectFile.project_id == UUID_type(str(project_id)))
+                            .where(ProjectFile.path == file_path)
+                            .values(generation_status=FileGenerationStatus.GENERATING)
+                        )
+                    else:
+                        # Create new file record (was missing from DB)
+                        logger.info(f"[ResumeIncomplete] Creating missing file record: {file_path}")
+                        new_file = ProjectFile(
+                            project_id=UUID_type(str(project_id)),
+                            path=file_path,
+                            name=file_path.split('/')[-1] if '/' in file_path else file_path,
+                            generation_status=FileGenerationStatus.GENERATING,
+                            generation_order=idx,
+                            is_folder=False
+                        )
+                        db.add(new_file)
                     await db.commit()
             except Exception as e:
-                logger.warning(f"[ResumeIncomplete] Could not update status: {e}")
+                logger.warning(f"[ResumeIncomplete] Could not update/create file status: {e}")
 
-            # Get description for this file
-            description = file_descriptions.get(file_path, f"Generate {file_path}")
+            # Get description - prefer from file_info (for missing_from_db), then from plan
+            description = file_info.get("description") or file_descriptions.get(file_path, f"Generate {file_path}")
 
             # Generate file using Claude
             try:
@@ -3089,6 +3111,16 @@ Generate ONLY the file content, no explanations. Output the complete, working co
                             "data": {"path": file_path, "chunk": text}
                         }
 
+                # Validate content is not empty before saving
+                file_content = file_content.strip()
+                if not file_content:
+                    logger.error(f"[ResumeIncomplete] Empty content generated for {file_path}")
+                    yield {
+                        "type": "file_error",
+                        "data": {"path": file_path, "error": "Empty content generated"}
+                    }
+                    continue
+
                 # Save file to all storage layers
                 save_success = await self.save_file(
                     project_id=project_id,
@@ -3097,15 +3129,20 @@ Generate ONLY the file content, no explanations. Output the complete, working co
                     user_id=user_id
                 )
 
-                if save_success:
-                    # Update status to COMPLETED
+                content_size = len(file_content.encode('utf-8'))
+
+                if save_success and content_size > 0:
+                    # Update status to COMPLETED with size_bytes
                     try:
                         async with async_session() as db:
                             await db.execute(
                                 update(ProjectFile)
                                 .where(ProjectFile.project_id == UUID_type(str(project_id)))
                                 .where(ProjectFile.path == file_path)
-                                .values(generation_status=FileGenerationStatus.COMPLETED)
+                                .values(
+                                    generation_status=FileGenerationStatus.COMPLETED,
+                                    size_bytes=content_size
+                                )
                             )
                             await db.commit()
                     except Exception as e:
@@ -3115,11 +3152,11 @@ Generate ONLY the file content, no explanations. Output the complete, working co
                         "type": "file_complete",
                         "data": {
                             "path": file_path,
-                            "size": len(file_content),
+                            "size": content_size,
                             "saved": True
                         }
                     }
-                    logger.info(f"[ResumeIncomplete] ✓ File completed: {file_path}")
+                    logger.info(f"[ResumeIncomplete] ✓ File completed: {file_path} ({content_size} bytes)")
                 else:
                     # Update status to FAILED
                     try:
