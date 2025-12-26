@@ -859,12 +859,9 @@ export function BoltLayout({
               }
             }}
             onOutput={(line) => {
-              // Only open terminal if in Code mode, NOT in Preview mode
-              // User must click Code tab to see terminal output
-              if (activeTab === 'code') {
-                openTerminal()
-              }
-              // Always add output to terminal buffer (user can view later)
+              // Always open terminal when output is received (so user sees logs)
+              openTerminal()
+              // Always add output to terminal buffer
               addLog({
                 type: 'output',
                 content: line
@@ -873,8 +870,9 @@ export function BoltLayout({
             onStartSession={() => {
               // Start session - keeps terminal open during and after execution
               startSession()
-              // Switch to Preview tab when Run is clicked
-              setActiveTab('preview')
+              // Stay on Code tab to see terminal logs - will switch to Preview when server starts
+              setActiveTab('code')
+              openTerminal()
             }}
             onEndSession={() => {
               // End session but keep terminal open for user to review output

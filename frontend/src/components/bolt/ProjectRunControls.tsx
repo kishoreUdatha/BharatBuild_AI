@@ -1059,12 +1059,14 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   const runDirect = async (): Promise<{ success: boolean; error?: string }> => {
     if (!currentProject?.id) return { success: false, error: 'No project' }
 
+    console.log('[ProjectRunControls] runDirect called for project:', currentProject.id)
     onOutput?.('🖥️ Running directly on server...')
     onOutput?.(`📂 Project ID: ${currentProject.id}`)
     errorBufferRef.current = [] // Reset error buffer
 
     try {
       const token = localStorage.getItem('access_token')
+      console.log('[ProjectRunControls] Making API call to:', `${API_BASE_URL}/execution/run/${currentProject.id}`)
       const response = await fetch(`${API_BASE_URL}/execution/run/${currentProject.id}`, {
         method: 'POST',
         headers: {
@@ -1110,8 +1112,10 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6))
+              console.log('[ProjectRunControls] SSE event received:', data.type, data)
               if (data.type === 'output') {
                 const content = data.data?.output || data.content || ''
+                console.log('[ProjectRunControls] Output:', content)
                 onOutput?.(content)
                 detectServerStart(content)
 
@@ -1139,6 +1143,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
                 // Use preview_url from Docker if available, otherwise construct from port
                 // Pass project ID for production URL construction
                 const url = data.preview_url || getPreviewUrl(data.port || 3000, currentProject?.id)
+                console.log('[ProjectRunControls] SERVER STARTED! preview_url:', data.preview_url, 'port:', data.port, 'final URL:', url)
                 setPreviewUrl(url)
                 onPreviewUrlChange?.(url)
                 // NOTE: Don't reset hasError here - errors detected before server start should still trigger fix

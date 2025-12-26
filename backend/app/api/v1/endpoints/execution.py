@@ -191,10 +191,13 @@ async def run_project(
 
     If project has no generated files, returns error without running commands.
     """
+    logger.info(f"[Execution] POST /run/{project_id} called, user={current_user.id if current_user else 'anonymous'}")
+
     # Validate project_id format (UUID)
     import re
     uuid_pattern = re.compile(r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$', re.IGNORECASE)
     if not uuid_pattern.match(project_id):
+        logger.warning(f"[Execution] Invalid project ID format: {project_id}")
         raise HTTPException(
             status_code=400,
             detail={"error": "invalid_project_id", "message": "Invalid project ID format"}
@@ -202,10 +205,13 @@ async def run_project(
 
     # Verify project ownership (skip if no auth in dev mode)
     if current_user and not await verify_project_ownership(project_id, current_user, db):
+        logger.warning(f"[Execution] Project ownership verification failed for {project_id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found"
         )
+
+    logger.info(f"[Execution] Ownership check passed for {project_id}")
 
     # Get user_id for the streaming function
     user_id = str(current_user.id) if current_user else None
@@ -217,6 +223,7 @@ async def run_project(
             select(ProjectFile).where(ProjectFile.project_id == project_id).limit(1)
         )
         has_files = files_result.scalar_one_or_none() is not None
+        logger.info(f"[Execution] Project {project_id} has_files={has_files}")
     except Exception as db_err:
         logger.error(f"[Execution] Database error checking files: {db_err}")
         raise HTTPException(
@@ -262,14 +269,23 @@ async def run_project(
         # Use StreamingResponse with manual SSE formatting
         async def sse_generator():
             """Wrapper that formats events as SSE and adds keepalive"""
+            event_count = 0
             try:
+                logger.info(f"[SSE] Starting SSE stream for project {project_id}")
                 async for event in _execute_docker_stream_with_progress(project_id, user_id, db):
+                    event_count += 1
                     if isinstance(event, dict) and "data" in event:
-                        yield f"data: {event['data']}\n\n"
+                        sse_line = f"data: {event['data']}\n\n"
+                        if event_count <= 5:  # Log first 5 events
+                            logger.info(f"[SSE] Event #{event_count}: {sse_line[:100]}...")
+                        yield sse_line
                     elif isinstance(event, str):
+                        if event_count <= 5:
+                            logger.info(f"[SSE] Raw event #{event_count}: {event[:100]}...")
                         yield event
                     # Yield immediately to flush
                     await asyncio.sleep(0)
+                logger.info(f"[SSE] Stream completed for {project_id}, total events: {event_count}")
             except Exception as e:
                 logger.error(f"[SSE] Generator error: {e}", exc_info=True)
                 yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
@@ -553,9 +569,34 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
     6. Return preview URL
 
     All steps are streamed to the frontend for terminal display.
+    Logs are also stored in LogBus for auto-fixer context.
     """
     from pathlib import Path
     import re
+
+    # Get LogBus for this project to store logs for auto-fixer
+    log_bus = get_log_bus(project_id)
+
+    # Error detection patterns for LogBus classification
+    error_patterns = [
+        r"npm ERR!",
+        r"Error:",
+        r"ERROR:",
+        r"error:",
+        r"SyntaxError:",
+        r"ReferenceError:",
+        r"TypeError:",
+        r"Module not found",
+        r"Cannot find module",
+        r"ENOENT:",
+        r"EADDRINUSE",
+        r"Permission denied",
+        r"Traceback \(most recent call last\)",
+        r"ImportError:",
+        r"ModuleNotFoundError:",
+        r"failed",
+        r"FAILED",
+    ]
 
     def emit(event_type: str, message: str = None, data: dict = None):
         """Helper to create SSE event dict for sse-starlette"""
@@ -564,7 +605,8 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
             event["message"] = message
             event["content"] = message
         if data:
-            event["data"] = data
+            # Spread data fields directly onto event (frontend expects data.port, not data.data.port)
+            event.update(data)
         # Return dict with 'data' key for EventSourceResponse
         return {"data": json.dumps(event)}
 
@@ -583,7 +625,12 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
             return default
 
     try:
-        # Send initial events immediately
+        # Send connection confirmation immediately
+        logger.info(f"[Execution] Starting stream for {project_id}")
+        yield emit("output", "📡 Connected to execution server")
+        await asyncio.sleep(0)  # Flush immediately
+
+        # Send initial events
         yield emit("output", "🖥️ Running directly on server...")
         yield emit("output", f"📂 Project ID: {project_id}")
 
@@ -601,7 +648,6 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
         logger.info(f"[SSE] Starting execution stream for {project_id}")
 
         # ==================== STEP 1: Check Project Status ====================
-        yield emit("step", "Checking project status...", {"step": 1, "total": 5, "phase": "checking"})
         yield emit("output", "[1/5] Checking project status...")
         # keepalive handled by EventSourceResponse ping
 
@@ -627,6 +673,9 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
             if exists_on_ec2:
                 yield emit("output", "  Project files found in sandbox")
                 project_path = unified_storage.get_sandbox_path(project_id, effective_user_id)
+                # DEBUG: Log actual path for troubleshooting
+                logger.info(f"[Execution] DEBUG: project_path (cached) = {project_path}, effective_user_id = {effective_user_id}")
+                yield emit("output", f"  📁 Path: {project_path}")
             else:
                 yield emit("output", "  Project files not in sandbox, will restore from database")
                 needs_restore = True
@@ -654,11 +703,7 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                 yield emit("output", "  Warning: Could not check sandbox, will attempt restore")
                 needs_restore = True
 
-        yield emit("step_complete", "Project status checked", {"step": 1})
-        # keepalive handled by EventSourceResponse ping
-
         # ==================== STEP 2: Create/Prepare Container ====================
-        yield emit("step", "Preparing container environment...", {"step": 2, "total": 5, "phase": "container"})
         yield emit("output", "\n[2/5] Preparing container environment...")
 
         try:
@@ -667,14 +712,11 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
             logger.warning(f"[Execution] touch_project failed: {touch_err}")
 
         yield emit("output", "  Container environment ready")
-        yield emit("step_complete", "Container prepared", {"step": 2})
-        # keepalive handled by EventSourceResponse ping
 
         # ==================== STEP 3: Restore Project Files (if needed) ====================
         if needs_restore:
-            yield emit("step", "Restoring project files...", {"step": 3, "total": 5, "phase": "restore"})
             yield emit("output", "\n[3/5] Restoring project files from database...")
-            # keepalive handled by EventSourceResponse ping
+            await asyncio.sleep(0)  # Flush immediately
 
             try:
                 from app.models.project_file import ProjectFile
@@ -696,15 +738,57 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                     yield emit("output", f"  Found {total_files} files in database")
                 else:
                     yield emit("output", "  Checking database for files...")
+                await asyncio.sleep(0)  # Flush
 
-                # Restore files - EventSourceResponse handles keepalive automatically
-                restored_files = await unified_storage.restore_project_from_database(project_id, effective_user_id)
+                # ============ CONCURRENT RESTORE WITH KEEPALIVE ============
+                # Run restore in background task while yielding keepalives
+                # This prevents CloudFront/ALB timeout during long restores
+                restore_task = asyncio.create_task(
+                    unified_storage.restore_project_from_database(project_id, effective_user_id)
+                )
+
+                restored_files = None
+                restore_error = None
+                keepalive_count = 0
+
+                while not restore_task.done():
+                    # Wait up to 5 seconds for restore to complete
+                    try:
+                        restored_files = await asyncio.wait_for(
+                            asyncio.shield(restore_task),
+                            timeout=5.0
+                        )
+                        break  # Restore completed
+                    except asyncio.TimeoutError:
+                        # Restore still running, send keepalive
+                        keepalive_count += 1
+                        yield emit("output", f"  Restoring files... ({keepalive_count * 5}s)")
+                        await asyncio.sleep(0)  # Flush immediately
+                        continue
+                    except asyncio.CancelledError:
+                        restore_task.cancel()
+                        raise
+                    except Exception as e:
+                        restore_error = e
+                        break
+
+                # Check for errors from the task itself
+                if restore_error is None and restore_task.done():
+                    try:
+                        restored_files = restore_task.result()
+                    except Exception as e:
+                        restore_error = e
+
+                if restore_error:
+                    raise restore_error
 
                 if restored_files:
                     restored_count = len(restored_files)
-                    yield emit("output", f"  Restored {restored_count}/{total_files or restored_count} files to sandbox")
+                    yield emit("output", f"  ✅ Restored {restored_count}/{total_files or restored_count} files to sandbox")
                     project_path = unified_storage.get_sandbox_path(project_id, effective_user_id)
-                    yield emit("step_complete", f"Restored {restored_count} files", {"step": 3, "files_restored": restored_count})
+                    # DEBUG: Log actual path for troubleshooting
+                    logger.info(f"[Execution] DEBUG: project_path after restore = {project_path}, effective_user_id = {effective_user_id}")
+                    yield emit("output", f"  📁 Path: {project_path}")
                 else:
                     yield emit("error", "No files found in database. Please regenerate the project.")
                     yield emit("output", "  ERROR: No files to restore")
@@ -718,14 +802,9 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                 yield emit("error", f"Failed to restore project files: {str(restore_err)}")
                 return
         else:
-            yield emit("step", "Project files ready", {"step": 3, "total": 5, "phase": "restore"})
-            yield emit("output", "\n[3/5] Project files already in sandbox")
-            yield emit("step_complete", "Files ready", {"step": 3, "files_restored": 0})
-
-        # keepalive handled by EventSourceResponse ping
+            yield emit("output", "\n[3/5] Project files already in sandbox ✅")
 
         # ==================== STEP 4 & 5: Install & Run ====================
-        yield emit("step", "Installing dependencies and starting server...", {"step": 4, "total": 5, "phase": "install"})
         yield emit("output", "\n[4/5] Installing dependencies...")
         # keepalive handled by EventSourceResponse ping
 
@@ -775,11 +854,11 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
 
                         port = safe_parse_port(preview_url, 3000)
 
-                        yield emit("step", "Starting dev server...", {"step": 5, "total": 5, "phase": "server"})
                         yield emit("output", "\n[5/5] Starting dev server...")
-                        yield emit("output", f"  Server started on port {port}")
+                        yield emit("output", f"  ✅ Server started on port {port}")
                         yield emit("server_started", None, {"port": port, "preview_url": preview_url})
-                        yield emit("step_complete", "Server running", {"step": 5})
+                        # Store success in LogBus
+                        log_bus.add_docker_log(f"Server started successfully on port {port}")
                     except Exception as parse_err:
                         logger.warning(f"[Execution] Error parsing server started marker: {parse_err}")
 
@@ -791,10 +870,17 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                             server_started = True
                             port = safe_parse_port(preview_url, 3000)
                             yield emit("server_started", None, {"port": port, "preview_url": preview_url})
+                            log_bus.add_docker_log(f"Server ready at {preview_url}")
 
                         clean_output = re.sub(r'_PREVIEW_URL_:.+?(?:\n|$)', '', output).strip()
                         if clean_output:
                             yield emit("output", clean_output)
+                            # Store log in LogBus
+                            is_error = any(re.search(pattern, clean_output, re.IGNORECASE) for pattern in error_patterns)
+                            if is_error:
+                                log_bus.add_docker_error(clean_output)
+                            else:
+                                log_bus.add_docker_log(clean_output)
                     except Exception as parse_err:
                         logger.warning(f"[Execution] Error parsing preview URL: {parse_err}")
                         yield emit("output", output.strip())
@@ -803,26 +889,33 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                         stripped = output.strip()
                         if stripped:
                             yield emit("output", stripped)
+                            # Store log in LogBus for auto-fixer context
+                            is_error = any(re.search(pattern, stripped, re.IGNORECASE) for pattern in error_patterns)
+                            if is_error:
+                                log_bus.add_docker_error(stripped)
+                            else:
+                                log_bus.add_docker_log(stripped)
                     except Exception:
                         pass
 
         except asyncio.CancelledError:
             logger.info(f"[Execution] Docker execution cancelled for {project_id}")
+            log_bus.add_docker_error("Execution was cancelled")
             yield emit("error", "Execution was cancelled.")
             return
         except Exception as docker_err:
             logger.error(f"[Execution] Docker executor error for {project_id}: {docker_err}", exc_info=True)
             docker_error = str(docker_err)
+            log_bus.add_docker_error(f"Docker execution error: {docker_error}")
             yield emit("output", f"  Error: {docker_error}")
 
         # Send completion event
         if docker_error:
             yield emit("error", f"Execution failed: {docker_error}")
         elif server_started and preview_url:
-            yield emit("complete", "Server running", {"preview_url": preview_url, "success": True})
+            yield emit("output", "✅ Server running successfully!")
         else:
-            yield emit("step_complete", "Build completed", {"step": 4})
-            yield emit("complete", "Execution completed", {"success": True})
+            yield emit("output", "✅ Build completed")
 
         logger.info(f"[SSE] Execution stream completed for {project_id}")
 
