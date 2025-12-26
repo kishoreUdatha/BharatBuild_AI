@@ -24,11 +24,11 @@ from datetime import datetime
 T = TypeVar('T')
 
 # SSE Keepalive intervals (seconds)
-# CloudFront has 60s timeout, but browsers/proxies may timeout earlier
-# Use aggressive initial keepalive (3s) to establish connection, then normal interval (10s)
-SSE_KEEPALIVE_INITIAL_INTERVAL = 3  # First 30 seconds: send keepalive every 3s
-SSE_KEEPALIVE_INTERVAL = 10  # After 30 seconds: send keepalive every 10s
-SSE_KEEPALIVE_AGGRESSIVE_DURATION = 30  # Duration of aggressive keepalive phase
+# Use very aggressive keepalive (1s) to prevent any buffering/timeout issues
+# This ensures data flows constantly to the client, preventing proxy/browser timeouts
+SSE_KEEPALIVE_INITIAL_INTERVAL = 1  # First 60 seconds: send keepalive every 1s (very aggressive)
+SSE_KEEPALIVE_INTERVAL = 5  # After 60 seconds: send keepalive every 5s
+SSE_KEEPALIVE_AGGRESSIVE_DURATION = 60  # Duration of aggressive keepalive phase (longer)
 
 from app.modules.orchestrator.dynamic_orchestrator import (
     DynamicOrchestrator,
