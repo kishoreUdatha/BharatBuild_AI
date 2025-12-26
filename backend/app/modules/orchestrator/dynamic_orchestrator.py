@@ -3273,9 +3273,10 @@ Ensure every import in every file has a corresponding file in the plan.
         # Stream tokens from Claude with keepalive to prevent timeout
         logger.info("[Planner] Starting token stream with Bolt XML parser...")
 
-        # Keepalive settings - send every 10 seconds to prevent CloudFront/ALB timeout
-        # CloudFront has 60s timeout, browser EventSource may have 30s timeout
-        PLANNER_KEEPALIVE_INTERVAL = 10.0  # seconds
+        # Keepalive settings - send every 3 seconds initially to establish connection reliably
+        # CloudFront has 60s timeout, but browsers/proxies may timeout earlier
+        # Using aggressive 3s interval prevents connection drops during Claude's thinking time
+        PLANNER_KEEPALIVE_INTERVAL = 3.0  # seconds (aggressive to prevent early timeout)
         chunk_count = 0
         keepalive_count = 0
 
