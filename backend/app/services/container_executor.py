@@ -422,7 +422,9 @@ class ContainerExecutor:
         technology: Optional[Technology] = None
     ) -> Tuple[bool, str, Optional[int]]:
         """
-        Create and start a container for project execution.
+        Create or reuse a container for project execution.
+
+        Optimization: Reuses existing container if available, avoiding recreation overhead.
 
         Args:
             project_id: Unique project identifier
@@ -436,9 +438,14 @@ class ContainerExecutor:
         if not self.docker_client:
             return False, "Docker client not initialized", None
 
-        # Clean up any existing container for this project before creating new one
-        # This ensures only ONE container per project at any time
-        await self._cleanup_project_container(project_id)
+        # ===== OPTIMIZATION: Try to reuse existing container =====
+        existing_container = await self._get_existing_container(project_id)
+        if existing_container:
+            reused, message, port = await self._reuse_container(existing_container, project_id, user_id)
+            if reused:
+                return True, message, port
+            # If reuse failed, continue to create new container
+            logger.info(f"[ContainerExecutor] Container reuse failed, creating new: {message}")
 
         # Auto-detect technology if not provided
         if technology is None:
@@ -659,10 +666,142 @@ class ContainerExecutor:
 
         raise RuntimeError("No available ports")
 
+    async def _get_existing_container(self, project_id: str):
+        """
+        Find an existing container for this project.
+
+        Returns:
+            Container object if found, None otherwise
+        """
+        if not self.docker_client:
+            return None
+
+        try:
+            # Find containers with this project_id label
+            containers = self.docker_client.containers.list(
+                all=True,  # Include stopped containers
+                filters={"label": f"project_id={project_id}"}
+            )
+
+            if containers:
+                # Return the first (should be only one per project)
+                return containers[0]
+            return None
+
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Error finding existing container: {e}")
+            return None
+
+    async def _reuse_container(self, container, project_id: str, user_id: str) -> Tuple[bool, str, Optional[int]]:
+        """
+        Attempt to reuse an existing container.
+
+        - If running: Just update tracking and return success
+        - If stopped: Start it and return success
+        - If unhealthy/error: Return False to trigger new container creation
+
+        Returns:
+            Tuple of (success, message, port)
+        """
+        try:
+            container.reload()  # Refresh container state
+            status = container.status
+            container_name = container.name
+
+            logger.info(f"[ContainerExecutor] Found existing container {container_name} in state: {status}")
+
+            # Extract port from container labels or inspect
+            port = None
+            try:
+                # Try to get port from container's network settings
+                ports = container.attrs.get('NetworkSettings', {}).get('Ports', {})
+                for container_port, host_bindings in ports.items():
+                    if host_bindings:
+                        port = int(host_bindings[0]['HostPort'])
+                        break
+
+                # If no port mapping (Traefik mode), use a tracking port
+                if port is None:
+                    # Check if we have it tracked
+                    if project_id in self.active_containers:
+                        port = self.active_containers[project_id].get("port", 3000)
+                    else:
+                        port = self._find_available_port()
+            except Exception:
+                port = 3000  # Default fallback
+
+            if status == "running":
+                # Container is already running - just update tracking
+                logger.info(f"[ContainerExecutor] Reusing running container {container_name} for {project_id}")
+
+                # Update active_containers tracking
+                self.active_containers[project_id] = {
+                    "container_id": container.id,
+                    "container_name": container_name,
+                    "user_id": user_id,
+                    "port": port,
+                    "technology": container.labels.get("technology", "unknown"),
+                    "created_at": datetime.utcnow(),
+                    "expires_at": datetime.utcnow() + timedelta(hours=24),
+                    "reused": True
+                }
+
+                return True, f"Reused existing container (already running)", port
+
+            elif status in ["exited", "created", "paused"]:
+                # Container exists but stopped - start it
+                logger.info(f"[ContainerExecutor] Starting stopped container {container_name} for {project_id}")
+
+                if status == "paused":
+                    container.unpause()
+                else:
+                    container.start()
+
+                # Wait briefly for container to be ready
+                await asyncio.sleep(1)
+                container.reload()
+
+                if container.status == "running":
+                    # Update tracking
+                    self.active_containers[project_id] = {
+                        "container_id": container.id,
+                        "container_name": container_name,
+                        "user_id": user_id,
+                        "port": port,
+                        "technology": container.labels.get("technology", "unknown"),
+                        "created_at": datetime.utcnow(),
+                        "expires_at": datetime.utcnow() + timedelta(hours=24),
+                        "reused": True
+                    }
+
+                    return True, f"Reused existing container (restarted)", port
+                else:
+                    # Failed to start - remove and let caller create new
+                    logger.warning(f"[ContainerExecutor] Failed to restart container {container_name}")
+                    try:
+                        container.remove(force=True)
+                    except Exception:
+                        pass
+                    return False, "Container failed to restart", None
+            else:
+                # Container in bad state (dead, removing, etc.) - remove it
+                logger.warning(f"[ContainerExecutor] Container {container_name} in bad state: {status}")
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    pass
+                if project_id in self.active_containers:
+                    del self.active_containers[project_id]
+                return False, f"Container in bad state: {status}", None
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Error reusing container: {e}")
+            return False, str(e), None
+
     async def _cleanup_project_container(self, project_id: str):
         """
         Clean up any existing container for a specific project.
-        Called before creating a new container to ensure only ONE container per project.
+        Called when container reuse fails and we need a fresh container.
         """
         if not self.docker_client:
             return
@@ -817,11 +956,11 @@ class ContainerExecutor:
             yield f"ERROR: Unsupported technology: {technology.value}\n"
             return
 
-        yield f"🐳 Creating container...\n"
+        yield f"🐳 Preparing container...\n"
         yield f"  📁 Project path: {project_path}\n"
         yield f"  🔌 Container port: {config.port}\n"
 
-        # Create and start container
+        # Create or reuse container
         success, message, host_port = await self.create_container(
             project_id=project_id,
             user_id=user_id,
@@ -833,7 +972,11 @@ class ContainerExecutor:
             yield f"ERROR: {message}\n"
             return
 
-        yield f"✅ Container started on port {host_port}\n"
+        # Check if container was reused (message contains "Reused")
+        if "Reused" in message:
+            yield f"♻️ {message}\n"
+        else:
+            yield f"✅ Container created on port {host_port}\n"
         yield f"📜 Streaming container logs...\n\n"
 
         # Stream container logs
