@@ -1221,6 +1221,30 @@ class UnifiedStorageService:
         workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}" if user_id else f"/tmp/sandbox/workspace/{project_id}"
 
         try:
+            # Quick check if project already exists on EC2 (skip restore if cached)
+            docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+            try:
+                check_output = docker_client.containers.run(
+                    "alpine:latest",
+                    ["-c", f"test -d {workspace_path} && ls {workspace_path} | wc -l"],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    remove=True,
+                    detach=False
+                )
+                file_count = int(check_output.decode().strip() or "0")
+                if file_count > 5:  # Project has files, skip restore
+                    logger.info(f"[RemoteRestore] Project already cached on EC2 ({file_count} files), skipping restore")
+                    # Return file info from DB without re-downloading
+                    async with AsyncSessionLocal() as session:
+                        result = await session.execute(
+                            select(ProjectFile).where(cast(ProjectFile.project_id, SQLString(36)) == str(UUID(project_id))).where(ProjectFile.is_folder == False)
+                        )
+                        file_records = result.scalars().all()
+                    return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in file_records]
+            except Exception as check_err:
+                logger.debug(f"[RemoteRestore] Cache check failed, proceeding with restore: {check_err}")
+
             project_uuid = str(UUID(project_id))
             logger.info(f"[RemoteRestore] Querying database for project: {project_uuid}")
 
@@ -1242,19 +1266,38 @@ class UnifiedStorageService:
                 logger.error(f"[RemoteRestore] No files have S3 keys! Files were not uploaded to S3.")
                 return []
 
-            docker_client = docker.DockerClient(base_url=sandbox_docker_host)
-            restore_commands = [f"mkdir -p {workspace_path}"]
+            # Reuse docker_client from cache check (already created above)
+            # Create directories first, then download files in PARALLEL for speed
+            mkdir_commands = [f"mkdir -p {workspace_path}"]
+            download_commands = []
+
             for f in files_with_s3:
                 fp = f"{workspace_path}/{f.path}"
                 dp = "/".join(fp.rsplit("/", 1)[:-1]) if "/" in f.path else workspace_path
-                restore_commands.extend([f"mkdir -p {dp}", f"aws s3 cp s3://{s3_bucket}/{f.s3_key} {fp}"])
+                mkdir_commands.append(f"mkdir -p {dp}")
+                # Use & for parallel execution, limit to 10 concurrent
+                download_commands.append(f"aws s3 cp s3://{s3_bucket}/{f.s3_key} {fp}")
 
-            logger.info(f"[RemoteRestore] Restoring {len(files_with_s3)} files to {workspace_path}")
+            logger.info(f"[RemoteRestore] Restoring {len(files_with_s3)} files to {workspace_path} (parallel)")
             logger.debug(f"[RemoteRestore] Sample S3 keys: {[f.s3_key for f in files_with_s3[:3]]}")
 
-            # amazon/aws-cli image has entrypoint set to 'aws', so we override it
-            # When entrypoint="/bin/sh", command should be ["-c", script] not ["/bin/sh", "-c", script]
-            restore_script = ' && '.join(restore_commands)
+            # Create dirs first (sequential), then download in parallel batches
+            mkdir_script = ' && '.join(mkdir_commands)
+
+            # Download in parallel using background jobs (10 concurrent)
+            # Group downloads into batches for parallel execution
+            batch_size = 10
+            parallel_download = []
+            for i in range(0, len(download_commands), batch_size):
+                batch = download_commands[i:i+batch_size]
+                # Run batch in background with & and wait
+                batch_script = ' & '.join(batch) + ' & wait'
+                parallel_download.append(batch_script)
+
+            download_script = ' && '.join(parallel_download) if parallel_download else "echo 'No files to download'"
+
+            # Combined script: create dirs, then parallel download
+            restore_script = f"{mkdir_script} && {download_script}"
 
             try:
                 output = docker_client.containers.run(
