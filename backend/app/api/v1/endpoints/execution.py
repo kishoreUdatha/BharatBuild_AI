@@ -537,6 +537,8 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
         event = {"type": event_type}
         if message:
             event["message"] = message
+            # Also put message in 'content' for frontend compatibility
+            event["content"] = message
         if data:
             event["data"] = data
         return f"data: {json.dumps(event)}\n\n"

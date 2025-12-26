@@ -654,7 +654,8 @@ class ContainerExecutor:
         """Find an available port for container mapping"""
         import socket
 
-        used_ports = {info["port"] for info in self.active_containers.values()}
+        # Get all used host ports from active containers
+        used_ports = {info.get("host_port", 0) for info in self.active_containers.values()}
 
         for port in range(start, end):
             if port in used_ports:
@@ -998,6 +999,9 @@ class ContainerExecutor:
             # Stream logs using async-compatible approach
             # The Docker SDK's logs() is synchronous, so we use a queue-based async pattern
             server_started = False
+            has_fatal_error = False
+
+            # Success patterns - server is ready for preview
             start_patterns = [
                 r"Local:\s*http://\S+:(\d+)",
                 r"listening on port (\d+)",
@@ -1007,6 +1011,24 @@ class ContainerExecutor:
                 r"VITE.*Local:\s*http://\S+:(\d+)",
                 r"ready in \d+",  # Vite ready message
                 r"compiled successfully",  # Webpack
+                r"compiled client and server",  # Next.js
+            ]
+
+            # Fatal error patterns - stop and show error (Bolt-style)
+            error_patterns = [
+                r"npm ERR!",
+                r"Error: Cannot find module",
+                r"Module not found",
+                r"SyntaxError:",
+                r"ReferenceError:",
+                r"TypeError:",
+                r"EADDRINUSE",
+                r"Address already in use",
+                r"ENOENT: no such file",
+                r"Permission denied",
+                r"Traceback \(most recent call last\)",
+                r"ImportError:",
+                r"ModuleNotFoundError:",
             ]
 
             # Use asyncio queue for thread-safe async log streaming
@@ -1047,9 +1069,11 @@ class ContainerExecutor:
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             log_future = executor.submit(stream_logs_sync)
 
-            # Process logs from queue asynchronously
+            # Process logs from queue asynchronously (Bolt-style health gate)
+            # Preview is ONLY enabled after server start is confirmed
             timeout_seconds = 120  # 2 minute timeout for server to start
             start_time = loop.time()
+            error_lines = []  # Collect error lines for context
 
             while True:
                 try:
@@ -1062,18 +1086,33 @@ class ContainerExecutor:
 
                     yield f"{line}\n"
 
-                    # Check for server start patterns
-                    if not server_started:
+                    # Check for FATAL ERROR patterns first (Bolt-style)
+                    if not has_fatal_error and not server_started:
+                        for pattern in error_patterns:
+                            if re.search(pattern, line, re.IGNORECASE):
+                                has_fatal_error = True
+                                error_lines.append(line)
+                                logger.error(f"[ContainerExecutor] Fatal error detected: {pattern}")
+                                # Continue collecting a few more error lines for context
+                                break
+
+                    # Collect error context (next 3 lines after error)
+                    if has_fatal_error and len(error_lines) < 5:
+                        if line not in error_lines:
+                            error_lines.append(line)
+
+                    # Check for server start patterns (only if no fatal error)
+                    if not server_started and not has_fatal_error:
                         for pattern in start_patterns:
                             match = re.search(pattern, line, re.IGNORECASE)
                             if match:
                                 server_started = True
-                                logger.info(f"[ContainerExecutor] Server started! Pattern matched: {pattern}")
+                                logger.info(f"[ContainerExecutor] ✅ Server READY! Pattern matched: {pattern}")
                                 yield f"\n{'='*50}\n"
-                                yield f"🚀 SERVER STARTED!\n"
+                                yield f"🚀 SERVER READY - PREVIEW ENABLED!\n"
                                 yield f"Preview URL: {preview_url}\n"
                                 yield f"{'='*50}\n\n"
-                                # Emit both markers for compatibility
+                                # Emit markers for frontend to enable preview
                                 yield f"__SERVER_STARTED__:{preview_url}\n"
                                 yield f"_PREVIEW_URL_:{preview_url}\n"
                                 break
@@ -1084,6 +1123,7 @@ class ContainerExecutor:
                     if elapsed > timeout_seconds and not server_started:
                         logger.warning(f"[ContainerExecutor] Timeout waiting for server start")
                         yield f"\n⚠️ Timeout waiting for server. Container may still be starting...\n"
+                        yield f"__ERROR__:Server startup timeout after {timeout_seconds}s\n"
                         break
                     # Send keepalive
                     yield f"  ⏳ Waiting for server... ({int(elapsed)}s)\n"
@@ -1092,8 +1132,18 @@ class ContainerExecutor:
             # Cleanup
             executor.shutdown(wait=False)
 
-            # If we exited the loop without detecting server start, still emit the URL
-            if not server_started and preview_url:
+            # Handle fatal error - do NOT enable preview (Bolt-style health gate)
+            if has_fatal_error:
+                logger.error(f"[ContainerExecutor] Preview BLOCKED due to fatal error")
+                yield f"\n{'='*50}\n"
+                yield f"❌ PREVIEW BLOCKED - Fatal Error Detected\n"
+                yield f"{'='*50}\n"
+                for err_line in error_lines:
+                    yield f"🔴 {err_line}\n"
+                yield f"\n💡 Fix the error and try again.\n"
+                yield f"__ERROR__:Fatal error detected - preview not available\n"
+            # If we exited the loop without detecting server start and no error
+            elif not server_started and preview_url:
                 logger.warning(f"[ContainerExecutor] Server start not detected, emitting URL anyway")
                 yield f"\n📍 Container running - Preview may be available at: {preview_url}\n"
                 yield f"_PREVIEW_URL_:{preview_url}\n"
