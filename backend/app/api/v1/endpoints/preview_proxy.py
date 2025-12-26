@@ -122,21 +122,26 @@ def get_http_client() -> httpx.AsyncClient:
 
 async def get_container_internal_address(project_id: str) -> Optional[tuple[str, int, str]]:
     """
-    Get the internal IP address for a project container.
+    Get the nginx gateway address for a project container.
 
     Returns:
-        Tuple of (container_ip, container_port, project_id) or None if container not found
+        Tuple of (ec2_ip, nginx_port, host_port) or None if container not found
 
     Architecture:
-        - Direct connection to container's internal IP on the bharatbuild-sandbox network
-        - No Traefik gateway needed - routes directly via Docker internal networking
+        - nginx on EC2 port 8080 routes /sandbox/{host_port}/ to localhost:{host_port}
+        - Container is mapped: internal_port -> host_port
+        - ECS calls: EC2_IP:8080/sandbox/{host_port}/path
+        - nginx proxies to: localhost:{host_port}/path -> container
     """
-    # For remote Docker (EC2 sandbox), get container internal IP directly
+    # For remote Docker (EC2 sandbox), route via nginx gateway
     if IS_REMOTE_DOCKER:
         docker_client = get_docker_client()
         if not docker_client:
             logger.error("[Preview] Docker client not available")
             return None
+
+        # Extract EC2 IP from SANDBOX_DOCKER_HOST
+        ec2_ip = SANDBOX_DOCKER_HOST.replace("tcp://", "").split(":")[0]
 
         try:
             # Find container by project_id label
@@ -151,47 +156,25 @@ async def get_container_internal_address(project_id: str) -> Optional[tuple[str,
             container = containers[0]
             logger.info(f"[Preview] Container found: {project_id} -> {container.name}")
 
-            # Get container's internal IP from the bharatbuild-sandbox network
-            networks = container.attrs.get('NetworkSettings', {}).get('Networks', {})
+            # Get host port from container's port bindings
+            ports = container.attrs.get('NetworkSettings', {}).get('Ports', {})
+            host_port = None
 
-            container_ip = None
-            container_port = 5173  # Default Vite port
-
-            # Try bharatbuild-sandbox network first
-            if 'bharatbuild-sandbox' in networks:
-                container_ip = networks['bharatbuild-sandbox'].get('IPAddress')
-                logger.info(f"[Preview] Found IP on bharatbuild-sandbox: {container_ip}")
-
-            # Try bridge network as fallback
-            if not container_ip and 'bridge' in networks:
-                container_ip = networks['bridge'].get('IPAddress')
-                logger.info(f"[Preview] Found IP on bridge: {container_ip}")
-
-            # Try any available network
-            if not container_ip:
-                for net_name, net_config in networks.items():
-                    ip = net_config.get('IPAddress')
-                    if ip:
-                        container_ip = ip
-                        logger.info(f"[Preview] Found IP on {net_name}: {container_ip}")
+            # Find the host port mapping
+            for container_port, bindings in ports.items():
+                if bindings:
+                    host_port = int(bindings[0].get('HostPort', 0))
+                    if host_port:
+                        logger.info(f"[Preview] Found host port mapping: {container_port} -> {host_port}")
                         break
 
-            if not container_ip:
-                logger.error(f"[Preview] Could not get IP for container {container.name}")
+            if not host_port:
+                logger.error(f"[Preview] No host port mapping found for container {container.name}")
                 return None
 
-            # Get port from container labels (technology determines port)
-            labels = container.labels or {}
-            technology = labels.get('technology', 'nodejs_vite')
-            if technology == 'nodejs_vite':
-                container_port = 5173
-            elif technology in ('nodejs', 'nodejs_cra'):
-                container_port = 3000
-            else:
-                container_port = 3000  # Default
-
-            logger.info(f"[Preview] Direct routing to container: {container_ip}:{container_port}")
-            return (container_ip, container_port, None)  # None = no gateway prefix needed
+            # Return EC2 IP, nginx port (8080), and host_port for /sandbox/{port}/ routing
+            logger.info(f"[Preview] Routing via nginx gateway: {ec2_ip}:8080/sandbox/{host_port}/")
+            return (ec2_ip, 8080, str(host_port))  # host_port as string for URL building
 
         except Exception as e:
             logger.error(f"[Preview] Error getting container address: {e}")
@@ -273,16 +256,18 @@ async def proxy_preview(project_id: str, path: str, request: Request):
     gateway_ip, gateway_port, gateway_project_id = address
 
     # Build target URL
-    # Vite is configured with --base=/api/v1/preview/{project_id}/ so it expects full paths
-    # Whether routing via Traefik or direct to container, send the full path
-    if gateway_project_id:
-        # Via Traefik gateway (legacy, Traefik not currently used)
+    # gateway_project_id is actually host_port for nginx /sandbox/{port}/ routing
+    if gateway_project_id and IS_REMOTE_DOCKER:
+        # Route via nginx gateway: /sandbox/{host_port}/{path}
+        # nginx proxies /sandbox/{port}/* to localhost:{port}/*
+        # Container receives request at root path (no prefix needed)
+        host_port = gateway_project_id
+        target_url = f"http://{gateway_ip}:{gateway_port}/sandbox/{host_port}/{path}"
+    elif gateway_project_id:
+        # Legacy Traefik mode (not used)
         target_url = f"http://{gateway_ip}:{gateway_port}/api/v1/preview/{gateway_project_id}/{path}"
-    elif IS_REMOTE_DOCKER:
-        # Direct to container IP in remote mode - still need full path for Vite --base
-        target_url = f"http://{gateway_ip}:{gateway_port}/api/v1/preview/{project_id}/{path}"
     else:
-        # Local mode: direct to container IP without prefix (different config)
+        # Local mode: direct to container IP
         target_url = f"http://{gateway_ip}:{gateway_port}/{path}"
 
     # Add query string if present
