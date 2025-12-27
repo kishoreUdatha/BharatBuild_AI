@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import dynamic from 'next/dynamic'
+import Image from 'next/image'
 import { ChatMessage } from './ChatMessage'
 import { ChatInput } from './ChatInput'
 import { FileExplorer } from './FileExplorer'
@@ -756,13 +757,22 @@ export function BoltLayout({
       {/* Top Header - Responsive */}
       <div className="relative z-50 flex items-center justify-between px-3 md:px-6 py-2 md:py-3 border-b border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))] flex-shrink-0 overflow-visible">
         <div className="flex items-center gap-2 md:gap-3">
-          {/* Home Button */}
+          {/* BharatBuild Logo */}
           <a
             href="/"
-            className="flex items-center justify-center w-8 h-8 rounded-lg text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
-            title="Go to Home"
+            className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-[hsl(var(--bolt-bg-tertiary))] transition-colors"
+            title="BharatBuild AI - Go to Home"
           >
-            <Home className="w-5 h-5" />
+            <Image
+              src="/logo.png"
+              alt="BharatBuild"
+              width={32}
+              height={32}
+              className="rounded"
+            />
+            <span className="hidden md:block text-sm font-semibold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
+              BharatBuild
+            </span>
           </a>
 
           {/* Project Selector - Hidden on very small screens */}
@@ -1319,7 +1329,7 @@ export function BoltLayout({
                 </div>
 
                 {/* Terminal Content - xterm.js - Single instance */}
-                <div className="flex-1 overflow-hidden bg-[hsl(var(--bolt-bg-primary))]">
+                <div className="flex-1 overflow-auto bg-[hsl(var(--bolt-bg-primary))]">
                   <XTerminal
                     logs={terminalLogs}
                     onCommand={(cmd) => {

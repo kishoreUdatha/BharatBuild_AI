@@ -23,9 +23,10 @@ resource "aws_cloudfront_distribution" "main" {
       https_port               = 443
       origin_protocol_policy   = "http-only"
       origin_ssl_protocols     = ["TLSv1.2"]
-      # 60 seconds is the max for CloudFront origin_read_timeout
-      # Backend sends keepalive events every 30 seconds to prevent timeout
-      origin_read_timeout      = 60
+      # With Origin Shield enabled, max is 180 seconds
+      # SSE streaming needs longer timeout for project restore operations
+      # Backend sends keepalive events every 5 seconds to prevent timeout
+      origin_read_timeout      = 180
       # 60 seconds is the max allowed for keepalive
       origin_keepalive_timeout = 60
     }

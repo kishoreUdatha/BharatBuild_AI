@@ -28,6 +28,7 @@ import asyncio
 import hashlib
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 from dataclasses import dataclass, field
 from uuid import UUID
@@ -1203,6 +1204,73 @@ class UnifiedStorageService:
         except Exception as e:
             logger.error(f"[Layer3-DB] Failed to restore project {project_id}: {e}")
             return []
+
+    async def restore_project_to_local(
+        self,
+        db: AsyncSession,
+        project_id: str,
+        target_path: Path,
+        user_id: Optional[str] = None
+    ) -> int:
+        """
+        Restore project files from database to a local directory.
+        Used by auto-fixer when running in remote sandbox mode.
+
+        Args:
+            db: Database session
+            project_id: Project UUID string
+            target_path: Local path to restore files to
+            user_id: User UUID string (optional)
+
+        Returns:
+            Number of files restored
+        """
+        from app.models.project_file import ProjectFile
+        from sqlalchemy import select, cast, String as SQLString
+
+        try:
+            project_uuid = str(UUID(project_id))
+            restored_count = 0
+
+            # Get all files for project
+            result = await db.execute(
+                select(ProjectFile)
+                .where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid)
+                .where(ProjectFile.is_folder == False)
+                .order_by(ProjectFile.path)
+            )
+            files = result.scalars().all()
+
+            if not files:
+                logger.info(f"[RestoreLocal] No files to restore for project {project_id}")
+                return 0
+
+            # Create target directory
+            target_path.mkdir(parents=True, exist_ok=True)
+
+            # Restore each file
+            for file_record in files:
+                content = None
+
+                # Get content from S3 or inline
+                if file_record.s3_key:
+                    content_bytes = await storage_service.download_file(file_record.s3_key)
+                    content = content_bytes.decode('utf-8') if content_bytes else None
+                elif file_record.content_inline:
+                    content = file_record.content_inline
+
+                if content:
+                    file_path = target_path / file_record.path
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    file_path.write_text(content, encoding='utf-8')
+                    restored_count += 1
+
+            logger.info(f"[RestoreLocal] Restored {restored_count} files for project {project_id} to {target_path}")
+            return restored_count
+
+        except Exception as e:
+            logger.error(f"[RestoreLocal] Failed to restore project {project_id}: {e}")
+            raise
 
     async def _restore_to_remote_sandbox(self, project_id: str, user_id: Optional[str] = None) -> List[FileInfo]:
         """Restore files to REMOTE sandbox EC2 using Docker container with AWS CLI."""
