@@ -13,6 +13,9 @@ All errors are processed through the auto-fixer system automatically.
 """
 
 import asyncio
+import os
+import tempfile
+import shutil
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -31,6 +34,9 @@ from app.services.auto_fixer import get_auto_fixer
 from app.core.config import settings
 from app.core.logging_config import logger
 from pathlib import Path
+
+# Check if we're in remote Docker mode
+IS_REMOTE_SANDBOX = bool(os.environ.get("SANDBOX_DOCKER_HOST"))
 
 router = APIRouter()
 
@@ -280,6 +286,19 @@ async def report_errors(
             if request.context and len(request.context) > len(primary_error.message):
                 error_context = request.context
 
+            # IMPORTANT: Include actual docker/build errors from LogBus for better context
+            docker_errors = log_bus.get_errors(source="docker")
+            build_errors = log_bus.get_errors(source="build")
+            if docker_errors or build_errors:
+                all_error_entries = docker_errors + build_errors
+                # Extract messages from error dicts, get last 20 for context
+                error_messages = [e.get("message", "") for e in all_error_entries if e.get("level") == "error"]
+                if error_messages:
+                    error_logs = "\n".join(error_messages[-20:])
+                    if error_logs and error_logs not in error_context:
+                        error_context = f"{error_context}\n\nActual error output:\n{error_logs}"
+                        logger.info(f"[ErrorHandler:{project_id}] Added {len(error_messages)} error logs to context")
+
             logger.info(f"[ErrorHandler:{project_id}] Triggering auto-fix...")
             logger.info(f"[ErrorHandler:{project_id}] Error: {error_context[:200]}")
             logger.info(f"[ErrorHandler:{project_id}] Command: {request.command}")
@@ -353,19 +372,61 @@ async def execute_fix_with_notification(
     user_id: Optional[str] = None
 ):
     """Execute fix using SimpleFixer and send WebSocket notifications"""
+    temp_dir = None
     try:
-        # Find project path
-        project_path = Path(settings.USER_PROJECTS_PATH) / project_id
+        # Find project path - handle remote sandbox mode
+        project_path = None
 
-        if not project_path.exists():
-            # Try sandbox path
-            sandbox_base = Path(settings.SANDBOX_PATH) if hasattr(settings, 'SANDBOX_PATH') else Path("/tmp/sandbox/workspace")
-            for user_dir in sandbox_base.iterdir():
-                if user_dir.is_dir():
-                    potential_path = user_dir / project_id
-                    if potential_path.exists():
-                        project_path = potential_path
-                        break
+        if IS_REMOTE_SANDBOX:
+            # Remote sandbox mode: files are on EC2, need to restore from database
+            logger.info(f"[ErrorHandler:{project_id}] Remote sandbox mode - restoring files from database")
+
+            try:
+                from app.services.unified_storage import UnifiedStorageService
+                from app.core.database import AsyncSessionLocal
+
+                # Create temp directory for fixer to work with
+                temp_dir = tempfile.mkdtemp(prefix=f"fixer_{project_id[:8]}_")
+                project_path = Path(temp_dir)
+
+                # Restore files from database to temp directory
+                async with AsyncSessionLocal() as db_session:
+                    unified_storage = UnifiedStorageService()
+                    restored_count = await unified_storage.restore_project_to_local(
+                        db=db_session,
+                        project_id=project_id,
+                        target_path=project_path,
+                        user_id=user_id
+                    )
+                    logger.info(f"[ErrorHandler:{project_id}] Restored {restored_count} files to temp directory")
+
+            except Exception as restore_err:
+                logger.error(f"[ErrorHandler:{project_id}] Failed to restore files: {restore_err}")
+                import traceback
+                logger.error(traceback.format_exc())
+                # Try to get files directly from database as fallback
+                project_path = None
+        else:
+            # Local mode: files are on the same machine
+            project_path = Path(settings.USER_PROJECTS_PATH) / project_id
+
+            if not project_path.exists():
+                # Try sandbox path
+                sandbox_base = Path(settings.SANDBOX_PATH) if hasattr(settings, 'SANDBOX_PATH') else Path("/tmp/sandbox/workspace")
+                try:
+                    for user_dir in sandbox_base.iterdir():
+                        if user_dir.is_dir():
+                            potential_path = user_dir / project_id
+                            if potential_path.exists():
+                                project_path = potential_path
+                                break
+                except FileNotFoundError:
+                    logger.warning(f"[ErrorHandler:{project_id}] Sandbox path not found: {sandbox_base}")
+
+        if project_path is None or not project_path.exists():
+            logger.error(f"[ErrorHandler:{project_id}] Project path not found")
+            await notify_fix_failed(project_id, "Could not find project files for auto-fix")
+            return
 
         logger.info(f"[ErrorHandler:{project_id}] Using SimpleFixer (Bolt.new style)")
         logger.info(f"[ErrorHandler:{project_id}] Project path: {project_path}")
@@ -418,7 +479,7 @@ async def execute_fix_with_notification(
         if result.success and result.files_modified:
             logger.info(f"[ErrorHandler:{project_id}] SimpleFixer completed: {len(result.files_modified)} files")
 
-            # Sync modified files to database and S3
+            # Sync modified files: FIRST to running container, THEN to S3/DB
             try:
                 from app.services.unified_storage import UnifiedStorageService
                 unified_storage = UnifiedStorageService()
@@ -429,14 +490,28 @@ async def execute_fix_with_notification(
                         if full_path.exists():
                             content = full_path.read_text(encoding='utf-8', errors='ignore')
 
-                            # Save to database (Layer 3)
+                            # STEP 1: Sync to RUNNING CONTAINER first (for immediate HMR effect)
+                            if IS_REMOTE_SANDBOX and user_id:
+                                try:
+                                    container_synced = await unified_storage._write_to_remote_sandbox(
+                                        project_id=project_id,
+                                        file_path=file_path,
+                                        content=content,
+                                        user_id=user_id
+                                    )
+                                    if container_synced:
+                                        logger.info(f"[ErrorHandler:{project_id}] ✓ Synced to CONTAINER: {file_path}")
+                                    else:
+                                        logger.warning(f"[ErrorHandler:{project_id}] Container sync failed: {file_path}")
+                                except Exception as container_err:
+                                    logger.warning(f"[ErrorHandler:{project_id}] Container sync error for {file_path}: {container_err}")
+
+                            # STEP 2: Save to database (Layer 3) for persistence
                             db_saved = await unified_storage.save_to_database(project_id, file_path, content)
                             if db_saved:
                                 logger.info(f"[ErrorHandler:{project_id}] Synced to DB: {file_path}")
-                            else:
-                                logger.warning(f"[ErrorHandler:{project_id}] DB sync failed: {file_path}")
 
-                            # Save to S3 (Layer 2) if user_id is available
+                            # STEP 3: Save to S3 (Layer 2) for persistence
                             if user_id:
                                 try:
                                     s3_result = await unified_storage.upload_to_s3(
@@ -453,10 +528,126 @@ async def execute_fix_with_notification(
                     except Exception as sync_err:
                         logger.warning(f"[ErrorHandler:{project_id}] Failed to sync {file_path}: {sync_err}")
 
-                logger.info(f"[ErrorHandler:{project_id}] Synced {len(result.files_modified)} fixed files to DB and S3")
+                logger.info(f"[ErrorHandler:{project_id}] Synced {len(result.files_modified)} fixed files to Container + DB + S3")
+
+                # STEP 4: If package.json was modified, run npm install in container
+                package_json_modified = any(
+                    'package.json' in f and 'package-lock.json' not in f
+                    for f in result.files_modified
+                )
+                if package_json_modified and IS_REMOTE_SANDBOX and user_id:
+                    try:
+                        from app.services.container_executor import container_executor
+
+                        # Find the working directory (frontend/ or root)
+                        pkg_file = next((f for f in result.files_modified if 'package.json' in f), None)
+                        work_dir = "/app"
+                        if pkg_file and '/' in pkg_file:
+                            # e.g., frontend/package.json -> /app/frontend
+                            work_dir = f"/app/{pkg_file.rsplit('/', 1)[0]}"
+
+                        logger.info(f"[ErrorHandler:{project_id}] Running npm install in container (workdir={work_dir})")
+
+                        # Find the container for this project
+                        container = await container_executor._get_existing_container(project_id)
+                        if container:
+                            # Run npm install in the container
+                            exit_code, output = container.exec_run(
+                                f"sh -c 'cd {work_dir} && npm install --legacy-peer-deps 2>&1'",
+                                workdir="/app",
+                                demux=True
+                            )
+                            stdout = output[0].decode('utf-8') if output[0] else ""
+                            stderr = output[1].decode('utf-8') if output[1] else ""
+                            full_output = stdout + stderr
+
+                            if exit_code == 0:
+                                logger.info(f"[ErrorHandler:{project_id}] ✓ npm install completed successfully")
+                            else:
+                                logger.warning(f"[ErrorHandler:{project_id}] npm install exit code: {exit_code}")
+                                logger.warning(f"[ErrorHandler:{project_id}] npm install output: {full_output[:500]}")
+                        else:
+                            logger.warning(f"[ErrorHandler:{project_id}] Container not found for npm install")
+                    except Exception as npm_err:
+                        logger.warning(f"[ErrorHandler:{project_id}] Failed to run npm install: {npm_err}")
 
             except Exception as storage_err:
                 logger.warning(f"[ErrorHandler:{project_id}] Storage sync error: {storage_err}")
+
+
+            # STEP 5: Auto-rebuild after fixes - trigger container to rebuild
+            if result.files_modified and IS_REMOTE_SANDBOX and user_id:
+                try:
+                    from app.services.container_executor import container_executor
+
+                    logger.info(f"[ErrorHandler:{project_id}] Triggering auto-rebuild after fix...")
+
+                    # Notify frontend that rebuild is starting
+                    await notify_rebuild_started(project_id)
+
+                    # Ensure docker client is initialized for container lookup
+                    if not container_executor.docker_client:
+                        logger.info(f"[ErrorHandler:{project_id}] Initializing docker client for auto-rebuild...")
+                        await container_executor.initialize()
+
+                    # Find the container by project_id label
+                    container = await container_executor._get_existing_container(project_id)
+                    if container:
+                        # Kill any existing dev server and restart it
+                        has_frontend = any('frontend/' in f for f in result.files_modified)
+                        work_dir = "/app/frontend" if has_frontend else "/app"
+
+                        # Kill existing node processes and restart dev server
+                        logger.info(f"[ErrorHandler:{project_id}] Restarting dev server in {work_dir}")
+
+                        # Kill existing processes (wait for completion)
+                        container.exec_run("pkill -f 'node.*vite' || true", detach=False)
+                        container.exec_run("pkill -f 'npm.*dev' || true", detach=False)
+
+                        await asyncio.sleep(2)
+
+                        # Start the dev server in the background with proper host binding
+                        start_cmd = f"sh -c 'cd {work_dir} && nohup npm run dev -- --host 0.0.0.0 > /tmp/dev.log 2>&1 &'"
+                        container.exec_run(start_cmd, workdir="/app", detach=True)
+
+                        logger.info(f"[ErrorHandler:{project_id}] Dev server restart triggered, waiting for ready...")
+
+                        # Wait for dev server to be ready (check logs for "ready" message)
+                        max_wait = 15  # Max 15 seconds
+                        ready = False
+                        for i in range(max_wait):
+                            await asyncio.sleep(1)
+                            try:
+                                # Check if Vite has started (look for "ready" or "Local:" in logs)
+                                exit_code, output = container.exec_run(
+                                    "cat /tmp/dev.log 2>/dev/null | tail -20",
+                                    demux=True
+                                )
+                                log_output = ""
+                                if output[0]:
+                                    log_output = output[0].decode('utf-8', errors='ignore')
+
+                                if 'ready in' in log_output.lower() or 'local:' in log_output.lower():
+                                    logger.info(f"[ErrorHandler:{project_id}] Dev server ready after {i+1}s")
+                                    ready = True
+                                    break
+                                elif 'error' in log_output.lower() and 'esbuild' not in log_output.lower():
+                                    logger.warning(f"[ErrorHandler:{project_id}] Dev server error detected")
+                                    break
+                            except Exception as check_err:
+                                logger.debug(f"[ErrorHandler:{project_id}] Log check error: {check_err}")
+
+                        if not ready:
+                            logger.warning(f"[ErrorHandler:{project_id}] Dev server may not be ready after {max_wait}s")
+
+                        # Notify frontend that rebuild is complete
+                        await notify_rebuild_completed(project_id, result.files_modified)
+                    else:
+                        logger.warning(f"[ErrorHandler:{project_id}] Container not found for auto-rebuild (project_id={project_id})")
+                except Exception as rebuild_err:
+                    logger.warning(f"[ErrorHandler:{project_id}] Auto-rebuild error: {rebuild_err}")
+                    import traceback
+                    logger.warning(traceback.format_exc())
 
             await notify_fix_completed(project_id, result.patches_applied, result.files_modified)
         elif result.success:
@@ -471,6 +662,14 @@ async def execute_fix_with_notification(
         import traceback
         logger.error(traceback.format_exc())
         await notify_fix_failed(project_id, str(e))
+    finally:
+        # Clean up temp directory if we created one
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+                logger.info(f"[ErrorHandler:{project_id}] Cleaned up temp directory")
+            except Exception as cleanup_err:
+                logger.warning(f"[ErrorHandler:{project_id}] Failed to cleanup temp dir: {cleanup_err}")
 
 
 @router.websocket("/ws/{project_id}")
@@ -535,6 +734,26 @@ async def notify_fix_failed(project_id: str, error: str):
         "timestamp": datetime.now().isoformat()
     })
 
+
+
+
+async def notify_rebuild_started(project_id: str):
+    """Notify WebSocket clients that auto-rebuild is starting"""
+    await broadcast_to_project(project_id, {
+        "type": "rebuild_started",
+        "message": "Rebuilding project after fix...",
+        "timestamp": datetime.now().isoformat()
+    })
+
+
+async def notify_rebuild_completed(project_id: str, files_modified: List[str]):
+    """Notify WebSocket clients that auto-rebuild is complete"""
+    await broadcast_to_project(project_id, {
+        "type": "rebuild_completed",
+        "files_modified": files_modified,
+        "message": "Project rebuilt successfully. Preview is ready.",
+        "timestamp": datetime.now().isoformat()
+    })
 
 async def broadcast_to_project(project_id: str, message: dict):
     """Broadcast message to all WebSocket connections for a project"""

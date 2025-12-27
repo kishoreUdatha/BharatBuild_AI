@@ -138,6 +138,8 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
       convertEol: true,
       allowProposedApi: true,
       smoothScrollDuration: 150,
+      fastScrollModifier: 'alt',
+      scrollSensitivity: 3,
     })
 
     // Add addons
@@ -364,8 +366,17 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
     }
   }, [debouncedFit])
 
+  // Handle wheel events for scrolling
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (xtermRef.current) {
+      // Let xterm handle the scroll
+      const scrollAmount = e.deltaY > 0 ? 3 : -3
+      xtermRef.current.scrollLines(scrollAmount)
+    }
+  }, [])
+
   return (
-    <div className="relative h-full w-full bg-[#0d1117]">
+    <div className="relative h-full w-full bg-[#0d1117]" onWheel={handleWheel}>
       <div
         ref={terminalRef}
         className="h-full w-full"

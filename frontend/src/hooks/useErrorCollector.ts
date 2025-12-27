@@ -72,6 +72,10 @@ const ERROR_PATTERNS: { pattern: RegExp; severity: ErrorSeverity }[] = [
   { pattern: /Build failed/i, severity: 'error' },
   { pattern: /Module not found/i, severity: 'error' },
   { pattern: /Cannot find module/i, severity: 'error' },
+  // ===== Esbuild error format =====
+  { pattern: /\[ERROR\]/i, severity: 'error' },
+  { pattern: /No matching export/i, severity: 'error' },
+  { pattern: /Failed to scan for dependencies/i, severity: 'error' },
   // ===== NEW: Vite import resolution errors =====
   { pattern: /Failed to resolve import/i, severity: 'error' },
   { pattern: /does not provide an export named/i, severity: 'error' },
@@ -119,7 +123,7 @@ export function useErrorCollector(options: UseErrorCollectorOptions = {}) {
     projectId,
     autoCapture = true,
     enabled = true,
-    debounceMs = 800,
+    debounceMs = 3000,
     onFixStarted,
     onFixCompleted,
     onFixFailed
@@ -153,6 +157,11 @@ export function useErrorCollector(options: UseErrorCollectorOptions = {}) {
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null)
   const recentErrorsRef = useRef<Set<string>>(new Set())
   const [isConnected, setIsConnected] = useState(false)
+
+  // Retry limit tracking - max 3 auto-fix attempts per error session
+  const MAX_FIX_ATTEMPTS = 3
+  const fixAttemptCountRef = useRef(0)
+  const [maxRetriesReached, setMaxRetriesReached] = useState(false)
 
   // WebSocket connection for real-time fix notifications
   const wsRef = useRef<WebSocket | null>(null)
@@ -224,18 +233,41 @@ export function useErrorCollector(options: UseErrorCollectorOptions = {}) {
 
             // Handle fix notifications from backend (use refs to get latest callbacks)
             if (msg.type === 'fix_started') {
-              console.log('[useErrorCollector] Fix started:', msg.reason)
+              // Increment fix attempt counter
+              fixAttemptCountRef.current++
+              console.log('[useErrorCollector] Fix started (attempt', fixAttemptCountRef.current, '/', MAX_FIX_ATTEMPTS, '):', msg.reason)
               setFixing(true)
               onFixStartedRef.current?.(msg.reason || 'Auto-fix started')
             } else if (msg.type === 'fix_completed') {
-              console.log('[useErrorCollector] Fix completed:', msg.patches_applied, 'patches')
+              console.log('[useErrorCollector] Fix completed (attempt', fixAttemptCountRef.current, '):', msg.patches_applied, 'patches')
               setFixing(false)
               markAllResolved()
+              // Clear deduplication cache so same error can trigger another fix if it persists
+              recentErrorsRef.current.clear()
+              errorBufferRef.current = []
+              // Check if max retries reached after this fix
+              if (fixAttemptCountRef.current >= MAX_FIX_ATTEMPTS) {
+                console.log('[useErrorCollector] Max fix attempts reached, stopping auto-fix')
+                setMaxRetriesReached(true)
+              }
               onFixCompletedRef.current?.(msg.patches_applied || 0, msg.files_modified || [])
             } else if (msg.type === 'fix_failed') {
-              console.log('[useErrorCollector] Fix failed:', msg.error)
+              console.log('[useErrorCollector] Fix failed (attempt', fixAttemptCountRef.current, '):', msg.error)
               setFixing(false)
+              // Clear deduplication cache so same error can trigger another fix attempt
+              recentErrorsRef.current.clear()
+              errorBufferRef.current = []
+              // Check if max retries reached
+              if (fixAttemptCountRef.current >= MAX_FIX_ATTEMPTS) {
+                console.log('[useErrorCollector] Max fix attempts reached, stopping auto-fix')
+                setMaxRetriesReached(true)
+              }
               onFixFailedRef.current?.(msg.error || 'Fix failed')
+            } else if (msg.type === 'rebuild_completed') {
+              // App rebuilt successfully - reset retry counter
+              console.log('[useErrorCollector] Rebuild completed, resetting fix attempt counter')
+              fixAttemptCountRef.current = 0
+              setMaxRetriesReached(false)
             }
           } catch (e) {
             console.error('[useErrorCollector] Failed to parse WebSocket message:', e)
@@ -281,19 +313,29 @@ export function useErrorCollector(options: UseErrorCollectorOptions = {}) {
     }
   }, [projectId, enabled, setFixing, markAllResolved]) // Removed callback dependencies - use refs instead
 
-  // Watch terminal logs for errors (legacy support)
+  // Watch terminal logs for errors AND capture output buffer (legacy support)
   useEffect(() => {
     if (!autoCapture || !enabled) return
 
-    const latestLogs = logs.slice(-10)
+    const latestLogs = logs.slice(-20)  // Check last 20 logs
     latestLogs.forEach(log => {
-      if (log.type === 'error') {
-        const content = log.content
+      const content = log.content
+
+      // Add ALL logs to output buffer for context (not just errors)
+      if (content && !outputBufferRef.current.includes(content)) {
+        outputBufferRef.current.push(content)
+        if (outputBufferRef.current.length > 200) {
+          outputBufferRef.current.shift()
+        }
+      }
+
+      // Detect errors
+      if (log.type === 'error' || log.type === 'output') {
         const isBuildError = ERROR_PATTERNS.some(({ pattern }) => pattern.test(content))
 
         if (isBuildError) {
           addBuildError(content)
-        } else if (content.includes('Error:') || content.includes('error:')) {
+        } else if (content.includes('Error:') || content.includes('error:') || content.includes('[ERROR]') || content.includes('No matching export')) {
           addTerminalError(content)
         }
       }
@@ -314,7 +356,7 @@ export function useErrorCollector(options: UseErrorCollectorOptions = {}) {
     if (!enabled || !output) return
 
     outputBufferRef.current.push(output)
-    if (outputBufferRef.current.length > 50) {
+    if (outputBufferRef.current.length > 200) {
       outputBufferRef.current.shift()
     }
   }, [enabled])
@@ -377,7 +419,7 @@ export function useErrorCollector(options: UseErrorCollectorOptions = {}) {
 
     // Also add to output buffer
     outputBufferRef.current.push(message)
-    if (outputBufferRef.current.length > 50) {
+    if (outputBufferRef.current.length > 200) {
       outputBufferRef.current.shift()
     }
 
@@ -445,6 +487,12 @@ export function useErrorCollector(options: UseErrorCollectorOptions = {}) {
    */
   const forwardErrorToBackend = useCallback(async () => {
     if (!projectId || errorBufferRef.current.length === 0) return
+
+    // Check if max retries reached - stop auto-fix
+    if (fixAttemptCountRef.current >= MAX_FIX_ATTEMPTS) {
+      console.log('[useErrorCollector] Skipping auto-fix: max retries reached (', fixAttemptCountRef.current, '/', MAX_FIX_ATTEMPTS, ')')
+      return
+    }
 
     const fullContext = outputBufferRef.current.join('\n')
     const errors = errorBufferRef.current.map(e => ({
@@ -660,6 +708,16 @@ export function useErrorCollector(options: UseErrorCollectorOptions = {}) {
     return context
   }, [])
 
+  /**
+   * Reset the retry counter - allows auto-fix to run again
+   * Call this when user manually intervenes or wants to retry
+   */
+  const resetRetryCount = useCallback(() => {
+    console.log('[useErrorCollector] Resetting fix attempt counter')
+    fixAttemptCountRef.current = 0
+    setMaxRetriesReached(false)
+  }, [])
+
   return {
     // State
     errors,
@@ -668,6 +726,8 @@ export function useErrorCollector(options: UseErrorCollectorOptions = {}) {
     isFixing,
     selectedErrorId,
     isConnected,
+    maxRetriesReached, // True when auto-fix has given up
+    fixAttemptCount: fixAttemptCountRef.current,
 
     // SINGLE ENTRY POINT - Primary methods
     reportError,          // Report any error
@@ -693,7 +753,10 @@ export function useErrorCollector(options: UseErrorCollectorOptions = {}) {
 
     // Utilities
     formatError,
-    getErrorContext
+    getErrorContext,
+
+    // Retry management
+    resetRetryCount  // Reset retry counter to allow auto-fix again
   }
 }
 

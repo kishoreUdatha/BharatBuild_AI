@@ -353,18 +353,32 @@ export function LivePreview({
     }
   }, [files, entryPoint, previewMode, refreshKey, projectId])
 
-  // Handle iframe load
+  // Handle iframe load - don't stop retrying immediately, error pages also fire onLoad
   const handleIframeLoad = useCallback(() => {
-    console.log('[LivePreview] Iframe loaded successfully')
+    console.log('[LivePreview] Iframe loaded, retryCount:', retryCount, 'retryStatus:', retryStatus)
+
+    // In early retries (< 8), don't stop - error pages (502, connection refused) also trigger onLoad
+    // Keep retrying until we get more attempts or hit retry limit
+    if (previewMode === 'server' && retryCount < 8 && retryStatus !== 'idle') {
+      console.log('[LivePreview] Still in retry phase, scheduling next retry in 2s...')
+      setTimeout(() => {
+        if (retryCount < maxRetries) {
+          retryPreview()
+        }
+      }, 2000)
+      return
+    }
+
+    // After 8 retries, assume loaded successfully
+    console.log('[LivePreview] Assuming app loaded after retries')
     setIsLoading(false)
     setRetryStatus('idle')
     setError(null)
-    // Clear any pending retry timeout
     if (retryTimeoutRef.current) {
       clearTimeout(retryTimeoutRef.current)
       retryTimeoutRef.current = null
     }
-  }, [])
+  }, [previewMode, retryCount, retryStatus, maxRetries, retryPreview])
 
   // Handle iframe crash/sandbox errors (Bolt.new style - Layer 12)
   const handleIframeError = useCallback((event: React.SyntheticEvent<HTMLIFrameElement, Event>) => {

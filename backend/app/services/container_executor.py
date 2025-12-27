@@ -592,12 +592,23 @@ class ContainerExecutor:
             # nginx gateway routing: /sandbox/{port}/* -> localhost:{port}/*
             # Container receives requests at root path, no --base needed
 
-            # Build run command - NO --base flag, nginx handles path routing
+            # Build run command with correct base path for preview URL routing
             run_command = config.run_command
+
+            # Generate the base path for frontend frameworks
+            # This ensures assets are loaded from the correct URL path
+            frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip('/')
+            environment = os.getenv("ENVIRONMENT", "development")
+            is_production = environment == "production" or ("localhost" not in frontend_url and "127.0.0.1" not in frontend_url)
+
+            # Base path for Vite/CRA - only needed in production where we use proxy URLs
+            base_path = f"/api/v1/preview/{project_id}/" if is_production else "/"
+
             if technology == Technology.NODEJS_VITE:
-                # Vite serves at root path, nginx handles the /sandbox/{port} routing
-                run_command = f"npm run dev -- --host 0.0.0.0 --port 5173"
-                logger.info(f"[ContainerExecutor] Using Vite at root path (nginx gateway routing)")
+                # Vite: Use --base flag to set the public base path
+                # This makes Vite generate correct asset URLs like /api/v1/preview/{project_id}/src/main.tsx
+                run_command = f"npm run dev -- --host 0.0.0.0 --port 5173 --base={base_path}"
+                logger.info(f"[ContainerExecutor] Using Vite with --base={base_path}")
 
             # Traefik routes /api/v1/preview/{project_id}/... to container
             # NO stripPrefix - Vite expects the full path to match its --base
@@ -652,7 +663,11 @@ class ContainerExecutor:
                 environment={
                     "NODE_ENV": "development",
                     "JAVA_OPTS": "-Xmx512m",
-                    "PYTHONUNBUFFERED": "1"
+                    "PYTHONUNBUFFERED": "1",
+                    # Base path for frontend frameworks (production only)
+                    # CRA uses PUBLIC_URL, Vite can use VITE_BASE_PATH
+                    "PUBLIC_URL": base_path.rstrip('/') if is_production else "",
+                    "VITE_BASE_PATH": base_path if is_production else "/",
                 },
                 command=f"sh -c '{config.build_command} && {run_command}'" if config.build_command else run_command,
                 labels=all_labels
@@ -1163,6 +1178,7 @@ class ContainerExecutor:
             # Fatal error patterns - stop and show error (Bolt-style)
             error_patterns = [
                 r"npm ERR!",
+                r"npm error",  # npm 10+ uses lowercase "error" instead of "ERR!"
                 r"Error: Cannot find module",
                 r"Module not found",
                 r"SyntaxError:",
@@ -1175,6 +1191,8 @@ class ContainerExecutor:
                 r"Traceback \(most recent call last\)",
                 r"ImportError:",
                 r"ModuleNotFoundError:",
+                r"404 Not Found",  # npm registry 404
+                r"E404",  # npm error code E404
             ]
 
             # Use asyncio queue for thread-safe async log streaming
@@ -1287,6 +1305,48 @@ class ContainerExecutor:
 
             # Cleanup
             executor.shutdown(wait=False)
+
+            # Check if container crashed (for auto-fixer to catch errors)
+            if not server_started and not has_fatal_error:
+                try:
+                    container.reload()
+                    container_status = container.status
+                    logger.info(f"[ContainerExecutor] Container status after stream end: {container_status}")
+
+                    if container_status == "exited":
+                        # Container crashed - get exit code and logs
+                        exit_code = container.attrs.get('State', {}).get('ExitCode', -1)
+                        logger.error(f"[ContainerExecutor] Container exited with code {exit_code}")
+
+                        if exit_code != 0:
+                            # Fetch container logs (even from stopped container)
+                            try:
+                                crash_logs = container.logs(tail=100).decode('utf-8', errors='ignore')
+                                if crash_logs:
+                                    logger.error(f"[ContainerExecutor] Container crash logs:\n{crash_logs[:1000]}")
+
+                                    # Parse logs for error lines
+                                    for log_line in crash_logs.split('\n'):
+                                        log_line = log_line.strip()
+                                        if log_line:
+                                            # Check for npm/build errors
+                                            if any(err in log_line.lower() for err in ['error', 'err!', 'failed', 'not found', '404']):
+                                                error_lines.append(log_line)
+                                                log_bus.add_docker_error(log_line)
+                                            else:
+                                                log_bus.add_docker_log(log_line)
+
+                                    # Mark as fatal error if we found error lines
+                                    if error_lines:
+                                        has_fatal_error = True
+                                        log_bus.add_build_error(f"Container crashed (exit code {exit_code}): {error_lines[0]}")
+                                        yield f"\n❌ Container crashed with exit code {exit_code}\n"
+                                        for err_line in error_lines[:10]:  # Show first 10 error lines
+                                            yield f"🔴 {err_line}\n"
+                            except Exception as log_err:
+                                logger.error(f"[ContainerExecutor] Failed to get crash logs: {log_err}")
+                except Exception as reload_err:
+                    logger.warning(f"[ContainerExecutor] Failed to check container status: {reload_err}")
 
             # Handle fatal error - do NOT enable preview (Bolt-style health gate)
             if has_fatal_error:

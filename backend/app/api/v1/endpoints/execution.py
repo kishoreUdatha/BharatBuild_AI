@@ -170,6 +170,13 @@ class FixErrorRequest(BaseModel):
     error_logs: Optional[List[str]] = None  # Additional error logs from terminal
 
 
+class FixTerminalErrorRequest(BaseModel):
+    """Request model for terminal/build error auto-fixing (Bolt.new style)"""
+    error_output: str  # Full stderr/stdout from failed command
+    exit_code: int = 1  # Exit code from failed command
+    command: Optional[str] = None  # The command that failed
+
+
 @router.post("/run/{project_id}")
 async def run_project(
     project_id: str,
@@ -539,6 +546,89 @@ async def fix_runtime_error(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/fix-terminal/{project_id}")
+async def fix_terminal_error(
+    project_id: str,
+    request: FixTerminalErrorRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Auto-fix terminal/build errors using rule-based fixes first, then AI.
+
+    This implements Bolt.new-style terminal error fixing:
+    1. Classify error into known categories (dependency, port, command, etc.)
+    2. Apply rule-based fix if available (NO AI - fast & cheap)
+    3. Escalate to AI only if rules fail
+    4. Return fix details for frontend to apply
+
+    Returns:
+    - fixed: bool - whether a fix was applied
+    - fix_type: "rule" | "ai" | null
+    - fix: Object with fix details
+    - needs_ai: bool - if AI intervention is needed
+    - errors: List of classified errors
+    - retry_allowed: bool - if more retries are allowed
+    """
+    from app.services.terminal_error_fixer import get_terminal_fixer
+
+    # Verify project ownership
+    if current_user and not await verify_project_ownership(project_id, current_user, db):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+
+    try:
+        # Touch the project to keep it alive
+        touch_project(project_id)
+
+        # Get project path
+        user_id = str(current_user.id) if current_user else None
+        project_path = await get_project_path_async(project_id, user_id)
+
+        if not project_path:
+            raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+
+        # Get or create terminal fixer for this project
+        fixer = get_terminal_fixer(project_id, project_path, user_id)
+
+        # Analyze and attempt fix
+        result = await fixer.analyze_and_fix(
+            error_output=request.error_output,
+            exit_code=request.exit_code,
+            command=request.command
+        )
+
+        logger.info(f"[TerminalFixer] Result for {project_id}: fixed={result['fixed']}, fix_type={result['fix_type']}, needs_ai={result['needs_ai']}")
+
+        # If rule-based fix applied and we're using EC2, run the fix command
+        if result['fixed'] and result['fix'] and result['fix'].get('command'):
+            sandbox_docker_host = _os.environ.get("SANDBOX_DOCKER_HOST")
+            if sandbox_docker_host:
+                # TODO: Execute fix command in container on EC2
+                # For now, return the command for frontend to trigger re-run
+                result['requires_rerun'] = True
+
+        # If AI is needed, call the existing fix endpoint logic
+        if result['needs_ai'] and result['errors']:
+            primary_error = result['errors'][0] if result['errors'] else {}
+            result['ai_context'] = {
+                'error_category': primary_error.get('category'),
+                'root_cause': primary_error.get('root_cause'),
+                'affected_file': primary_error.get('affected_file'),
+                'missing_module': primary_error.get('missing_module'),
+            }
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fixing terminal error for {project_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _get_available_port(start_port: int = 3001) -> int:
     """Find an available port starting from start_port"""
     import socket
@@ -583,6 +673,10 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
         r"Error:",
         r"ERROR:",
         r"error:",
+        r"\[ERROR\]",           # esbuild [ERROR] format
+        r"No matching export",  # esbuild export mismatch
+        r"Failed to resolve",   # Vite resolve errors
+        r"does not provide an export named",  # ESM export errors
         r"SyntaxError:",
         r"ReferenceError:",
         r"TypeError:",
@@ -842,6 +936,14 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                         output = str(output)
                     except Exception:
                         continue
+
+                # Check for error marker from container_executor
+                if output.startswith("__ERROR__:"):
+                    error_msg = output.split("__ERROR__:", 1)[1].strip()
+                    docker_error = error_msg
+                    log_bus.add_docker_error(error_msg)
+                    logger.error(f"[Execution] Container error: {error_msg}")
+                    continue
 
                 # Check for server started markers
                 if output.startswith("__SERVER_STARTED__:") or output.startswith("_PREVIEW_URL_:"):

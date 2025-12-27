@@ -142,6 +142,42 @@ C / C++:
 - Compilation errors, linker errors
 - CMake/Make build failures
 
+NPM / YARN DEPENDENCY ERRORS:
+- npm error E404 / 404 Not Found: Package doesn't exist on npm registry
+  - SOLUTION: Remove the non-existent package from BOTH package.json AND package-lock.json
+  - In package.json: Remove the line from dependencies or devDependencies
+  - In package-lock.json: Find and remove all entries for the package (search for the package name)
+  - If the package was needed, find an alternative or remove the import from code
+- npm ERESOLVE: Dependency resolution conflict
+  - SOLUTION: Check for conflicting version requirements in package.json
+- Missing peer dependency: Add the required peer dependency to package.json
+- IMPORTANT: Always check BOTH package.json AND package-lock.json for npm errors!
+
+VITE / ESBUILD DEPENDENCY SCAN ERRORS:
+- "Failed to scan for dependencies from entries": Module import can't be resolved
+  - SOLUTION: Find and remove/fix the bad import statement in the source code
+  - Search source files (.tsx, .ts, .jsx, .js) for imports of non-existent packages
+  - Either remove the import entirely, or replace with an alternative package
+- "Could not resolve": Same as above - module not found
+- "Failed to resolve import": The import path is wrong or package doesn't exist
+  - Check if the package is in package.json - if not, either add it or remove the import
+- IMPORT ANALYSIS: When you see "[IMPORT ANALYSIS - MISSING DEPENDENCIES]" in the context,
+  this shows imports that are NOT in package.json. These are the problematic imports!
+  - For each listed import, either:
+    a) Remove the import statement from the source file if the package is not needed
+    b) Replace with an alternative package that IS in package.json
+    c) If the import is from code that should be removed entirely, delete that code
+
+EXPORT MISMATCH ERRORS (esbuild "No matching export"):
+- When you see "[EXPORT MISMATCH ERRORS - FIX THESE FIRST!]" in the context, these are CRITICAL!
+- Error: "No matching export in 'file.tsx' for import 'ComponentName'"
+  - This means the file exists but doesn't export what's being imported
+  - SOLUTION: Open the file and add the missing export
+  - If the file has `export default Component`, change to `export const ComponentName = Component` or add named export
+  - If using React Context, make sure BOTH the context AND the provider are exported:
+    Example: `export const AuthContext = createContext(...); export const AuthProvider = ...`
+  - Check if there's a typo in the export name vs import name
+
 IMPORTANT RULES:
 - If the output shows SUCCESS (build success, server started, etc.) - respond with "NO_FIX_NEEDED"
 - Only fix ACTUAL errors, not warnings or info messages
@@ -150,6 +186,7 @@ IMPORTANT RULES:
 - Fix import/include errors, syntax errors, type errors
 - For CORS errors, update backend CORS configuration
 - For missing dependencies, suggest installing OR fix the import path
+- For npm 404 errors (package not found), REMOVE the non-existent package from package.json
 
 CRITICAL - PARTIAL FILE HANDLING:
 - When you see "[PARTIAL FILE - SHOWING LINES X-Y of Z total lines]", you are seeing ONLY A PORTION of the file
@@ -577,12 +614,14 @@ class SimpleFixer:
             model = self._select_model(complexity)
 
             # COST OPTIMIZATION #3: Gather SMALLER context (only error-mentioned files + key configs)
-            context_files = await self._gather_context_optimized(project_path, context, errors)
+            # Also returns modified context with export mismatch info if detected
+            context_files, enriched_context = await self._gather_context_optimized(project_path, context, errors)
 
             # Build error summary
             error_summary = self._format_errors(errors)
 
             # COST OPTIMIZATION #3: Smaller context window
+            # Use enriched_context which may contain export mismatch info
             context_limit = 8000 if complexity == ErrorComplexity.SIMPLE else 12000
             user_message = f"""Error Source: {errors[0].get('source', 'unknown') if errors else 'unknown'}
 Command: {command or 'N/A'}
@@ -592,7 +631,7 @@ Errors:
 
 Full Context:
 ```
-{context[-context_limit:] if context else '(no context)'}
+{enriched_context[-context_limit:] if enriched_context else '(no context)'}
 ```
 
 Project Files:
@@ -634,9 +673,8 @@ Please analyze and fix these errors. If the output shows success or warnings onl
             # Process tool calls
             files_modified = []
             iterations = 0
-            # COST OPTIMIZATION #4: Lower max iterations (3 instead of 5)
-            # If 3 tries don't fix it, ask user or try different approach
-            max_iterations = 3
+            # Allow up to 5 iterations for complex fixes
+            max_iterations = 5
 
             while response.stop_reason == "tool_use" and iterations < max_iterations:
                 iterations += 1
@@ -645,11 +683,19 @@ Please analyze and fix these errors. If the output shows success or warnings onl
                 tool_results = []
                 for block in response.content:
                     if block.type == "tool_use":
+                        # Log all tool calls for debugging
+                        logger.info(f"[SimpleFixer] Tool call: {block.name} on {block.input.get('path', 'N/A')}")
+                        if block.name == "str_replace":
+                            old_str_preview = block.input.get('old_str', '')[:100]
+                            logger.info(f"[SimpleFixer] str_replace old_str preview: {old_str_preview!r}")
+
                         result = await self._execute_tool(
                             project_path,
                             block.name,
                             block.input
                         )
+                        logger.info(f"[SimpleFixer] Tool result: {result[:200] if result else 'None'}")
+
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
@@ -694,6 +740,104 @@ Please analyze and fix these errors. If the output shows success or warnings onl
                 patches_applied=0
             )
 
+    def _find_missing_imports(self, project_path: Path, source_files: List[str]) -> List[Dict[str, str]]:
+        """
+        Analyze source files to find imports that are NOT in package.json.
+        This helps identify which import is causing Vite "Failed to scan" errors.
+
+        Returns list of: [{"import": "package-name", "file": "src/App.tsx"}, ...]
+        """
+        import json
+
+        # Step 1: Get all dependencies from package.json files
+        dependencies = set()
+        package_json_paths = [
+            project_path / "package.json",
+            project_path / "frontend" / "package.json",
+            project_path / "client" / "package.json",
+        ]
+
+        for pkg_path in package_json_paths:
+            if pkg_path.exists():
+                try:
+                    with open(pkg_path, 'r', encoding='utf-8') as f:
+                        pkg_data = json.load(f)
+                        # Get all dependencies
+                        for key in ["dependencies", "devDependencies", "peerDependencies"]:
+                            if key in pkg_data and isinstance(pkg_data[key], dict):
+                                dependencies.update(pkg_data[key].keys())
+                except Exception as e:
+                    logger.debug(f"[SimpleFixer] Could not parse {pkg_path}: {e}")
+
+        if not dependencies:
+            logger.debug("[SimpleFixer] No dependencies found in package.json")
+            return []
+
+        logger.debug(f"[SimpleFixer] Found {len(dependencies)} packages in package.json")
+
+        # Step 2: Extract imports from source files
+        # Pattern matches: import ... from 'package' or import 'package' or require('package')
+        import_pattern = re.compile(
+            r'''(?:import\s+.*?\s+from\s+['"]([^'"./][^'"]*?)['"])|'''  # import X from 'package'
+            r'''(?:import\s+['"]([^'"./][^'"]*?)['"])|'''  # import 'package'
+            r'''(?:require\s*\(\s*['"]([^'"./][^'"]*?)['"]\s*\))'''  # require('package')
+        )
+
+        missing_imports = []
+
+        for src_file in source_files[:15]:  # Limit to 15 files
+            src_path = project_path / src_file
+            if not src_path.exists():
+                continue
+
+            try:
+                content = src_path.read_text(encoding='utf-8')
+                matches = import_pattern.findall(content)
+
+                for match in matches:
+                    # match is a tuple of groups, get the non-empty one
+                    package_name = match[0] or match[1] or match[2]
+                    if not package_name:
+                        continue
+
+                    # Extract the base package name (e.g., '@types/react' -> '@types/react', 'lodash/merge' -> 'lodash')
+                    if package_name.startswith('@'):
+                        # Scoped package: @scope/package or @scope/package/subpath
+                        parts = package_name.split('/')
+                        base_package = '/'.join(parts[:2]) if len(parts) >= 2 else package_name
+                    else:
+                        # Regular package: package or package/subpath
+                        base_package = package_name.split('/')[0]
+
+                    # Check if package is in dependencies
+                    if base_package not in dependencies:
+                        # Also check if it's a built-in Node.js module
+                        builtin_modules = {
+                            'fs', 'path', 'os', 'util', 'events', 'stream', 'http', 'https',
+                            'url', 'querystring', 'crypto', 'zlib', 'buffer', 'child_process',
+                            'cluster', 'dgram', 'dns', 'net', 'tls', 'readline', 'repl',
+                            'vm', 'assert', 'console', 'process', 'module'
+                        }
+
+                        if base_package not in builtin_modules:
+                            # Check if we already added this import
+                            already_added = any(
+                                m['import'] == base_package and m['file'] == src_file
+                                for m in missing_imports
+                            )
+                            if not already_added:
+                                missing_imports.append({
+                                    "import": base_package,
+                                    "file": src_file,
+                                    "full_import": package_name
+                                })
+                                logger.info(f"[SimpleFixer] Missing import: '{base_package}' in {src_file}")
+
+            except Exception as e:
+                logger.debug(f"[SimpleFixer] Could not analyze {src_file}: {e}")
+
+        return missing_imports
+
     def _extract_relevant_lines(self, content: str, error_line: int, context_lines: int = 25) -> str:
         """
         Extract only relevant lines around the error.
@@ -717,7 +861,7 @@ Please analyze and fix these errors. If the output shows success or warnings onl
 
         return '\n'.join(result_lines)
 
-    async def _gather_context_optimized(self, project_path: Path, output: str, errors: List[Dict[str, Any]]) -> Dict[str, str]:
+    async def _gather_context_optimized(self, project_path: Path, output: str, errors: List[Dict[str, Any]]) -> tuple:
         """
         COST OPTIMIZATION #3: Gather SMALLER context.
 
@@ -725,11 +869,20 @@ Please analyze and fix these errors. If the output shows success or warnings onl
         - For files with errors: Send only ~50 lines around error (not full file!)
         - For config files: Send full content (usually small)
         - Result: ~90% token reduction for large files
+
+        Returns:
+            tuple: (files_dict, modified_output) - files and output with export mismatch info added
         """
         files = {}
 
+        # Initialize variables for import error detection
+        missing_imports = []
+        is_vite_scan_error = False
+
         # KEY config files only (small files, send full content)
+        # Include both root-level AND multi-folder project paths
         key_configs = [
+            # Root level
             "package.json",
             "tsconfig.json",
             "vite.config.ts",
@@ -737,6 +890,16 @@ Please analyze and fix these errors. If the output shows success or warnings onl
             "pom.xml",
             "requirements.txt",
             "pyproject.toml",
+            # Multi-folder fullstack projects
+            "frontend/package.json",
+            "frontend/tsconfig.json",
+            "frontend/vite.config.ts",
+            "frontend/vite.config.js",
+            "backend/package.json",
+            "backend/requirements.txt",
+            "backend/pom.xml",
+            "client/package.json",
+            "server/package.json",
         ]
 
         for rel_path in key_configs:
@@ -800,6 +963,181 @@ Please analyze and fix these errors. If the output shows success or warnings onl
         for sf in simple_files:
             if sf not in mentioned:
                 mentioned.append(sf)
+
+        # CRITICAL: Detect npm/yarn dependency errors and add package.json
+        # npm errors like "npm error code E404", "npm ERR! 404", "Cannot find module" need package.json
+        output_lower = output.lower()
+        npm_error_indicators = [
+            'npm error',       # npm 10+
+            'npm err!',        # npm < 10
+            'e404',            # npm error code
+            '404 not found',   # registry 404
+            'enoent',          # file not found
+            'eresolve',        # dependency resolution error
+            'peer dep',        # peer dependency
+            'missing peer',    # missing peer dependency
+            'could not resolve',
+            'unable to resolve',
+            'cannot find module',
+            'module not found',
+            'no matching version',
+            'yarn error',      # yarn errors
+        ]
+        is_npm_error = any(indicator in output_lower for indicator in npm_error_indicators)
+
+        if is_npm_error:
+            logger.info(f"[SimpleFixer] Detected npm/dependency error - ensuring package.json files are included")
+            # Add package.json AND package-lock.json files to mentioned list for npm errors
+            # IMPORTANT: package-lock.json can cache old dependencies even after package.json is fixed
+            npm_files_to_check = [
+                "package.json",
+                "package-lock.json",
+                "frontend/package.json",
+                "frontend/package-lock.json",
+                "backend/package.json",
+                "backend/package-lock.json",
+                "client/package.json",
+                "client/package-lock.json",
+                "server/package.json",
+                "server/package-lock.json",
+            ]
+            for npm_file in npm_files_to_check:
+                npm_path = project_path / npm_file
+                if npm_path.exists() and npm_file not in mentioned:
+                    mentioned.append(npm_file)
+                    logger.info(f"[SimpleFixer] Added {npm_file} for npm error context")
+
+        # CRITICAL: Check for esbuild export mismatch errors
+        # Pattern 1: No matching export in "file.tsx" for import "ExportName"
+        # Debug: Log if we see the export mismatch indicator
+        if 'matching export' in output_lower or 'no matching export' in output_lower:
+            logger.info(f"[SimpleFixer] Detected 'matching export' in output - checking for mismatch pattern")
+        export_mismatch_pattern = re.compile(
+            r'No matching export in ["\']([^"\']+)["\'] for import ["\']([^"\']+)["\']',
+            re.IGNORECASE
+        )
+        export_mismatches = export_mismatch_pattern.findall(output)
+        logger.info(f"[SimpleFixer] Export mismatch pattern search: found {len(export_mismatches)} matches")
+
+        # Pattern 2: Extract files from esbuild file:line:column format (e.g., src/hooks/useAuth.ts:2:9)
+        # This catches errors even when full message isn't passed
+        esbuild_file_pattern = re.compile(
+            r'(?:^|\s)([a-zA-Z0-9_\-./]+\.(?:tsx?|jsx?|vue|svelte)):(\d+):(\d+)',
+            re.MULTILINE
+        )
+        esbuild_files = esbuild_file_pattern.findall(output)
+        if esbuild_files:
+            logger.info(f"[SimpleFixer] Found {len(esbuild_files)} files from esbuild errors")
+            for file_path, line, col in esbuild_files[:5]:
+                normalized_path = file_path
+                if not normalized_path.startswith('frontend/'):
+                    frontend_path = f"frontend/{file_path}"
+                    if (project_path / frontend_path).exists():
+                        normalized_path = frontend_path
+                if normalized_path not in mentioned:
+                    mentioned.insert(0, normalized_path)
+                    logger.info(f"[SimpleFixer] Added {normalized_path} from esbuild error (line {line})")
+
+        # Pattern 3: Extract import paths from error messages (e.g., from '../contexts/AuthContext')
+        import_path_pattern = re.compile(
+            r"from\s+['\"]([^'\"]+)['\"]",
+            re.IGNORECASE
+        )
+        import_paths = import_path_pattern.findall(output)
+        for imp_path in import_paths[:5]:
+            # Convert relative import to file path
+            if imp_path.startswith('.'):
+                # Try common extensions
+                for ext in ['.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts']:
+                    # Normalize path (remove leading ./ or ../)
+                    clean_path = imp_path.lstrip('.').lstrip('/')
+                    test_path = f"frontend/src/{clean_path}{ext}"
+                    if (project_path / test_path).exists() and test_path not in mentioned:
+                        mentioned.insert(0, test_path)
+                        logger.info(f"[SimpleFixer] Added {test_path} from import path")
+                        break
+        if export_mismatches:
+            logger.info(f"[SimpleFixer] Found {len(export_mismatches)} export mismatch errors")
+            for source_file, export_name in export_mismatches:
+                # Normalize path - handle both src/ and frontend/src/ paths
+                normalized_path = source_file
+                if not normalized_path.startswith('frontend/'):
+                    # Try with frontend/ prefix for multi-folder projects
+                    frontend_path = f"frontend/{source_file}"
+                    if (project_path / frontend_path).exists():
+                        normalized_path = frontend_path
+
+                if normalized_path not in mentioned:
+                    mentioned.insert(0, normalized_path)  # Prioritize these files at the beginning
+                    logger.info(f"[SimpleFixer] Added {normalized_path} (missing export '{export_name}')")
+
+            # Add export mismatch info to the output for AI context - this is CRITICAL
+            export_info = "\n\n[EXPORT MISMATCH ERRORS - FIX THESE FIRST!]\n"
+            for source_file, export_name in export_mismatches:
+                export_info += f"- File '{source_file}' does NOT export '{export_name}'\n"
+                export_info += f"  FIX: Add 'export {{ {export_name} }}' or 'export const {export_name} = ...' to the file\n"
+            export_info += "[END EXPORT MISMATCH ERRORS]\n"
+            output = output + export_info
+            logger.info(f"[SimpleFixer] Added export mismatch info to context: {len(export_mismatches)} errors")
+
+        # CRITICAL: Detect Vite/esbuild scan errors - these need source files searched
+        # Error like "Failed to scan for dependencies from entries" means bad import in code
+        vite_scan_indicators = [
+            'failed to scan for dependencies',
+            'could not resolve',
+            'failed to resolve import',
+            'cannot find module',
+            'module not found',
+            'failed to load',
+            'pre-transform error',
+        ]
+        is_vite_scan_error = any(indicator in output_lower for indicator in vite_scan_indicators)  # Update the pre-initialized variable
+
+        if is_vite_scan_error:
+            logger.info(f"[SimpleFixer] Detected Vite/esbuild scan error - searching source files")
+            # Search for source files that might have bad imports
+            source_patterns = [
+                "src/**/*.tsx", "src/**/*.ts", "src/**/*.jsx", "src/**/*.js",
+                "frontend/src/**/*.tsx", "frontend/src/**/*.ts",
+                "frontend/src/**/*.jsx", "frontend/src/**/*.js",
+                "*.tsx", "*.ts", "*.jsx", "*.js",
+            ]
+            import glob as glob_module
+            source_files_found = []
+            for pattern in source_patterns:
+                matches = list(project_path.glob(pattern))
+                for match in matches[:20]:  # Limit to first 20 per pattern
+                    rel_path = str(match.relative_to(project_path)).replace("\\", "/")
+                    if rel_path not in mentioned and rel_path not in source_files_found:
+                        # Skip node_modules and common non-source dirs
+                        if 'node_modules' not in rel_path and 'dist' not in rel_path:
+                            source_files_found.append(rel_path)
+
+            # Add source files to mentioned (limit to 10 most relevant)
+            for src_file in source_files_found[:10]:
+                if src_file not in mentioned:
+                    mentioned.append(src_file)
+                    logger.info(f"[SimpleFixer] Added {src_file} for Vite scan error")
+
+            # CRITICAL: Analyze imports vs dependencies to find missing packages
+            # This helps the AI know exactly which import is problematic
+            missing_imports = self._find_missing_imports(project_path, source_files_found)
+            if missing_imports:
+                # Add missing imports info to the output for AI context
+                missing_info = "\n\n[IMPORT ANALYSIS - MISSING DEPENDENCIES]\n"
+                for imp in missing_imports[:5]:  # Limit to 5 most relevant
+                    missing_info += f"- Import '{imp['import']}' in {imp['file']} is NOT in package.json\n"
+                missing_info += "[END IMPORT ANALYSIS]\n"
+                output = output + missing_info
+                logger.info(f"[SimpleFixer] Found {len(missing_imports)} missing imports: {[m['import'] for m in missing_imports[:5]]}")
+
+                # CRITICAL: Prioritize files with missing imports - add them first with FULL content
+                # so the AI can see and fix the import statements
+                for imp in missing_imports[:3]:  # Top 3 files with bad imports
+                    bad_file = imp['file']
+                    if bad_file not in mentioned:
+                        mentioned.insert(0, bad_file)  # Add at the beginning
+                        logger.info(f"[SimpleFixer] Prioritized {bad_file} (has missing import)")
 
         # If no files found, check for common entry files (ALL technologies)
         # Trigger if we have error_lines OR if we detected any error keywords in output
@@ -896,15 +1234,40 @@ Please analyze and fix these errors. If the output shows success or warnings onl
                         files[path_fragment] = content
                         logger.info(f"[SimpleFixer] Sent full file {path_fragment} ({len(content)} chars)")
                     else:
-                        # Large file without line number - send last portion (where syntax errors usually are)
-                        # Get last 100 lines where SyntaxError is likely
+                        # Large file without line number - check if this file has missing imports
                         lines = content.split('\n')
-                        last_100 = '\n'.join(lines[-100:]) if len(lines) > 100 else content
-                        files[path_fragment] = f"""[PARTIAL FILE - SHOWING LAST {min(100, len(lines))} LINES of {total_lines} total]
+                        has_missing_import = any(
+                            m.get('file') == path_fragment
+                            for m in missing_imports
+                        ) if missing_imports else False
+
+                        if has_missing_import or is_vite_scan_error:
+                            # For import errors, send FIRST 80 lines (imports) + LAST 40 lines
+                            first_80 = '\n'.join(lines[:80]) if len(lines) > 80 else content
+                            last_40 = '\n'.join(lines[-40:]) if len(lines) > 120 else ''
+                            if last_40:
+                                files[path_fragment] = f"""[PARTIAL FILE - SHOWING FIRST 80 + LAST 40 LINES of {total_lines} total]
+[⚠️ USE str_replace TOOL ONLY - file is larger than shown]
+{first_80}
+
+... [MIDDLE SECTION OMITTED - {len(lines) - 120} lines] ...
+
+{last_40}
+[END PARTIAL FILE]"""
+                            else:
+                                files[path_fragment] = f"""[PARTIAL FILE - FIRST 80 LINES of {total_lines} total]
+[⚠️ USE str_replace TOOL ONLY - file is larger than shown]
+{first_80}
+[END PARTIAL FILE]"""
+                            logger.info(f"[SimpleFixer] Sent first 80 + last 40 lines of {path_fragment} (import error)")
+                        else:
+                            # For other errors, send last 100 lines (where syntax errors usually are)
+                            last_100 = '\n'.join(lines[-100:]) if len(lines) > 100 else content
+                            files[path_fragment] = f"""[PARTIAL FILE - SHOWING LAST {min(100, len(lines))} LINES of {total_lines} total]
 [⚠️ USE str_replace TOOL ONLY - file is larger than shown]
 {last_100}
 [END PARTIAL FILE]"""
-                        logger.info(f"[SimpleFixer] Sent last 100 lines of {path_fragment} (no line number available)")
+                            logger.info(f"[SimpleFixer] Sent last 100 lines of {path_fragment} (no line number available)")
                     continue
                 except (IOError, OSError, UnicodeDecodeError) as e:
                     logger.debug(f"Could not read file {path_fragment}: {e}")
@@ -940,7 +1303,8 @@ Please analyze and fix these errors. If the output shows success or warnings onl
 
         total_chars = sum(len(v) for v in files.values())
         logger.info(f"[SimpleFixer] Gathered {len(files)} context files (~{total_chars} chars, optimized)")
-        return files
+        # Return both files and modified output (output may have export mismatch info added)
+        return files, output
 
     def _format_errors(self, errors: List[Dict[str, Any]]) -> str:
         """Format errors for the prompt"""
@@ -1247,16 +1611,18 @@ Please analyze and fix these errors. If the output shows success or warnings onl
             model = self._select_model(complexity)
 
             # COST OPTIMIZATION #3: Gather SMALLER context
-            context_files = await self._gather_context_optimized(project_path, output, errors)
+            # Also returns modified output with export mismatch info if detected
+            context_files, enriched_output = await self._gather_context_optimized(project_path, output, errors)
 
             # COST OPTIMIZATION #3: Smaller context window based on complexity
+            # Use enriched_output which may contain export mismatch info
             context_limit = 6000 if complexity == ErrorComplexity.SIMPLE else 10000
             user_message = f"""Command: {command}
 Exit code: {exit_code}
 
 Full output:
 ```
-{output[-context_limit:]}
+{enriched_output[-context_limit:]}
 ```
 
 Project files:
@@ -1293,9 +1659,8 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
             # Process tool calls
             files_modified = []
             iterations = 0
-            # COST OPTIMIZATION #4: Lower max iterations (3 instead of 5)
-            # If 3 tries don't fix it, ask user or try different approach
-            max_iterations = 3
+            # Allow up to 5 iterations for complex fixes
+            max_iterations = 5
 
             while response.stop_reason == "tool_use" and iterations < max_iterations:
                 iterations += 1
