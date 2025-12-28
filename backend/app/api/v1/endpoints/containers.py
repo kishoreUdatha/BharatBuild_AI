@@ -24,18 +24,15 @@ from pydantic import BaseModel, Field
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# Sandbox public URL for preview (use sandbox EC2 public IP/domain in production)
-SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
+# =============================================================================
+# PREVIEW URL - Use centralized function
+# =============================================================================
+from app.core.preview_url import get_preview_url as _get_preview_url_centralized
 
 
-def _get_preview_url(port: int) -> str:
-    """Generate preview URL using sandbox public URL or localhost fallback"""
-    if SANDBOX_PUBLIC_URL and SANDBOX_PUBLIC_URL != "http://localhost":
-        base = SANDBOX_PUBLIC_URL.rstrip('/')
-        if ':' in base.split('/')[-1]:
-            base = ':'.join(base.rsplit(':', 1)[:-1])
-        return f"{base}:{port}"
-    return f"http://localhost:{port}"
+def _get_preview_url(port: int, project_id: str = None) -> str:
+    """Generate preview URL - delegates to centralized function."""
+    return _get_preview_url_centralized(port, project_id or "")
 
 from app.modules.execution import (
     get_container_manager,
@@ -219,6 +216,11 @@ async def create_container(
             config=config,
         )
 
+        # CRITICAL #4: Validate port mappings exist
+        if not container.port_mappings:
+            logger.warning(f"[Container] Container created but no port mappings for {project_id}")
+            # Still continue - the reverse proxy might work
+
         # Build preview URLs - Direct port URLs work better on Windows Docker
         preview_urls = {}
         primary_url = None
@@ -227,6 +229,11 @@ async def create_container(
         priority_ports = [3000, 5173, 5174, 4173, 8080, 8000, 5000]
 
         for container_port, host_port in container.port_mappings.items():
+            # CRITICAL #4: Validate host_port is valid
+            if host_port is None or host_port == 0:
+                logger.warning(f"[Container] Invalid host_port for container_port {container_port}")
+                continue
+
             direct_url = _get_preview_url(host_port)
             preview_urls[str(container_port)] = direct_url
 
@@ -236,8 +243,10 @@ async def create_container(
 
         # Fallback to first available port if no priority port found
         if primary_url is None and container.port_mappings:
-            first_host_port = list(container.port_mappings.values())[0]
-            primary_url = _get_preview_url(first_host_port)
+            valid_ports = [p for p in container.port_mappings.values() if p and p != 0]
+            if valid_ports:
+                first_host_port = valid_ports[0]
+                primary_url = _get_preview_url(first_host_port)
 
         # Also include reverse proxy as fallback (may work in some setups)
         bolt_style_preview_url = f"/api/v1/preview/{project_id}/"
@@ -486,7 +495,16 @@ async def stop_container(project_id: str):
     Stop a project container.
 
     Container can be restarted later. Files are preserved.
+    Gap #15: Verifies container is actually stopped after the request.
+    Gap #16: Invalidates preview cache to ensure stale IPs aren't used.
     """
+    # Gap #16: Invalidate preview cache immediately
+    try:
+        from app.api.v1.endpoints.preview_proxy import invalidate_preview_cache
+        invalidate_preview_cache(project_id)
+    except Exception as cache_err:
+        logger.warning(f"[Container] Failed to invalidate preview cache: {cache_err}")
+
     manager = safe_get_container_manager()
 
     success = await manager.stop_container(project_id)
@@ -494,7 +512,35 @@ async def stop_container(project_id: str):
     if not success:
         raise HTTPException(status_code=404, detail="Container not found")
 
-    return {"success": True, "message": "Container stopped"}
+    # Gap #15: Verify container is actually stopped
+    verification_attempts = 0
+    max_verification_attempts = 3
+    container_stopped = False
+
+    while verification_attempts < max_verification_attempts:
+        await asyncio.sleep(0.5)  # Wait for container state to update
+        verification_attempts += 1
+
+        try:
+            status = await manager.get_container_status(project_id)
+            if status is None or status.get("status") in ["stopped", "exited", None]:
+                container_stopped = True
+                break
+            logger.warning(f"[Container] Stop verification attempt {verification_attempts}: container still {status.get('status')}")
+        except Exception as e:
+            # Container not found means it's stopped
+            container_stopped = True
+            break
+
+    if not container_stopped:
+        logger.warning(f"[Container] Failed to verify container stop for {project_id} after {max_verification_attempts} attempts")
+        return {
+            "success": True,
+            "message": "Container stop requested but verification failed",
+            "verified": False
+        }
+
+    return {"success": True, "message": "Container stopped", "verified": True}
 
 
 @router.delete("/{project_id}")
@@ -579,6 +625,43 @@ async def batch_write_files(
     }
 
 
+class FileVerifyRequest(BaseModel):
+    """Verify files exist in container"""
+    paths: List[str]
+
+
+@router.post("/{project_id}/files/verify")
+async def verify_files(
+    project_id: str,
+    request: FileVerifyRequest,
+):
+    """
+    HIGH #2: Verify that specified files exist in the container.
+    Used to confirm file sync completed before running commands.
+    """
+    manager = safe_get_container_manager()
+
+    existing = []
+    missing = []
+
+    for path in request.paths:
+        try:
+            content = await manager.read_file(project_id, path)
+            if content is not None:
+                existing.append(path)
+            else:
+                missing.append(path)
+        except Exception:
+            missing.append(path)
+
+    return {
+        "all_exist": len(missing) == 0,
+        "existing": existing,
+        "missing": missing,
+        "total": len(request.paths)
+    }
+
+
 class BatchCommandRequest(BaseModel):
     """Execute multiple commands in sequence"""
     commands: List[str]
@@ -625,3 +708,143 @@ async def batch_execute_commands(
             "Connection": "keep-alive",
         }
     )
+
+
+# =============================================================================
+# ERROR RECOVERY ENDPOINTS
+# =============================================================================
+
+class RecoveryRequest(BaseModel):
+    """Request to recover from an error"""
+    error_type: str = Field(..., description="Type of error: missing_files, s3_failure, container_crash, fix_exhausted")
+    context: dict = Field(default_factory=dict, description="Additional context for recovery")
+
+
+class RecoveryResponse(BaseModel):
+    """Response from recovery attempt"""
+    success: bool
+    action_taken: str
+    message: str
+    details: Optional[dict] = None
+    next_steps: List[str] = []
+
+
+@router.post("/{project_id}/recover", response_model=RecoveryResponse)
+async def recover_from_error(
+    project_id: str,
+    request: RecoveryRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Attempt to recover from a run-time error.
+
+    Error types:
+    - missing_files: Critical files missing from workspace
+    - s3_failure: S3 download failed
+    - container_crash: Container crashed or unhealthy
+    - fix_exhausted: Auto-fix exhausted all attempts
+
+    Returns recovery result with next steps if manual action needed.
+    """
+    from app.services.error_recovery import error_recovery, RecoveryType
+
+    # Map string to enum
+    error_type_map = {
+        "missing_files": RecoveryType.MISSING_FILES,
+        "s3_failure": RecoveryType.S3_FAILURE,
+        "container_crash": RecoveryType.CONTAINER_CRASH,
+        "fix_exhausted": RecoveryType.FIX_EXHAUSTED,
+        "validation_failed": RecoveryType.VALIDATION_FAILED,
+    }
+
+    recovery_type = error_type_map.get(request.error_type.lower())
+    if not recovery_type:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid error type: {request.error_type}. Valid types: {list(error_type_map.keys())}"
+        )
+
+    # Add project_id to context
+    context = request.context.copy()
+    context["project_id"] = project_id
+
+    # Attempt recovery
+    result = await error_recovery.recover(
+        error_type=recovery_type,
+        context=context,
+        db=db
+    )
+
+    return RecoveryResponse(
+        success=result.success,
+        action_taken=result.action_taken.value,
+        message=result.message,
+        details=result.details,
+        next_steps=result.next_steps
+    )
+
+
+@router.post("/{project_id}/restart")
+async def restart_container(project_id: str):
+    """
+    Restart a container (stop and start).
+
+    Use this when container is in an unhealthy state.
+    """
+    from app.services.error_recovery import error_recovery, RecoveryType
+    from app.services.container_executor import container_executor
+
+    # Get container ID
+    container_info = container_executor.active_containers.get(project_id)
+    if not container_info:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    # Attempt recovery via restart
+    result = await error_recovery.recover(
+        error_type=RecoveryType.CONTAINER_CRASH,
+        context={
+            "project_id": project_id,
+            "container_id": container_info["container_id"],
+        }
+    )
+
+    return {
+        "success": result.success,
+        "message": result.message,
+        "next_steps": result.next_steps
+    }
+
+
+@router.post("/{project_id}/regenerate")
+async def regenerate_project(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Regenerate project files from saved plan.
+
+    Use this when files are corrupted or missing and need to be recreated from scratch.
+    """
+    try:
+        # Check if regeneration is available
+        status = await workspace_restore.check_workspace_status(project_id, db)
+
+        if not status.get("can_regenerate"):
+            return {
+                "success": False,
+                "message": "No saved plan available for regeneration",
+                "can_restore": status.get("can_restore", False)
+            }
+
+        # Trigger regeneration
+        result = await workspace_restore.regenerate_from_plan(project_id, db)
+
+        return {
+            "success": result.get("success", False),
+            "message": result.get("message", "Regeneration context prepared"),
+            "regeneration_context": result.get("regeneration_context"),
+            "instructions": result.get("instructions")
+        }
+    except Exception as e:
+        logger.error(f"[Containers] Regeneration failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

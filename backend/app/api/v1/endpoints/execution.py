@@ -922,8 +922,37 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
         output_count = 0
         max_outputs = 10000
 
+        # CRITICAL #1: Adaptive stream timeout based on phase
+        # - npm install phase: 10 minutes (large projects need time)
+        # - dev server phase: 3 minutes (should start quickly after install)
+        MAX_INSTALL_DURATION_SECONDS = 600  # 10 minutes for npm install
+        MAX_DEV_SERVER_DURATION_SECONDS = 180  # 3 minutes for dev server
+        stream_start_time = asyncio.get_event_loop().time()
+        install_complete = False  # Track when install finishes
+
+        # Gap #5: Per-phase timeout tracking
+        phase_start_time = stream_start_time
+        current_phase = "install"  # Start in install phase
+
         try:
+            last_keepalive = stream_start_time  # HIGH #6: Track keepalive timing
+
             async for output in docker_executor.run_project(project_id, project_path, effective_user_id):
+                # CRITICAL #1: Adaptive stream watchdog based on phase
+                elapsed = asyncio.get_event_loop().time() - stream_start_time
+                max_duration = MAX_DEV_SERVER_DURATION_SECONDS if install_complete else MAX_INSTALL_DURATION_SECONDS
+
+                if elapsed > max_duration:
+                    phase_name = "dev server" if install_complete else "install"
+                    logger.warning(f"[Execution] Stream watchdog triggered after {elapsed:.0f}s ({phase_name} phase) for {project_id}")
+                    yield emit("error", f"Stream timeout: {phase_name} phase exceeded {max_duration}s")
+                    break
+
+                # HIGH #6: Send keepalive every 30s to prevent CloudFront/ALB timeout
+                now = asyncio.get_event_loop().time()
+                if now - last_keepalive > 30:
+                    yield emit("keepalive", "...")
+                    last_keepalive = now
                 output_count += 1
                 if output_count > max_outputs:
                     logger.warning(f"[Execution] Max output count reached for {project_id}")
@@ -944,6 +973,63 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                     log_bus.add_docker_error(error_msg)
                     logger.error(f"[Execution] Container error: {error_msg}")
                     continue
+
+                # CRITICAL #1: Detect install completion to switch to dev server phase
+                # Extended patterns to catch all npm/yarn/pnpm/pip output formats
+                install_complete_patterns = [
+                    # npm patterns (various versions)
+                    r"added \d+ packages?",
+                    r"up to date",
+                    r"audited \d+ packages?",
+                    r"packages are looking for funding",
+                    r"npm WARN",  # Warnings after install
+                    r"found \d+ vulnerabilities",
+                    r"removed \d+ packages?",  # npm uninstall completion
+                    r"changed \d+ packages?",
+                    # yarn patterns
+                    r"Done in \d+",
+                    r"success Saved lockfile",
+                    r"YN0000.*Done",
+                    # pnpm patterns
+                    r"Progress: resolved \d+",
+                    r"dependencies:",
+                    r"devDependencies:",
+                    # pip patterns
+                    r"Successfully installed",
+                    r"Installing collected packages",
+                    r"Requirement already satisfied",
+                    # Maven patterns
+                    r"BUILD SUCCESS",
+                    r"\[INFO\] BUILD",
+                    # Gradle patterns
+                    r"Dependencies resolved",
+                    r"BUILD SUCCESSFUL",
+                    # Generic completion markers
+                    r"npm run dev",  # Command transition indicates install done
+                    r"npm start",
+                    r"yarn dev",
+                    r"yarn start",
+                ]
+
+                # CRITICAL #1: Also detect dev server start commands as install completion
+                dev_server_start_patterns = [
+                    r"vite",
+                    r"next dev",
+                    r"react-scripts start",
+                    r"webpack serve",
+                    r"ng serve",
+                    r"nuxt dev",
+                ]
+
+                if not install_complete:
+                    is_install_done = any(re.search(p, output, re.IGNORECASE) for p in install_complete_patterns)
+                    is_dev_starting = any(re.search(p, output, re.IGNORECASE) for p in dev_server_start_patterns)
+
+                    if is_install_done or is_dev_starting:
+                        install_complete = True
+                        phase_start_time = asyncio.get_event_loop().time()  # Reset phase timer
+                        current_phase = "dev_server"
+                        logger.info(f"[Execution] Install phase complete, switching to dev_server phase")
 
                 # Check for server started markers
                 if output.startswith("__SERVER_STARTED__:") or output.startswith("_PREVIEW_URL_:"):
