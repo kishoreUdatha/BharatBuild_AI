@@ -500,19 +500,19 @@ class TestContextGathering:
         """Test that config files are included in context"""
         errors = [{"message": "Error", "file": "src/index.js", "line": 10}]
 
-        context = await fixer._gather_context_optimized(temp_project, "", errors)
+        files, _ = await fixer._gather_context_optimized(temp_project, "", errors)
 
-        assert "package.json" in context
+        assert "package.json" in files
 
     @pytest.mark.asyncio
     async def test_gather_context_extracts_relevant_lines(self, fixer, temp_project):
         """Test that only relevant lines are extracted for large files"""
         errors = [{"message": "Error at line 50", "file": "src/index.js", "line": 50}]
 
-        context = await fixer._gather_context_optimized(temp_project, "line 50", errors)
+        files, _ = await fixer._gather_context_optimized(temp_project, "line 50", errors)
 
         # Should have the file in context
-        assert any("index.js" in key for key in context.keys())
+        assert any("index.js" in key for key in files.keys())
 
 
 class TestTokenTracking:
