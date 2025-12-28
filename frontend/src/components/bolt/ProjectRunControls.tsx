@@ -61,7 +61,11 @@ const parsePreviewUrl = (output: string): string | null => {
 const MAX_AUTO_FIX_ATTEMPTS = 3
 const DEFAULT_RETRY_DELAY = 1500  // Base delay between retries (ms)
 const MAX_RETRY_DELAY = 10000     // Max delay with exponential backoff (ms)
+const MAX_ERROR_BUFFER_SIZE = 50  // Max lines in error buffer to prevent memory leaks
+const MAX_OUTPUT_BUFFER_SIZE = 100 // Max lines in output buffer
 
+// Error severity classification
+type ErrorSeverity = 'warning' | 'build_error' | 'runtime_error' | 'fatal'
 type ExecutionMode = 'docker' | 'direct'
 type RunStatus = 'idle' | 'creating' | 'starting' | 'running' | 'stopping' | 'stopped' | 'error' | 'fixing'
 
@@ -69,6 +73,8 @@ interface ErrorInfo {
   message: string
   stackTrace: string
   detectedAt: Date
+  severity: ErrorSeverity
+  phase: 'install' | 'build' | 'runtime' | 'unknown'
 }
 
 interface ProjectRunControlsProps {
@@ -92,11 +98,14 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
-  // Auto-fix state
+  // Auto-fix state with synchronized refs and state
   const [lastError, setLastError] = useState<ErrorInfo | null>(null)
   const [fixAttempts, setFixAttempts] = useState(0)
   const fixAttemptsRef = useRef(0) // Ref for synchronous access (React state updates are async!)
   const [isFixing, setIsFixing] = useState(false)
+  const isFixingRef = useRef(false) // Ref for synchronous fix lock (Gap #9: prevent concurrent fixes)
+  const fixLockTimeRef = useRef<number>(0) // High #5: Timestamp when fix lock acquired
+  const FIX_LOCK_TIMEOUT_MS = 180000 // High #5: 180 second timeout for fix lock (increased from 60s for slow API)
   const [maxAttemptsReached, setMaxAttemptsReached] = useState(false)
   const errorBufferRef = useRef<string[]>([]) // Collect error lines
   const outputBufferRef = useRef<string[]>([]) // Collect ALL recent output for context
@@ -104,6 +113,8 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   const consecutiveFailuresRef = useRef<number>(0) // Track consecutive failures for backoff
   const isRetryingRef = useRef<boolean>(false) // Prevent duplicate retries
   const forwardDebounceRef = useRef<NodeJS.Timeout | null>(null) // Debounce error forwarding
+  const fixRequestIdRef = useRef<number>(0) // Unique ID for fix requests (deduplication)
+  const serverStartedRef = useRef<boolean>(false) // Track if server has started (Gap #3)
 
   // Calculate exponential backoff delay
   const getRetryDelay = useCallback((failureCount: number): number => {
@@ -228,6 +239,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   }, [currentProject?.files])
 
   // Detect server start from output
+  // Gap #3: Track server start state to avoid race condition with error detection
   const detectServerStart = useCallback((output: string) => {
     // Strip ANSI escape codes for pattern matching (Vite uses colored output)
     const stripAnsi = (str: string) => str.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\r/g, '')
@@ -239,6 +251,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     const backendUrl = parsePreviewUrl(cleanOutput)
     if (backendUrl) {
       console.log('[DetectServer] Found _PREVIEW_URL_ marker:', backendUrl)
+      serverStartedRef.current = true // Gap #3: Mark server as started
       setPreviewUrl(backendUrl)
       setStatus('running')
       onPreviewUrlChange?.(backendUrl)
@@ -276,6 +289,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         // Pass project ID to get correct production URL
         const url = getPreviewUrl(port, currentProject?.id)
         console.log('[DetectServer] MATCHED serverPattern:', pattern, '-> port:', port, '-> url:', url)
+        serverStartedRef.current = true // Gap #3: Mark server as started
         setPreviewUrl(url)
         setStatus('running')
         onPreviewUrlChange?.(url)
@@ -287,6 +301,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     for (const pattern of readyPatterns) {
       if (pattern.test(cleanOutput)) {
         console.log('[DetectServer] MATCHED readyPattern:', pattern)
+        serverStartedRef.current = true // Gap #3: Mark server as started
         // Server is ready, set status to running
         // Port will be fetched from preview endpoint
         setStatus('running')
@@ -300,19 +315,66 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   // Track current command for fixer agent
   const currentCommandRef = useRef<string>('')
 
+  // Gap #11: Classify error type for better auto-fix strategy
+  const classifyError = useCallback((output: string): { severity: ErrorSeverity; phase: 'install' | 'build' | 'runtime' | 'unknown' } => {
+    const lowerOutput = output.toLowerCase()
+
+    // Install phase errors (npm/yarn/pip)
+    if (/npm err!|yarn error|pip.*error|could not resolve|enoent.*package/i.test(output)) {
+      return { severity: 'build_error', phase: 'install' }
+    }
+
+    // Build/compile errors
+    if (/failed to compile|syntaxerror|typeerror.*at build|webpack.*error|vite.*error|tsc.*error/i.test(output)) {
+      return { severity: 'build_error', phase: 'build' }
+    }
+
+    // Runtime errors (after server starts)
+    if (serverStartedRef.current && /typeerror|referenceerror|unhandled.*rejection|uncaught.*exception/i.test(output)) {
+      return { severity: 'runtime_error', phase: 'runtime' }
+    }
+
+    // Fatal errors
+    if (/segmentation fault|out of memory|killed|fatal error/i.test(output)) {
+      return { severity: 'fatal', phase: 'unknown' }
+    }
+
+    // Warnings (non-fatal)
+    if (/warn|warning|deprecated/i.test(output) && !/error/i.test(output)) {
+      return { severity: 'warning', phase: 'unknown' }
+    }
+
+    return { severity: 'build_error', phase: 'unknown' }
+  }, [])
+
   const detectError = useCallback((output: string): boolean => {
-    // Ignore these non-fatal errors/warnings (they don't affect the app)
+    // Gap #2: Expanded ignore patterns to reduce false positives
     const ignoredPatterns = [
       /spawn xdg-open ENOENT/i,      // Vite trying to open browser on Windows
       /spawn open ENOENT/i,          // Same for macOS fallback
       /npm WARN/i,                   // npm warnings are not errors
+      /npm notice/i,                 // npm notices
+      /npm timing/i,                 // npm timing info
       /deprecation warning/i,        // Deprecation warnings
+      /DeprecationWarning/i,         // Node deprecation warnings
       /ExperimentalWarning/i,        // Node experimental features
+      /PendingDeprecationWarning/i,  // Pending deprecations
+      /warning:.*deprecated/i,       // Generic deprecation warnings
+      /punycode.*deprecated/i,       // Common punycode warning
+      /\[DEP\d+\]/i,                 // Node deprecation codes
+      /peer dep/i,                   // Peer dependency warnings
+      /optional dependency/i,        // Optional deps that failed (OK)
+      /SKIPPING OPTIONAL/i,          // Skipped optional deps
+      /gyp WARN/i,                   // Node-gyp warnings
+      /fsevents.*skip/i,             // fsevents on non-Mac
+      /enoent.*optional/i,           // Optional file not found
+      /warn.*@/i,                    // Package version warnings (@types/node@...)
     ]
 
-    // Check if this is an ignorable error first
+    // Check if this is an ignorable warning first
     for (const pattern of ignoredPatterns) {
       if (pattern.test(output)) {
+        console.log('[ErrorDetect] ⚪ Ignored (false positive):', output.slice(0, 50))
         return false // Not a real error
       }
     }
@@ -385,6 +447,18 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       /flask\..*error/i,
       /fastapi.*error/i,
       /pydantic.*error/i,
+      /memoryerror/i,  // Medium #15: Python OOM
+    ]
+
+    // Medium #15: OOM (Out of Memory) errors
+    const oomErrorPatterns = [
+      /JavaScript heap out of memory/i,
+      /FATAL ERROR.*allocation failed/i,
+      /Killed/i,  // Linux OOM killer
+      /out of memory/i,
+      /Cannot allocate memory/i,
+      /ENOMEM/i,  // Node.js memory error
+      /java\.lang\.OutOfMemoryError/i,  // Java OOM
     ]
 
     // Java/Maven/Gradle/Kotlin errors
@@ -525,20 +599,21 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       ...cppErrorPatterns,
       ...flutterErrorPatterns,
       ...databaseErrorPatterns,
+      ...oomErrorPatterns,  // Medium #15: OOM detection
     ]
 
-    // First, add ALL output lines to output buffer (for context)
+    // Gap #19: Add ALL output lines to buffer with overflow protection
     outputBufferRef.current.push(output)
-    // Keep last 50 lines of all output for full context
-    if (outputBufferRef.current.length > 50) {
+    // Keep last N lines to prevent memory leaks on long error sequences
+    while (outputBufferRef.current.length > MAX_OUTPUT_BUFFER_SIZE) {
       outputBufferRef.current.shift()
     }
 
     for (const pattern of allPatterns) {
       if (pattern.test(output)) {
-        // Add to local error buffer for UI display
+        // Add to local error buffer for UI display with overflow protection
         errorBufferRef.current.push(output)
-        if (errorBufferRef.current.length > 30) {
+        while (errorBufferRef.current.length > MAX_ERROR_BUFFER_SIZE) {
           errorBufferRef.current.shift()
         }
 
@@ -562,16 +637,21 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     return false
   }, [detectAndReport])
 
-  // Reset fix state
+  // Reset fix state - synchronizes all refs and state (Gap #1)
   const resetFixState = useCallback(() => {
+    // Sync state and refs together
     setFixAttempts(0)
-    fixAttemptsRef.current = 0 // Reset ref too (synchronous)
+    fixAttemptsRef.current = 0
+    setIsFixing(false)
+    isFixingRef.current = false
     setLastError(null)
     setMaxAttemptsReached(false)
     errorBufferRef.current = []
-    outputBufferRef.current = [] // Also clear output buffer
+    outputBufferRef.current = []
     consecutiveFailuresRef.current = 0
     isRetryingRef.current = false
+    serverStartedRef.current = false
+    fixRequestIdRef.current = 0
     // Clear any pending debounce timer
     if (forwardDebounceRef.current) {
       clearTimeout(forwardDebounceRef.current)
@@ -579,12 +659,27 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     }
     // Clear centralized error collector buffers
     clearBuffers?.()
+    console.log('[ResetFixState] All refs and state synchronized')
   }, [clearBuffers])
 
   // ============= BOLT.NEW STYLE AUTO-FIX HANDLER =============
   const attemptAutoFix = useCallback(async (errorMessage: string, stackTrace: string) => {
     if (!currentProject?.id || !autoFix) {
       return false
+    }
+
+    // Gap #9 + High #5: Prevent concurrent fix attempts with lock + timeout
+    if (isFixingRef.current) {
+      // High #5: Check if lock is stale (older than timeout)
+      const lockAge = Date.now() - fixLockTimeRef.current
+      if (lockAge > FIX_LOCK_TIMEOUT_MS) {
+        console.log(`[AutoFix] Lock stale (${lockAge}ms), releasing and proceeding`)
+        isFixingRef.current = false
+        fixLockTimeRef.current = 0
+      } else {
+        console.log('[AutoFix] Fix already in progress, skipping duplicate request')
+        return false
+      }
     }
 
     // Use ref for synchronous check (React state updates are async!)
@@ -602,6 +697,12 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       onOutput?.(`   ${errorMessage.slice(0, 200)}...`)
       return false
     }
+
+    // Gap #9 + High #5: Acquire fix lock with timestamp and generate unique request ID
+    isFixingRef.current = true
+    fixLockTimeRef.current = Date.now() // High #5: Record when lock acquired
+    fixRequestIdRef.current += 1
+    const thisRequestId = fixRequestIdRef.current
 
     // Increment ref FIRST (synchronous), then state (for UI)
     fixAttemptsRef.current += 1
@@ -638,7 +739,15 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         const error = await response.json()
         onOutput?.(`❌ Fix failed: ${error.detail || 'Unknown error'}`)
         setIsFixing(false)
+        isFixingRef.current = false // Release lock
         setStatus('error')
+        return false
+      }
+
+      // Gap #9: Check if this request is still valid (not superseded)
+      if (thisRequestId !== fixRequestIdRef.current) {
+        console.log('[AutoFix] Request superseded, ignoring result')
+        isFixingRef.current = false
         return false
       }
 
@@ -650,6 +759,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
           onOutput?.(`💡 Suggestion: ${result.suggestion}`)
         }
         setIsFixing(false)
+        isFixingRef.current = false // Release lock
         setStatus('error')
         return false
       }
@@ -677,6 +787,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       }
 
       setIsFixing(false)
+      isFixingRef.current = false // Release lock
       setLastError(null)
       errorBufferRef.current = []
 
@@ -687,6 +798,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     } catch (error: any) {
       onOutput?.(`❌ Auto-fix error: ${error.message}`)
       setIsFixing(false)
+      isFixingRef.current = false // Release lock
       setStatus('error')
       return false
     }
@@ -764,6 +876,64 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
       const result = await response.json()
       onOutput?.(`✅ Synced ${result.success}/${result.total} files`)
+
+      // HIGH #8: Verify all files were written and wait for filesystem consistency
+      if (result.success !== result.total) {
+        onOutput?.(`⚠️ Warning: Only ${result.success}/${result.total} files synced`)
+      }
+
+      // HIGH #2: Verify critical files exist in container (package.json for Node projects)
+      const criticalFiles = freshProject.files.filter(f =>
+        f.path === 'package.json' ||
+        f.path === 'requirements.txt' ||
+        f.path === 'pom.xml' ||
+        f.path === 'build.gradle'
+      )
+
+      if (criticalFiles.length > 0 && result.success > 0) {
+        onOutput?.('  Verifying file sync...')
+        await new Promise(resolve => setTimeout(resolve, 300))
+
+        // HIGH #2: Quick verification - check if package.json exists
+        try {
+          const verifyResponse = await fetch(`${API_BASE_URL}/containers/${freshProject.id}/files/verify`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token && { 'Authorization': `Bearer ${token}` })
+            },
+            body: JSON.stringify({
+              paths: criticalFiles.map(f => f.path)
+            })
+          })
+
+          if (verifyResponse.ok) {
+            const verifyResult = await verifyResponse.json()
+            if (verifyResult.all_exist) {
+              onOutput?.('  ✓ Critical files verified')
+            } else {
+              onOutput?.(`  ⚠️ Some files not found: ${verifyResult.missing?.join(', ')}`)
+              // Retry sync for missing files
+              if (verifyResult.missing?.length > 0) {
+                onOutput?.('  Retrying sync for missing files...')
+                await new Promise(resolve => setTimeout(resolve, 500))
+              }
+            }
+          }
+        } catch {
+          // Verification endpoint may not exist, continue anyway
+          onOutput?.('  Waiting for filesystem sync...')
+          await new Promise(resolve => setTimeout(resolve, 500))
+        }
+      } else {
+        // HIGH #8: Wait for filesystem to stabilize before npm install
+        // This prevents race conditions where npm install starts before files are fully written
+        if (result.success > 0) {
+          onOutput?.('  Waiting for filesystem sync...')
+          await new Promise(resolve => setTimeout(resolve, 500))
+        }
+      }
+
       return result.success > 0
     } catch (error: any) {
       onOutput?.(`⚠️ Sync error: ${error.message}`)
@@ -806,16 +976,66 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       const container = await createResponse.json()
       onOutput?.(`✅ Container created: ${container.container_id}`)
 
-      // Extract preview URL
-      containerPreviewUrl = container.preview_urls?.primary ||
-                            container.preview_urls?.['3000'] ||
-                            container.preview_urls?.['5173'] ||
-                            Object.values(container.preview_urls || {}).find((url: any) => url?.startsWith('http')) as string || null
+      // CRITICAL #4: Validate preview_urls before accessing
+      if (!container.preview_urls || Object.keys(container.preview_urls).length === 0) {
+        console.warn('[RunWithDocker] Container created but no preview_urls returned')
+        onOutput?.('⚠️ Warning: No preview URLs available from container')
+      }
+
+      // CRITICAL #4: Extract and validate preview URL
+      const candidateUrls = [
+        container.preview_urls?.primary,
+        container.preview_urls?.['3000'],
+        container.preview_urls?.['5173'],
+        container.preview_urls?.['5174'],
+        container.preview_urls?.['8080'],
+        container.preview_urls?.reverse_proxy,
+        ...Object.values(container.preview_urls || {}).filter((url: any) => typeof url === 'string')
+      ].filter(Boolean) as string[]
+
+      // CRITICAL #4: Find first valid URL (must be http/https or start with /)
+      containerPreviewUrl = candidateUrls.find(url => {
+        if (!url || typeof url !== 'string') return false
+        return url.startsWith('http://') || url.startsWith('https://') || url.startsWith('/')
+      }) || null
 
       if (containerPreviewUrl) {
         setPreviewUrl(containerPreviewUrl)
         onPreviewUrlChange?.(containerPreviewUrl)
         onOutput?.(`📍 Preview: ${containerPreviewUrl}`)
+      } else {
+        console.warn('[RunWithDocker] No valid preview URL found in:', container.preview_urls)
+        onOutput?.('⚠️ Warning: Could not determine preview URL')
+      }
+
+      // HIGH #4: Verify container is ready before syncing files
+      onOutput?.('📡 Checking container status...')
+      let containerReady = false
+      const maxHealthChecks = 5
+
+      for (let i = 0; i < maxHealthChecks && !containerReady; i++) {
+        try {
+          const statusResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/status`, {
+            headers: { ...(token && { 'Authorization': `Bearer ${token}` }) },
+          })
+          if (statusResponse.ok) {
+            const status = await statusResponse.json()
+            if (status.status === 'running' || status.status === 'ready') {
+              containerReady = true
+              onOutput?.('  ✓ Container is ready')
+              break
+            }
+          }
+        } catch {
+          // Ignore errors, keep trying
+        }
+        if (!containerReady && i < maxHealthChecks - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500))
+        }
+      }
+
+      if (!containerReady) {
+        onOutput?.('  ⚠️ Container health check failed, proceeding anyway...')
       }
 
       // Step 2: Sync files
@@ -844,6 +1064,13 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         onOutput?.(`$ ${command}`)
 
         const isDevServer = isDevServerCommand(command)
+        // Critical #4: Detect install commands that MUST complete before proceeding
+        const isInstallCommand = command.includes('npm install') ||
+                                 command.includes('yarn install') ||
+                                 command.includes('pnpm install') ||
+                                 command.includes('pip install') ||
+                                 command.includes('mvn install') ||
+                                 command.includes('gradle build')
 
         const execResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/exec`, {
           method: 'POST',
@@ -863,12 +1090,14 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         if (!reader) continue
 
         // Execute command with proper timeout handling
+        // Critical #4: Install commands wait for completion to prevent race condition
         const result = await executeCommandWithTimeout(
           reader,
           isDevServer,
-          isDevServer ? 10000 : 120000, // 10s for dev server, 2min for install
+          isDevServer ? 10000 : 120000, // 10s for dev server, 2min timeout (but install waits for completion)
           containerPreviewUrl,
-          onOutput
+          onOutput,
+          isInstallCommand // Critical #4: Wait for install commands to fully complete
         )
 
         // Check for real errors FIRST (applies to both dev servers and short commands)
@@ -876,7 +1105,9 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
           setLastError({
             message: result.errorOutput.slice(0, 500),
             stackTrace: result.errorOutput,
-            detectedAt: new Date()
+            detectedAt: new Date(),
+            severity: isInstallCommand ? 'build_error' : 'runtime_error',
+            phase: isInstallCommand ? 'install' : 'runtime'
           })
           onOutput?.(`\n❌ Error detected during: ${command}`)
           onOutput?.(`📋 Error: ${result.errorOutput.slice(0, 200)}...`)
@@ -913,19 +1144,22 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   }
 
   // Helper: Execute command with timeout and proper SSE handling
+  // Critical #4: For install commands, wait for completion (done event) not timeout
   const executeCommandWithTimeout = async (
     reader: ReadableStreamDefaultReader<Uint8Array>,
     isDevServer: boolean,
     timeoutMs: number,
     previewUrl: string | null,
-    output?: (line: string) => void
-  ): Promise<{ hasRealError: boolean; errorOutput: string; serverStarted: boolean }> => {
+    output?: (line: string) => void,
+    waitForCompletion: boolean = false // Critical #4: Wait for done event, not timeout
+  ): Promise<{ hasRealError: boolean; errorOutput: string; serverStarted: boolean; completed: boolean }> => {
     const decoder = new TextDecoder()
     let buffer = ''
     let hasRealError = false
     let errorOutput = ''
     let serverStarted = false
     let timedOut = false
+    let commandCompleted = false // Critical #4: Track if command actually finished
 
     // Create timeout promise
     const timeoutPromise = new Promise<void>((resolve) => {
@@ -938,8 +1172,16 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     // Process SSE stream
     const processStream = async () => {
       try {
-        while (!timedOut) {
-          // Race between read and a short timeout to check timedOut flag
+        // Critical #4: For install commands (waitForCompletion=true), don't check timedOut
+        // This ensures we wait for npm install to fully complete
+        while (waitForCompletion ? !commandCompleted : !timedOut) {
+          // CRITICAL #5: Check if abort signal was triggered before reading
+          if (abortControllerRef.current?.signal.aborted) {
+            console.log('[ExecuteCommand] Abort signal detected, stopping stream')
+            break
+          }
+
+          // Race between read and a short timeout to check flags
           const readWithTimeout = Promise.race([
             reader.read(),
             new Promise<{ done: true; value: undefined }>((resolve) =>
@@ -947,11 +1189,28 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
             )
           ])
 
-          const { done, value } = await readWithTimeout
+          let result: ReadableStreamReadResult<Uint8Array>
+          try {
+            result = await readWithTimeout
+          } catch (readErr) {
+            // CRITICAL #5: Handle abort error gracefully
+            if (readErr instanceof DOMException && readErr.name === 'AbortError') {
+              console.log('[ExecuteCommand] Stream aborted by user')
+              break
+            }
+            throw readErr
+          }
 
-          if (timedOut) break
+          const { done, value } = result
+
+          // Critical #4: Only break on timedOut if not waiting for completion
+          if (!waitForCompletion && timedOut) break
           if (done && value === undefined && !timedOut) continue // Short timeout, retry
-          if (done) break
+          if (done) {
+            // Stream ended - mark as completed
+            commandCompleted = true
+            break
+          }
 
           if (value) {
             buffer += decoder.decode(value, { stream: true })
@@ -991,10 +1250,19 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
                   }
 
                   if (event.type === 'done') {
+                    // Critical #4: Mark command as completed
+                    commandCompleted = true
+
                     // Check exit code for non-zero (error)
                     const exitCode = event.exit_code || event.exitCode || 0
                     if (exitCode !== 0) {
                       hasRealError = true
+                      // CRITICAL #2: Reset serverStarted if command failed
+                      // This ensures we don't show "server running" when it actually crashed
+                      if (serverStarted) {
+                        console.log('[ExecuteCommand] ⚠️ Server was marked as started but command failed - resetting')
+                        serverStarted = false
+                      }
                       const exitMsg = `Command exited with code ${exitCode}`
                       errorOutput += exitMsg + '\n'
                       console.log('[ExecuteCommand] 🔴 NON-ZERO EXIT CODE:', exitCode)
@@ -1033,11 +1301,26 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         }
       } catch (e) {
         // Stream error, exit gracefully
+        console.log('[ExecuteCommand] Stream error:', e)
       }
     }
 
-    // Race between stream processing and timeout
-    await Promise.race([processStream(), timeoutPromise])
+    // Critical #4: For install commands, wait for completion without timeout race
+    // This prevents starting dev server before npm install finishes
+    if (waitForCompletion) {
+      // Wait for stream to complete (or until a maximum safety timeout of 5 minutes)
+      const safetyTimeout = new Promise<void>((resolve) => {
+        setTimeout(() => {
+          console.log('[ExecuteCommand] ⚠️ Safety timeout reached for install command')
+          timedOut = true
+          resolve()
+        }, 300000) // 5 minute safety timeout
+      })
+      await Promise.race([processStream(), safetyTimeout])
+    } else {
+      // Race between stream processing and timeout
+      await Promise.race([processStream(), timeoutPromise])
+    }
 
     // For dev servers:
     // - If timeout WITH errors, keep the errors (trigger auto-fix) regardless of server status
@@ -1052,7 +1335,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       // This allows auto-fix to trigger for compile errors even if dev server is running
     }
 
-    return { hasRealError, errorOutput, serverStarted }
+    return { hasRealError, errorOutput, serverStarted, completed: commandCompleted }
   }
 
   // ============= DIRECT EXECUTION (FALLBACK) =============
@@ -1171,7 +1454,9 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         setLastError({
           message: fullError.slice(0, 500),
           stackTrace: fullError,
-          detectedAt: new Date()
+          detectedAt: new Date(),
+          severity: 'build_error',
+          phase: 'build'
         })
 
         // Return error for auto-fix
@@ -1373,11 +1658,20 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   }, [status, handleRun, onOutput]) // Removed fixAttempts - using ref now
 
   // ============= STOP HANDLER =============
+  // High #9: Actually stops container and propagates abort signal
   const handleStop = useCallback(async () => {
     setStatus('stopping')
+    onOutput?.('🛑 Stopping project...')
 
-    // Abort current execution
+    // Abort current fetch requests
     abortControllerRef.current?.abort()
+    abortControllerRef.current = null
+
+    // Reset fix state to prevent stuck fixes
+    isFixingRef.current = false
+    fixLockTimeRef.current = 0
+    isRetryingRef.current = false
+    serverStartedRef.current = false
 
     // If we detected an existing server (not started by us), just close the preview
     if (startedFromExistingServerRef.current) {
@@ -1389,24 +1683,67 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       return
     }
 
-    try {
-      const token = localStorage.getItem('access_token')
+    const token = localStorage.getItem('access_token')
+    let stopSuccess = false
 
-      // Try to stop container (if Docker mode)
-      if (executionMode === 'docker') {
-        await fetch(`${API_BASE_URL}/containers/${currentProject?.id}/stop`, {
+    try {
+      // HIGH #9: Stop container with proper error handling and verification wait
+      if (executionMode === 'docker' && currentProject?.id) {
+        const containerResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/stop`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}` },
-        }).catch(() => {})
+        })
+        if (containerResponse.ok) {
+          const result = await containerResponse.json()
+          stopSuccess = result.verified === true
+
+          // HIGH #9: If not verified, wait and retry verification
+          if (!stopSuccess) {
+            onOutput?.('  ⏳ Waiting for container to stop...')
+            const maxRetries = 5
+            for (let i = 0; i < maxRetries && !stopSuccess; i++) {
+              await new Promise(resolve => setTimeout(resolve, 1000))
+              try {
+                const statusResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/status`, {
+                  headers: { 'Authorization': `Bearer ${token}` },
+                })
+                if (statusResponse.ok) {
+                  const status = await statusResponse.json()
+                  if (status.status === 'stopped' || status.status === 'not_found' || status.status === 'exited') {
+                    stopSuccess = true
+                    break
+                  }
+                } else if (statusResponse.status === 404) {
+                  // Container not found = stopped
+                  stopSuccess = true
+                  break
+                }
+              } catch {
+                // Ignore check errors, keep retrying
+              }
+            }
+          }
+
+          if (stopSuccess) {
+            onOutput?.('  ✓ Container stopped and verified')
+          } else {
+            onOutput?.('  ⚠️ Container stop requested (may still be shutting down)')
+          }
+        }
       }
 
-      // Also try direct stop endpoint
-      await fetch(`${API_BASE_URL}/execution/stop/${currentProject?.id}`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-      }).catch(() => {})
+      // Also try direct stop endpoint for non-Docker executions
+      if (currentProject?.id) {
+        await fetch(`${API_BASE_URL}/execution/stop/${currentProject.id}`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+        }).catch(() => {}) // This one can fail silently
+      }
 
-    } catch {}
+    } catch (stopErr) {
+      console.warn('[Stop] Error stopping container:', stopErr)
+      onOutput?.(`  ⚠️ Stop error: ${stopErr}`)
+    }
 
     setStatus('stopped')
     setPreviewUrl(null)

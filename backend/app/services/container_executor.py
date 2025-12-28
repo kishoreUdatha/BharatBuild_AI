@@ -17,61 +17,41 @@ Supported Technologies:
 import asyncio
 import docker
 from docker.errors import NotFound, APIError
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, AsyncGenerator, List
 from dataclasses import dataclass
 from enum import Enum
 import uuid
 import os
+import re
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from app.core.logging_config import logger
+from app.services.execution_context import (
+    ExecutionContext,
+    ExecutionState,
+    RuntimeType,
+    create_execution_context,
+    get_execution_context,
+    remove_execution_context,
+)
 
-# Note: Environment variables are read dynamically in _get_preview_url() to handle late initialization
+# =============================================================================
+# PREVIEW URL - Use centralized function from app.core.preview_url
+# =============================================================================
+# IMPORTANT: All preview URL generation goes through this single function
+# to ensure consistency between frontend and backend.
+
+from app.core.preview_url import get_preview_url as _get_preview_url_impl, check_preview_health
 
 
 def _get_preview_url(port: int, project_id: str = None) -> str:
     """
-    Generate preview URL using API proxy pattern (production) or localhost (development).
+    Generate preview URL - delegates to centralized function.
 
-    Production: Uses /api/v1/preview/{project_id}/ which proxies through backend
-    Development: Uses localhost:{port}
-
-    Note: Reads environment variables dynamically (not at import time) to ensure
-    they are available even if module was imported before env was configured.
+    See app.core.preview_url for implementation details.
     """
-    # Read environment variables dynamically
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip('/')
-    environment = os.getenv("ENVIRONMENT", "development")
-    sandbox_public_url = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "")
-
-    # Determine if we're in production
-    is_production = (
-        environment == "production" or
-        (frontend_url and "localhost" not in frontend_url and "127.0.0.1" not in frontend_url)
-    )
-
-    logger.info(f"[ContainerExecutor] _get_preview_url: port={port}, project_id={project_id}, "
-                f"env={environment}, frontend_url={frontend_url}, is_production={is_production}")
-
-    if is_production and project_id:
-        # Use API proxy pattern - this routes through backend preview_proxy
-        result = f"{frontend_url}/api/v1/preview/{project_id}/"
-        logger.info(f"[ContainerExecutor] Preview URL (production): {result}")
-        return result
-
-    if sandbox_public_url and sandbox_public_url != "http://localhost":
-        # Use sandbox public URL if available
-        base = sandbox_public_url.rstrip('/')
-        # Remove any existing port from base URL
-        if ':' in base.split('/')[-1]:
-            base = ':'.join(base.rsplit(':', 1)[:-1])
-        result = f"{base}:{port}"
-        logger.info(f"[ContainerExecutor] Preview URL (sandbox): {result}")
-        return result
-
-    result = f"http://localhost:{port}"
-    logger.info(f"[ContainerExecutor] Preview URL (local): {result}")
-    return result
+    return _get_preview_url_impl(port, project_id or "")
 
 
 class Technology(Enum):
@@ -124,6 +104,10 @@ class ContainerConfig:
             self.timeout_seconds = settings.CONTAINER_IDLE_TIMEOUT_SECONDS
 
 
+# MEDIUM #8: Default memory limit for containers - configurable via env
+import os as _os
+DEFAULT_CONTAINER_MEMORY = _os.environ.get("CONTAINER_MEMORY_LIMIT", "768m")
+
 # Pre-built images for each technology - Universal Preview Architecture
 TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
     # ==================== FRONTEND FRAMEWORKS ====================
@@ -132,21 +116,21 @@ TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
         build_command="npm install",
         run_command="npm run dev -- --host 0.0.0.0 --no-open",
         port=3000,
-        memory_limit="512m"
+        memory_limit=DEFAULT_CONTAINER_MEMORY  # MEDIUM #8: Increased from 512m
     ),
     Technology.NODEJS_VITE: ContainerConfig(
         image="node:20-alpine",
         build_command="npm install",
         run_command="npm run dev -- --host 0.0.0.0 --no-open",
         port=5173,  # Vite default port
-        memory_limit="512m"
+        memory_limit=DEFAULT_CONTAINER_MEMORY  # MEDIUM #8: Increased from 512m
     ),
     Technology.ANGULAR: ContainerConfig(
         image="node:20-alpine",
         build_command="npm install",
         run_command="npm run start -- --host 0.0.0.0 --port 4200 --disable-host-check",
         port=4200,
-        memory_limit="512m"
+        memory_limit=DEFAULT_CONTAINER_MEMORY  # MEDIUM #8: Increased from 512m
     ),
     Technology.REACT_NATIVE: ContainerConfig(
         image="node:20-alpine",
@@ -273,14 +257,20 @@ class ContainerExecutor:
 
     async def initialize(self):
         """Initialize Docker client"""
+        # High #7: Docker API timeout for remote mode (prevents indefinite hangs)
+        DOCKER_API_TIMEOUT = 30  # 30 seconds timeout for Docker API calls
+
         try:
             # First, try SANDBOX_DOCKER_HOST env var (for ECS -> EC2 sandbox connection)
             sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
             if sandbox_docker_host:
                 try:
-                    self.docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+                    self.docker_client = docker.DockerClient(
+                        base_url=sandbox_docker_host,
+                        timeout=DOCKER_API_TIMEOUT  # High #7: Add timeout
+                    )
                     self.docker_client.ping()
-                    logger.info(f"[ContainerExecutor] Docker client initialized via SANDBOX_DOCKER_HOST: {sandbox_docker_host}")
+                    logger.info(f"[ContainerExecutor] Docker client initialized via SANDBOX_DOCKER_HOST: {sandbox_docker_host} (timeout={DOCKER_API_TIMEOUT}s)")
                 except Exception as remote_err:
                     logger.warning(f"[ContainerExecutor] Remote Docker {sandbox_docker_host} failed: {remote_err}")
                     self.docker_client = None
@@ -295,7 +285,10 @@ class ContainerExecutor:
 
                 for socket_path in socket_paths:
                     try:
-                        self.docker_client = docker.DockerClient(base_url=socket_path)
+                        self.docker_client = docker.DockerClient(
+                            base_url=socket_path,
+                            timeout=DOCKER_API_TIMEOUT  # High #7: Add timeout
+                        )
                         self.docker_client.ping()
                         logger.info(f"[ContainerExecutor] Docker client initialized via {socket_path}")
                         break
@@ -329,6 +322,156 @@ class ContainerExecutor:
                 logger.info(f"[ContainerExecutor] Image ready: {config.image}")
             except Exception as e:
                 logger.warning(f"[ContainerExecutor] Failed to pull {config.image}: {e}")
+
+    # =========================================================================
+    # PRE-RUN VALIDATION - Ensures workspace is ready before container starts
+    # =========================================================================
+
+    async def validate_workspace(
+        self,
+        project_path: str,
+        technology: "Technology"
+    ) -> Tuple[bool, str, List[str]]:
+        """
+        Validate that workspace has all required files before running.
+
+        GUARANTEES:
+        - Critical files (package.json, etc.) exist
+        - Workspace directory is accessible
+        - Required dependencies file exists
+
+        Args:
+            project_path: Path to project workspace
+            technology: Detected technology type
+
+        Returns:
+            Tuple of (is_valid, message, missing_files)
+        """
+        path = Path(project_path)
+        missing = []
+
+        # Check if path exists
+        if not path.exists():
+            return False, f"Workspace path does not exist: {project_path}", ["workspace_directory"]
+
+        # Check if path is directory
+        if not path.is_dir():
+            return False, f"Workspace path is not a directory: {project_path}", ["workspace_directory"]
+
+        # Check for frontend subdirectory (multi-folder projects)
+        frontend_path = path / "frontend"
+        is_frontend_subdir = frontend_path.exists() and (frontend_path / "package.json").exists()
+        check_path = frontend_path if is_frontend_subdir else path
+
+        # Define required files by technology
+        required_files = {
+            Technology.NODEJS: ["package.json"],
+            Technology.NODEJS_VITE: ["package.json"],
+            Technology.REACT_NATIVE: ["package.json"],
+            Technology.ANGULAR: ["package.json", "angular.json"],
+            Technology.JAVA: [],  # any_of handled below
+            Technology.PYTHON: [],  # any_of handled below
+            Technology.PYTHON_ML: [],
+            Technology.GO: ["go.mod"],
+            Technology.FLUTTER: ["pubspec.yaml"],
+            Technology.DOTNET: [],  # .csproj or .fsproj
+        }
+
+        # Define any_of files (at least one must exist)
+        any_of_files = {
+            Technology.JAVA: ["pom.xml", "build.gradle", "build.gradle.kts"],
+            Technology.PYTHON: ["requirements.txt", "pyproject.toml", "setup.py"],
+            Technology.PYTHON_ML: ["requirements.txt", "pyproject.toml", "setup.py"],
+            Technology.DOTNET: [],  # Will check for .csproj files
+        }
+
+        # Check required files
+        for required_file in required_files.get(technology, []):
+            file_path = check_path / required_file
+            if not file_path.exists():
+                missing.append(required_file)
+
+        # Check any_of files
+        any_of = any_of_files.get(technology, [])
+        if any_of:
+            has_any = any((check_path / f).exists() for f in any_of)
+            if not has_any:
+                missing.append(f"one of: {', '.join(any_of)}")
+
+        # Check for .csproj files for .NET
+        if technology == Technology.DOTNET:
+            csproj_files = list(check_path.glob("**/*.csproj")) + list(check_path.glob("**/*.fsproj"))
+            if not csproj_files:
+                missing.append(".csproj or .fsproj file")
+
+        if missing:
+            return False, f"Missing critical files: {', '.join(missing)}", missing
+
+        # All validations passed
+        logger.info(f"[ContainerExecutor] Workspace validation passed for {project_path}")
+        return True, "Workspace validated successfully", []
+
+    async def health_check_container(
+        self,
+        container,
+        timeout: int = 30
+    ) -> Tuple[bool, str]:
+        """
+        Check if container is healthy and ready to run commands.
+
+        CHECKS:
+        1. Container is running
+        2. Container can execute basic commands
+        3. Working directory exists
+        4. Node/Python/etc. runtime is available
+
+        Args:
+            container: Docker container object
+            timeout: Timeout in seconds for health check
+
+        Returns:
+            Tuple of (is_healthy, message)
+        """
+        try:
+            # Check 1: Container is running
+            container.reload()
+            status = container.status
+            if status != "running":
+                return False, f"Container is not running (status: {status})"
+
+            # Check 2: Can execute basic command
+            try:
+                result = container.exec_run(
+                    cmd=["sh", "-c", "echo 'health_check_ok'"],
+                    demux=True,
+                    workdir="/app"
+                )
+                stdout, stderr = result.output
+                if result.exit_code != 0:
+                    return False, f"Health check command failed: {stderr.decode() if stderr else 'unknown error'}"
+                if b"health_check_ok" not in (stdout or b""):
+                    return False, "Health check command produced unexpected output"
+            except Exception as e:
+                return False, f"Failed to execute health check command: {e}"
+
+            # Check 3: Working directory exists
+            try:
+                result = container.exec_run(
+                    cmd=["sh", "-c", "test -d /app && echo 'dir_exists'"],
+                    demux=True
+                )
+                stdout, _ = result.output
+                if b"dir_exists" not in (stdout or b""):
+                    return False, "Working directory /app does not exist in container"
+            except Exception as e:
+                return False, f"Failed to check working directory: {e}"
+
+            logger.info(f"[ContainerExecutor] Container health check passed: {container.id[:12]}")
+            return True, "Container is healthy"
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Container health check failed: {e}")
+            return False, f"Health check failed: {str(e)}"
 
     def detect_technology(self, project_path: str) -> Technology:
         """
@@ -514,6 +657,208 @@ class ContainerExecutor:
 
         return Technology.UNKNOWN
 
+    def validate_technology_detection(
+        self,
+        technology: "Technology",
+        project_path: str
+    ) -> Tuple[bool, str, float]:
+        """
+        Validate that detected technology matches the actual project files.
+
+        This helps prevent running Node.js for Python projects, etc.
+
+        Args:
+            technology: The detected technology
+            project_path: Path to the project
+
+        Returns:
+            Tuple of (is_valid, message, confidence_score)
+            - is_valid: True if technology matches project files
+            - message: Description of validation result
+            - confidence_score: 0.0-1.0 confidence in detection
+        """
+        path = Path(project_path)
+
+        # Check for frontend subdirectory
+        frontend_path = path / "frontend"
+        is_frontend_subdir = frontend_path.exists() and (frontend_path / "package.json").exists()
+        check_path = frontend_path if is_frontend_subdir else path
+
+        # Define expected files for each technology
+        expected_files = {
+            Technology.NODEJS: {
+                "required": ["package.json"],
+                "indicators": ["node_modules", "package-lock.json", "yarn.lock"],
+            },
+            Technology.NODEJS_VITE: {
+                "required": ["package.json"],
+                "indicators": ["vite.config.ts", "vite.config.js", "vite.config.mjs"],
+            },
+            Technology.PYTHON: {
+                "required": [],
+                "any_of": ["requirements.txt", "pyproject.toml", "setup.py"],
+                "indicators": [".venv", "venv", "__pycache__"],
+            },
+            Technology.JAVA: {
+                "required": [],
+                "any_of": ["pom.xml", "build.gradle", "build.gradle.kts"],
+                "indicators": ["target", "build", ".gradle"],
+            },
+            Technology.GO: {
+                "required": ["go.mod"],
+                "indicators": ["go.sum", "vendor"],
+            },
+            Technology.ANGULAR: {
+                "required": ["package.json", "angular.json"],
+                "indicators": ["src/app"],
+            },
+        }
+
+        config = expected_files.get(technology, {})
+        if not config:
+            logger.warning(f"[ContainerExecutor] No validation config for {technology.value}")
+            return True, f"No validation available for {technology.value}", 0.5
+
+        confidence = 0.0
+        issues = []
+
+        # Check required files
+        required = config.get("required", [])
+        for req_file in required:
+            if (check_path / req_file).exists():
+                confidence += 0.3
+            else:
+                issues.append(f"Missing required file: {req_file}")
+
+        # Check any_of files
+        any_of = config.get("any_of", [])
+        if any_of:
+            has_any = any((check_path / f).exists() for f in any_of)
+            if has_any:
+                confidence += 0.3
+            else:
+                issues.append(f"Missing one of: {', '.join(any_of)}")
+
+        # Check indicator files (bonus confidence)
+        indicators = config.get("indicators", [])
+        indicator_count = sum(1 for ind in indicators if (check_path / ind).exists())
+        if indicators:
+            confidence += 0.2 * (indicator_count / len(indicators))
+
+        # Normalize confidence
+        confidence = min(1.0, confidence)
+
+        if issues:
+            is_valid = False
+            message = f"Technology validation issues: {'; '.join(issues)}"
+            logger.warning(f"[ContainerExecutor] {message}")
+        else:
+            is_valid = True
+            message = f"Technology {technology.value} validated with {confidence:.0%} confidence"
+            logger.info(f"[ContainerExecutor] {message}")
+
+        return is_valid, message, confidence
+
+    def calculate_adaptive_timeout(
+        self,
+        project_path: str,
+        technology: "Technology"
+    ) -> int:
+        """
+        Calculate adaptive timeout based on project size and complexity.
+
+        Base timeouts by technology (npm install is fast, Maven is slow):
+        - Node.js: 60s base
+        - Node.js Vite: 60s base
+        - Java (Maven): 180s base (Maven is slow)
+        - Java (Gradle): 120s base
+        - Python: 90s base
+        - Go: 60s base
+
+        Adjustments:
+        - +30s for every 10 dependencies (Node.js)
+        - +60s for every 10 dependencies (Python)
+        - +30s for projects with >50 files
+        - Max: 300s (5 minutes)
+        - Min: 60s (1 minute)
+
+        Args:
+            project_path: Path to the project
+            technology: Detected technology type
+
+        Returns:
+            Timeout in seconds
+        """
+        import json
+
+        # Base timeouts by technology
+        base_timeouts = {
+            Technology.NODEJS: 60,
+            Technology.NODEJS_VITE: 60,
+            Technology.ANGULAR: 90,
+            Technology.JAVA: 180,  # Maven is slow
+            Technology.PYTHON: 90,
+            Technology.PYTHON_ML: 180,  # ML deps are large
+            Technology.GO: 60,
+            Technology.FLUTTER: 120,
+            Technology.DOTNET: 120,
+        }
+
+        timeout = base_timeouts.get(technology, 120)
+        path = Path(project_path)
+
+        # Check for frontend subdirectory
+        frontend_path = path / "frontend"
+        is_frontend_subdir = frontend_path.exists() and (frontend_path / "package.json").exists()
+        check_path = frontend_path if is_frontend_subdir else path
+
+        # Count files (rough complexity measure)
+        try:
+            file_count = sum(1 for _ in check_path.rglob("*") if _.is_file())
+            if file_count > 50:
+                timeout += 30
+                logger.debug(f"[ContainerExecutor] +30s for {file_count} files")
+            if file_count > 100:
+                timeout += 30
+                logger.debug(f"[ContainerExecutor] +30s for {file_count} files (100+)")
+        except Exception:
+            pass
+
+        # Check Node.js dependencies
+        if technology in [Technology.NODEJS, Technology.NODEJS_VITE, Technology.ANGULAR]:
+            try:
+                pkg_path = check_path / "package.json"
+                if pkg_path.exists():
+                    with open(pkg_path, 'r') as f:
+                        pkg = json.load(f)
+                        deps = len(pkg.get("dependencies", {}))
+                        dev_deps = len(pkg.get("devDependencies", {}))
+                        total_deps = deps + dev_deps
+                        # +30s for every 10 deps
+                        timeout += (total_deps // 10) * 30
+                        logger.debug(f"[ContainerExecutor] +{(total_deps // 10) * 30}s for {total_deps} deps")
+            except Exception:
+                pass
+
+        # Check Python dependencies
+        if technology in [Technology.PYTHON, Technology.PYTHON_ML]:
+            try:
+                req_path = check_path / "requirements.txt"
+                if req_path.exists():
+                    lines = req_path.read_text().strip().split('\n')
+                    dep_count = len([l for l in lines if l.strip() and not l.startswith('#')])
+                    # +60s for every 10 deps (Python deps are larger)
+                    timeout += (dep_count // 10) * 60
+                    logger.debug(f"[ContainerExecutor] +{(dep_count // 10) * 60}s for {dep_count} Python deps")
+            except Exception:
+                pass
+
+        # Clamp to min/max
+        timeout = max(60, min(300, timeout))
+
+        logger.info(f"[ContainerExecutor] Adaptive timeout: {timeout}s for {technology.value}")
+        return timeout
+
     async def create_container(
         self,
         project_id: str,
@@ -595,20 +940,24 @@ class ContainerExecutor:
             # Build run command with correct base path for preview URL routing
             run_command = config.run_command
 
-            # Generate the base path for frontend frameworks
-            # This ensures assets are loaded from the correct URL path
-            frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip('/')
-            environment = os.getenv("ENVIRONMENT", "development")
-            is_production = environment == "production" or ("localhost" not in frontend_url and "127.0.0.1" not in frontend_url)
-
-            # Base path for Vite/CRA - only needed in production where we use proxy URLs
-            base_path = f"/api/v1/preview/{project_id}/" if is_production else "/"
+            # Critical #2: Fix Vite base path
+            # The proxy handles all path stripping (/api/v1/preview/{project_id}/ → /)
+            # So Vite should ALWAYS use --base=/ to generate root-relative URLs
+            # The nginx sub_filter rules handle any remaining path rewrites
+            #
+            # Flow:
+            # 1. Vite generates: <script src="/@vite/client">
+            # 2. Browser requests: /api/v1/preview/{project_id}/@vite/client
+            # 3. FastAPI proxy extracts: path = @vite/client
+            # 4. Proxy sends to nginx: /sandbox/{port}/@vite/client
+            # 5. nginx proxies to container: /@vite/client
+            # 6. Vite serves the file (expects root-relative paths)
 
             if technology == Technology.NODEJS_VITE:
-                # Vite: Use --base flag to set the public base path
-                # This makes Vite generate correct asset URLs like /api/v1/preview/{project_id}/src/main.tsx
-                run_command = f"npm run dev -- --host 0.0.0.0 --port 5173 --base={base_path}"
-                logger.info(f"[ContainerExecutor] Using Vite with --base={base_path}")
+                # Vite: Use --base=/ (root) since proxy handles path translation
+                # This ensures HMR WebSocket and asset loading work correctly
+                run_command = f"npm run dev -- --host 0.0.0.0 --port 5173"
+                logger.info(f"[ContainerExecutor] Using Vite with default --base=/ (proxy handles path translation)")
 
             # Traefik routes /api/v1/preview/{project_id}/... to container
             # NO stripPrefix - Vite expects the full path to match its --base
@@ -664,10 +1013,10 @@ class ContainerExecutor:
                     "NODE_ENV": "development",
                     "JAVA_OPTS": "-Xmx512m",
                     "PYTHONUNBUFFERED": "1",
-                    # Base path for frontend frameworks (production only)
-                    # CRA uses PUBLIC_URL, Vite can use VITE_BASE_PATH
-                    "PUBLIC_URL": base_path.rstrip('/') if is_production else "",
-                    "VITE_BASE_PATH": base_path if is_production else "/",
+                    # Critical #2: No custom base paths needed
+                    # Proxy handles path translation, so frameworks use default root paths
+                    "PUBLIC_URL": "",  # CRA: empty = use relative paths
+                    "VITE_BASE_PATH": "/",  # Vite: root path (proxy strips prefix)
                 },
                 command=f"sh -c '{config.build_command} && {run_command}'" if config.build_command else run_command,
                 labels=all_labels
@@ -1057,6 +1406,289 @@ class ContainerExecutor:
         if self._cleanup_task:
             self._cleanup_task.cancel()
 
+    # =========================================================================
+    # BACKEND-FIRST AUTO-FIX: File Sync & Retry Loop
+    # =========================================================================
+
+    async def _sync_files_to_container(
+        self,
+        container,
+        project_path: str,
+        files_modified: list
+    ) -> bool:
+        """
+        Sync fixed files from local filesystem to running container.
+
+        This copies the fixed files into the container's /app directory
+        so that the dev server can pick up the changes via HMR or restart.
+        """
+        import tarfile
+        import io
+
+        if not files_modified:
+            return True
+
+        try:
+            # Create a tar archive with the modified files
+            tar_buffer = io.BytesIO()
+            with tarfile.open(fileobj=tar_buffer, mode='w') as tar:
+                for rel_path in files_modified:
+                    local_path = Path(project_path) / rel_path
+                    if local_path.exists():
+                        # Add file to tar with correct path in container
+                        tar.add(str(local_path), arcname=rel_path)
+                        logger.info(f"[ContainerExecutor] Adding to sync: {rel_path}")
+
+            tar_buffer.seek(0)
+
+            # Copy tar to container
+            container.put_archive('/app', tar_buffer.read())
+            logger.info(f"[ContainerExecutor] Synced {len(files_modified)} files to container")
+            return True
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Failed to sync files to container: {e}")
+            return False
+
+    async def _kill_dev_server(self, container) -> bool:
+        """
+        Kill the running dev server process inside the container.
+
+        This is needed before restarting to avoid port conflicts.
+        """
+        try:
+            # Kill node/python processes
+            kill_commands = [
+                "pkill -f 'node' || true",
+                "pkill -f 'npm' || true",
+                "pkill -f 'vite' || true",
+                "pkill -f 'python' || true",
+                "pkill -f 'uvicorn' || true",
+                "pkill -f 'java' || true",
+            ]
+
+            for cmd in kill_commands:
+                try:
+                    container.exec_run(f"sh -c '{cmd}'", detach=True)
+                except Exception:
+                    pass
+
+            # Wait a moment for processes to die
+            await asyncio.sleep(1)
+            logger.info(f"[ContainerExecutor] Killed dev server processes")
+            return True
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Failed to kill dev server: {e}")
+            return False
+
+    async def _restart_dev_server(
+        self,
+        container,
+        run_command: str,
+        working_dir: str = "/app"
+    ) -> bool:
+        """
+        Restart the dev server inside the container.
+
+        Returns True if the command was started successfully.
+        The actual server readiness is checked by log streaming.
+        """
+        try:
+            # Start the dev server in background
+            exec_result = container.exec_run(
+                f"sh -c 'cd {working_dir} && {run_command}'",
+                detach=True,
+                workdir=working_dir
+            )
+            logger.info(f"[ContainerExecutor] Restarted dev server: {run_command}")
+            return True
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Failed to restart dev server: {e}")
+            return False
+
+    async def _run_fix_retry_loop(
+        self,
+        project_id: str,
+        project_path: str,
+        container,
+        exec_ctx: ExecutionContext,
+        run_command: str,
+        working_dir: str,
+        error_patterns: list,
+        start_patterns: list,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Backend-first auto-fix retry loop.
+
+        Flow:
+        1. Fix error using AI
+        2. Sync fixed files to container
+        3. Kill existing dev server
+        4. Restart dev server
+        5. Stream logs and check for success/error
+        6. Repeat up to max_fix_attempts times
+
+        Yields log lines for streaming to UI.
+        """
+        from app.services.simple_fixer import simple_fixer
+
+        while exec_ctx.should_attempt_fix():
+            attempt = exec_ctx.fix_attempt + 1
+            yield f"\n{'='*50}\n"
+            yield f"🔧 AUTO-FIX: Attempt {attempt}/{exec_ctx.max_fix_attempts}\n"
+            yield f"{'='*50}\n"
+            yield f"__FIX_STARTING__\n"
+
+            # Step 1: Get fix from AI
+            yield f"📊 Analyzing error...\n"
+            payload = exec_ctx.get_fixer_payload()
+
+            try:
+                fix_result = await simple_fixer.fix_from_backend(
+                    project_id=project_id,
+                    project_path=Path(project_path),
+                    payload=payload
+                )
+            except Exception as fix_err:
+                logger.error(f"[ContainerExecutor] Fix error: {fix_err}")
+                yield f"❌ Fix failed: {fix_err}\n"
+                yield f"__FIX_FAILED__:{fix_err}\n"
+                exec_ctx.mark_fixing()  # Increment attempt counter
+                continue
+
+            if not fix_result.success:
+                yield f"❌ Could not generate fix: {fix_result.message}\n"
+                yield f"__FIX_FAILED__:{fix_result.message}\n"
+                exec_ctx.mark_fixing()
+                continue
+
+            # Step 2: Apply fix
+            exec_ctx.mark_fixing()
+            exec_ctx.mark_fixed(fix_result.files_modified)
+            yield f"✅ Generated fixes for {len(fix_result.files_modified)} file(s):\n"
+            for f in fix_result.files_modified:
+                yield f"   📝 {f}\n"
+
+            # Step 3: Sync files to container
+            yield f"📦 Syncing fixes to container...\n"
+            sync_success = await self._sync_files_to_container(
+                container=container,
+                project_path=project_path,
+                files_modified=fix_result.files_modified
+            )
+
+            if not sync_success:
+                yield f"⚠️ Failed to sync files, but fixes are saved locally.\n"
+
+            # Step 4: Kill existing dev server
+            yield f"🔄 Restarting dev server...\n"
+            await self._kill_dev_server(container)
+
+            # Step 5: Restart dev server
+            restart_success = await self._restart_dev_server(
+                container=container,
+                run_command=run_command,
+                working_dir=working_dir
+            )
+
+            if not restart_success:
+                yield f"❌ Failed to restart dev server.\n"
+                yield f"__FIX_FAILED__:Failed to restart server\n"
+                continue
+
+            # Step 6: Stream new logs and check for success/error
+            yield f"📜 Checking if fix worked...\n\n"
+            exec_ctx.reset_for_retry()
+
+            # Wait for logs with timeout
+            server_started = False
+            has_new_error = False
+            check_timeout = 30  # 30 seconds to check if fix worked
+            check_start = asyncio.get_event_loop().time()
+
+            # Create log queue for streaming
+            log_queue: asyncio.Queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+
+            def stream_check_logs():
+                try:
+                    for log in container.logs(stream=True, follow=True, since=int(check_start), timestamps=False):
+                        line = log.decode('utf-8', errors='ignore').strip()
+                        if line:
+                            asyncio.run_coroutine_threadsafe(log_queue.put(line), loop)
+                except Exception as e:
+                    logger.debug(f"[ContainerExecutor] Log stream ended: {e}")
+                finally:
+                    asyncio.run_coroutine_threadsafe(log_queue.put(None), loop)
+
+            import concurrent.futures
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            log_future = executor.submit(stream_check_logs)
+
+            try:
+                while True:
+                    elapsed = loop.time() - check_start
+                    if elapsed > check_timeout:
+                        yield f"⏱️ Timeout waiting for server restart.\n"
+                        break
+
+                    try:
+                        line = await asyncio.wait_for(log_queue.get(), timeout=2.0)
+
+                        if line is None:
+                            break
+
+                        yield f"{line}\n"
+                        exec_ctx.add_output(line)
+
+                        # Check for success
+                        for pattern in start_patterns:
+                            if re.search(pattern, line, re.IGNORECASE):
+                                server_started = True
+                                exec_ctx.server_started = True
+                                exec_ctx.complete(exit_code=0)
+                                yield f"\n🎉 SUCCESS! Server started after fix.\n"
+                                yield f"__FIX_SUCCESS__\n"
+                                break
+
+                        if server_started:
+                            break
+
+                        # Check for new error
+                        for pattern in error_patterns:
+                            if re.search(pattern, line, re.IGNORECASE):
+                                has_new_error = True
+                                exec_ctx.add_stderr(line)
+                                break
+
+                    except asyncio.TimeoutError:
+                        continue
+
+            finally:
+                executor.shutdown(wait=False)
+
+            if server_started:
+                # Fix worked!
+                return
+
+            if has_new_error:
+                yield f"\n⚠️ Fix applied but new error detected. Retrying...\n"
+                exec_ctx.complete(exit_code=1)
+                # Continue to next iteration
+            else:
+                yield f"\n⚠️ Server did not start. Retrying...\n"
+                exec_ctx.complete(exit_code=1)
+
+        # Exhausted all attempts
+        exec_ctx.mark_exhausted()
+        yield f"\n{'='*50}\n"
+        yield f"❌ AUTO-FIX EXHAUSTED: Could not fix after {exec_ctx.max_fix_attempts} attempts.\n"
+        yield f"{'='*50}\n"
+        yield f"💡 Please fix the error manually and try again.\n"
+        yield f"__FIX_EXHAUSTED__\n"
+
     async def run_project(
         self,
         project_id: str,
@@ -1113,16 +1745,168 @@ class ContainerExecutor:
             yield f"  📂 Multi-folder project detected - using frontend/ subdirectory\n"
             logger.info(f"[ContainerExecutor] Multi-folder project: will use /app/frontend as working dir")
 
+        # =====================================================================
+        # TECHNOLOGY VALIDATION: Verify detection matches project files
+        # =====================================================================
+        is_tech_valid, tech_msg, tech_confidence = self.validate_technology_detection(technology, project_path)
+        if not is_tech_valid:
+            yield f"  ⚠️ {tech_msg}\n"
+            # Don't fail, just warn - we'll try to run anyway
+        else:
+            yield f"  ✓ Technology confidence: {tech_confidence:.0%}\n"
+
+        # =====================================================================
+        # ADAPTIVE TIMEOUT: Calculate based on project size and complexity
+        # =====================================================================
+        adaptive_timeout = self.calculate_adaptive_timeout(project_path, technology)
+        yield f"  ⏱️ Adaptive timeout: {adaptive_timeout}s\n"
+
         config = TECHNOLOGY_CONFIGS.get(technology)
         if not config:
             yield f"ERROR: Unsupported technology: {technology.value}\n"
             return
+
+        # =====================================================================
+        # PRE-RUN FILE SYNC: Ensure files are synced from S3 BEFORE container starts
+        # This prevents race conditions where container runs before files exist
+        # =====================================================================
+        yield f"📥 Ensuring files are synced...\n"
+        try:
+            from app.services.workspace_restore import workspace_restore
+            from app.core.database import get_session
+
+            async for db in get_session():
+                # Get project type string for workspace restore
+                tech_type_map = {
+                    Technology.NODEJS: "node",
+                    Technology.NODEJS_VITE: "vite",
+                    Technology.PYTHON: "python",
+                    Technology.PYTHON_ML: "python",
+                    Technology.JAVA: "java",
+                    Technology.GO: "go",
+                }
+                project_type = tech_type_map.get(technology, "node")
+
+                # Check workspace status and auto-restore if needed
+                restore_result = await workspace_restore.auto_restore(
+                    project_id=project_id,
+                    db=db,
+                    user_id=user_id if user_id != "anonymous" else None,
+                    project_type=project_type
+                )
+
+                if restore_result.get("success"):
+                    method = restore_result.get("method", "unknown")
+                    if method == "already_exists":
+                        yield f"  ✓ Files already synced\n"
+                    elif method == "restore_from_storage":
+                        restored_count = restore_result.get("restored_files", 0)
+                        yield f"  ✓ Restored {restored_count} files from storage\n"
+                    else:
+                        yield f"  ✓ Workspace ready ({method})\n"
+                else:
+                    error_msg = restore_result.get("error", "Unknown error")
+                    yield f"  ⚠️ File sync warning: {error_msg}\n"
+                    logger.warning(f"[ContainerExecutor] File sync warning: {error_msg}")
+                break
+        except Exception as sync_err:
+            logger.warning(f"[ContainerExecutor] Pre-run file sync error: {sync_err}")
+            yield f"  ⚠️ File sync check failed (continuing): {sync_err}\n"
+
+        # =====================================================================
+        # PRE-RUN VALIDATION: Ensure workspace has all critical files
+        # =====================================================================
+        yield f"✅ Validating workspace...\n"
+        is_valid, validation_msg, missing_files = await self.validate_workspace(project_path, technology)
+
+        if not is_valid:
+            yield f"❌ WORKSPACE VALIDATION FAILED\n"
+            yield f"  {validation_msg}\n"
+            if missing_files:
+                yield f"  Missing files:\n"
+                for f in missing_files:
+                    yield f"    - {f}\n"
+
+            # =====================================================================
+            # AUTO-RECOVERY: Attempt to restore/regenerate missing files
+            # =====================================================================
+            yield f"🔄 Attempting automatic recovery...\n"
+            try:
+                from app.services.error_recovery import error_recovery, RecoveryType
+                from app.core.database import get_session
+
+                # Get database session for recovery
+                async for db in get_session():
+                    recovery_result = await error_recovery.recover(
+                        error_type=RecoveryType.MISSING_FILES,
+                        context={
+                            "project_id": project_id,
+                            "project_path": project_path,
+                            "missing_files": missing_files,
+                        },
+                        db=db
+                    )
+
+                    if recovery_result.success:
+                        yield f"  ✓ {recovery_result.message}\n"
+                        # Re-validate after recovery
+                        is_valid, _, _ = await self.validate_workspace(project_path, technology)
+                        if is_valid:
+                            yield f"  ✓ Workspace now valid - continuing...\n"
+                            break  # Continue with run
+                        else:
+                            yield f"  ✗ Workspace still invalid after recovery\n"
+                    else:
+                        yield f"  ✗ {recovery_result.message}\n"
+                        for step in recovery_result.next_steps:
+                            yield f"    → {step}\n"
+                        yield f"__VALIDATION_FAILED__:{','.join(missing_files)}\n"
+                        return
+                    break
+            except Exception as recovery_error:
+                logger.error(f"[ContainerExecutor] Validation recovery failed: {recovery_error}")
+                yield f"  ✗ Recovery error: {recovery_error}\n"
+                yield f"__VALIDATION_FAILED__:{','.join(missing_files)}\n"
+                return
+        else:
+            yield f"  ✓ Workspace validation passed\n"
 
         yield f"🐳 Preparing container...\n"
         yield f"  📁 Project path: {project_path}\n"
         working_dir = "/app/frontend" if getattr(self, '_frontend_subdir', False) else "/app"
         yield f"  📂 Working dir: {working_dir}\n"
         yield f"  🔌 Container port: {config.port}\n"
+
+        # Map Technology to RuntimeType for ExecutionContext
+        tech_to_runtime = {
+            Technology.NODEJS: RuntimeType.NODE,
+            Technology.NODEJS_VITE: RuntimeType.NODE,
+            Technology.REACT_NATIVE: RuntimeType.NODE,
+            Technology.ANGULAR: RuntimeType.NODE,
+            Technology.JAVA: RuntimeType.JAVA,
+            Technology.PYTHON: RuntimeType.PYTHON,
+            Technology.PYTHON_ML: RuntimeType.PYTHON,
+            Technology.GO: RuntimeType.GO,
+            Technology.DOTNET: RuntimeType.DOTNET,
+            Technology.FLUTTER: RuntimeType.UNKNOWN,
+        }
+        runtime_type = tech_to_runtime.get(technology, RuntimeType.UNKNOWN)
+
+        # Create ExecutionContext for backend-first error capture
+        # This is the SINGLE SOURCE OF TRUTH for error context - NO FRONTEND INVOLVEMENT
+        build_cmd = config.build_command or ""
+        run_cmd = config.run_command or ""
+        full_command = f"{build_cmd} && {run_cmd}" if build_cmd else run_cmd
+
+        exec_ctx = create_execution_context(
+            project_id=project_id,
+            user_id=user_id,
+            command=full_command,
+            runtime=runtime_type,
+            working_dir=working_dir,
+        )
+        exec_ctx.start()
+        logger.info(f"[ContainerExecutor] Created ExecutionContext for {project_id}: runtime={runtime_type.value}")
 
         # Create or reuse container
         success, message, host_port = await self.create_container(
@@ -1141,7 +1925,6 @@ class ContainerExecutor:
             yield f"♻️ {message}\n"
         else:
             yield f"✅ Container created on port {host_port}\n"
-        yield f"📜 Streaming container logs...\n\n"
 
         # Stream container logs
         container_info = self.active_containers.get(project_id)
@@ -1151,6 +1934,55 @@ class ContainerExecutor:
 
         try:
             container = self.docker_client.containers.get(container_info["container_id"])
+
+            # Store container ID in execution context
+            exec_ctx.container_id = container_info["container_id"]
+            exec_ctx.container_name = container_info.get("container_name")
+
+            # =====================================================================
+            # HEALTH CHECK: Verify container is ready before running commands
+            # =====================================================================
+            yield f"🏥 Running container health check...\n"
+            is_healthy, health_msg = await self.health_check_container(container)
+
+            if not is_healthy:
+                yield f"❌ CONTAINER HEALTH CHECK FAILED\n"
+                yield f"  {health_msg}\n"
+
+                # =====================================================================
+                # AUTO-RECOVERY: Attempt to restart container
+                # =====================================================================
+                yield f"🔄 Attempting automatic recovery...\n"
+                try:
+                    from app.services.error_recovery import error_recovery, RecoveryType
+
+                    recovery_result = await error_recovery.recover(
+                        error_type=RecoveryType.CONTAINER_CRASH,
+                        context={
+                            "project_id": project_id,
+                            "container_id": container_info["container_id"],
+                        }
+                    )
+
+                    if recovery_result.success:
+                        yield f"  ✓ {recovery_result.message}\n"
+                        # Refresh container reference after restart
+                        container = self.docker_client.containers.get(container_info["container_id"])
+                    else:
+                        yield f"  ✗ Recovery failed: {recovery_result.message}\n"
+                        for step in recovery_result.next_steps:
+                            yield f"    → {step}\n"
+                        yield f"__HEALTH_CHECK_FAILED__:{health_msg}\n"
+                        return
+                except Exception as recovery_error:
+                    logger.error(f"[ContainerExecutor] Recovery failed: {recovery_error}")
+                    yield f"  ✗ Recovery error: {recovery_error}\n"
+                    yield f"__HEALTH_CHECK_FAILED__:{health_msg}\n"
+                    return
+            else:
+                yield f"  ✓ Container health check passed\n"
+
+            yield f"📜 Streaming container logs...\n\n"
 
             # Generate preview URL upfront
             preview_url = _get_preview_url(host_port, project_id)
@@ -1162,7 +1994,8 @@ class ContainerExecutor:
             server_started = False
             has_fatal_error = False
 
-            # Success patterns - server is ready for preview
+            # Gap #6: Flexible port detection patterns (not hardcoded to 3000/5173)
+            # These patterns capture any port from logs dynamically
             start_patterns = [
                 r"Local:\s*http://\S+:(\d+)",
                 r"listening on port (\d+)",
@@ -1170,12 +2003,21 @@ class ContainerExecutor:
                 r"Started.*on port (\d+)",
                 r"ready.*http://\S+:(\d+)",
                 r"VITE.*Local:\s*http://\S+:(\d+)",
-                r"ready in \d+",  # Vite ready message
+                r"http://(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)",  # Generic localhost URLs
+                r"https?://\[?::1?\]?:(\d+)",  # IPv6 localhost
+                r"running on.*:(\d+)",  # Generic "running on" patterns
+                r"available at.*:(\d+)",  # "available at" patterns
+                r"serving on.*:(\d+)",  # Python http.server
+                r"bound to.*:(\d+)",  # Bound to port
+                r"ready in \d+",  # Vite ready message (no port capture)
                 r"compiled successfully",  # Webpack
                 r"compiled client and server",  # Next.js
+                r"Application startup complete",  # FastAPI/Uvicorn
+                r"Listening on tcp://.*:(\d+)",  # Rails Puma
             ]
 
             # Fatal error patterns - stop and show error (Bolt-style)
+            # Medium #15: Added OOM detection patterns
             error_patterns = [
                 r"npm ERR!",
                 r"npm error",  # npm 10+ uses lowercase "error" instead of "ERR!"
@@ -1193,6 +2035,15 @@ class ContainerExecutor:
                 r"ModuleNotFoundError:",
                 r"404 Not Found",  # npm registry 404
                 r"E404",  # npm error code E404
+                # Medium #15: OOM (Out of Memory) detection
+                r"JavaScript heap out of memory",
+                r"FATAL ERROR.*allocation failed",
+                r"Killed",  # Linux OOM killer
+                r"out of memory",
+                r"Cannot allocate memory",
+                r"MemoryError",  # Python OOM
+                r"java\.lang\.OutOfMemoryError",  # Java OOM
+                r"ENOMEM",  # Node.js memory error
             ]
 
             # Use asyncio queue for thread-safe async log streaming
@@ -1235,7 +2086,7 @@ class ContainerExecutor:
 
             # Process logs from queue asynchronously (Bolt-style health gate)
             # Preview is ONLY enabled after server start is confirmed
-            timeout_seconds = 120  # 2 minute timeout for server to start
+            timeout_seconds = adaptive_timeout  # Use adaptive timeout based on project size
             start_time = loop.time()
             error_lines = []  # Collect error lines for context
 
@@ -1253,6 +2104,14 @@ class ContainerExecutor:
                     # Store log in LogBus for auto-fixer context
                     log_bus.add_docker_log(line)
 
+                    # BACKEND-FIRST: Buffer into ExecutionContext (SINGLE SOURCE OF TRUTH)
+                    # Detect if line is stderr by checking for error patterns
+                    is_stderr_line = any(re.search(p, line, re.IGNORECASE) for p in error_patterns)
+                    if is_stderr_line:
+                        exec_ctx.add_stderr(line)
+                    else:
+                        exec_ctx.add_stdout(line)
+
                     # Check for FATAL ERROR patterns first (Bolt-style)
                     if not has_fatal_error and not server_started:
                         for pattern in error_patterns:
@@ -1261,7 +2120,31 @@ class ContainerExecutor:
                                 error_lines.append(line)
                                 # Mark as error in LogBus
                                 log_bus.add_docker_error(line)
+                                # Also mark in ExecutionContext
+                                exec_ctx.add_stderr(line)
                                 logger.error(f"[ContainerExecutor] Fatal error detected: {pattern}")
+
+                                # High #10: Special handling for port conflict errors
+                                if re.search(r"EADDRINUSE|Address already in use", line, re.IGNORECASE):
+                                    yield f"\n⚠️ PORT CONFLICT DETECTED\n"
+                                    yield f"The port is already in use. Possible solutions:\n"
+                                    yield f"  1. Stop other running projects first\n"
+                                    yield f"  2. Wait a moment and try again\n"
+                                    yield f"  3. The previous container may still be shutting down\n"
+                                    yield f"__PORT_CONFLICT__:{host_port}\n"
+                                    log_bus.add_docker_error(f"Port conflict on {host_port}")
+
+                                # Medium #15: Special handling for OOM errors
+                                if re.search(r"out of memory|heap out of memory|ENOMEM|MemoryError|OutOfMemoryError|Killed|allocation failed", line, re.IGNORECASE):
+                                    yield f"\n⚠️ OUT OF MEMORY DETECTED\n"
+                                    yield f"The container ran out of memory. Possible solutions:\n"
+                                    yield f"  1. Reduce the number of dependencies\n"
+                                    yield f"  2. Optimize your code to use less memory\n"
+                                    yield f"  3. Add NODE_OPTIONS=--max-old-space-size=2048 for Node.js\n"
+                                    yield f"  4. Try running with fewer concurrent operations\n"
+                                    yield f"__OOM_ERROR__:{config.memory_limit}\n"
+                                    log_bus.add_docker_error(f"OOM with limit {config.memory_limit}")
+
                                 # Continue collecting a few more error lines for context
                                 break
 
@@ -1271,23 +2154,66 @@ class ContainerExecutor:
                             error_lines.append(line)
                             # Store error context lines
                             log_bus.add_docker_error(line)
+                            exec_ctx.add_stderr(line)
 
                     # Check for server start patterns (only if no fatal error)
                     if not server_started and not has_fatal_error:
                         for pattern in start_patterns:
                             match = re.search(pattern, line, re.IGNORECASE)
                             if match:
+                                logger.info(f"[ContainerExecutor] Server start pattern matched: {pattern}")
+                                yield f"\n🔍 Server start detected, verifying accessibility...\n"
+
+                                # ================================================================
+                                # HEALTH CHECK: Verify URL is actually reachable before enabling
+                                # Critical #1 & #3: Extended retries with fallback on failure
+                                # ================================================================
+                                internal_url = f"http://localhost:{host_port}"
+                                health_check_passed = False
+                                max_health_attempts = 8  # Critical #3: More retries for slow servers
+
+                                # Try health check with extended retries
+                                for attempt in range(max_health_attempts):
+                                    try:
+                                        # Progressive backoff: 1s, 1.5s, 2s, 2.5s, 3s, 3s, 3s, 3s
+                                        wait_time = min(1.0 + (attempt * 0.5), 3.0)
+                                        await asyncio.sleep(wait_time)
+
+                                        health_ok = await check_preview_health(internal_url, timeout=5.0)
+                                        if health_ok:
+                                            health_check_passed = True
+                                            logger.info(f"[ContainerExecutor] ✅ Health check passed on attempt {attempt+1}: {internal_url}")
+                                            break
+                                        else:
+                                            logger.warning(f"[ContainerExecutor] Health check attempt {attempt+1}/{max_health_attempts} failed")
+                                    except Exception as health_err:
+                                        logger.warning(f"[ContainerExecutor] Health check error on attempt {attempt+1}: {health_err}")
+
+                                # Always mark as started and show preview
                                 server_started = True
-                                logger.info(f"[ContainerExecutor] ✅ Server READY! Pattern matched: {pattern}")
-                                yield f"\n{'='*50}\n"
-                                yield f"🚀 SERVER READY - PREVIEW ENABLED!\n"
-                                yield f"Preview URL: {preview_url}\n"
-                                yield f"{'='*50}\n\n"
+                                exec_ctx.server_started = True
+                                exec_ctx.server_url = preview_url
+
+                                if health_check_passed:
+                                    exec_ctx.complete(exit_code=0)
+                                    logger.info(f"[ContainerExecutor] ✅ Server READY! Health check verified")
+                                    yield f"\n{'='*50}\n"
+                                    yield f"🚀 SERVER READY - PREVIEW ENABLED!\n"
+                                    yield f"Preview URL: {preview_url}\n"
+                                    yield f"{'='*50}\n\n"
+                                else:
+                                    # Critical #1: FALLBACK - Show preview with warning instead of blocking
+                                    logger.warning(f"[ContainerExecutor] Health check failed after {max_health_attempts} attempts, enabling preview anyway")
+                                    yield f"\n{'='*50}\n"
+                                    yield f"⚠️ SERVER DETECTED - PREVIEW ENABLED (unverified)\n"
+                                    yield f"Preview URL: {preview_url}\n"
+                                    yield f"Note: Server may still be starting. Refresh if blank.\n"
+                                    yield f"{'='*50}\n\n"
+
                                 # Emit markers for frontend to enable preview
                                 yield f"__SERVER_STARTED__:{preview_url}\n"
                                 yield f"_PREVIEW_URL_:{preview_url}\n"
-                                # Log success in LogBus
-                                log_bus.add_docker_log(f"Server started successfully - Preview URL: {preview_url}")
+                                log_bus.add_docker_log(f"Server started - Preview URL: {preview_url}")
                                 break
 
                 except asyncio.TimeoutError:
@@ -1351,15 +2277,50 @@ class ContainerExecutor:
             # Handle fatal error - do NOT enable preview (Bolt-style health gate)
             if has_fatal_error:
                 logger.error(f"[ContainerExecutor] Preview BLOCKED due to fatal error")
+
+                # Mark failure in ExecutionContext
+                exec_ctx.complete(exit_code=1)
+
                 yield f"\n{'='*50}\n"
                 yield f"❌ PREVIEW BLOCKED - Fatal Error Detected\n"
                 yield f"{'='*50}\n"
                 for err_line in error_lines:
                     yield f"🔴 {err_line}\n"
-                yield f"\n💡 Fix the error and try again.\n"
-                yield f"__ERROR__:Fatal error detected - preview not available\n"
+
                 # Store fatal error summary in LogBus for auto-fixer
                 log_bus.add_build_error(f"Fatal error: {error_lines[0] if error_lines else 'Unknown error'}")
+
+                # ================================================================
+                # BACKEND-FIRST AUTO-FIX WITH RETRY LOOP
+                # Fix → Sync → Restart → Check → Repeat (up to 3 times)
+                # NO FRONTEND INVOLVEMENT - this is the correct architecture
+                # ================================================================
+                if exec_ctx.should_attempt_fix():
+                    # Run the fix retry loop
+                    async for fix_log in self._run_fix_retry_loop(
+                        project_id=project_id,
+                        project_path=project_path,
+                        container=container,
+                        exec_ctx=exec_ctx,
+                        run_command=config.run_command,
+                        working_dir=working_dir,
+                        error_patterns=error_patterns,
+                        start_patterns=start_patterns,
+                    ):
+                        yield fix_log
+
+                    # Check if fix succeeded
+                    if exec_ctx.server_started:
+                        # Success! Server is running after fix
+                        yield f"\n🚀 Preview is now available at: {preview_url}\n"
+                        yield f"__SERVER_STARTED__:{preview_url}\n"
+                        yield f"_PREVIEW_URL_:{preview_url}\n"
+                    else:
+                        yield f"__ERROR__:Fatal error detected - preview not available\n"
+                else:
+                    yield f"\n💡 Fix the error and try again.\n"
+                    yield f"__ERROR__:Fatal error detected - preview not available\n"
+
             # If we exited the loop without detecting server start and no error
             elif not server_started and preview_url:
                 logger.warning(f"[ContainerExecutor] Server start not detected, emitting URL anyway")
@@ -1369,7 +2330,15 @@ class ContainerExecutor:
         except Exception as e:
             logger.error(f"[ContainerExecutor] Error streaming logs: {e}")
             log_bus.add_docker_error(f"Error streaming logs: {e}")
+            exec_ctx.add_stderr(str(e))
+            exec_ctx.complete(exit_code=1)
             yield f"ERROR: Failed to stream logs: {e}\n"
+
+        finally:
+            # Cleanup execution context if completed
+            if exec_ctx.state in [ExecutionState.SUCCESS, ExecutionState.EXHAUSTED]:
+                # Keep context for a while for debugging, but mark as inactive
+                logger.info(f"[ContainerExecutor] Execution completed: {exec_ctx.state.value}")
 
 
 # Global instance

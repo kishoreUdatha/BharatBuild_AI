@@ -26,11 +26,12 @@ ECS only needs to reach EC2:8080 (the gateway port).
 
 import asyncio
 import httpx
+import websockets
 import re
 import os
 import docker
 from typing import Optional
-from fastapi import APIRouter, Request, Response, HTTPException
+from fastapi import APIRouter, Request, Response, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
@@ -47,29 +48,118 @@ IS_REMOTE_DOCKER = bool(SANDBOX_DOCKER_HOST)
 # Preview Gateway port (Traefik on EC2)
 PREVIEW_GATEWAY_PORT = int(os.environ.get("PREVIEW_GATEWAY_PORT", "8080"))
 
+# Gap #16: TTL-based address cache with invalidation
+from dataclasses import dataclass
+from time import time as current_time
+
+@dataclass
+class CachedAddress:
+    address: tuple  # (ip, port, host_port)
+    cached_at: float
+    ttl_seconds: float = 10.0  # HIGH #1: Reduced from 30s to 10s for faster cache invalidation
+
+    def is_valid(self) -> bool:
+        return (current_time() - self.cached_at) < self.ttl_seconds
+
+_address_cache: dict[str, CachedAddress] = {}
+
+def invalidate_preview_cache(project_id: str = None):
+    """
+    Invalidate preview address cache.
+    Gap #16: Call this when container restarts or IP changes.
+
+    Args:
+        project_id: Specific project to invalidate, or None for all
+    """
+    global _address_cache
+    if project_id:
+        if project_id in _address_cache:
+            del _address_cache[project_id]
+            logger.info(f"[Preview] Cache invalidated for {project_id}")
+    else:
+        _address_cache.clear()
+        logger.info("[Preview] Cache cleared for all projects")
+
+def get_cached_address(project_id: str) -> Optional[tuple]:
+    """Get cached address if valid."""
+    if project_id in _address_cache:
+        cached = _address_cache[project_id]
+        if cached.is_valid():
+            return cached.address
+        else:
+            # Expired, remove from cache
+            del _address_cache[project_id]
+    return None
+
+def set_cached_address(project_id: str, address: tuple):
+    """Cache container address."""
+    _address_cache[project_id] = CachedAddress(
+        address=address,
+        cached_at=current_time()
+    )
+
 # HTTP client for proxying requests
 _http_client: Optional[httpx.AsyncClient] = None
 
 # Docker client for querying remote containers
 _docker_client: Optional[docker.DockerClient] = None
 
+# CRITICAL #3: Thread-safe lock for Docker client initialization
+import threading
+_docker_client_lock = threading.Lock()
+
 
 def get_docker_client() -> Optional[docker.DockerClient]:
-    """Get or create Docker client for querying remote containers"""
+    """Get or create Docker client for querying remote containers.
+
+    CRITICAL #3: Uses thread-safe singleton pattern to prevent race conditions
+    when multiple concurrent requests try to create the Docker client.
+    HIGH #7: Implements retry logic with exponential backoff.
+    """
     global _docker_client
-    if _docker_client is None and SANDBOX_DOCKER_HOST:
+
+    # Fast path: client already initialized
+    if _docker_client is not None:
+        # HIGH #7: Verify client is still connected
         try:
-            logger.info(f"[Preview] Attempting Docker connection to {SANDBOX_DOCKER_HOST}")
-            _docker_client = docker.DockerClient(base_url=SANDBOX_DOCKER_HOST, timeout=5)
             _docker_client.ping()
-            logger.info(f"[Preview] Docker client connected successfully to {SANDBOX_DOCKER_HOST}")
-        except Exception as e:
-            logger.error(f"[Preview] Failed to connect to Docker at {SANDBOX_DOCKER_HOST}: {type(e).__name__}: {e}")
+            return _docker_client
+        except Exception:
+            logger.warning("[Preview] Docker client ping failed, reconnecting...")
             _docker_client = None
-            return None
-    elif not SANDBOX_DOCKER_HOST:
+
+    if not SANDBOX_DOCKER_HOST:
         logger.warning("[Preview] SANDBOX_DOCKER_HOST not set, cannot connect to remote Docker")
-    return _docker_client
+        return None
+
+    # CRITICAL #3: Use lock to prevent race condition
+    with _docker_client_lock:
+        # Double-check after acquiring lock
+        if _docker_client is not None:
+            return _docker_client
+
+        # HIGH #7: Retry logic with exponential backoff
+        max_retries = 3
+        base_delay = 0.5  # seconds
+
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"[Preview] Attempting Docker connection to {SANDBOX_DOCKER_HOST} (attempt {attempt + 1}/{max_retries})")
+                # HIGH #5: Increased timeout from 5s to 30s for slow Docker hosts
+                client = docker.DockerClient(base_url=SANDBOX_DOCKER_HOST, timeout=30)
+                client.ping()
+                _docker_client = client
+                logger.info(f"[Preview] Docker client connected successfully to {SANDBOX_DOCKER_HOST}")
+                return _docker_client
+            except Exception as e:
+                logger.warning(f"[Preview] Docker connection attempt {attempt + 1} failed: {type(e).__name__}: {e}")
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)  # Exponential backoff: 0.5s, 1s, 2s
+                    import time
+                    time.sleep(delay)
+
+        logger.error(f"[Preview] Failed to connect to Docker at {SANDBOX_DOCKER_HOST} after {max_retries} attempts")
+        return None
 
 
 def container_exists_on_docker(project_id: str) -> bool:
@@ -132,7 +222,15 @@ async def get_container_internal_address(project_id: str) -> Optional[tuple[str,
         - Container is mapped: internal_port -> host_port
         - ECS calls: EC2_IP:8080/sandbox/{host_port}/path
         - nginx proxies to: localhost:{host_port}/path -> container
+
+    Gap #16: Uses TTL-based caching to reduce Docker API calls
     """
+    # Check cache first
+    cached = get_cached_address(project_id)
+    if cached:
+        logger.debug(f"[Preview] Cache hit for {project_id}")
+        return cached
+
     # For remote Docker (EC2 sandbox), route via nginx gateway
     if IS_REMOTE_DOCKER:
         docker_client = get_docker_client()
@@ -174,7 +272,9 @@ async def get_container_internal_address(project_id: str) -> Optional[tuple[str,
 
             # Return EC2 IP, nginx port (8080), and host_port for /sandbox/{port}/ routing
             logger.info(f"[Preview] Routing via nginx gateway: {ec2_ip}:8080/sandbox/{host_port}/")
-            return (ec2_ip, 8080, str(host_port))  # host_port as string for URL building
+            result = (ec2_ip, 8080, str(host_port))  # host_port as string for URL building
+            set_cached_address(project_id, result)  # Gap #16: Cache the result
+            return result
 
         except Exception as e:
             logger.error(f"[Preview] Error getting container address: {e}")
@@ -351,16 +451,105 @@ async def preview_root(project_id: str, request: Request):
 
 
 @router.websocket("/{project_id}/{path:path}")
-async def websocket_proxy(project_id: str, path: str):
+async def websocket_proxy(websocket: WebSocket, project_id: str, path: str):
     """
     WebSocket proxy for HMR (Hot Module Replacement).
 
     Vite, Next.js, etc. use WebSockets for live reload.
     This proxies WS connections to the container.
+
+    Common WebSocket paths:
+    - Vite: /@vite/client, /@hmr
+    - Webpack: /sockjs-node, /ws
+    - Next.js: /_next/webpack-hmr
     """
-    # TODO: Implement WebSocket proxying for HMR
-    # For now, HMR will work via the direct port mapping fallback
-    pass
+    logger.info(f"[Preview WS] Incoming WebSocket: /preview/{project_id}/{path}")
+
+    # Get container address
+    address = await get_container_internal_address(project_id)
+
+    if not address:
+        await websocket.close(code=1008, reason="Container not found")
+        return
+
+    gateway_ip, gateway_port, host_port = address
+
+    # Build WebSocket target URL
+    if host_port and IS_REMOTE_DOCKER:
+        # Route via nginx gateway: ws://EC2:8080/sandbox/{host_port}/{path}
+        target_ws_url = f"ws://{gateway_ip}:{gateway_port}/sandbox/{host_port}/{path}"
+    else:
+        # Local mode: direct to container
+        target_ws_url = f"ws://{gateway_ip}:{gateway_port}/{path}"
+
+    logger.info(f"[Preview WS] Proxying WebSocket to {target_ws_url}")
+
+    # Accept the incoming WebSocket connection
+    await websocket.accept()
+
+    try:
+        # Connect to the target WebSocket
+        async with websockets.connect(
+            target_ws_url,
+            ping_interval=30,
+            ping_timeout=10,
+            close_timeout=5
+        ) as target_ws:
+            # Create tasks for bidirectional message forwarding
+            async def forward_to_target():
+                """Forward messages from client to target"""
+                try:
+                    while True:
+                        # Receive from client
+                        data = await websocket.receive()
+
+                        if data.get("type") == "websocket.disconnect":
+                            break
+
+                        if "text" in data:
+                            await target_ws.send(data["text"])
+                        elif "bytes" in data:
+                            await target_ws.send(data["bytes"])
+                except WebSocketDisconnect:
+                    logger.debug(f"[Preview WS] Client disconnected: {project_id}")
+                except Exception as e:
+                    logger.debug(f"[Preview WS] Forward to target error: {e}")
+
+            async def forward_to_client():
+                """Forward messages from target to client"""
+                try:
+                    async for message in target_ws:
+                        if isinstance(message, str):
+                            await websocket.send_text(message)
+                        else:
+                            await websocket.send_bytes(message)
+                except websockets.exceptions.ConnectionClosed:
+                    logger.debug(f"[Preview WS] Target disconnected: {project_id}")
+                except Exception as e:
+                    logger.debug(f"[Preview WS] Forward to client error: {e}")
+
+            # Run both directions concurrently
+            await asyncio.gather(
+                forward_to_target(),
+                forward_to_client(),
+                return_exceptions=True
+            )
+
+    except websockets.exceptions.InvalidStatusCode as e:
+        logger.warning(f"[Preview WS] Target WebSocket rejected connection: {e}")
+        await websocket.close(code=1002, reason="Target rejected WebSocket")
+    except websockets.exceptions.InvalidURI as e:
+        logger.error(f"[Preview WS] Invalid WebSocket URI: {e}")
+        await websocket.close(code=1008, reason="Invalid target URI")
+    except ConnectionRefusedError:
+        logger.warning(f"[Preview WS] Target WebSocket connection refused: {target_ws_url}")
+        await websocket.close(code=1013, reason="Target not ready")
+    except Exception as e:
+        logger.error(f"[Preview WS] WebSocket proxy error: {type(e).__name__}: {e}")
+        try:
+            await websocket.close(code=1011, reason="Internal proxy error")
+        except Exception:
+            pass
 
 
 # Helper endpoint to get preview info
