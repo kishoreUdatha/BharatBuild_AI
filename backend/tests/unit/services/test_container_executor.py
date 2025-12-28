@@ -137,7 +137,7 @@ class TestContainerConfig:
         assert config.build_command == "npm install"
         assert config.run_command == "npm run dev -- --host 0.0.0.0 --no-open"
         assert config.port == 3000
-        assert config.memory_limit == "512m"
+        assert config.memory_limit == "768m"
 
     def test_java_config_values(self):
         """Test Java configuration values"""
