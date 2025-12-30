@@ -102,7 +102,7 @@ function XTerminalComponent({ logs = [], onCommand }: XTerminalProps) {
 
     // Initialize xterm.js with improved styling
     const terminal = new Terminal({
-      cursorBlink: true,
+      cursorBlink: false,
       cursorStyle: 'bar',
       fontSize: 13,
       fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", monospace',

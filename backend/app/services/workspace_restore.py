@@ -42,7 +42,8 @@ CRITICAL_FILES_BY_TYPE = {
         "optional_entry": ["src/index.tsx", "src/index.ts", "src/index.js", "src/App.tsx", "src/App.js", "index.html", "src/main.tsx", "src/main.ts"],
     },
     "vite": {
-        "required": ["package.json", "vite.config.ts", "vite.config.js"],  # At least one vite config
+        "required": ["package.json"],
+        "any_of": ["vite.config.ts", "vite.config.js"],  # At least one vite config
         "optional_entry": ["index.html", "src/main.tsx", "src/main.ts", "src/App.tsx"],
     },
     "python": {
@@ -688,6 +689,9 @@ class WorkspaceRestoreService:
         """
         Validate that all critical files were restored.
 
+        Supports both frontend-only and full-stack projects by checking
+        critical files at root level AND in common subdirectories.
+
         Args:
             restored_files: Set of file paths that were restored
             project_type: Type of project (node, python, etc.)
@@ -699,20 +703,28 @@ class WorkspaceRestoreService:
 
         missing = []
 
-        # Check required files (ALL must exist)
-        for required_file in config.get("required", []):
-            # Handle wildcards (e.g., vite.config.ts OR vite.config.js)
-            if required_file in restored_files:
-                continue
-            # Check if it's a pattern (contains multiple options separated by comma in required list)
-            # For now, just check exact match
-            if required_file not in restored_files:
-                missing.append(required_file)
+        # Common subdirectories for full-stack projects
+        # Full-stack projects often have frontend code in subdirectories
+        COMMON_SUBDIRS = ["", "frontend/", "client/", "web/", "app/", "src/"]
 
-        # Check any_of files (AT LEAST ONE must exist)
+        def file_exists_anywhere(filename: str) -> bool:
+            """Check if file exists at root or in common subdirectories."""
+            for subdir in COMMON_SUBDIRS:
+                if f"{subdir}{filename}" in restored_files:
+                    return True
+            return False
+
+        # Check required files (ALL must exist - at root or subdirectory)
+        for required_file in config.get("required", []):
+            # Check at root level and in common subdirectories
+            if file_exists_anywhere(required_file):
+                continue
+            missing.append(required_file)
+
+        # Check any_of files (AT LEAST ONE must exist - at root or subdirectory)
         any_of = config.get("any_of", [])
         if any_of:
-            if not any(f in restored_files for f in any_of):
+            if not any(file_exists_anywhere(f) for f in any_of):
                 missing.append(f"one of: {', '.join(any_of)}")
 
         # Check optional entry points (warn but don't fail)
