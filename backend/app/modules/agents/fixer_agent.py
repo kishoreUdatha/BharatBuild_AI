@@ -3,10 +3,11 @@ AGENT 3 - Fixer Agent (Auto Debugger)
 Fixes errors during generation, build, runtime, or compilation
 """
 
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import json
 import re
 from datetime import datetime
+from pathlib import Path
 
 from app.core.logging_config import logger
 from app.modules.agents.base_agent import BaseAgent, AgentContext
@@ -370,6 +371,136 @@ If additional commands are needed (npm install, pip install, etc.), use <instruc
 
         return new_files
 
+    async def _try_deterministic_export_fix(
+        self,
+        project_id: str,
+        error_message: str,
+        project_path: Optional[Path] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Deterministically fix export/import mismatches (no AI needed).
+
+        This fixes the common error:
+        - "No matching export in 'X.tsx' for import 'default'"
+
+        When components use named exports (export const X = ...) but
+        imports expect default exports (import X from ...).
+
+        The fix: Add 'export default ComponentName;' at the end of the file.
+
+        Returns:
+            Dict with response and files_modified if fixed, None otherwise
+        """
+        # Pattern: No matching export in "path" for import "default"
+        export_error_pattern = r'No matching export in ["\']([^"\']+)["\'] for import ["\']default["\']'
+        matches = re.findall(export_error_pattern, error_message)
+
+        if not matches:
+            return None
+
+        logger.info(f"[FixerAgent:{project_id}] Found {len(matches)} export mismatch errors - using deterministic fix")
+
+        # Get project path if not provided
+        if project_path is None:
+            try:
+                from app.modules.automation.file_manager import FileManager
+                fm = FileManager()
+                project_path = fm.get_project_path(project_id)
+            except Exception as e:
+                logger.warning(f"[FixerAgent:{project_id}] Could not get project path: {e}")
+                return None
+
+        files_modified = []
+        patches = []
+        unique_files = set(matches)
+
+        for rel_path in unique_files:
+            try:
+                # Handle paths like src/components/UI/Button.tsx
+                file_path = project_path / rel_path
+
+                # Also try with frontend/ prefix for full-stack projects
+                if not file_path.exists():
+                    file_path = project_path / "frontend" / rel_path
+                if not file_path.exists():
+                    logger.warning(f"[FixerAgent:{project_id}] File not found: {rel_path}")
+                    continue
+
+                content = file_path.read_text(encoding='utf-8')
+
+                # Check if file already has a default export
+                if re.search(r'export\s+default\s+', content):
+                    logger.info(f"[FixerAgent:{project_id}] File already has default export: {rel_path}")
+                    continue
+
+                # Find the component name from named exports
+                # Pattern: export const ComponentName = ...
+                # or: export function ComponentName(...
+                # or: export const ComponentName: React.FC = ...
+                component_match = re.search(
+                    r'export\s+(?:const|function|class)\s+([A-Z][a-zA-Z0-9]*)',
+                    content
+                )
+
+                if not component_match:
+                    logger.warning(f"[FixerAgent:{project_id}] Could not find component name in {rel_path}")
+                    continue
+
+                component_name = component_match.group(1)
+                logger.info(f"[FixerAgent:{project_id}] Found component '{component_name}' in {rel_path}")
+
+                # Add default export at the end of the file
+                if content.endswith('\n'):
+                    new_content = content + f"\nexport default {component_name};\n"
+                else:
+                    new_content = content + f"\n\nexport default {component_name};\n"
+
+                # Write fixed content
+                file_path.write_text(new_content, encoding='utf-8')
+
+                # Determine the correct relative path
+                try:
+                    final_rel_path = str(file_path.relative_to(project_path))
+                except ValueError:
+                    final_rel_path = rel_path
+
+                files_modified.append(final_rel_path)
+                logger.info(f"[FixerAgent:{project_id}] Added 'export default {component_name}' to {final_rel_path}")
+
+                # Create a patch for the response
+                patches.append(f"""<patch>
+--- {final_rel_path}
++++ {final_rel_path}
+@@ -end of file @@
++export default {component_name};
+</patch>""")
+
+                # Sync to S3 for persistence
+                try:
+                    from app.services.unified_storage import unified_storage
+                    await unified_storage.save_to_database(
+                        project_id=project_id,
+                        file_path=final_rel_path,
+                        content=new_content
+                    )
+                    logger.info(f"[FixerAgent:{project_id}] Persisted fix to S3+DB: {final_rel_path}")
+                except Exception as sync_err:
+                    logger.warning(f"[FixerAgent:{project_id}] Failed to persist fix: {sync_err}")
+
+            except Exception as e:
+                logger.warning(f"[FixerAgent:{project_id}] Error fixing {rel_path}: {e}")
+                continue
+
+        if files_modified:
+            return {
+                "response": "\n".join(patches),
+                "files_modified": files_modified,
+                "message": f"Deterministic fix: Added default exports to {len(files_modified)} component(s)",
+                "deterministic": True
+            }
+
+        return None
+
     async def fix_error(
         self,
         error: Dict[str, Any],
@@ -392,6 +523,18 @@ If additional commands are needed (npm install, pip install, etc.), use <instruc
         error_file = error.get("file", "unknown")
         error_line = error.get("line", 0)
         error_type = error.get("type", "runtime_error")
+
+        # =================================================================
+        # STEP 0: Try deterministic fixes FIRST (fast, free, no AI cost)
+        # =================================================================
+        # Try deterministic export mismatch fix
+        deterministic_result = await self._try_deterministic_export_fix(
+            project_id=project_id,
+            error_message=error_message
+        )
+        if deterministic_result:
+            logger.info(f"[FixerAgent:{project_id}] Deterministic fix applied - skipping AI")
+            return deterministic_result
 
         # Get file contents for context
         files_created = file_context.get("files_created", [])
