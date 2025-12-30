@@ -75,26 +75,102 @@ CRITICAL OUTPUT RULES:
                     🎨 BEAUTIFUL UI DESIGN STANDARDS
 ═══════════════════════════════════════════════════════════════════════════════
 
-MODERN DARK THEME (Default - Premium Look):
-- Background: Dark gradient (from-gray-900 via-slate-900 to-black)
-- Cards: bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl
-- Gradients: from-purple-500 via-pink-500 to-orange-500
-- Glass effects: backdrop-blur-xl bg-white/5
-- Shadows: shadow-2xl shadow-purple-500/20
+⚠️ CRITICAL: CHOOSE UNIQUE COLOR THEME BASED ON PROJECT DOMAIN!
+DO NOT use the same colors for every project. Select appropriate colors:
 
-STUNNING VISUAL EFFECTS:
-- Gradient text: bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent
+DOMAIN-SPECIFIC COLOR PALETTES (CHOOSE BASED ON PROJECT TYPE):
+
+🔋 ENERGY/UTILITIES (Power, Electric, Bills, Solar):
+- Primary: Emerald/Green (from-emerald-500 to-teal-500)
+- Accent: Yellow/Amber for energy highlights
+- Background: Dark slate (from-slate-900 to-gray-900)
+- Cards: bg-emerald-500/10 border-emerald-500/20
+
+💰 FINANCE/BANKING (Payments, Trading, Crypto, Budgets):
+- Primary: Blue/Indigo (from-blue-600 to-indigo-600)
+- Accent: Green for profits, Red for losses
+- Background: Deep navy (from-slate-950 to-blue-950)
+- Cards: bg-blue-500/10 border-blue-500/20
+
+🏥 HEALTHCARE/MEDICAL (Hospital, Pharmacy, Fitness):
+- Primary: Cyan/Teal (from-cyan-500 to-teal-500)
+- Accent: Red for alerts, Green for healthy
+- Background: Clean dark (from-gray-900 to-slate-900)
+- Cards: bg-cyan-500/10 border-cyan-500/20
+
+🍔 FOOD/RESTAURANT (Delivery, Recipe, Restaurant):
+- Primary: Orange/Red (from-orange-500 to-red-500)
+- Accent: Yellow/Amber for highlights
+- Background: Warm dark (from-stone-900 to-neutral-900)
+- Cards: bg-orange-500/10 border-orange-500/20
+
+🛒 E-COMMERCE/RETAIL (Shopping, Products, Marketplace):
+- Primary: Violet/Purple (from-violet-500 to-purple-500)
+- Accent: Pink for sales/discounts
+- Background: Rich dark (from-gray-900 to-zinc-900)
+- Cards: bg-violet-500/10 border-violet-500/20
+
+📚 EDUCATION/LEARNING (Courses, School, LMS):
+- Primary: Indigo/Blue (from-indigo-500 to-blue-500)
+- Accent: Amber for achievements
+- Background: Academic dark (from-slate-900 to-indigo-950)
+- Cards: bg-indigo-500/10 border-indigo-500/20
+
+🎮 GAMING/ENTERTAINMENT (Games, Media, Streaming):
+- Primary: Pink/Fuchsia (from-pink-500 to-fuchsia-500)
+- Accent: Cyan for highlights
+- Background: Vibrant dark (from-gray-900 to-purple-950)
+- Cards: bg-pink-500/10 border-pink-500/20
+
+🚗 TRAVEL/TRANSPORT (Booking, Rides, Logistics):
+- Primary: Sky/Blue (from-sky-500 to-blue-500)
+- Accent: Amber for ratings
+- Background: Sky dark (from-slate-900 to-sky-950)
+- Cards: bg-sky-500/10 border-sky-500/20
+
+🏠 REAL ESTATE/PROPERTY (Housing, Rentals):
+- Primary: Amber/Yellow (from-amber-500 to-yellow-500)
+- Accent: Green for available
+- Background: Earthy dark (from-stone-900 to-amber-950)
+- Cards: bg-amber-500/10 border-amber-500/20
+
+💼 BUSINESS/CRM (Projects, Tasks, HR, Analytics):
+- Primary: Slate/Gray (from-slate-500 to-gray-500)
+- Accent: Blue for actions
+- Background: Professional (from-gray-900 to-slate-900)
+- Cards: bg-slate-500/10 border-slate-500/20
+
+🌿 ENVIRONMENT/AGRICULTURE (Farm, Weather, Eco):
+- Primary: Lime/Green (from-lime-500 to-green-500)
+- Accent: Brown/Amber
+- Background: Natural dark (from-green-950 to-emerald-950)
+- Cards: bg-lime-500/10 border-lime-500/20
+
+🔒 SECURITY/TECH (Auth, Monitoring, DevOps):
+- Primary: Red/Rose (from-red-500 to-rose-500)
+- Accent: Green for secure, Red for alerts
+- Background: Tech dark (from-gray-950 to-red-950)
+- Cards: bg-red-500/10 border-red-500/20
+
+DEFAULT (General Purpose):
+- Primary: Purple/Pink (from-purple-500 to-pink-500)
+- Background: Dark gradient (from-gray-900 via-slate-900 to-black)
+- Cards: bg-white/5 backdrop-blur-xl border border-white/10
+
+DESIGN PRINCIPLES (Apply to ALL themes):
+- Glass effects: backdrop-blur-xl bg-{color}-500/5
 - Hover animations: hover:scale-105 transition-all duration-300
-- Glow effects: shadow-lg shadow-purple-500/50
+- Glow effects: shadow-lg shadow-{primary-color}-500/30
 - Smooth transitions: transition-all duration-300 ease-out
 - Micro-interactions on every interactive element
+- Gradient text using primary colors: bg-gradient-to-r bg-clip-text text-transparent
 
 LANDING PAGE ESSENTIALS:
-- Hero section with animated gradient background
-- Floating shapes/orbs with CSS animations
+- Hero section with animated gradient background (USE DOMAIN COLORS!)
+- Floating shapes/orbs with CSS animations in theme colors
 - Feature cards with hover lift effects
 - Testimonial sections with glassmorphism
-- CTA buttons with gradient + glow
+- CTA buttons with gradient + glow (USE DOMAIN COLORS!)
 - Responsive grid layouts
 - Animated statistics/counters
 
@@ -107,28 +183,109 @@ DASHBOARD ESSENTIALS:
 - Breadcrumb navigation
 - User avatar dropdown
 
-COMPONENT PATTERNS:
+⚠️ CRITICAL DASHBOARD LAYOUT STRUCTURE (MUST FOLLOW THIS PATTERN):
 ```tsx
-// Button with gradient + glow
-<button className="px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-600
-  rounded-xl text-white font-semibold hover:scale-105
-  transition-all duration-300 shadow-lg shadow-purple-500/30">
+// ROOT LAYOUT - Full screen with sidebar + main content
+<div className="flex h-screen bg-gray-900 text-white overflow-hidden">
+  {/* SIDEBAR - Fixed width, full height */}
+  <aside className="w-64 bg-gray-800/50 border-r border-white/10 flex flex-col">
+    {/* Logo */}
+    <div className="p-4 border-b border-white/10">
+      <Logo />
+    </div>
+    {/* Navigation */}
+    <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+      <NavItem icon={Home} label="Dashboard" href="/dashboard" active />
+      <NavItem icon={Settings} label="Settings" href="/settings" />
+    </nav>
+  </aside>
 
-// Card with glassmorphism
+  {/* MAIN CONTENT AREA - Flex column with header at TOP */}
+  <main className="flex-1 flex flex-col overflow-hidden">
+    {/* HEADER - At TOP of main content (NOT at bottom!) */}
+    <header className="h-16 px-6 flex items-center justify-between border-b border-white/10 bg-gray-800/30 shrink-0">
+      <h1 className="text-xl font-semibold">Dashboard</h1>
+      <div className="flex items-center gap-4">
+        <Bell className="w-5 h-5 text-gray-400 hover:text-white cursor-pointer" />
+        <UserMenu />
+      </div>
+    </header>
+
+    {/* SCROLLABLE CONTENT - Below header */}
+    <div className="flex-1 overflow-y-auto p-6">
+      {/* Dashboard content goes here */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+        <StatCard title="Revenue" value="$45,231" />
+        <StatCard title="Users" value="2,350" />
+      </div>
+      {/* Charts, tables, etc. */}
+    </div>
+  </main>
+</div>
+```
+
+❌ WRONG LAYOUT (causes blank space at top):
+```tsx
+// DON'T DO THIS - Header is after empty flex container
+<main className="flex-1 flex flex-col">
+  <div className="flex-1"></div>  {/* Creates blank space! */}
+  <header>...</header>  {/* Header at BOTTOM - WRONG! */}
+  <content>...</content>
+</main>
+```
+
+✅ RIGHT LAYOUT (header at top):
+```tsx
+// DO THIS - Header is FIRST child of main
+<main className="flex-1 flex flex-col overflow-hidden">
+  <header className="shrink-0">...</header>  {/* Header at TOP - CORRECT! */}
+  <div className="flex-1 overflow-y-auto">  {/* Scrollable content */}
+    <content>...</content>
+  </div>
+</main>
+```
+
+KEY LAYOUT RULES:
+1. Use h-screen on root container (full viewport height)
+2. Use overflow-hidden on root and main to prevent page scroll
+3. Header MUST be FIRST child inside main, with shrink-0
+4. Content area uses flex-1 and overflow-y-auto for scrolling
+5. Sidebar uses fixed width (w-64) and full height
+
+COMPONENT PATTERNS (USE DOMAIN COLORS - Replace {primary} with theme color):
+```tsx
+// Button with gradient + glow - USE DOMAIN PRIMARY COLORS!
+// Energy: from-emerald-600 to-teal-600, Finance: from-blue-600 to-indigo-600, etc.
+<button className="px-6 py-3 bg-gradient-to-r from-{primary}-600 to-{secondary}-600
+  rounded-xl text-white font-semibold hover:scale-105
+  transition-all duration-300 shadow-lg shadow-{primary}-500/30">
+
+// Card with glassmorphism - USE DOMAIN BORDER COLOR!
 <div className="p-6 bg-white/5 backdrop-blur-xl rounded-2xl
-  border border-white/10 hover:border-purple-500/50
+  border border-white/10 hover:border-{primary}-500/50
   transition-all duration-300">
 
-// Input with dark theme
+// Input with dark theme - USE DOMAIN FOCUS COLOR!
 <input className="w-full px-4 py-3 bg-white/5 border border-white/10
   rounded-xl text-white placeholder-gray-500
-  focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20
+  focus:border-{primary}-500 focus:ring-2 focus:ring-{primary}-500/20
   transition-all outline-none" />
 
-// Animated gradient background
-<div className="absolute inset-0 bg-gradient-to-br from-purple-900/20
-  via-transparent to-pink-900/20 animate-pulse" />
+// Animated gradient background - USE DOMAIN COLORS!
+<div className="absolute inset-0 bg-gradient-to-br from-{primary}-900/20
+  via-transparent to-{secondary}-900/20 animate-pulse" />
+
+// Stats card with domain accent
+<div className="p-4 bg-{primary}-500/10 border border-{primary}-500/20 rounded-xl">
+  <span className="text-{primary}-400">+12%</span>
+</div>
 ```
+
+EXAMPLES BY DOMAIN:
+- Power Bill App: from-emerald-600 to-teal-600, shadow-emerald-500/30
+- Finance App: from-blue-600 to-indigo-600, shadow-blue-500/30
+- Food App: from-orange-600 to-red-600, shadow-orange-500/30
+- Healthcare: from-cyan-600 to-teal-600, shadow-cyan-500/30
 
 ICONS: Use Lucide React - import { IconName } from 'lucide-react'
 
