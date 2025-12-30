@@ -189,7 +189,7 @@ class StorageService:
         return hashlib.sha256(content).hexdigest()
 
     @staticmethod
-    def generate_s3_key(project_id: str, file_path: str, content_hash: str = None) -> str:
+    def generate_s3_key(project_id: str, file_path: str) -> str:
         """
         Generate S3 key with simple path-based structure.
         Format: projects/{project_id}/{file_path}
@@ -200,8 +200,6 @@ class StorageService:
         - Direct mapping: file path = S3 key
         - Updates naturally overwrite (same path = same key)
         - Industry standard (GitHub, Replit, Bolt.new use this)
-
-        Note: content_hash kept for backwards compatibility but not used in key.
         """
         # Normalize path separators
         normalized_path = file_path.replace("\\", "/")
@@ -225,21 +223,22 @@ class StorageService:
         Updates naturally overwrite existing files at the same path.
 
         Returns:
-            dict with s3_key, content_hash, size_bytes
+            dict with s3_key, size_bytes, content_hash (for DB only)
 
         Retry behavior:
             - Retries on ClientError, ConnectionError, TimeoutError
             - Exponential backoff: 1s, 2s, 4s...
             - Max 3 retries by default
         """
-        content_hash = self.calculate_hash(content)
         s3_key = self.generate_s3_key(project_id, file_path)
         size_bytes = len(content)
+        # Hash calculated for database integrity, NOT used in S3 key
+        content_hash = self.calculate_hash(content)
 
         client = self._get_client()
 
         # Path-based storage: just upload (overwrites if exists)
-        # No deduplication check needed - same path = same file
+        # No deduplication, no hash in S3 key or metadata
 
         # Upload file with retry logic
         last_exception = None
@@ -252,8 +251,7 @@ class StorageService:
                     ContentType=content_type,
                     Metadata={
                         'project_id': project_id,
-                        'file_path': file_path,
-                        'content_hash': content_hash
+                        'file_path': file_path
                     }
                 )
 
@@ -261,9 +259,8 @@ class StorageService:
 
                 return {
                     's3_key': s3_key,
-                    'content_hash': content_hash,
                     'size_bytes': size_bytes,
-                    'deduplicated': False
+                    'content_hash': content_hash  # For database, not S3
                 }
 
             except (ClientError, ConnectionError, TimeoutError) as e:
