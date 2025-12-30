@@ -1,6 +1,15 @@
 """
 AGENT 3 - Fixer Agent (Auto Debugger)
 Fixes errors during generation, build, runtime, or compilation
+
+Architecture follows Bolt.new pattern:
+1. Error Classifier (rule-based) - Classifies errors BEFORE Claude
+2. Decision Gate - Determines if Claude should be called
+3. Strict Prompt - Claude returns diff only, no explanations
+4. Patch Validator - Validates output before applying
+5. Retry Limiter - Caps retries to prevent runaway costs
+
+Claude is never called blindly. Claude is a tool, not a controller.
 """
 
 from typing import Dict, List, Optional, Any, Tuple
@@ -11,6 +20,9 @@ from pathlib import Path
 
 from app.core.logging_config import logger
 from app.modules.agents.base_agent import BaseAgent, AgentContext
+from app.services.error_classifier import ErrorClassifier, ErrorType, ClassifiedError
+from app.services.patch_validator import PatchValidator, ValidationResult
+from app.services.retry_limiter import RetryLimiter, retry_limiter
 
 
 class FixerAgent(BaseAgent):
@@ -27,132 +39,57 @@ class FixerAgent(BaseAgent):
     - Generate corrected FULL file(s)
     """
 
-    SYSTEM_PROMPT = """You are the FIXER agent for an AI code-generation platform.
+    # STRICT system prompt - Claude only returns diffs, no explanations
+    SYSTEM_PROMPT = """You are an automated code-fix agent.
 
-Your purpose:
-Fix errors in the user's project by returning MINIMAL and SAFE code patches using unified diff format.
-ALSO create missing files when the error is clearly about a file that doesn't exist (ENOENT errors).
-
-You will receive:
-1. The user's problem description
-2. Browser console errors
-3. Build logs, backend logs, Docker logs
-4. The project file tree
-5. The content of ONLY the relevant files
-6. Additional context detected by the system (tech stack, dependencies)
-
-Your responsibilities:
-- Identify the root cause from logs + file content.
-- Modify ONLY the files provided.
-- Produce a minimal patch that fixes the exact issue.
-- Do NOT rewrite entire files.
-- CREATE missing config files when the error indicates a file is missing (ENOENT, "no such file", "Failed to resolve config file").
+STRICT RULES:
+- You may ONLY return a unified diff or file block.
+- Do NOT explain.
+- Do NOT invent files.
 - Do NOT modify unrelated code.
-- NEVER hallucinate file paths or folder names.
-- If you need another file's content, request it explicitly.
+- Do NOT output anything outside <patch> or <newfile> or <file> blocks.
 
-Output Rules:
+OUTPUT FORMAT:
 
-1. For PATCHING existing files, use <patch> blocks:
-- Every modification must be inside <patch> ... </patch>
-- Use standard unified diff format:
-  --- path/to/file
-  +++ path/to/file
-  @@ context @@
-  - old line
-  + new line
-- Only output patches, no explanations outside <patch> blocks.
-- If no change is needed, respond with: <patch></patch>
-
-2. For CREATING missing files, use <newfile> blocks:
-- Use <newfile path="path/to/file">content</newfile>
-- This is for creating files that don't exist but are required (config files, missing imports, etc.)
-
-COMMON MISSING CONFIG FILES (use these templates):
-
-tsconfig.node.json (required when tsconfig.json has references to it):
-```json
-{
-  "compilerOptions": {
-    "composite": true,
-    "skipLibCheck": true,
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "allowSyntheticDefaultImports": true,
-    "strict": true
-  },
-  "include": ["vite.config.ts"]
-}
-```
-
-postcss.config.js (required for Tailwind CSS):
-```javascript
-export default {
-  plugins: {
-    tailwindcss: {},
-    autoprefixer: {},
-  },
-}
-```
-
-tailwind.config.js (required for Tailwind CSS):
-```javascript
-/** @type {import('tailwindcss').Config} */
-export default {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
-  theme: {
-    extend: {},
-  },
-  plugins: [],
-}
-```
-
-Constraints:
-- If logs contradict file content, rely on file content.
-- If the error cannot be fixed with available files, ask:
-  "I need the content of {file_path} to provide a correct fix."
-- Preserve formatting and style conventions already in the file.
-- Do not remove user code unless it is undeniably wrong.
-- Do not modify import order or formatting unless necessary to fix.
-
-Error Understanding:
-- Read stack traces and extract source file & line numbers.
-- Use dependency graph to understand related files.
-- Identify common frontend issues:
-  - React undefined variables
-  - React hydration mismatches
-  - Missing exports/imports
-  - CSS/JS module resolution issues
-- Identify common backend issues:
-  - Missing routes
-  - Incorrect API paths
-  - Syntax errors
-  - Missing dependencies
-- Identify Docker issues:
-  - Misconfigured ports
-  - Container failing to start
-  - Missing environment variables
-
-Your Output:
-- One or more <patch> blocks.
-- No text outside patch blocks.
-- No markdown formatting.
-- No extra commentary.
-- Only the exact code changes needed to fix the error.
-
-Example Output:
+For PATCHING existing files:
 <patch>
---- src/App.jsx
-+++ src/App.jsx
-@@ -12,6 +12,6 @@ function App() {
-- const data = props.items.map(i => i.name)
-+ const data = (props.items || []).map(i => i.name)
+--- path/to/file
++++ path/to/file
+@@ -line,count +line,count @@
+- old line
++ new line
 </patch>
 
-End of rules."""
+For CREATING missing files:
+<newfile path="path/to/file">
+file content here
+</newfile>
+
+For FULL FILE REPLACEMENT (syntax errors only):
+<file path="path/to/file">
+complete file content
+</file>
+
+If no fix is possible: <patch></patch>
+
+No text outside blocks. No markdown. No commentary."""
+
+    # Extended system prompt for syntax errors (full file replacement)
+    SYNTAX_FIX_PROMPT = """You are fixing a SYNTAX ERROR.
+
+The file has malformed code (mismatched brackets, tokens, etc).
+You MUST return the COMPLETE fixed file.
+
+Use: <file path="filepath">complete content</file>
+
+Rules:
+- Return the ENTIRE file, not a patch
+- Fix all bracket mismatches {{ }} ( ) [ ]
+- Remove duplicate code blocks
+- Remove orphaned/unreachable code
+- Maintain proper component structure
+
+No explanations. Only the <file> block."""
 
     def __init__(self, model: str = "sonnet"):
         super().__init__(
@@ -510,6 +447,14 @@ If additional commands are needed (npm install, pip install, etc.), use <instruc
         """
         Fix a specific error - called by orchestrator
 
+        Follows Bolt.new architecture:
+        1. Classify error (rule-based, no AI)
+        2. Check if Claude should be called
+        3. Check retry limits
+        4. Call Claude with strict prompt
+        5. Validate output
+        6. Apply fix
+
         Args:
             error: Error dictionary with message, file, line, etc.
             project_id: Project ID
@@ -522,18 +467,60 @@ If additional commands are needed (npm install, pip install, etc.), use <instruc
         error_message = error.get("message", "Unknown error")
         error_file = error.get("file", "unknown")
         error_line = error.get("line", 0)
-        error_type = error.get("type", "runtime_error")
+        stderr = error.get("stderr", "")
 
         # =================================================================
-        # STEP 0: Try deterministic fixes FIRST (fast, free, no AI cost)
+        # STEP 1: CLASSIFY ERROR (Rule-based, NO AI)
         # =================================================================
-        # Try deterministic export mismatch fix
+        classified = ErrorClassifier.classify(
+            error_message=error_message,
+            stderr=stderr,
+            exit_code=error.get("exit_code", 1)
+        )
+        logger.info(
+            f"[FixerAgent:{project_id}] Classified error: {classified.error_type.value}, "
+            f"fixable={classified.is_claude_fixable}, confidence={classified.confidence}"
+        )
+
+        # =================================================================
+        # STEP 2: DECISION GATE - Should Claude be called?
+        # =================================================================
+        should_call, reason = ErrorClassifier.should_call_claude(classified)
+        if not should_call:
+            logger.info(f"[FixerAgent:{project_id}] NOT calling Claude: {reason}")
+            return {
+                "success": False,
+                "error": reason,
+                "error_type": classified.error_type.value,
+                "suggested_action": classified.suggested_action,
+                "skip_claude": True
+            }
+
+        # =================================================================
+        # STEP 3: CHECK RETRY LIMITS
+        # =================================================================
+        error_hash = retry_limiter.hash_error(error_message)
+        can_retry, retry_reason = retry_limiter.can_retry(project_id, error_hash)
+        if not can_retry:
+            logger.warning(f"[FixerAgent:{project_id}] Retry limit reached: {retry_reason}")
+            return {
+                "success": False,
+                "error": retry_reason,
+                "error_type": classified.error_type.value,
+                "retry_blocked": True,
+                "stats": retry_limiter.get_stats(project_id)
+            }
+
+        # =================================================================
+        # STEP 4: Try deterministic fixes FIRST (fast, free, no AI cost)
+        # =================================================================
         deterministic_result = await self._try_deterministic_export_fix(
             project_id=project_id,
             error_message=error_message
         )
         if deterministic_result:
             logger.info(f"[FixerAgent:{project_id}] Deterministic fix applied - skipping AI")
+            retry_limiter.record_attempt(project_id, error_hash, tokens_used=0, fixed=True)
             return deterministic_result
 
         # Get file contents for context
@@ -661,56 +648,154 @@ If additional commands are needed (npm install, pip install, etc.), use <instruc
                     for frame in trace.get('frames', [])[:5]:
                         logs_section += f"    at {frame.get('function', '?')} ({frame.get('file', '?')}:{frame.get('line', '?')})\n"
 
-        # Build prompt for Claude with full relevant files
-        prompt = f"""
-Fix the following error:
+        # =================================================================
+        # STEP 5: BUILD STRICT PROMPT (based on error type)
+        # =================================================================
+        # Get the error-type specific prompt template
+        error_type_prompt = ErrorClassifier.get_claude_prompt_template(classified.error_type)
 
-ERROR TYPE: {error_type}
-ERROR MESSAGE: {error_message}
-FILE: {error_file}
-LINE: {error_line}
+        # Choose system prompt based on error type
+        if classified.error_type == ErrorType.SYNTAX_ERROR:
+            system_prompt = self.SYNTAX_FIX_PROMPT
+            max_tokens = 16384  # Need more tokens for full file
+        else:
+            system_prompt = self.SYSTEM_PROMPT
+            max_tokens = 4096  # Smaller for diffs
 
-RELEVANT FILES (FULL CONTENT):
+        # Build the strict user prompt
+        prompt = f"""{error_type_prompt}
+
+ERROR: {error_message}
+FILE: {classified.file_path or error_file}
+LINE: {classified.line_number or error_line}
+
+CONTEXT:
+{json.dumps(classified.extracted_context, indent=2) if classified.extracted_context else "None"}
+
+FILE CONTENT:
 {relevant_files_content if relevant_files_content else "No file content available"}
 
-FILE TREE:
-{json.dumps(context_payload.file_tree[:30] if context_payload else [f.get("path", f) if isinstance(f, dict) else f for f in files_created[:20]], indent=2)}
-
-ALL COLLECTED LOGS:
-{logs_section if logs_section else "No logs collected"}
-
-TECH STACK:
-{context_payload.tech_stack if context_payload else (json.dumps(tech_stack, indent=2) if tech_stack else "Not specified")}
-
-Analyze the error and provide a FIX:
-- If the error is about a MISSING FILE (ENOENT, "no such file", "Failed to resolve config file"), CREATE the file using <newfile path="...">content</newfile>
-- For other errors, use <patch> format to fix existing files.
+BUILD LOG (last 20 lines):
+{logs_section[-2000:] if logs_section else "No logs"}
 """
 
-        # Call Claude
+        # =================================================================
+        # STEP 6: CALL CLAUDE (strict prompt, limited tokens)
+        # =================================================================
+        logger.info(f"[FixerAgent:{project_id}] Calling Claude for {classified.error_type.value} fix")
         response = await self._call_claude(
-            system_prompt=self.SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             user_prompt=prompt,
-            max_tokens=8192,
-            temperature=0.2
+            max_tokens=max_tokens,
+            temperature=0.1  # Very low for precise fixes
         )
 
-        # Parse response - prefer patches over full files
+        # Estimate tokens used (rough estimate)
+        tokens_used = len(prompt.split()) + len(response.split())
+
+        # =================================================================
+        # STEP 7: PARSE RESPONSE
+        # =================================================================
         patches = self._parse_patch_blocks(response)
         fixed_files = self._parse_file_blocks(response)
-        new_files = self._parse_newfile_blocks(response)  # For creating missing files
-        instructions = self._parse_instructions(response)
+        new_files = self._parse_newfile_blocks(response)
         requested_files = self._parse_request_files(response)
 
-        logger.info(f"[FixerAgent] Got {len(patches)} patches, {len(fixed_files)} full files, {len(new_files)} new files, {len(requested_files)} file requests for error: {error_message[:50]}...")
+        logger.info(
+            f"[FixerAgent:{project_id}] Claude returned: "
+            f"{len(patches)} patches, {len(fixed_files)} files, {len(new_files)} new files"
+        )
+
+        # =================================================================
+        # STEP 8: VALIDATE PATCHES (before applying)
+        # =================================================================
+        try:
+            from app.modules.automation.file_manager import FileManager
+            fm = FileManager()
+            project_path = fm.get_project_path(project_id)
+        except:
+            project_path = Path("/tmp")
+
+        validation_errors = []
+        validated_patches = []
+        validated_files = []
+        validated_new_files = []
+
+        # Validate patches
+        for patch in patches:
+            result = PatchValidator.validate_diff(
+                patch_content=patch.get("patch", ""),
+                project_path=project_path
+            )
+            if result.is_valid:
+                validated_patches.append(patch)
+            else:
+                validation_errors.extend(result.errors)
+                logger.warning(f"[FixerAgent:{project_id}] Invalid patch for {result.file_path}: {result.errors}")
+
+        # Validate full file replacements
+        for file_info in fixed_files:
+            result = PatchValidator.validate_full_file(
+                file_path=file_info.get("path", ""),
+                content=file_info.get("content", ""),
+                project_path=project_path
+            )
+            if result.is_valid:
+                validated_files.append(file_info)
+            else:
+                validation_errors.extend(result.errors)
+                logger.warning(f"[FixerAgent:{project_id}] Invalid file {result.file_path}: {result.errors}")
+
+        # Validate new files
+        for file_info in new_files:
+            result = PatchValidator.validate_new_file(
+                file_path=file_info.get("path", ""),
+                content=file_info.get("content", ""),
+                project_path=project_path
+            )
+            if result.is_valid:
+                validated_new_files.append(file_info)
+            else:
+                validation_errors.extend(result.errors)
+                logger.warning(f"[FixerAgent:{project_id}] Invalid new file {result.file_path}: {result.errors}")
+
+        # =================================================================
+        # STEP 9: RECORD ATTEMPT
+        # =================================================================
+        has_valid_fix = (len(validated_patches) > 0 or
+                        len(validated_files) > 0 or
+                        len(validated_new_files) > 0)
+
+        retry_limiter.record_attempt(
+            project_id=project_id,
+            error_hash=error_hash,
+            tokens_used=tokens_used,
+            fixed=has_valid_fix
+        )
+
+        # =================================================================
+        # STEP 10: RETURN RESULT
+        # =================================================================
+        if validation_errors and not has_valid_fix:
+            logger.error(f"[FixerAgent:{project_id}] All patches failed validation: {validation_errors}")
+            return {
+                "success": False,
+                "error": f"Patches failed validation: {validation_errors[0]}",
+                "validation_errors": validation_errors,
+                "error_type": classified.error_type.value,
+                "response": response
+            }
 
         return {
-            "success": True,
+            "success": has_valid_fix,
             "response": response,
-            "patches": patches,  # Preferred - minimal changes
-            "fixed_files": fixed_files,  # Fallback - full file replacement
-            "new_files": new_files,  # For creating missing config files
-            "instructions": instructions,
-            "requested_files": requested_files,  # Files agent needs for more context
-            "error_fixed": error_message
+            "patches": validated_patches,
+            "fixed_files": validated_files,
+            "new_files": validated_new_files,
+            "requested_files": requested_files,
+            "error_fixed": error_message,
+            "error_type": classified.error_type.value,
+            "validation_warnings": validation_errors if not has_valid_fix else [],
+            "tokens_used": tokens_used,
+            "retry_stats": retry_limiter.get_stats(project_id)
         }
