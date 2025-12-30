@@ -993,6 +993,14 @@ class SimpleFixer:
                 logger.info(f"[SimpleFixer:{project_id}] Deterministic CSS fix applied - skipping AI")
                 return deterministic_result
 
+            # =================================================================
+            # STEP 0c: Try deterministic export mismatch fix (fast, free, no AI)
+            # =================================================================
+            export_fix_result = await self._try_deterministic_export_mismatch_fix(project_path, error_text)
+            if export_fix_result:
+                logger.info(f"[SimpleFixer:{project_id}] Deterministic export fix applied - skipping AI")
+                return export_fix_result
+
             # COST OPTIMIZATION #2: Select model based on complexity
             model = self._select_model(complexity)
 
@@ -2044,6 +2052,108 @@ Please analyze and fix these errors. If the output shows success or warnings onl
 
         return None
 
+    async def _try_deterministic_export_mismatch_fix(
+        self,
+        project_path: Path,
+        output: str
+    ) -> Optional[SimpleFixResult]:
+        """
+        Deterministically fix export/import mismatches (no AI needed).
+
+        This fixes the common error:
+        - "No matching export in 'X.tsx' for import 'default'"
+
+        When components use named exports (export const X = ...) but
+        imports expect default exports (import X from ...).
+
+        The fix: Add 'export default ComponentName;' at the end of the file.
+        """
+        # Pattern: No matching export in "path" for import "default"
+        export_error_pattern = r'No matching export in ["\']([^"\']+)["\'] for import ["\']default["\']'
+        matches = re.findall(export_error_pattern, output)
+
+        if not matches:
+            return None
+
+        logger.info(f"[SimpleFixer] Found {len(matches)} export mismatch errors")
+
+        files_modified = []
+        unique_files = set(matches)
+
+        for rel_path in unique_files:
+            try:
+                # Handle paths like src/components/UI/Button.tsx
+                file_path = project_path / rel_path
+
+                # Also try with frontend/ prefix for full-stack projects
+                if not file_path.exists():
+                    file_path = project_path / "frontend" / rel_path
+                if not file_path.exists():
+                    logger.warning(f"[SimpleFixer] File not found: {rel_path}")
+                    continue
+
+                content = file_path.read_text(encoding='utf-8')
+
+                # Check if file already has a default export
+                if re.search(r'export\s+default\s+', content):
+                    logger.info(f"[SimpleFixer] File already has default export: {rel_path}")
+                    continue
+
+                # Find the component name from named exports
+                # Pattern: export const ComponentName = ...
+                # or: export function ComponentName(...
+                # or: export const ComponentName: React.FC = ...
+                component_match = re.search(
+                    r'export\s+(?:const|function|class)\s+([A-Z][a-zA-Z0-9]*)',
+                    content
+                )
+
+                if not component_match:
+                    logger.warning(f"[SimpleFixer] Could not find component name in {rel_path}")
+                    continue
+
+                component_name = component_match.group(1)
+                logger.info(f"[SimpleFixer] Found component '{component_name}' in {rel_path}")
+
+                # Add default export at the end of the file
+                # Check if file ends with a newline
+                if content.endswith('\n'):
+                    new_content = content + f"\nexport default {component_name};\n"
+                else:
+                    new_content = content + f"\n\nexport default {component_name};\n"
+
+                # Write fixed content
+                file_path.write_text(new_content, encoding='utf-8')
+
+                # Determine the correct relative path for storage
+                try:
+                    final_rel_path = str(file_path.relative_to(project_path))
+                except ValueError:
+                    final_rel_path = rel_path
+
+                files_modified.append(final_rel_path)
+                logger.info(f"[SimpleFixer] Added 'export default {component_name}' to {final_rel_path}")
+
+                # Sync to S3
+                path_parts = str(project_path).replace("\\", "/").split("/")
+                project_id = path_parts[-1] if path_parts else None
+                if project_id:
+                    await self._sync_to_s3(project_id, final_rel_path, new_content)
+
+            except Exception as e:
+                logger.warning(f"[SimpleFixer] Error fixing {rel_path}: {e}")
+                continue
+
+        if files_modified:
+            return SimpleFixResult(
+                success=True,
+                files_modified=files_modified,
+                message=f"Added default exports to {len(files_modified)} component(s)",
+                patches_applied=len(files_modified)
+            )
+
+        return None
+
     async def fix(
         self,
         project_path: Path,
@@ -2077,6 +2187,15 @@ Please analyze and fix these errors. If the output shows success or warnings onl
             if deterministic_result:
                 logger.info(f"[SimpleFixer] Deterministic CSS fix applied - skipping AI")
                 return deterministic_result
+
+            # =================================================================
+            # STEP 0c: Try deterministic export mismatch fix (fast, free, no AI)
+            # =================================================================
+            export_fix_result = await self._try_deterministic_export_mismatch_fix(project_path, output)
+            if export_fix_result:
+                logger.info(f"[SimpleFixer] Deterministic export fix applied - skipping AI")
+                return export_fix_result
+
             # COST OPTIMIZATION #2: Classify error for model selection
             errors = [{"message": output[-2000:], "source": "terminal"}]
             complexity = self._classify_error_complexity(errors, output)
@@ -2422,21 +2541,35 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
         ]
 
     async def _sync_to_s3(self, project_id: str, file_path: str, content: str) -> None:
-        """Sync fixed file to S3 storage"""
+        """
+        Sync fixed file to BOTH S3 AND database.
+
+        CRITICAL: Uses save_to_database() which:
+        1. Uploads to S3 with content-addressed key (hash-based)
+        2. Updates database record with new s3_key
+
+        Previously only uploaded to a different S3 path, causing
+        fixes to be lost on restore (database pointed to old content).
+        """
         try:
             from app.services.unified_storage import unified_storage
 
-            # Upload to S3
-            s3_key = f"projects/{project_id}/{file_path}"
-            await unified_storage.upload_content(
-                content=content.encode('utf-8'),
-                key=s3_key,
-                content_type='text/plain'
+            # Use save_to_database which properly updates BOTH S3 and database
+            # This uses content-addressed storage and updates the database record
+            success = await unified_storage.save_to_database(
+                project_id=project_id,
+                file_path=file_path,
+                content=content
             )
-            logger.info(f"[SimpleFixer] Synced to S3: {s3_key}")
+
+            if success:
+                logger.info(f"[SimpleFixer] ✓ Persisted fix to S3+DB: {file_path}")
+            else:
+                logger.warning(f"[SimpleFixer] ✗ Failed to persist fix: {file_path}")
+
         except Exception as e:
-            # Don't fail the fix if S3 sync fails - just log it
-            logger.warning(f"[SimpleFixer] Failed to sync to S3: {e}")
+            # Don't fail the fix if sync fails - but log it prominently
+            logger.error(f"[SimpleFixer] ✗ Failed to sync fix to S3+DB: {file_path} - {e}")
 
     async def _execute_tool(
         self,
