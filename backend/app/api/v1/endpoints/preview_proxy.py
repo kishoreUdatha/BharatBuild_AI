@@ -344,6 +344,49 @@ async def proxy_preview(project_id: str, path: str, request: Request):
     logger.info(f"[Preview] Incoming request: {request.method} /preview/{project_id}/{path}")
     logger.info(f"[Preview] IS_REMOTE_DOCKER={IS_REMOTE_DOCKER}, SANDBOX_DOCKER_HOST={SANDBOX_DOCKER_HOST}")
 
+    # Fix double-src path issue: /src/src/App.tsx -> /src/App.tsx
+    # This happens when AI generates imports like './src/App' when already in src/
+    if "/src/src/" in path:
+        original_path = path
+        path = path.replace("/src/src/", "/src/")
+        logger.info(f"[Preview] Fixed double-src path: {original_path} -> {path}")
+    elif path.startswith("src/src/"):
+        original_path = path
+        path = path.replace("src/src/", "src/", 1)
+        logger.info(f"[Preview] Fixed double-src path: {original_path} -> {path}")
+
+    # Fix src/node_modules path issue: /src/node_modules/.vite/... -> /node_modules/.vite/...
+    # This happens when Vite transforms imports with base path that incorrectly includes src/
+    if "/src/node_modules/" in path:
+        original_path = path
+        path = path.replace("/src/node_modules/", "/node_modules/")
+        logger.info(f"[Preview] Fixed src/node_modules path: {original_path} -> {path}")
+    elif path.startswith("src/node_modules/"):
+        original_path = path
+        path = path.replace("src/node_modules/", "node_modules/", 1)
+        logger.info(f"[Preview] Fixed src/node_modules path: {original_path} -> {path}")
+
+    # Fix src/@vite path issue: /src/@vite/client -> /@vite/client
+    # Vite internal paths should never have src/ prefix
+    if "/src/@vite/" in path:
+        original_path = path
+        path = path.replace("/src/@vite/", "/@vite/")
+        logger.info(f"[Preview] Fixed src/@vite path: {original_path} -> {path}")
+    elif path.startswith("src/@vite/"):
+        original_path = path
+        path = path.replace("src/@vite/", "@vite/", 1)
+        logger.info(f"[Preview] Fixed src/@vite path: {original_path} -> {path}")
+
+    # Fix src/@react-refresh path issue: /src/@react-refresh -> /@react-refresh
+    if "/src/@react-refresh" in path:
+        original_path = path
+        path = path.replace("/src/@react-refresh", "/@react-refresh")
+        logger.info(f"[Preview] Fixed src/@react-refresh path: {original_path} -> {path}")
+    elif path.startswith("src/@react-refresh"):
+        original_path = path
+        path = path.replace("src/@react-refresh", "@react-refresh", 1)
+        logger.info(f"[Preview] Fixed src/@react-refresh path: {original_path} -> {path}")
+
     # Get container address (returns 3-tuple: ip, port, gateway_project_id)
     address = await get_container_internal_address(project_id)
 

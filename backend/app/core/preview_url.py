@@ -6,12 +6,14 @@ DO NOT create preview URLs anywhere else in the codebase.
 
 ARCHITECTURE:
 - Local development: http://localhost:{port}
-- Production: /api/v1/preview/{project_id}/
+- Production (subdomain): https://{project_id}.bharatbuild.ai/
+- Production (path-based fallback): /api/v1/preview/{project_id}/
 
 The URL strategy depends on:
 1. ENVIRONMENT variable (development/production)
 2. SANDBOX_PUBLIC_URL for direct container access
 3. FRONTEND_URL for API proxy path
+4. USE_SUBDOMAIN_PREVIEW for subdomain-based routing (production)
 """
 
 import os
@@ -34,7 +36,12 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL", os.getenv("SANDBOX_PREVIEW_BASE_URL", ""))
 API_BASE_PATH = "/api/v1"
 
-# Preview path template
+# Subdomain-based preview (Vercel/Netlify style)
+# Format: https://{project_id}.bharatbuild.ai/
+USE_SUBDOMAIN_PREVIEW = os.getenv("USE_SUBDOMAIN_PREVIEW", "true").lower() == "true"
+PREVIEW_DOMAIN = os.getenv("PREVIEW_DOMAIN", "bharatbuild.ai")
+
+# Preview path template (fallback for path-based routing)
 PREVIEW_PATH_TEMPLATE = f"{API_BASE_PATH}/preview/{{project_id}}/"
 
 
@@ -104,7 +111,11 @@ def get_websocket_url(port: int, project_id: str, path: str = "") -> str:
         The WebSocket URL
     """
     if IS_PRODUCTION:
-        # Use WSS through API proxy
+        # Use subdomain-based WebSocket (Vercel/Netlify style)
+        if USE_SUBDOMAIN_PREVIEW:
+            return f"wss://{project_id}.{PREVIEW_DOMAIN}/{path.lstrip('/')}"
+
+        # Fallback: WSS through API proxy
         frontend_parsed = urlparse(FRONTEND_URL)
         protocol = "wss" if frontend_parsed.scheme == "https" else "ws"
         host = frontend_parsed.netloc
@@ -120,7 +131,11 @@ def get_websocket_url(port: int, project_id: str, path: str = "") -> str:
 
 def _get_proxy_url(project_id: str) -> str:
     """Get URL through API proxy (production mode)"""
-    # Use frontend URL as base
+    # Use subdomain-based preview (Vercel/Netlify style)
+    if USE_SUBDOMAIN_PREVIEW:
+        return f"https://{project_id}.{PREVIEW_DOMAIN}/"
+
+    # Fallback: path-based routing
     base = FRONTEND_URL.rstrip("/")
     return f"{base}{PREVIEW_PATH_TEMPLATE.format(project_id=project_id)}"
 

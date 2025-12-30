@@ -108,33 +108,43 @@ class ContainerConfig:
 import os as _os
 DEFAULT_CONTAINER_MEMORY = _os.environ.get("CONTAINER_MEMORY_LIMIT", "768m")
 
+# pnpm global store path - shared across all containers for faster installs
+PNPM_STORE_PATH = "/tmp/sandbox/pnpm-store"
+
 # Pre-built images for each technology - Universal Preview Architecture
 TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
     # ==================== FRONTEND FRAMEWORKS ====================
     Technology.NODEJS: ContainerConfig(
         image="node:20-alpine",
-        build_command="npm install",
-        run_command="npm run dev -- --host 0.0.0.0 --no-open",
+        # pnpm v10+ blocks build scripts by default, enable them for esbuild/swc etc.
+        build_command="npm install -g pnpm && pnpm config set enable-pre-post-scripts true && pnpm install",
+        # Kill any existing node/vite processes before starting to prevent duplicates
+        run_command="pkill -f 'node|vite' 2>/dev/null || true; npm run dev -- --host 0.0.0.0 --no-open",
         port=3000,
         memory_limit=DEFAULT_CONTAINER_MEMORY  # MEDIUM #8: Increased from 512m
     ),
     Technology.NODEJS_VITE: ContainerConfig(
         image="node:20-alpine",
-        build_command="npm install",
-        run_command="npm run dev -- --host 0.0.0.0 --no-open",
+        # pnpm v10+ blocks build scripts by default, enable them for esbuild/swc etc.
+        # IMPORTANT: Run "npx vite optimize" after install to pre-bundle dependencies
+        # This creates .vite/deps BEFORE dev server starts, preventing 504 timeouts on first request
+        build_command="npm install -g pnpm && pnpm config set enable-pre-post-scripts true && pnpm install && npx vite optimize",
+        run_command="pkill -f vite 2>/dev/null || true; npm run dev -- --host 0.0.0.0 --no-open",
         port=5173,  # Vite default port
         memory_limit=DEFAULT_CONTAINER_MEMORY  # MEDIUM #8: Increased from 512m
     ),
     Technology.ANGULAR: ContainerConfig(
         image="node:20-alpine",
-        build_command="npm install",
+        # pnpm v10+ blocks build scripts by default, enable them for esbuild/swc etc.
+        build_command="npm install -g pnpm && pnpm config set enable-pre-post-scripts true && pnpm install",
         run_command="npm run start -- --host 0.0.0.0 --port 4200 --disable-host-check",
         port=4200,
         memory_limit=DEFAULT_CONTAINER_MEMORY  # MEDIUM #8: Increased from 512m
     ),
     Technology.REACT_NATIVE: ContainerConfig(
         image="node:20-alpine",
-        build_command="npm install && npx expo export:web",
+        # pnpm v10+ blocks build scripts by default, enable them for esbuild/swc etc.
+        build_command="npm install -g pnpm && pnpm config set enable-pre-post-scripts true && pnpm install && npx expo export:web",
         run_command="npx serve dist -l 3000",
         port=3000,  # Web preview for React Native
         memory_limit="1g"
@@ -208,7 +218,8 @@ TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
     # ==================== BLOCKCHAIN ====================
     Technology.BLOCKCHAIN: ContainerConfig(
         image="node:20-alpine",
-        build_command="npm install",
+        # pnpm v10+ blocks build scripts by default, enable them for esbuild/swc etc.
+        build_command="npm install -g pnpm && pnpm config set enable-pre-post-scripts true && pnpm install",
         run_command="npx hardhat node",  # Local Ethereum node
         port=8545,
         memory_limit="1g"
@@ -472,6 +483,38 @@ class ContainerExecutor:
         except Exception as e:
             logger.error(f"[ContainerExecutor] Container health check failed: {e}")
             return False, f"Health check failed: {str(e)}"
+
+    def is_container_running(self, project_id: str, user_id: str) -> bool:
+        """
+        Check if a container EXISTS for this project (running OR stopped).
+
+        CRITICAL: This checks for ANY container, not just running ones.
+        If a container exists (even if stopped), files are already in its volume,
+        so we should skip file restoration to prevent Vite restart loops.
+
+        Returns:
+            True if container exists (running or stopped), False otherwise
+        """
+        if not self.docker_client:
+            return False
+
+        try:
+            container_name = f"bharatbuild_{user_id[:8]}_{project_id[:8]}"
+            # IMPORTANT: all=True to check for stopped containers too
+            containers = self.docker_client.containers.list(
+                filters={"name": container_name},
+                all=True  # Include stopped containers
+            )
+
+            for container in containers:
+                # Container exists (running, exited, paused, etc.)
+                logger.info(f"[ContainerExecutor] Found existing container for {project_id}: {container.name} (status: {container.status})")
+                return True
+
+            return False
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Error checking container status: {e}")
+            return False
 
     def detect_technology(self, project_path: str) -> Technology:
         """
@@ -888,6 +931,22 @@ class ContainerExecutor:
         if technology is None:
             technology = self.detect_technology(project_path)
 
+        # Fix common project issues before container starts (vite open:true, missing configs, etc.)
+        try:
+            from app.services.workspace_restore import workspace_restore
+            fix_result = await workspace_restore.fix_common_issues(Path(project_path), project_id=project_id)
+            if fix_result.get("fixes_applied"):
+                logger.info(f"[ContainerExecutor] Applied pre-start fixes for {project_id}: {fix_result['fixes_applied']}")
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Error applying pre-start fixes: {e}")
+
+        # CRITICAL: Apply import fixes to REMOTE SANDBOX files
+        # Files restored from S3 may have wrong import paths
+        try:
+            await self._apply_sandbox_import_fixes(project_id, user_id)
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Sandbox import fixes failed: {e}")
+
         # Check if multi-folder project - need to force recreate container with correct working_dir
         is_frontend_subdir = getattr(self, '_frontend_subdir', False)
 
@@ -898,8 +957,10 @@ class ContainerExecutor:
             reused, message, port = await self._reuse_container(existing_container, project_id, user_id)
             if reused:
                 return True, message, port
-            # If reuse failed, continue to create new container
-            logger.info(f"[ContainerExecutor] Container reuse failed, creating new: {message}")
+            # If reuse failed, CLEANUP old container before creating new one
+            # This prevents port conflicts where old container holds the port
+            logger.info(f"[ContainerExecutor] Container reuse failed, cleaning up before creating new: {message}")
+            await self._cleanup_project_container(project_id)
         elif existing_container and is_frontend_subdir:
             # Multi-folder project needs correct working_dir - remove old container
             logger.info(f"[ContainerExecutor] Multi-folder project: removing old container for fresh start")
@@ -996,14 +1057,18 @@ class ContainerExecutor:
                 self._frontend_subdir = False  # Reset for next project
                 logger.info(f"[ContainerExecutor] Using frontend subdirectory: {working_dir}")
 
+            # Build volumes - project path + pnpm store for faster installs
+            container_volumes = {
+                path_str: {"bind": "/app", "mode": "rw"},
+                PNPM_STORE_PATH: {"bind": "/root/.local/share/pnpm/store", "mode": "rw"}
+            }
+
             container = self.docker_client.containers.run(
                 image=config.image,
                 name=container_name,
                 detach=True,
                 working_dir=working_dir,
-                volumes={
-                    path_str: {"bind": "/app", "mode": "rw"}
-                },
+                volumes=container_volumes,
                 ports={f"{config.port}/tcp": host_port},  # Map container port to host port
                 network="bharatbuild-sandbox",
                 mem_limit=config.memory_limit,
@@ -1013,10 +1078,15 @@ class ContainerExecutor:
                     "NODE_ENV": "development",
                     "JAVA_OPTS": "-Xmx512m",
                     "PYTHONUNBUFFERED": "1",
+                    # Critical: CI=true prevents pnpm from prompting for user input
+                    # This fixes ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY error
+                    "CI": "true",
                     # Critical #2: No custom base paths needed
                     # Proxy handles path translation, so frameworks use default root paths
                     "PUBLIC_URL": "",  # CRA: empty = use relative paths
                     "VITE_BASE_PATH": "/",  # Vite: root path (proxy strips prefix)
+                    # pnpm global store for faster installs (shared across containers)
+                    "PNPM_HOME": "/root/.local/share/pnpm",
                 },
                 command=f"sh -c '{config.build_command} && {run_command}'" if config.build_command else run_command,
                 labels=all_labels
@@ -1046,26 +1116,63 @@ class ContainerExecutor:
             logger.error(f"[ContainerExecutor] Error creating container: {e}")
             return False, f"Error: {str(e)}", None
 
-    async def stop_container(self, project_id: str) -> Tuple[bool, str]:
-        """Stop and remove a project's container"""
-        if project_id not in self.active_containers:
-            return False, "Container not found"
+    async def stop_container(self, project_id: str, user_id: str = None) -> Tuple[bool, str]:
+        """
+        Stop and remove a project's container.
 
-        container_info = self.active_containers[project_id]
+        This method now finds containers by name pattern (not just in-memory tracking),
+        which allows stopping containers even after backend restart.
+        """
+        if not self.docker_client:
+            return False, "Docker client not available"
+
+        stopped_any = False
+        container_name_prefix = f"bharatbuild_"
 
         try:
-            container = self.docker_client.containers.get(container_info["container_id"])
-            container.stop(timeout=10)
-            container.remove()
+            # Method 1: Try in-memory tracking first
+            if project_id in self.active_containers:
+                container_info = self.active_containers[project_id]
+                try:
+                    container = self.docker_client.containers.get(container_info["container_id"])
+                    container.stop(timeout=10)
+                    container.remove(force=True)
+                    del self.active_containers[project_id]
+                    logger.info(f"[ContainerExecutor] Stopped tracked container for {project_id}")
+                    stopped_any = True
+                except NotFound:
+                    del self.active_containers[project_id]
+                except Exception as e:
+                    logger.warning(f"[ContainerExecutor] Error stopping tracked container: {e}")
 
-            del self.active_containers[project_id]
+            # Method 2: Find containers by name pattern (handles backend restart case)
+            # Container naming: bharatbuild_{user_id[:8]}_{project_id[:8]}_{port}
+            project_prefix = project_id[:8] if len(project_id) >= 8 else project_id
 
-            logger.info(f"[ContainerExecutor] Container stopped for project {project_id}")
-            return True, "Container stopped successfully"
+            containers = self.docker_client.containers.list(all=True)
+            for container in containers:
+                name = container.name
+                # Check if container name contains the project ID prefix
+                if container_name_prefix in name and project_prefix in name:
+                    try:
+                        logger.info(f"[ContainerExecutor] Found container by name: {name}")
+                        if container.status == "running":
+                            container.stop(timeout=10)
+                        container.remove(force=True)
+                        logger.info(f"[ContainerExecutor] Stopped and removed container: {name}")
+                        stopped_any = True
+                    except Exception as e:
+                        logger.warning(f"[ContainerExecutor] Error stopping container {name}: {e}")
 
-        except NotFound:
-            del self.active_containers[project_id]
-            return True, "Container already removed"
+            # Clean up tracking
+            if project_id in self.active_containers:
+                del self.active_containers[project_id]
+
+            if stopped_any:
+                return True, "Container stopped successfully"
+            else:
+                return False, "No container found for project"
+
         except Exception as e:
             logger.error(f"[ContainerExecutor] Error stopping container: {e}")
             return False, f"Error: {str(e)}"
@@ -1183,6 +1290,165 @@ class ContainerExecutor:
             logger.warning(f"[ContainerExecutor] Error finding existing container: {e}")
             return None
 
+    async def _clear_vite_cache_on_restart(self, project_id: str, user_id: str) -> bool:
+        """
+        Clear Vite cache on the sandbox before restarting a container.
+
+        This prevents corrupted cache issues that cause double-path problems like:
+        /node_modules/.vite/deps/node_modules/.vite/deps/chunk-XXX.js
+
+        The cache is at: /tmp/sandbox/workspace/{user_id}/{project_id}/node_modules/.vite
+        """
+        try:
+            sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+            if not sandbox_docker_host:
+                # Local sandbox - clear directly
+                sandbox_path = Path("/tmp/sandbox/workspace") / user_id / project_id / "node_modules" / ".vite"
+                if sandbox_path.exists():
+                    import shutil
+                    shutil.rmtree(sandbox_path)
+                    logger.info(f"[ContainerExecutor] Cleared local Vite cache for {project_id}")
+                return True
+
+            # Remote sandbox - use Docker to clear the cache
+            import docker
+            docker_client = docker.DockerClient(base_url=sandbox_docker_host, timeout=30)
+
+            workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}"
+            vite_cache_path = f"{workspace_path}/node_modules/.vite"
+
+            # Run a quick container to clear the cache
+            try:
+                result = docker_client.containers.run(
+                    image="alpine:latest",
+                    command=f"sh -c 'rm -rf {vite_cache_path} && echo CLEARED || echo SKIPPED'",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    remove=True,
+                    detach=False,
+                )
+                output = result.decode().strip() if result else "UNKNOWN"
+                logger.info(f"[ContainerExecutor] Vite cache clear result for {project_id}: {output}")
+                return True
+            except Exception as e:
+                logger.warning(f"[ContainerExecutor] Could not clear Vite cache: {e}")
+                return False
+
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Error clearing Vite cache for {project_id}: {e}")
+            return False
+
+
+    async def _apply_sandbox_import_fixes(self, project_id: str, user_id: str) -> bool:
+        """Apply import path fixes to files on the remote sandbox."""
+        try:
+            sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+            if not sandbox_docker_host:
+                return True
+
+            import docker
+            docker_client = docker.DockerClient(base_url=sandbox_docker_host, timeout=60)
+            workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}"
+
+            # Note: Using .format() instead of f-string because the script contains backslashes
+            fix_script = """#!/bin/sh
+WORKSPACE="{workspace_path}"
+echo "Workspace: $WORKSPACE"
+""".format(workspace_path=workspace_path) + """
+# Clear Vite cache
+if [ -d "$WORKSPACE/node_modules/.vite" ]; then
+    rm -rf "$WORKSPACE/node_modules/.vite"
+    echo "Cleared .vite cache"
+fi
+# Fix vite.config: open:true -> false, add hmr:false, host:0.0.0.0
+for cfg in "$WORKSPACE/vite.config.ts" "$WORKSPACE/vite.config.js"; do
+    if [ -f "$cfg" ]; then
+        CHANGED=0
+        # Disable open:true
+        if grep -q 'open *: *true' "$cfg"; then
+            sed -i 's/open *: *true/open: false/g' "$cfg"
+            CHANGED=1
+        fi
+        # CRITICAL: Disable HMR for subdomain preview (WebSocket proxying is unreliable)
+        # Check if hmr: false already exists
+        if ! grep -q 'hmr *: *false' "$cfg"; then
+            # Check if there's an existing hmr block to replace (hmr: { ... })
+            if grep -q 'hmr *: *{' "$cfg"; then
+                # Replace hmr: { ... } block with hmr: false using perl for multi-line
+                perl -i -0pe 's/hmr\s*:\s*\{[^}]*\}/hmr: false/g' "$cfg"
+                echo "Replaced HMR block with hmr: false"
+                CHANGED=1
+            elif grep -q 'server *:' "$cfg" && ! grep -q 'hmr *:' "$cfg"; then
+                # No hmr config at all, add hmr: false
+                sed -i 's/server *: *{/server: { hmr: false,/g' "$cfg"
+                CHANGED=1
+            fi
+        fi
+        # Add host if server block exists but no host
+        if grep -q 'server *:' "$cfg" && ! grep -q "host *:" "$cfg"; then
+            sed -i "s/server *: *{/server: { host: '0.0.0.0',/g" "$cfg"
+            CHANGED=1
+        fi
+        if [ $CHANGED -eq 1 ]; then
+            echo "Fixed vite.config in $cfg"
+        fi
+    fi
+done
+# Fix PostCSS config: Remove conflicting .cjs/.mjs files and ensure proper ESM config
+# This fixes Tailwind CSS not compiling (raw @tailwind directives showing in browser)
+if [ -f "$WORKSPACE/package.json" ]; then
+    # Remove conflicting PostCSS configs that confuse Vite
+    rm -f "$WORKSPACE/postcss.config.cjs" "$WORKSPACE/postcss.config.mjs" 2>/dev/null
+
+    # Check if postcss.config.js exists and has correct ESM syntax
+    if [ ! -f "$WORKSPACE/postcss.config.js" ] || grep -q 'module.exports' "$WORKSPACE/postcss.config.js" 2>/dev/null; then
+        cat > "$WORKSPACE/postcss.config.js" << 'POSTCSS_EOF'
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+POSTCSS_EOF
+        echo "Fixed postcss.config.js (ESM format)"
+    fi
+
+    # Fix tailwind.config.js if it uses CJS in an ESM project
+    if grep -q '"type".*:.*"module"' "$WORKSPACE/package.json" 2>/dev/null; then
+        if [ -f "$WORKSPACE/tailwind.config.js" ] && grep -q 'module.exports' "$WORKSPACE/tailwind.config.js" 2>/dev/null; then
+            sed -i 's/module\.exports *= */export default /g' "$WORKSPACE/tailwind.config.js"
+            echo "Fixed tailwind.config.js (converted to ESM)"
+        fi
+    fi
+fi
+# Fix import paths in src/ files - NOTE: parentheses fix operator precedence!
+if [ -d "$WORKSPACE/src" ]; then
+    FIXED=0
+    for f in $(find "$WORKSPACE/src" -type f \( -name "*.tsx" -o -name "*.ts" -o -name "*.jsx" -o -name "*.js" \) 2>/dev/null); do
+        if grep -q "from './src/" "$f" 2>/dev/null || grep -q "from '/src/" "$f" 2>/dev/null; then
+            sed -i "s|from './src/|from './|g" "$f"
+            sed -i "s|from '/src/|from './|g" "$f"
+            FIXED=$((FIXED+1))
+        fi
+    done
+    echo "Fixed imports in $FIXED files"
+else
+    echo "No src/ dir found"
+fi
+echo "Done"
+"""
+
+            result = docker_client.containers.run(
+                "node:20-alpine", ["-c", fix_script], entrypoint="/bin/sh",
+                volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                remove=True, detach=False, stdout=True, stderr=True
+            )
+            output = result.decode().strip() if result else "No output"
+            logger.info(f"[ContainerExecutor] Sandbox fixes output: {output[:500] if output else 'Empty'}")
+            return True
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Sandbox fixes failed: {e}")
+            return False
+
     async def _reuse_container(self, container, project_id: str, user_id: str) -> Tuple[bool, str, Optional[int]]:
         """
         Attempt to reuse an existing container.
@@ -1240,8 +1506,27 @@ class ContainerExecutor:
                 return True, f"Reused existing container (already running)", port
 
             elif status in ["exited", "created", "paused"]:
-                # Container exists but stopped - start it
+                # Check if container has CI=true env before reusing (old containers don't have it)
+                try:
+                    container_env = container.attrs.get('Config', {}).get('Env', [])
+                    has_ci_true = any(env.startswith('CI=') for env in container_env)
+                    if not has_ci_true:
+                        logger.info(f"[ContainerExecutor] Container {container_name} missing CI=true, removing for fresh start")
+                        try:
+                            container.remove(force=True)
+                        except Exception:
+                            pass
+                        return False, "Container missing CI=true environment variable", None
+                except Exception as env_check_err:
+                    logger.warning(f"[ContainerExecutor] Could not check container env: {env_check_err}")
+
+                # Container has CI=true (or check failed), safe to restart
                 logger.info(f"[ContainerExecutor] Starting stopped container {container_name} for {project_id}")
+
+                # CRITICAL: Clear Vite cache before restarting to prevent corrupted cache issues
+                # The cache at node_modules/.vite can cause double-path problems like:
+                # /node_modules/.vite/deps/node_modules/.vite/deps/chunk-XXX.js
+                await self._clear_vite_cache_on_restart(project_id, user_id)
 
                 if status == "paused":
                     container.unpause()
@@ -1773,9 +2058,9 @@ class ContainerExecutor:
         yield f"📥 Ensuring files are synced...\n"
         try:
             from app.services.workspace_restore import workspace_restore
-            from app.core.database import get_session
+            from app.core.database import get_db
 
-            async for db in get_session():
+            async for db in get_db():
                 # Get project type string for workspace restore
                 tech_type_map = {
                     Technology.NODEJS: "node",
@@ -1833,10 +2118,10 @@ class ContainerExecutor:
             yield f"🔄 Attempting automatic recovery...\n"
             try:
                 from app.services.error_recovery import error_recovery, RecoveryType
-                from app.core.database import get_session
+                from app.core.database import get_db
 
                 # Get database session for recovery
-                async for db in get_session():
+                async for db in get_db():
                     recovery_result = await error_recovery.recover(
                         error_type=RecoveryType.MISSING_FILES,
                         context={
@@ -2201,18 +2486,32 @@ class ContainerExecutor:
                                     yield f"🚀 SERVER READY - PREVIEW ENABLED!\n"
                                     yield f"Preview URL: {preview_url}\n"
                                     yield f"{'='*50}\n\n"
+                                    # Emit markers for frontend - only navigate when READY
+                                    yield f"__SERVER_STARTED__:{preview_url}\n"
+                                    yield f"_PREVIEW_URL_:{preview_url}\n"
+                                    yield f"__PREVIEW_READY__:{preview_url}\n"
                                 else:
-                                    # Critical #1: FALLBACK - Show preview with warning instead of blocking
-                                    logger.warning(f"[ContainerExecutor] Health check failed after {max_health_attempts} attempts, enabling preview anyway")
+                                    # Health check failed - show URL but don't auto-navigate
+                                    logger.warning(f"[ContainerExecutor] Health check failed after {max_health_attempts} attempts")
                                     yield f"\n{'='*50}\n"
-                                    yield f"⚠️ SERVER DETECTED - PREVIEW ENABLED (unverified)\n"
+                                    yield f"⏳ SERVER STARTING - Please wait...\n"
                                     yield f"Preview URL: {preview_url}\n"
-                                    yield f"Note: Server may still be starting. Refresh if blank.\n"
+                                    yield f"Note: Server is still initializing. Will auto-navigate when ready.\n"
                                     yield f"{'='*50}\n\n"
-
-                                # Emit markers for frontend to enable preview
-                                yield f"__SERVER_STARTED__:{preview_url}\n"
-                                yield f"_PREVIEW_URL_:{preview_url}\n"
+                                    # Keep trying health check in background
+                                    yield f"_PREVIEW_URL_:{preview_url}\n"
+                                    # Continue health check loop
+                                    for retry in range(5):
+                                        await asyncio.sleep(3)
+                                        try:
+                                            if await check_preview_health(internal_url, timeout=5.0):
+                                                logger.info(f"[ContainerExecutor] ✅ Delayed health check passed on retry {retry+1}")
+                                                yield f"🚀 Server is now ready!\n"
+                                                yield f"__PREVIEW_READY__:{preview_url}\n"
+                                                exec_ctx.complete(exit_code=0)
+                                                break
+                                        except Exception:
+                                            pass
                                 log_bus.add_docker_log(f"Server started - Preview URL: {preview_url}")
                                 break
 
@@ -2323,9 +2622,26 @@ class ContainerExecutor:
 
             # If we exited the loop without detecting server start and no error
             elif not server_started and preview_url:
-                logger.warning(f"[ContainerExecutor] Server start not detected, emitting URL anyway")
-                yield f"\n📍 Container running - Preview may be available at: {preview_url}\n"
-                yield f"_PREVIEW_URL_:{preview_url}\n"
+                logger.warning(f"[ContainerExecutor] Server start not detected, checking if ready...")
+                yield f"\n📍 Container running - checking if preview is ready...\n"
+                # Try health check before enabling preview
+                internal_url = f"http://localhost:{host_port}" if host_port else None
+                if internal_url:
+                    for attempt in range(5):
+                        try:
+                            await asyncio.sleep(2)
+                            if await check_preview_health(internal_url, timeout=5.0):
+                                logger.info(f"[ContainerExecutor] ✅ Server ready on fallback check")
+                                yield f"🚀 Server is ready!\n"
+                                yield f"_PREVIEW_URL_:{preview_url}\n"
+                                yield f"__PREVIEW_READY__:{preview_url}\n"
+                                break
+                        except Exception:
+                            pass
+                    else:
+                        # All attempts failed - show URL but don't auto-navigate
+                        yield f"⏳ Server may still be starting. Preview URL: {preview_url}\n"
+                        yield f"_PREVIEW_URL_:{preview_url}\n"
 
         except Exception as e:
             logger.error(f"[ContainerExecutor] Error streaming logs: {e}")

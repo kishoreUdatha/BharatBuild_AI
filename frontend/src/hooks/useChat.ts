@@ -1203,6 +1203,78 @@ I'll keep trying to help!`)
               }
               break
 
+            // ==================== DOCUMENT GENERATION EVENTS ====================
+            case 'documents_starting':
+              // Document generation is starting - add a thinking step
+              console.log('[documents_starting] Starting document generation:', event.data)
+              addThinkingStep(aiMessageId, {
+                label: 'Generating Documents',
+                status: 'active',
+                description: 'Creating academic documents (SRS, Report, PPT, Viva Q&A)...',
+                details: event.data?.message || 'Starting document generation...'
+              })
+              break
+
+            case 'document_generating':
+              // A specific document is being generated
+              console.log('[document_generating]', event.data?.document)
+              {
+                const docName = event.data?.document || 'Document'
+                // Update the main documents step with current document
+                updateThinkingStep(aiMessageId, 'Generating Documents', {
+                  status: 'active',
+                  details: `Generating ${docName}...`
+                })
+              }
+              break
+
+            case 'document_progress':
+              // Progress update for a document
+              console.log('[document_progress]', event.data)
+              {
+                const docName = event.data?.document || 'Document'
+                const progressMsg = event.data?.message || event.data?.section || ''
+                updateThinkingStep(aiMessageId, 'Generating Documents', {
+                  status: 'active',
+                  details: `${docName}: ${progressMsg}`
+                })
+              }
+              break
+
+            case 'document_complete':
+              // A specific document is complete
+              console.log('[document_complete]', event.data?.document)
+              {
+                const docName = event.data?.document || 'Document'
+                updateThinkingStep(aiMessageId, 'Generating Documents', {
+                  status: 'active',
+                  details: `${docName} completed ✓`
+                })
+              }
+              break
+
+            case 'all_documents_complete':
+              // All documents are complete
+              console.log('[all_documents_complete] All documents generated')
+              updateThinkingStep(aiMessageId, 'Generating Documents', {
+                status: 'complete',
+                details: 'All documents generated successfully!'
+              })
+              break
+
+            case 'document_error':
+              // Error generating a document
+              console.error('[document_error]', event.data)
+              {
+                const docName = event.data?.document || 'Document'
+                const errorMsg = event.data?.error || 'Unknown error'
+                updateThinkingStep(aiMessageId, 'Generating Documents', {
+                  status: 'active',
+                  details: `${docName}: Error - ${errorMsg}`
+                })
+              }
+              break
+
             case 'complete':
               // Mark any remaining active steps as complete
               const currentMessage = useChatStore.getState().messages.find(m => m.id === aiMessageId)

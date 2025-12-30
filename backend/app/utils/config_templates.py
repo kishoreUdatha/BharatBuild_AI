@@ -97,10 +97,122 @@ export default defineConfig({
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>React App</title>
+    <!-- BharatBuild Error Capture - Auto-detects and reports browser errors -->
+    <script>
+      // Set project ID from URL path (e.g., /sandbox/PROJECT_ID/...)
+      (function() {
+        var match = window.location.pathname.match(/\\/sandbox\\/([a-f0-9-]+)/i);
+        if (match) {
+          window.__PROJECT_ID__ = match[1];
+          window.__ERROR_ENDPOINT__ = '/api/v1/errors/browser';
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <!-- Browser Error Capture Script (inline for reliability) -->
+    <script>
+      (function() {
+        'use strict';
+        if (!window.__PROJECT_ID__) return; // Skip if no project ID
+
+        var CONFIG = {
+          endpoint: window.__ERROR_ENDPOINT__ || '/api/v1/errors/browser',
+          projectId: window.__PROJECT_ID__,
+          debounceMs: 1000,
+          maxBufferSize: 5
+        };
+
+        var errorBuffer = [];
+        var debounceTimer = null;
+        var recentErrors = {};
+
+        function sendErrors() {
+          if (errorBuffer.length === 0 || !CONFIG.projectId) return;
+          var errors = errorBuffer.splice(0, errorBuffer.length);
+          fetch(CONFIG.endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              project_id: CONFIG.projectId,
+              source: 'browser',
+              errors: errors,
+              timestamp: Date.now(),
+              url: window.location.href
+            }),
+            keepalive: true
+          }).catch(function() {});
+        }
+
+        function queueError(error) {
+          var key = error.type + ':' + error.message.slice(0, 100);
+          if (recentErrors[key]) return;
+          recentErrors[key] = true;
+          setTimeout(function() { delete recentErrors[key]; }, 5000);
+
+          errorBuffer.push(error);
+          if (errorBuffer.length >= CONFIG.maxBufferSize) {
+            clearTimeout(debounceTimer);
+            sendErrors();
+            return;
+          }
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(sendErrors, CONFIG.debounceMs);
+        }
+
+        // A. JS Runtime Errors
+        window.onerror = function(message, source, line, column, error) {
+          queueError({
+            type: 'JS_RUNTIME',
+            category: message.includes('not defined') ? 'REFERENCE_ERROR' : 'RUNTIME_ERROR',
+            message: String(message),
+            file: source,
+            line: line,
+            column: column,
+            stack: error ? error.stack : null,
+            timestamp: Date.now()
+          });
+          return false;
+        };
+
+        // B. Unhandled Promise Rejections
+        window.onunhandledrejection = function(event) {
+          var reason = event.reason;
+          queueError({
+            type: 'PROMISE_REJECTION',
+            category: 'RUNTIME_ERROR',
+            message: reason && reason.message ? reason.message : String(reason),
+            stack: reason && reason.stack ? reason.stack : null,
+            timestamp: Date.now()
+          });
+        };
+
+        // C. Console Errors
+        var originalConsoleError = console.error;
+        console.error = function() {
+          originalConsoleError.apply(console, arguments);
+          var message = Array.prototype.slice.call(arguments).map(function(arg) {
+            if (arg instanceof Error) return arg.message;
+            if (typeof arg === 'object') try { return JSON.stringify(arg); } catch(e) { return String(arg); }
+            return String(arg);
+          }).join(' ');
+
+          if (message.length > 10) {
+            queueError({
+              type: 'CONSOLE_ERROR',
+              category: message.toLowerCase().includes('not defined') ? 'REFERENCE_ERROR' : 'RUNTIME_ERROR',
+              message: message,
+              stack: arguments[0] instanceof Error ? arguments[0].stack : null,
+              timestamp: Date.now()
+            });
+          }
+        };
+
+        console.debug('[BharatBuild] Error capture initialized for project:', CONFIG.projectId);
+      })();
+    </script>
   </body>
 </html>
 """,

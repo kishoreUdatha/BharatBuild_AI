@@ -1950,6 +1950,24 @@ class DockerExecutor:
 
     async def stop_container(self, project_id: str) -> bool:
         """Stop a running container"""
+        # Check if we're using remote Docker (EC2 sandbox)
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+
+        if sandbox_docker_host:
+            # Use container_executor singleton for remote containers
+            try:
+                from app.services.container_executor import container_executor
+                success, msg = await container_executor.stop_container(project_id)
+                if success:
+                    logger.info(f"[DockerExecutor] Stopped remote container: {msg}")
+                else:
+                    logger.warning(f"[DockerExecutor] Failed to stop remote container: {msg}")
+                return success
+            except Exception as e:
+                logger.error(f"[DockerExecutor] Error stopping remote container: {e}")
+                return False
+
+        # Local Docker mode - use original logic
         container_name = f"run-{project_id}".lower()
 
         try:

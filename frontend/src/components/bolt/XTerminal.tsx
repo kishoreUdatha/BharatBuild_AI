@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useCallback, useState, memo } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -15,7 +15,7 @@ interface XTerminalProps {
   onCommand?: (command: string) => void
 }
 
-export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
+function XTerminalComponent({ logs = [], onCommand }: XTerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -404,5 +404,16 @@ export function XTerminal({ logs = [], onCommand }: XTerminalProps) {
     </div>
   )
 }
+
+// Memoize to prevent re-renders when parent updates but props haven't changed
+// Custom comparison: only re-render if logs array length changes (new logs added)
+export const XTerminal = memo(XTerminalComponent, (prevProps, nextProps) => {
+  // Return true if props are equal (skip re-render)
+  // Only re-render when logs length changes or onCommand changes
+  return (
+    prevProps.logs?.length === nextProps.logs?.length &&
+    prevProps.onCommand === nextProps.onCommand
+  )
+})
 
 export default XTerminal

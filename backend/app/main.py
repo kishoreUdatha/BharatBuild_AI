@@ -15,6 +15,7 @@ from app.core.middleware import (
     RequestLoggingMiddleware,
     SecurityHeadersMiddleware,
     RequestSizeLimitMiddleware,
+    SubdomainPreviewMiddleware,
 )
 from app.core.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.api.v1.router import api_router
@@ -234,12 +235,16 @@ app.add_middleware(RequestSizeLimitMiddleware, max_size=10 * 1024 * 1024)
 # 4. CORS - Origins from CORS_ORIGINS_STR in .env
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=settings.CORS_ORIGINS + ["https://*.bharatbuild.ai"],  # Include preview subdomains
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*", "X-Request-ID", "X-Response-Time"],
 )
+
+# 5. Subdomain Preview Routing - Routes {project_id}.bharatbuild.ai to preview proxy
+# This enables Vercel/Netlify-style preview URLs where Vite works at root "/"
+app.add_middleware(SubdomainPreviewMiddleware)
 
 # GZipMiddleware - but we need to skip it for SSE endpoints
 # app.add_middleware(GZipMiddleware, minimum_size=1000)

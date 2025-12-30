@@ -49,6 +49,7 @@ from app.modules.automation.file_manager import FileManager
 from app.modules.agents.base_agent import AgentContext
 from app.services.checkpoint_service import checkpoint_service, CheckpointStatus
 from app.services.unified_storage import UnifiedStorageService
+from app.services.project_sanitizer import sanitize_project_file
 
 # Import agent classes to use their embedded SYSTEM_PROMPT (Bolt.new style)
 # Core Agents (like Bolt.new)
@@ -1369,6 +1370,17 @@ class DynamicOrchestrator:
             True if saved successfully to all critical layers
         """
         import asyncio
+
+        # AUTO-SANITIZE: Clean file path and content for Docker/EC2 compatibility
+        try:
+            sanitized_path, sanitized_content, fixes = sanitize_project_file(file_path, content)
+            if fixes:
+                logger.info(f"[Sanitizer] {file_path}: {', '.join(fixes)}")
+            file_path = sanitized_path
+            content = sanitized_content
+        except Exception as sanitize_err:
+            logger.warning(f"[Sanitizer] Failed to sanitize {file_path}: {sanitize_err}")
+            # Continue with original content if sanitization fails
 
         layer1_success = False
         layer2_success = False
@@ -4131,6 +4143,66 @@ Ensure every import in every file has a corresponding file in the plan.
                     )
 
             logger.info(f"[Writer] ✓ File-by-file generation complete: {len(context.files_created)} files created")
+
+            # ============================================================
+            # IMPORT VALIDATION: Detect and generate missing imported files
+            # This fixes the "AI generation gap" where App.tsx imports
+            # pages/components that were not in the original plan.
+            # ============================================================
+            try:
+                from app.services.import_validator import import_validator
+
+                missing_files = import_validator.get_missing_files_for_generation(
+                    context.files_created,
+                    project_base="frontend"
+                )
+
+                if missing_files:
+                    logger.info(f"[ImportValidation] Generating {len(missing_files)} missing imported files...")
+
+                    yield OrchestratorEvent(
+                        type=EventType.STATUS,
+                        data={
+                            "message": f"Found {len(missing_files)} missing imports - generating automatically...",
+                            "missing_count": len(missing_files),
+                            "phase": "import_validation"
+                        }
+                    )
+
+                    # Generate missing files using the same writer logic
+                    for idx, missing_file in enumerate(missing_files):
+                        file_path = missing_file.get('path', '')
+                        file_desc = missing_file.get('description', f'Missing file: {file_path}')
+
+                        if not file_path:
+                            continue
+
+                        logger.info(f"[ImportValidation] Generating missing file {idx+1}/{len(missing_files)}: {file_path}")
+
+                        try:
+                            async for event in self._execute_writer_for_single_file(
+                                config, context, file_path, file_desc, system_prompt
+                            ):
+                                yield event
+                        except Exception as gen_err:
+                            logger.error(f"[ImportValidation] Failed to generate {file_path}: {gen_err}")
+                            yield OrchestratorEvent(
+                                type=EventType.WARNING,
+                                data={
+                                    "message": f"Could not auto-generate {file_path}. Auto-fixer will handle it at runtime.",
+                                    "file_path": file_path,
+                                    "error": str(gen_err)
+                                }
+                            )
+
+                    logger.info(f"[ImportValidation] ✓ Generated {len(missing_files)} missing files")
+                else:
+                    logger.info("[ImportValidation] ✓ All imports valid - no missing files detected")
+
+            except Exception as validation_err:
+                logger.warning(f"[ImportValidation] Validation skipped due to error: {validation_err}")
+                # Non-fatal - auto-fixer will catch missing files at runtime
+
             return
 
         # TASK-BASED MODE (Legacy - for backward compatibility)

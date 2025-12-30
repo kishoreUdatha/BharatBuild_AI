@@ -479,10 +479,27 @@ async def execute_fix_with_notification(
         if result.success and result.files_modified:
             logger.info(f"[ErrorHandler:{project_id}] SimpleFixer completed: {len(result.files_modified)} files")
 
-            # Sync modified files: FIRST to running container, THEN to S3/DB
+            # Sync modified files: SOURCE files to container (HMR), CONFIG files to DB/S3 only
+            # CRITICAL: Config files (vite.config.ts, package.json, etc.) should NOT be synced
+            # to running containers as they cause Vite to restart and create restart loops
             try:
                 from app.services.unified_storage import UnifiedStorageService
                 unified_storage = UnifiedStorageService()
+
+                # Config files that should NOT be synced to running containers
+                # These files cause Vite/build tool restarts when changed
+                CONFIG_FILES = {
+                    'vite.config.ts', 'vite.config.js', 'vite.config.mjs',
+                    'package.json', 'package-lock.json',
+                    'tsconfig.json', 'tsconfig.node.json', 'tsconfig.app.json',
+                    'postcss.config.js', 'postcss.config.cjs', 'postcss.config.mjs',
+                    'tailwind.config.js', 'tailwind.config.ts',
+                    '.env', '.env.local', '.env.production',
+                    'webpack.config.js', 'next.config.js', 'next.config.mjs',
+                }
+
+                config_files_modified = []
+                source_files_modified = []
 
                 for file_path in result.files_modified:
                     try:
@@ -490,8 +507,13 @@ async def execute_fix_with_notification(
                         if full_path.exists():
                             content = full_path.read_text(encoding='utf-8', errors='ignore')
 
-                            # STEP 1: Sync to RUNNING CONTAINER first (for immediate HMR effect)
-                            if IS_REMOTE_SANDBOX and user_id:
+                            # Check if this is a config file
+                            file_name = Path(file_path).name
+                            is_config_file = file_name in CONFIG_FILES
+
+                            # STEP 1: Sync SOURCE files to RUNNING CONTAINER (for HMR)
+                            # SKIP config files - they cause restart loops
+                            if IS_REMOTE_SANDBOX and user_id and not is_config_file:
                                 try:
                                     container_synced = await unified_storage._write_to_remote_sandbox(
                                         project_id=project_id,
@@ -501,10 +523,14 @@ async def execute_fix_with_notification(
                                     )
                                     if container_synced:
                                         logger.info(f"[ErrorHandler:{project_id}] ✓ Synced to CONTAINER: {file_path}")
+                                        source_files_modified.append(file_path)
                                     else:
                                         logger.warning(f"[ErrorHandler:{project_id}] Container sync failed: {file_path}")
                                 except Exception as container_err:
                                     logger.warning(f"[ErrorHandler:{project_id}] Container sync error for {file_path}: {container_err}")
+                            elif is_config_file:
+                                config_files_modified.append(file_path)
+                                logger.info(f"[ErrorHandler:{project_id}] ⚠️ Config file skipped for container sync: {file_path}")
 
                             # STEP 2: Save to database (Layer 3) for persistence
                             db_saved = await unified_storage.save_to_database(project_id, file_path, content)
@@ -575,79 +601,19 @@ async def execute_fix_with_notification(
                 logger.warning(f"[ErrorHandler:{project_id}] Storage sync error: {storage_err}")
 
 
-            # STEP 5: Auto-rebuild after fixes - trigger container to rebuild
-            if result.files_modified and IS_REMOTE_SANDBOX and user_id:
-                try:
-                    from app.services.container_executor import container_executor
+            # STEP 5: Handle file changes
+            # SOURCE files: HMR handles automatically - preview refreshes without restart
+            # CONFIG files: Saved to S3/DB - user clicks Run to apply (safe, no container crash)
+            #
+            # NOTE: We removed auto-restart because killing Vite kills the container (Vite is PID 1)
+            # This approach is safer and keeps preview working
+            if config_files_modified:
+                logger.info(f"[ErrorHandler:{project_id}] Config files fixed and saved: {config_files_modified}")
+                logger.info(f"[ErrorHandler:{project_id}] Config changes will apply on next Run")
 
-                    logger.info(f"[ErrorHandler:{project_id}] Triggering auto-rebuild after fix...")
-
-                    # Notify frontend that rebuild is starting
-                    await notify_rebuild_started(project_id)
-
-                    # Ensure docker client is initialized for container lookup
-                    if not container_executor.docker_client:
-                        logger.info(f"[ErrorHandler:{project_id}] Initializing docker client for auto-rebuild...")
-                        await container_executor.initialize()
-
-                    # Find the container by project_id label
-                    container = await container_executor._get_existing_container(project_id)
-                    if container:
-                        # Kill any existing dev server and restart it
-                        has_frontend = any('frontend/' in f for f in result.files_modified)
-                        work_dir = "/app/frontend" if has_frontend else "/app"
-
-                        # Kill existing node processes and restart dev server
-                        logger.info(f"[ErrorHandler:{project_id}] Restarting dev server in {work_dir}")
-
-                        # Kill existing processes (wait for completion)
-                        container.exec_run("pkill -f 'node.*vite' || true", detach=False)
-                        container.exec_run("pkill -f 'npm.*dev' || true", detach=False)
-
-                        await asyncio.sleep(2)
-
-                        # Start the dev server in the background with proper host binding
-                        start_cmd = f"sh -c 'cd {work_dir} && nohup npm run dev -- --host 0.0.0.0 > /tmp/dev.log 2>&1 &'"
-                        container.exec_run(start_cmd, workdir="/app", detach=True)
-
-                        logger.info(f"[ErrorHandler:{project_id}] Dev server restart triggered, waiting for ready...")
-
-                        # Wait for dev server to be ready (check logs for "ready" message)
-                        max_wait = 15  # Max 15 seconds
-                        ready = False
-                        for i in range(max_wait):
-                            await asyncio.sleep(1)
-                            try:
-                                # Check if Vite has started (look for "ready" or "Local:" in logs)
-                                exit_code, output = container.exec_run(
-                                    "cat /tmp/dev.log 2>/dev/null | tail -20",
-                                    demux=True
-                                )
-                                log_output = ""
-                                if output[0]:
-                                    log_output = output[0].decode('utf-8', errors='ignore')
-
-                                if 'ready in' in log_output.lower() or 'local:' in log_output.lower():
-                                    logger.info(f"[ErrorHandler:{project_id}] Dev server ready after {i+1}s")
-                                    ready = True
-                                    break
-                                elif 'error' in log_output.lower() and 'esbuild' not in log_output.lower():
-                                    logger.warning(f"[ErrorHandler:{project_id}] Dev server error detected")
-                                    break
-                            except Exception as check_err:
-                                logger.debug(f"[ErrorHandler:{project_id}] Log check error: {check_err}")
-
-                        if not ready:
-                            logger.warning(f"[ErrorHandler:{project_id}] Dev server may not be ready after {max_wait}s")
-
-                        # Notify frontend that rebuild is complete
-                        await notify_rebuild_completed(project_id, result.files_modified)
-                    else:
-                        logger.warning(f"[ErrorHandler:{project_id}] Container not found for auto-rebuild (project_id={project_id})")
-                except Exception as rebuild_err:
-                    logger.warning(f"[ErrorHandler:{project_id}] Auto-rebuild error: {rebuild_err}")
-                    import traceback
-                    logger.warning(traceback.format_exc())
+            if source_files_modified:
+                # Source files only - HMR handles updates, just notify completion
+                logger.info(f"[ErrorHandler:{project_id}] Source files synced via HMR: {source_files_modified}")
 
             await notify_fix_completed(project_id, result.patches_applied, result.files_modified)
         elif result.success:
@@ -795,6 +761,345 @@ async def get_error_status(project_id: str):
         "is_fixing": auto_fixer.is_fixing if hasattr(auto_fixer, 'is_fixing') else False,
         "websocket_connections": len(ws_connections.get(project_id, []))
     }
+
+
+# =============================================================================
+# BROWSER ERROR CAPTURE ENDPOINT
+# =============================================================================
+# This endpoint receives errors from the browser error capture script
+# (frontend/public/error-capture.js). The browser is the REPORTER, not the fixer.
+# All actual fixing happens in the backend.
+# =============================================================================
+
+class BrowserErrorEntry(BaseModel):
+    """Single browser error entry (from error-capture.js)"""
+    type: str  # JS_RUNTIME, PROMISE_REJECTION, CONSOLE_ERROR, NETWORK_ERROR, RESOURCE_ERROR, REACT_ERROR
+    category: str  # REFERENCE_ERROR, TYPE_ERROR, SYNTAX_ERROR, CORS_ERROR, etc.
+    message: str
+    file: Optional[str] = None
+    source: Optional[str] = None  # Alternative to file
+    line: Optional[int] = None
+    column: Optional[int] = None
+    stack: Optional[str] = None
+    framework: Optional[str] = None  # react, vue, angular, etc.
+    timestamp: Optional[int] = None
+    # Network error specific
+    url: Optional[str] = None
+    method: Optional[str] = None
+    status: Optional[int] = None
+    statusText: Optional[str] = None
+    # Resource error specific
+    resource: Optional[str] = None
+    tagName: Optional[str] = None
+
+
+class BrowserErrorReportRequest(BaseModel):
+    """Request body for browser error report (from error-capture.js)"""
+    project_id: str
+    source: str = "browser"  # Always "browser" from this endpoint
+    errors: List[BrowserErrorEntry]
+    timestamp: int
+    url: Optional[str] = None  # Page URL
+    userAgent: Optional[str] = None
+
+
+class BrowserErrorReportResponse(BaseModel):
+    """Response for browser error report"""
+    success: bool
+    errors_received: int
+    normalized_count: int
+    fix_triggered: bool
+    message: str
+
+
+# Rule-based fixes for common browser errors (NO AI needed)
+BROWSER_ERROR_RULES = {
+    # Reference errors (missing imports, undefined variables)
+    "REFERENCE_ERROR": {
+        "is not defined": {
+            "fix_type": "add_import",
+            "description": "Missing import or variable declaration"
+        },
+        "is not a function": {
+            "fix_type": "check_import",
+            "description": "Function not imported or misspelled"
+        }
+    },
+    # Type errors (null/undefined access)
+    "TYPE_ERROR": {
+        "cannot read properties of undefined": {
+            "fix_type": "add_optional_chaining",
+            "description": "Add optional chaining (?.) to prevent null access"
+        },
+        "cannot read properties of null": {
+            "fix_type": "add_optional_chaining",
+            "description": "Add optional chaining (?.) to prevent null access"
+        },
+        "is not a function": {
+            "fix_type": "check_type",
+            "description": "Check if variable is the expected type"
+        }
+    },
+    # Network errors
+    "NETWORK_ERROR": {
+        "failed to fetch": {
+            "fix_type": "check_backend",
+            "description": "Backend server might be down or CORS issue"
+        },
+        "cors": {
+            "fix_type": "add_cors_headers",
+            "description": "Add CORS headers to backend"
+        }
+    },
+    # Chunk load errors (usually stale cache)
+    "CHUNK_LOAD_ERROR": {
+        "loading chunk": {
+            "fix_type": "clear_cache_reload",
+            "description": "Clear cache and reload"
+        },
+        "chunk": {
+            "fix_type": "rebuild",
+            "description": "Rebuild the frontend bundle"
+        }
+    },
+    # Hook errors (React specific)
+    "HOOK_ERROR": {
+        "invalid hook call": {
+            "fix_type": "check_hooks",
+            "description": "Hooks must be called at top level of component"
+        },
+        "rendered more hooks": {
+            "fix_type": "fix_hook_order",
+            "description": "Ensure hooks are called in the same order"
+        }
+    },
+    # Hydration errors (SSR specific)
+    "HYDRATION_ERROR": {
+        "hydration": {
+            "fix_type": "fix_hydration",
+            "description": "Server/client content mismatch"
+        }
+    },
+    # Module errors
+    "MODULE_ERROR": {
+        "cannot find module": {
+            "fix_type": "npm_install",
+            "description": "Run npm install to install missing module"
+        },
+        "failed to resolve import": {
+            "fix_type": "check_import_path",
+            "description": "Check import path and file existence"
+        }
+    }
+}
+
+
+def get_rule_based_fix(category: str, message: str) -> Optional[Dict[str, Any]]:
+    """
+    Try to get a rule-based fix for a browser error.
+    Returns None if no rule matches (AI will be used instead).
+    """
+    rules = BROWSER_ERROR_RULES.get(category, {})
+    message_lower = message.lower()
+
+    for pattern, fix_info in rules.items():
+        if pattern in message_lower:
+            return fix_info
+
+    return None
+
+
+def normalize_browser_error(error: BrowserErrorEntry) -> Dict[str, Any]:
+    """
+    Normalize browser error into structured format for auto-fixer.
+
+    This converts noisy browser errors into clean, structured events
+    that the AI can reason about.
+    """
+    # Determine file from various sources
+    file_path = error.file or error.source or error.url
+    if file_path:
+        # Clean up file path
+        file_path = file_path.replace('http://localhost:3000', '')
+        file_path = file_path.replace('https://localhost:3000', '')
+        # Remove query params and hash
+        if '?' in file_path:
+            file_path = file_path.split('?')[0]
+        if '#' in file_path:
+            file_path = file_path.split('#')[0]
+
+    # Get rule-based fix if available
+    rule_fix = get_rule_based_fix(error.category, error.message)
+
+    return {
+        "source": "browser",
+        "category": error.category,
+        "type": error.type,
+        "message": error.message,
+        "file": file_path,
+        "line": error.line,
+        "column": error.column,
+        "stack": error.stack,
+        "framework": error.framework or "unknown",
+        "timestamp": error.timestamp,
+        # Rule-based fix info (if available)
+        "has_rule_fix": rule_fix is not None,
+        "rule_fix": rule_fix,
+        # Network-specific
+        "url": error.url,
+        "method": error.method,
+        "status": error.status,
+    }
+
+
+@router.post("/browser", response_model=BrowserErrorReportResponse)
+async def report_browser_errors(
+    request: BrowserErrorReportRequest,
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    BROWSER ERROR ENDPOINT - Receives errors from error-capture.js
+
+    This endpoint:
+    1. Receives errors captured in the browser (JS runtime, network, etc.)
+    2. Normalizes them into structured format
+    3. Applies rule-based fixes for common errors (NO AI)
+    4. Triggers AI auto-fixer for complex errors
+
+    ARCHITECTURE:
+    - Browser = Reporter (captures and sends errors)
+    - Backend = Doctor (analyzes and fixes errors)
+    - Browser NEVER fixes itself
+
+    Flow:
+    Browser Error → Normalize → Rule Check → AI Fix → Rebuild → Browser Reload
+    """
+    project_id = request.project_id
+
+    if not request.errors:
+        return BrowserErrorReportResponse(
+            success=True,
+            errors_received=0,
+            normalized_count=0,
+            fix_triggered=False,
+            message="No errors to process"
+        )
+
+    logger.info(f"[BrowserErrors:{project_id}] Received {len(request.errors)} browser errors")
+
+    # Get LogBus for this project
+    log_bus = get_log_bus(project_id)
+
+    # Normalize all errors
+    normalized_errors = []
+    rule_fixable_errors = []
+    ai_required_errors = []
+
+    for error in request.errors:
+        normalized = normalize_browser_error(error)
+        normalized_errors.append(normalized)
+
+        # Log to LogBus
+        log_bus.add_browser_error(
+            message=normalized["message"],
+            file=normalized["file"],
+            line=normalized["line"],
+            column=normalized["column"],
+            stack=normalized["stack"]
+        )
+
+        # Categorize by fix type
+        if normalized["has_rule_fix"]:
+            rule_fixable_errors.append(normalized)
+        else:
+            ai_required_errors.append(normalized)
+
+    logger.info(
+        f"[BrowserErrors:{project_id}] Normalized {len(normalized_errors)} errors: "
+        f"{len(rule_fixable_errors)} rule-fixable, {len(ai_required_errors)} need AI"
+    )
+
+    # Check if user can auto-fix
+    can_auto_fix = True
+    if current_user:
+        try:
+            limits = await get_user_limits(current_user, db)
+            feature_flags = limits.feature_flags or {}
+            can_auto_fix = feature_flags.get("bug_fixing", False) or feature_flags.get("all", False)
+        except Exception as e:
+            logger.warning(f"[BrowserErrors:{project_id}] Could not check feature flags: {e}")
+            can_auto_fix = False
+    else:
+        can_auto_fix = False
+
+    fix_triggered = False
+
+    # Trigger fixes if we have fixable errors
+    if normalized_errors and can_auto_fix:
+        # Convert to ErrorEntry format for existing fix system
+        errors_for_fixer = []
+        for err in normalized_errors:
+            errors_for_fixer.append({
+                "source": "browser",
+                "type": err["category"],
+                "message": err["message"],
+                "file": err["file"],
+                "line": err["line"],
+                "column": err["column"],
+                "stack": err["stack"],
+                "severity": "error"
+            })
+
+        try:
+            # Notify WebSocket clients that fix is starting
+            primary_message = normalized_errors[0]["message"][:100] if normalized_errors else "Browser error"
+            await notify_fix_started(project_id, primary_message)
+
+            # Get user_id for token tracking
+            fix_user_id = str(current_user.id) if current_user else None
+
+            # Build context
+            context = f"Browser errors detected:\n"
+            for err in normalized_errors[:5]:  # First 5 errors
+                context += f"- [{err['category']}] {err['message'][:200]}\n"
+                if err["file"]:
+                    context += f"  File: {err['file']}"
+                    if err["line"]:
+                        context += f":{err['line']}"
+                    context += "\n"
+                if err["stack"]:
+                    # First 3 lines of stack
+                    stack_lines = err["stack"].split("\n")[:3]
+                    context += f"  Stack: {' | '.join(stack_lines)}\n"
+
+            # Trigger fix in background
+            asyncio.create_task(execute_fix_with_notification(
+                project_id=project_id,
+                errors=errors_for_fixer,
+                context=context,
+                command=None,
+                file_tree=None,
+                recently_modified=None,
+                user_id=fix_user_id
+            ))
+
+            fix_triggered = True
+            logger.info(f"[BrowserErrors:{project_id}] Triggered fix for {len(errors_for_fixer)} errors")
+
+        except Exception as fix_err:
+            logger.error(f"[BrowserErrors:{project_id}] Failed to trigger fix: {fix_err}")
+
+    return BrowserErrorReportResponse(
+        success=True,
+        errors_received=len(request.errors),
+        normalized_count=len(normalized_errors),
+        fix_triggered=fix_triggered,
+        message=f"Processed {len(request.errors)} browser errors" + (
+            f", fix triggered" if fix_triggered else
+            ", upgrade required for auto-fix" if not can_auto_fix else ""
+        )
+    )
 
 
 @router.post("/reset/{project_id}")
