@@ -82,7 +82,38 @@ class Technology(Enum):
     JUPYTER = "jupyter"  # Jupyter notebooks for AI/ML/DL
     STREAMLIT = "streamlit"  # Streamlit for ML dashboards
 
+    # Full-Stack (Multi-Container)
+    FULLSTACK = "fullstack"  # Frontend + Backend in separate containers
+
     UNKNOWN = "unknown"
+
+
+# Full-Stack Project Configuration
+@dataclass
+class FullStackConfig:
+    """Configuration for full-stack projects with frontend + backend"""
+    frontend_tech: Technology
+    backend_tech: Technology
+    frontend_port: int = 5173
+    backend_port: int = 8080
+    frontend_path: str = "frontend"
+    backend_path: str = "backend"
+
+
+# Backend technology detection patterns
+BACKEND_PATTERNS = {
+    Technology.JAVA: ["pom.xml", "build.gradle", "build.gradle.kts"],
+    Technology.PYTHON: ["requirements.txt", "pyproject.toml", "main.py", "app.py"],
+    Technology.GO: ["go.mod", "main.go"],
+    Technology.DOTNET: ["*.csproj", "*.fsproj"],
+}
+
+# Frontend technology detection patterns
+FRONTEND_PATTERNS = {
+    Technology.NODEJS_VITE: ["vite.config.ts", "vite.config.js", "vite.config.mjs"],
+    Technology.NODEJS: ["package.json"],
+    Technology.ANGULAR: ["angular.json"],
+}
 
 
 @dataclass
@@ -700,6 +731,426 @@ class ContainerExecutor:
 
         return Technology.UNKNOWN
 
+    def detect_fullstack_project(self, project_path: str) -> Optional[FullStackConfig]:
+        """
+        Detect if project is a full-stack project with separate frontend and backend.
+
+        Full-stack project structure:
+        project/
+        ├── frontend/    # React, Vue, Angular
+        │   └── package.json
+        └── backend/     # Java, Python, Go
+            └── pom.xml / requirements.txt / go.mod
+
+        Returns:
+            FullStackConfig if full-stack project detected, None otherwise
+        """
+        path = Path(project_path)
+        frontend_path = path / "frontend"
+        backend_path = path / "backend"
+
+        # Check if both frontend/ and backend/ directories exist
+        if not (frontend_path.exists() and backend_path.exists()):
+            return None
+
+        # Detect frontend technology
+        frontend_tech = None
+        if (frontend_path / "package.json").exists():
+            if (frontend_path / "vite.config.ts").exists() or \
+               (frontend_path / "vite.config.js").exists() or \
+               (frontend_path / "vite.config.mjs").exists():
+                frontend_tech = Technology.NODEJS_VITE
+                frontend_port = 5173
+            elif (frontend_path / "angular.json").exists():
+                frontend_tech = Technology.ANGULAR
+                frontend_port = 4200
+            else:
+                frontend_tech = Technology.NODEJS
+                frontend_port = 3000
+
+        if not frontend_tech:
+            return None
+
+        # Detect backend technology
+        backend_tech = None
+        backend_port = 8080
+
+        if (backend_path / "pom.xml").exists() or \
+           (backend_path / "build.gradle").exists() or \
+           (backend_path / "build.gradle.kts").exists():
+            backend_tech = Technology.JAVA
+            backend_port = 8080
+        elif (backend_path / "requirements.txt").exists() or \
+             (backend_path / "pyproject.toml").exists():
+            backend_tech = Technology.PYTHON
+            backend_port = 8000
+        elif (backend_path / "go.mod").exists():
+            backend_tech = Technology.GO
+            backend_port = 8080
+        elif list(backend_path.glob("*.csproj")) or list(backend_path.glob("*.fsproj")):
+            backend_tech = Technology.DOTNET
+            backend_port = 5000
+
+        if not backend_tech:
+            return None
+
+        logger.info(f"[ContainerExecutor] Detected full-stack project: frontend={frontend_tech.value}, backend={backend_tech.value}")
+
+        return FullStackConfig(
+            frontend_tech=frontend_tech,
+            backend_tech=backend_tech,
+            frontend_port=frontend_port,
+            backend_port=backend_port,
+            frontend_path="frontend",
+            backend_path="backend"
+        )
+
+    async def create_project_network(self, project_id: str) -> str:
+        """
+        Create a Docker network for full-stack project communication.
+
+        Args:
+            project_id: Project identifier
+
+        Returns:
+            Network name
+        """
+        network_name = f"bharatbuild_{project_id[:8]}_network"
+
+        try:
+            # Check if network already exists
+            existing_networks = self.docker_client.networks.list(names=[network_name])
+            if existing_networks:
+                logger.info(f"[ContainerExecutor] Network {network_name} already exists")
+                return network_name
+
+            # Create new network
+            self.docker_client.networks.create(
+                network_name,
+                driver="bridge",
+                labels={"project_id": project_id, "managed_by": "bharatbuild"}
+            )
+            logger.info(f"[ContainerExecutor] Created network: {network_name}")
+            return network_name
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Failed to create network: {e}")
+            raise
+
+    async def run_fullstack_project(
+        self,
+        project_id: str,
+        project_path: str,
+        fullstack_config: FullStackConfig
+    ) -> AsyncGenerator[str, None]:
+        """
+        Run a full-stack project with both frontend and backend containers.
+
+        Architecture:
+        1. Create Docker network for inter-container communication
+        2. Start backend container first (Java/Python/Go)
+        3. Wait for backend to be healthy
+        4. Start frontend container with backend URL injected
+        5. Return frontend preview URL
+
+        Args:
+            project_id: Project identifier
+            project_path: Path to project root
+            fullstack_config: Full-stack configuration
+
+        Yields:
+            Progress messages and preview URL
+        """
+        yield f"🚀 Starting full-stack project (frontend + backend)...\n"
+        yield f"  📦 Frontend: {fullstack_config.frontend_tech.value}\n"
+        yield f"  📦 Backend: {fullstack_config.backend_tech.value}\n\n"
+
+        backend_container = None
+        frontend_container = None
+        network_name = None
+
+        try:
+            # Step 1: Create Docker network
+            yield f"📡 Creating Docker network for service communication...\n"
+            network_name = await self.create_project_network(project_id)
+
+            # Step 2: Start backend container
+            yield f"\n━━━ Starting Backend ({fullstack_config.backend_tech.value}) ━━━\n"
+            backend_path = os.path.join(project_path, fullstack_config.backend_path)
+            backend_config = TECHNOLOGY_CONFIGS.get(fullstack_config.backend_tech)
+
+            if not backend_config:
+                yield f"❌ Unsupported backend technology: {fullstack_config.backend_tech.value}\n"
+                return
+
+            # Create backend container
+            backend_container_name = f"bharatbuild_{project_id[:8]}_backend"
+            backend_host_port = self._get_available_port(fullstack_config.backend_port)
+
+            yield f"  📂 Backend path: {backend_path}\n"
+            yield f"  🔧 Building backend...\n"
+
+            # Build command for backend
+            if backend_config.build_command:
+                yield f"  $ {backend_config.build_command}\n"
+
+            backend_container = self.docker_client.containers.run(
+                backend_config.image,
+                command=f"/bin/sh -c '{backend_config.build_command} && {backend_config.run_command}'",
+                name=backend_container_name,
+                detach=True,
+                remove=False,
+                working_dir="/app",
+                volumes={backend_path: {"bind": "/app", "mode": "rw"}},
+                ports={f"{fullstack_config.backend_port}/tcp": backend_host_port},
+                environment={
+                    "PORT": str(fullstack_config.backend_port),
+                    "SERVER_PORT": str(fullstack_config.backend_port),
+                },
+                mem_limit=backend_config.memory_limit,
+                cpu_quota=int(backend_config.cpu_limit * 100000),
+                network=network_name,
+                labels={
+                    "project_id": project_id,
+                    "service": "backend",
+                    "managed_by": "bharatbuild"
+                }
+            )
+
+            yield f"  ✅ Backend container started: {backend_container_name}\n"
+
+            # Wait for backend to be healthy
+            yield f"  ⏳ Waiting for backend to be ready...\n"
+            backend_ready = await self._wait_for_container_ready(
+                backend_container,
+                fullstack_config.backend_port,
+                timeout=180  # 3 minutes for Java/Maven
+            )
+
+            if not backend_ready:
+                yield f"  ⚠️ Backend may still be starting (continuing anyway)...\n"
+            else:
+                yield f"  ✅ Backend is ready on port {backend_host_port}\n"
+
+            # Step 3: Start frontend container
+            yield f"\n━━━ Starting Frontend ({fullstack_config.frontend_tech.value}) ━━━\n"
+            frontend_path = os.path.join(project_path, fullstack_config.frontend_path)
+            frontend_config = TECHNOLOGY_CONFIGS.get(fullstack_config.frontend_tech)
+
+            if not frontend_config:
+                yield f"❌ Unsupported frontend technology: {fullstack_config.frontend_tech.value}\n"
+                return
+
+            frontend_container_name = f"bharatbuild_{project_id[:8]}_frontend"
+            frontend_host_port = self._get_available_port(fullstack_config.frontend_port)
+
+            yield f"  📂 Frontend path: {frontend_path}\n"
+            yield f"  🔧 Installing dependencies...\n"
+
+            # Backend URL for frontend to use
+            backend_internal_url = f"http://{backend_container_name}:{fullstack_config.backend_port}"
+
+            # Environment variables for frontend
+            frontend_env = {
+                "VITE_API_URL": backend_internal_url,
+                "VITE_BACKEND_URL": backend_internal_url,
+                "REACT_APP_API_URL": backend_internal_url,
+                "NEXT_PUBLIC_API_URL": backend_internal_url,
+                "API_URL": backend_internal_url,
+                "BACKEND_URL": backend_internal_url,
+            }
+
+            # Build and run frontend
+            frontend_run_cmd = frontend_config.run_command
+            if fullstack_config.frontend_tech == Technology.NODEJS_VITE:
+                frontend_run_cmd = f"npm run dev -- --host 0.0.0.0 --port {fullstack_config.frontend_port}"
+
+            frontend_container = self.docker_client.containers.run(
+                frontend_config.image,
+                command=f"/bin/sh -c '{frontend_config.build_command} && {frontend_run_cmd}'",
+                name=frontend_container_name,
+                detach=True,
+                remove=False,
+                working_dir="/app",
+                volumes={frontend_path: {"bind": "/app", "mode": "rw"}},
+                ports={f"{fullstack_config.frontend_port}/tcp": frontend_host_port},
+                environment=frontend_env,
+                mem_limit=frontend_config.memory_limit,
+                cpu_quota=int(frontend_config.cpu_limit * 100000),
+                network=network_name,
+                labels={
+                    "project_id": project_id,
+                    "service": "frontend",
+                    "managed_by": "bharatbuild"
+                }
+            )
+
+            yield f"  ✅ Frontend container started: {frontend_container_name}\n"
+
+            # Wait for frontend to be ready
+            yield f"  ⏳ Waiting for frontend to be ready...\n"
+            frontend_ready = await self._wait_for_container_ready(
+                frontend_container,
+                fullstack_config.frontend_port,
+                timeout=120
+            )
+
+            # Generate preview URL
+            preview_url = _get_preview_url(frontend_host_port, project_id)
+
+            # Store both containers in active_containers
+            self.active_containers[project_id] = {
+                "frontend_container": frontend_container,
+                "backend_container": backend_container,
+                "frontend_port": frontend_host_port,
+                "backend_port": backend_host_port,
+                "network": network_name,
+                "technology": Technology.FULLSTACK,
+                "fullstack_config": fullstack_config,
+                "started_at": datetime.utcnow(),
+                "preview_url": preview_url
+            }
+
+            yield f"\n━━━ Full-Stack Project Running ━━━\n"
+            yield f"  🌐 Frontend: http://localhost:{frontend_host_port}\n"
+            yield f"  🔧 Backend: http://localhost:{backend_host_port}\n"
+            yield f"  📡 Network: {network_name}\n"
+            yield f"\n🚀 Preview URL: {preview_url}\n"
+            yield f"_PREVIEW_URL_:{preview_url}\n"
+            yield f"__PREVIEW_READY__:{preview_url}\n"
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Full-stack project failed: {e}")
+            yield f"\n❌ Error: {str(e)}\n"
+
+            # Cleanup on failure
+            if frontend_container:
+                try:
+                    frontend_container.stop(timeout=5)
+                    frontend_container.remove(force=True)
+                except Exception:
+                    pass
+
+            if backend_container:
+                try:
+                    backend_container.stop(timeout=5)
+                    backend_container.remove(force=True)
+                except Exception:
+                    pass
+
+            if network_name:
+                try:
+                    network = self.docker_client.networks.get(network_name)
+                    network.remove()
+                except Exception:
+                    pass
+
+    async def _wait_for_container_ready(
+        self,
+        container,
+        port: int,
+        timeout: int = 60
+    ) -> bool:
+        """Wait for container's service to be ready on specified port."""
+        import aiohttp
+
+        start_time = datetime.utcnow()
+        check_url = f"http://localhost:{port}"
+
+        while (datetime.utcnow() - start_time).seconds < timeout:
+            try:
+                # Check container is still running
+                container.reload()
+                if container.status != "running":
+                    logger.warning(f"[ContainerExecutor] Container stopped unexpectedly")
+                    return False
+
+                # Try to connect to the service
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(check_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                        if resp.status < 500:
+                            return True
+            except Exception:
+                pass
+
+            await asyncio.sleep(2)
+
+        return False
+
+    def _get_available_port(self, preferred_port: int) -> int:
+        """Get an available port, starting from preferred port."""
+        import socket
+
+        port = preferred_port
+        max_attempts = 100
+
+        for _ in range(max_attempts):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(("", port))
+                    return port
+            except OSError:
+                port += 1
+
+        # Fallback: let system assign port
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
+
+    async def stop_fullstack_project(self, project_id: str) -> Tuple[bool, str]:
+        """
+        Stop a full-stack project (both frontend and backend containers).
+
+        Args:
+            project_id: Project identifier
+
+        Returns:
+            Tuple of (success, message)
+        """
+        container_info = self.active_containers.get(project_id)
+        if not container_info:
+            return False, "No running full-stack project found"
+
+        errors = []
+
+        # Stop frontend
+        frontend_container = container_info.get("frontend_container")
+        if frontend_container:
+            try:
+                frontend_container.stop(timeout=10)
+                frontend_container.remove(force=True)
+                logger.info(f"[ContainerExecutor] Stopped frontend container for {project_id}")
+            except Exception as e:
+                errors.append(f"Frontend: {e}")
+
+        # Stop backend
+        backend_container = container_info.get("backend_container")
+        if backend_container:
+            try:
+                backend_container.stop(timeout=10)
+                backend_container.remove(force=True)
+                logger.info(f"[ContainerExecutor] Stopped backend container for {project_id}")
+            except Exception as e:
+                errors.append(f"Backend: {e}")
+
+        # Remove network
+        network_name = container_info.get("network")
+        if network_name:
+            try:
+                network = self.docker_client.networks.get(network_name)
+                network.remove()
+                logger.info(f"[ContainerExecutor] Removed network {network_name}")
+            except Exception as e:
+                errors.append(f"Network: {e}")
+
+        # Remove from active containers
+        del self.active_containers[project_id]
+
+        if errors:
+            return True, f"Stopped with warnings: {', '.join(errors)}"
+
+        return True, "Full-stack project stopped successfully"
+
     def validate_technology_detection(
         self,
         technology: "Technology",
@@ -1122,6 +1573,7 @@ class ContainerExecutor:
 
         This method now finds containers by name pattern (not just in-memory tracking),
         which allows stopping containers even after backend restart.
+        Also handles full-stack projects with multiple containers.
         """
         if not self.docker_client:
             return False, "Docker client not available"
@@ -1130,7 +1582,14 @@ class ContainerExecutor:
         container_name_prefix = f"bharatbuild_"
 
         try:
-            # Method 1: Try in-memory tracking first
+            # Check for full-stack project first (has frontend_container and backend_container)
+            if project_id in self.active_containers:
+                container_info = self.active_containers[project_id]
+                if container_info.get("technology") == Technology.FULLSTACK:
+                    # Use dedicated full-stack stop method
+                    return await self.stop_fullstack_project(project_id)
+
+            # Method 1: Try in-memory tracking first (single container)
             if project_id in self.active_containers:
                 container_info = self.active_containers[project_id]
                 try:
@@ -2010,6 +2469,21 @@ echo "Done"
         path_str = str(project_path)
         logger.info(f"[ContainerExecutor] run_project called with project_path={path_str}, user_id={user_id}")
         yield f"  📁 Using path: {path_str}\n"
+
+        # =====================================================================
+        # FULL-STACK DETECTION: Check if project has both frontend/ and backend/
+        # If so, run both containers with network communication
+        # =====================================================================
+        fullstack_config = self.detect_fullstack_project(project_path)
+        if fullstack_config:
+            yield f"  🎯 Full-stack project detected!\n"
+            yield f"     Frontend: {fullstack_config.frontend_tech.value}\n"
+            yield f"     Backend: {fullstack_config.backend_tech.value}\n\n"
+
+            # Run full-stack project with multi-container orchestration
+            async for msg in self.run_fullstack_project(project_id, project_path, fullstack_config):
+                yield msg
+            return  # Exit after full-stack handling
 
         # Reset frontend subdir flag before detection
         self._frontend_subdir = False
