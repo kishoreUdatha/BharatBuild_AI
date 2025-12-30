@@ -485,6 +485,76 @@ class ContainerExecutor:
         path = Path(project_path)
         missing = []
 
+        # =====================================================================
+        # CRITICAL: Remote Docker mode - check filesystem on remote EC2 sandbox
+        # When SANDBOX_DOCKER_HOST is set, local path.exists() will always fail
+        # because files are on the remote sandbox, not local ECS container.
+        # =====================================================================
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+        if sandbox_docker_host and self.docker_client:
+            logger.info(f"[ContainerExecutor] Remote mode: validating workspace via Docker on {project_path}")
+            try:
+                # Check if directory exists on remote sandbox
+                check_result = self.docker_client.containers.run(
+                    "alpine:latest",
+                    ["-c", f"test -d {project_path} && echo 'EXISTS' || echo 'MISSING'"],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    remove=True,
+                    detach=False
+                )
+                if b"MISSING" in check_result:
+                    return False, f"Workspace path does not exist on remote sandbox: {project_path}", ["workspace_directory"]
+
+                # Check for frontend subdirectory on remote
+                frontend_check = self.docker_client.containers.run(
+                    "alpine:latest",
+                    ["-c", f"test -d {project_path}/frontend && test -f {project_path}/frontend/package.json && echo 'FRONTEND' || echo 'ROOT'"],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    remove=True,
+                    detach=False
+                )
+                is_frontend_subdir = b"FRONTEND" in frontend_check
+                check_path_str = f"{project_path}/frontend" if is_frontend_subdir else project_path
+
+                # Check required files on remote
+                required_files = {
+                    Technology.NODEJS: ["package.json"],
+                    Technology.NODEJS_VITE: ["package.json"],
+                    Technology.REACT_NATIVE: ["package.json"],
+                    Technology.ANGULAR: ["package.json", "angular.json"],
+                    Technology.JAVA: [],
+                    Technology.PYTHON: [],
+                    Technology.PYTHON_ML: [],
+                    Technology.GO: ["go.mod"],
+                    Technology.FLUTTER: ["pubspec.yaml"],
+                    Technology.DOTNET: [],
+                }
+
+                for required_file in required_files.get(technology, []):
+                    file_check = self.docker_client.containers.run(
+                        "alpine:latest",
+                        ["-c", f"test -f {check_path_str}/{required_file} && echo 'EXISTS' || echo 'MISSING'"],
+                        entrypoint="/bin/sh",
+                        volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                        remove=True,
+                        detach=False
+                    )
+                    if b"MISSING" in file_check:
+                        missing.append(required_file)
+
+                if missing:
+                    return False, f"Missing critical files on remote sandbox: {', '.join(missing)}", missing
+
+                logger.info(f"[ContainerExecutor] Remote workspace validation passed for {project_path}")
+                return True, "Workspace validated successfully on remote sandbox", []
+
+            except Exception as remote_err:
+                logger.warning(f"[ContainerExecutor] Remote validation failed: {remote_err}, falling back to local check")
+                # Fall through to local check
+
+        # Local filesystem check (non-remote mode)
         # Check if path exists
         if not path.exists():
             return False, f"Workspace path does not exist: {project_path}", ["workspace_directory"]

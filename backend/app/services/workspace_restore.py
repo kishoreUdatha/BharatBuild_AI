@@ -16,6 +16,7 @@ this service can restore the workspace in two ways:
    - Creates fresh files based on the original plan
 """
 
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
 import asyncio
@@ -521,6 +522,45 @@ class WorkspaceRestoreService:
         Returns:
             Dict with restoration results
         """
+        # =====================================================================
+        # CRITICAL: Remote Docker mode handling
+        # When SANDBOX_DOCKER_HOST is set, files must be restored to remote EC2
+        # not the local ECS filesystem. Delegate to unified_storage's remote restore.
+        # =====================================================================
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+        if sandbox_docker_host:
+            logger.info(f"[WorkspaceRestore] Remote Docker mode detected, delegating to unified_storage")
+            try:
+                from app.services.unified_storage import unified_storage
+                # Get user_id from project if not provided
+                project = await self._get_project(project_id, db)
+                if not user_id and project:
+                    user_id = str(project.user_id)
+
+                # Use unified_storage's remote restore which handles EC2 sandbox
+                restored_files = await unified_storage._restore_to_remote_sandbox(project_id, user_id)
+                if restored_files:
+                    return {
+                        "success": True,
+                        "method": "restore_from_storage",
+                        "restored_files": len(restored_files),
+                        "total_files": len(restored_files),
+                        "message": f"Restored {len(restored_files)} files to remote sandbox"
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "method": "restore_from_storage",
+                        "error": "No files restored to remote sandbox"
+                    }
+            except Exception as remote_err:
+                logger.error(f"[WorkspaceRestore] Remote restore failed: {remote_err}")
+                return {
+                    "success": False,
+                    "method": "restore_from_storage",
+                    "error": f"Remote restore failed: {str(remote_err)}"
+                }
+
         status = await self.check_workspace_status(project_id, db, user_id)
 
         # Get workspace path to check essential files
