@@ -136,4 +136,34 @@
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--bolt-text-secondary));
   }
+
+  /* Hide scrollbar utility class */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Hide xterm.js scrollbar */
+  .xterm-viewport {
+    overflow-y: auto !important;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .xterm-viewport::-webkit-scrollbar {
+    display: none;
+  }
+
+  .xterm-scroll-area {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .xterm-scroll-area::-webkit-scrollbar {
+    display: none;
+  }
 }

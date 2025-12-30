@@ -461,7 +461,7 @@ export function Terminal({
 
           {/* Status indicator */}
           <div className="flex items-center gap-1.5">
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+            <div className="w-2 h-2 rounded-full bg-green-500" />
             <span className="text-xs text-gray-500">{lines.length} lines</span>
           </div>
 
@@ -612,8 +612,10 @@ export function Terminal({
         <div
           ref={terminalRef}
           onScroll={handleScroll}
-          className="h-[calc(100%-48px)] overflow-y-auto overflow-x-hidden font-mono text-sm"
+          className="h-[calc(100%-48px)] overflow-y-auto overflow-x-hidden font-mono text-sm scrollbar-hide"
           style={{
+            scrollbarWidth: 'none',
+            msOverflowStyle: 'none',
             background: 'linear-gradient(to bottom, #1a1d23 0%, #16181d 100%)',
             scrollBehavior: 'smooth'
           }}
@@ -656,10 +658,10 @@ export function Terminal({
               )
             })}
 
-            {/* Cursor */}
+            {/* Cursor - static, no blinking */}
             <div className="flex items-center gap-2 pt-2">
               <span className="text-green-400">$</span>
-              <span className="inline-block w-2 h-4 bg-green-400 animate-pulse" />
+              <span className="inline-block w-2 h-4 bg-green-400" />
             </div>
           </div>
         </div>
