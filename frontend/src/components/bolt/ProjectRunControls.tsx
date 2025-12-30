@@ -146,7 +146,8 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     setCurrentCommand: setErrorCommand,
     forwardNow,
     clearBuffers,
-    isConnected: errorCollectorConnected
+    isConnected: errorCollectorConnected,
+    setServerRunning  // Prevents auto-fix when preview is working
   } = useErrorCollector({
     projectId: currentProject?.id,
     enabled: !!currentProject?.id && autoFix,
@@ -162,8 +163,17 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       if (filesModified.length > 0) {
         onOutput?.(`📄 Files modified: ${filesModified.join(', ')}`)
       }
-      // Set flag to trigger restart (handled by useEffect)
-      pendingRestartRef.current = true
+
+      // Only restart if server is NOT already running
+      // If server is running, HMR will pick up the changes automatically
+      if (!serverStartedRef.current) {
+        pendingRestartRef.current = true
+        onOutput?.('\n🚀 Restarting project with fixes...\n')
+      } else {
+        onOutput?.('\n✨ Fix applied! HMR will reload automatically.\n')
+        setStatus('running')  // Keep status as running
+      }
+
       setFixAttempts(0)
       setLastError(null)
       setMaxAttemptsReached(false)
@@ -174,7 +184,6 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         clearTimeout(forwardDebounceRef.current)
         forwardDebounceRef.current = null
       }
-      onOutput?.('\n🚀 Restarting project with fixes...\n')
     },
     onFixFailed: (error) => {
       console.log('[ProjectRunControls] Auto-fix failed:', error)
@@ -266,6 +275,8 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       setPreviewUrl(readyUrl)
       setStatus('running')
       onPreviewUrlChange?.(readyUrl)
+      // IMPORTANT: Tell error collector server is running - stops auto-fix
+      setServerRunning(true)
       return true
     }
 
@@ -673,6 +684,8 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     isRetryingRef.current = false
     serverStartedRef.current = false
     fixRequestIdRef.current = 0
+    // Reset server running state in error collector
+    setServerRunning(false)
     // Clear any pending debounce timer
     if (forwardDebounceRef.current) {
       clearTimeout(forwardDebounceRef.current)
@@ -681,7 +694,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     // Clear centralized error collector buffers
     clearBuffers?.()
     console.log('[ResetFixState] All refs and state synchronized')
-  }, [clearBuffers])
+  }, [clearBuffers, setServerRunning])
 
   // ============= BOLT.NEW STYLE AUTO-FIX HANDLER =============
   const attemptAutoFix = useCallback(async (errorMessage: string, stackTrace: string) => {
@@ -1693,6 +1706,8 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     fixLockTimeRef.current = 0
     isRetryingRef.current = false
     serverStartedRef.current = false
+    // Tell error collector server stopped - allows auto-fix on next run
+    setServerRunning(false)
 
     // If we detected an existing server (not started by us), just close the preview
     if (startedFromExistingServerRef.current) {

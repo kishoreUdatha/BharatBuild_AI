@@ -257,6 +257,7 @@ export default function BuildPage() {
             files={fileContents}
             isServerRunning={isServerRunning}
             serverUrl={serverUrl}
+            projectId={currentProject?.id}
           />
         }
         onGenerateProject={() => setIsGenerationModalOpen(true)}

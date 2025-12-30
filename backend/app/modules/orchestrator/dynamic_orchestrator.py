@@ -706,6 +706,13 @@ class EventType(str, Enum):
     AGENT_START = "agent_start"
     AGENT_COMPLETE = "agent_complete"
     VERIFICATION_RESULT = "verification_result"  # NEW: Verification results
+    # Document generation events - for showing progress like build
+    DOCUMENTS_STARTING = "documents_starting"
+    DOCUMENT_GENERATING = "document_generating"
+    DOCUMENT_PROGRESS = "document_progress"
+    DOCUMENT_COMPLETE = "document_complete"
+    ALL_DOCUMENTS_COMPLETE = "all_documents_complete"
+    DOCUMENT_ERROR = "document_error"
 
 
 @dataclass
@@ -7305,13 +7312,26 @@ htmlcov
         doc_count = 0
         docs_dir = f"docs"
 
+        # Document definitions for progress tracking
+        doc_definitions = [
+            ("report", "Project Report", DocumentType.PROJECT_REPORT),
+            ("srs", "SRS Document", DocumentType.SRS),
+            ("ppt", "Presentation", DocumentType.PPT),
+            ("viva", "Viva Q&A", DocumentType.VIVA_QA),
+        ]
+
         try:
             # ============================================================
-            # PARALLEL DOCUMENT GENERATION - All docs generated at once!
+            # SEND DOCUMENTS_STARTING EVENT - Frontend shows progress!
             # ============================================================
             yield OrchestratorEvent(
-                type=EventType.STATUS,
-                data={"message": "Generating all documents in PARALLEL (Project Report, SRS, PPT, Viva Q&A)..."}
+                type=EventType.DOCUMENTS_STARTING,
+                data={
+                    "message": "Code generation complete. Starting document generation...",
+                    "documents": [d[1] for d in doc_definitions],
+                    "total": len(doc_definitions)
+                },
+                agent="document_generator"
             )
 
             # Helper function to generate a single document and return its path
@@ -7338,6 +7358,17 @@ htmlcov
             logger.info("[Documenter] Starting PARALLEL generation of all 4 documents...")
             start_time = asyncio.get_event_loop().time()
 
+            # Send DOCUMENT_GENERATING event for all docs (parallel start)
+            yield OrchestratorEvent(
+                type=EventType.DOCUMENT_GENERATING,
+                data={
+                    "document": "All Documents",
+                    "key": "all",
+                    "message": "Generating Project Report, SRS, PPT, and Viva Q&A in parallel..."
+                },
+                agent="document_generator"
+            )
+
             results = await asyncio.gather(
                 generate_single_doc(DocumentType.PROJECT_REPORT, "Project Report"),
                 generate_single_doc(DocumentType.SRS, "SRS"),
@@ -7352,58 +7383,57 @@ htmlcov
             # Unpack results
             report_path, srs_path, ppt_path, viva_path = results
 
-            # Helper to process results and log exceptions
-            doc_names = ["Project Report", "SRS", "PPT", "Viva Q&A"]
-            doc_results = [report_path, srs_path, ppt_path, viva_path]
-            failed_docs = []
+            # Process results and send proper events
+            doc_results = [
+                ("report", "Project Report", report_path),
+                ("srs", "SRS Document", srs_path),
+                ("ppt", "Presentation", ppt_path),
+                ("viva", "Viva Q&A", viva_path),
+            ]
 
-            for doc_name, result in zip(doc_names, doc_results):
+            for doc_key, doc_name, result in doc_results:
                 if isinstance(result, Exception):
+                    # Send DOCUMENT_ERROR event
                     logger.error(f"[Documenter] {doc_name} generation failed: {type(result).__name__}: {result}")
-                    failed_docs.append(doc_name)
+                    yield OrchestratorEvent(
+                        type=EventType.DOCUMENT_ERROR,
+                        data={
+                            "document": doc_name,
+                            "key": doc_key,
+                            "error": str(result)
+                        },
+                        agent="document_generator"
+                    )
+                elif result:
+                    # Send DOCUMENT_COMPLETE event
+                    doc_count += 1
+                    yield OrchestratorEvent(
+                        type=EventType.DOCUMENT_COMPLETE,
+                        data={
+                            "document": doc_name,
+                            "key": doc_key,
+                            "message": f"{doc_name} generated successfully",
+                            "file_path": result
+                        },
+                        agent="document_generator"
+                    )
+                    # Also send FILE_OPERATION for file explorer
+                    yield OrchestratorEvent(
+                        type=EventType.FILE_OPERATION,
+                        data={"path": result, "operation": "documentation", "status": "complete"}
+                    )
+                    context.files_created.append({"path": result, "type": "documentation"})
 
-            if failed_docs:
-                logger.warning(f"[Documenter] Failed documents: {', '.join(failed_docs)}")
-
-            # Process Project Report
-            if report_path and not isinstance(report_path, Exception):
-                doc_count += 1
-                yield OrchestratorEvent(
-                    type=EventType.FILE_OPERATION,
-                    data={"path": report_path, "operation": "documentation", "status": "complete"}
-                )
-                context.files_created.append({"path": report_path, "type": "documentation"})
-
-            # Process SRS
-            if srs_path and not isinstance(srs_path, Exception):
-                doc_count += 1
-                yield OrchestratorEvent(
-                    type=EventType.FILE_OPERATION,
-                    data={"path": srs_path, "operation": "documentation", "status": "complete"}
-                )
-                context.files_created.append({"path": srs_path, "type": "documentation"})
-
-            # Process PPT
-            if ppt_path and not isinstance(ppt_path, Exception):
-                doc_count += 1
-                yield OrchestratorEvent(
-                    type=EventType.FILE_OPERATION,
-                    data={"path": ppt_path, "operation": "documentation", "status": "complete"}
-                )
-                context.files_created.append({"path": ppt_path, "type": "documentation"})
-
-            # Process Viva Q&A
-            if viva_path and not isinstance(viva_path, Exception):
-                doc_count += 1
-                yield OrchestratorEvent(
-                    type=EventType.FILE_OPERATION,
-                    data={"path": viva_path, "operation": "documentation", "status": "complete"}
-                )
-                context.files_created.append({"path": viva_path, "type": "documentation"})
-
+            # Send ALL_DOCUMENTS_COMPLETE event
             yield OrchestratorEvent(
-                type=EventType.STATUS,
-                data={"message": f"Academic documentation complete ({doc_count} documents in {elapsed:.0f}s - PARALLEL mode)"}
+                type=EventType.ALL_DOCUMENTS_COMPLETE,
+                data={
+                    "message": f"All documents generated successfully! ({doc_count} documents in {elapsed:.0f}s)",
+                    "doc_count": doc_count,
+                    "elapsed_seconds": round(elapsed, 1),
+                    "project_status": "COMPLETED" if doc_count > 0 else "PARTIAL_COMPLETED"
+                },
+                agent="document_generator"
             )
 
             # Set flag to indicate academic documents were generated
@@ -7416,14 +7446,24 @@ htmlcov
         except asyncio.TimeoutError:
             logger.error("[Documenter] Academic documentation generation timed out")
             yield OrchestratorEvent(
-                type=EventType.STATUS,
-                data={"message": "Academic documentation generation timed out - skipping"}
+                type=EventType.DOCUMENT_ERROR,
+                data={
+                    "document": "All Documents",
+                    "error": "Document generation timed out",
+                    "message": "Academic documentation generation timed out - skipping"
+                },
+                agent="document_generator"
             )
         except Exception as e:
             logger.error(f"[Documenter] Academic documentation generation failed: {e}")
             yield OrchestratorEvent(
-                type=EventType.STATUS,
-                data={"message": f"Academic documentation failed: {str(e)[:100]} - skipping"}
+                type=EventType.DOCUMENT_ERROR,
+                data={
+                    "document": "All Documents",
+                    "error": str(e)[:100],
+                    "message": f"Academic documentation failed: {str(e)[:100]} - skipping"
+                },
+                agent="document_generator"
             )
 
     async def _execute_standard_documenter(
