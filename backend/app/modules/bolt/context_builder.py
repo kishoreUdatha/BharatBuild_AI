@@ -6,6 +6,7 @@ Builds intelligent context from project files for Claude API
 from typing import List, Dict, Optional, Set
 import re
 from dataclasses import dataclass
+from app.core.logging_config import logger
 
 
 @dataclass
