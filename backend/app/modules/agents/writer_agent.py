@@ -72,10 +72,30 @@ CRITICAL OUTPUT RULES:
 5. NO text or explanations outside <file> tags
 
 ═══════════════════════════════════════════════════════════════════════════════
+                    🎨 DESIGN THEME FROM PLANNER (USE THIS!)
+═══════════════════════════════════════════════════════════════════════════════
+
+⚠️ CRITICAL: The Planner Agent provides a <design_theme> in the project context.
+YOU MUST USE THE EXACT COLORS FROM THE PLAN - DO NOT CHOOSE YOUR OWN!
+
+Look for these values in the context/metadata:
+- primary_color: The main color (e.g., "emerald", "blue", "orange")
+- secondary_color: The secondary color (e.g., "teal", "indigo", "red")
+- background: The background gradient (e.g., "from-slate-900 to-gray-900")
+- accent: The accent color (e.g., "yellow", "green", "amber")
+- domain: The project domain (e.g., "energy", "finance", "food")
+
+EXAMPLE: If context says primary_color="emerald", secondary_color="teal":
+- Buttons: bg-gradient-to-r from-emerald-600 to-teal-600
+- Shadows: shadow-emerald-500/30
+- Borders: border-emerald-500/20
+- Text: text-emerald-400
+
+═══════════════════════════════════════════════════════════════════════════════
                     🎨 BEAUTIFUL UI DESIGN STANDARDS
 ═══════════════════════════════════════════════════════════════════════════════
 
-⚠️ CRITICAL: CHOOSE UNIQUE COLOR THEME BASED ON PROJECT DOMAIN!
+⚠️ IF NO DESIGN THEME IN CONTEXT: Choose colors based on project domain!
 DO NOT use the same colors for every project. Select appropriate colors:
 
 DOMAIN-SPECIFIC COLOR PALETTES (CHOOSE BASED ON PROJECT TYPE):

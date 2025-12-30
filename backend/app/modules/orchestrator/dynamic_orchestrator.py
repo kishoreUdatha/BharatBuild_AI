@@ -7679,62 +7679,83 @@ htmlcov
 
     def _build_color_instruction(self, context: ExecutionContext) -> str:
         """
-        Build color theme instruction from context.metadata.color_theme.
+        Build color theme instruction from:
+        1. context.plan["design_theme"] (from Planner Agent) - PRIORITY
+        2. context.metadata["color_theme"] (user override)
 
         Args:
-            context: ExecutionContext containing metadata with optional color_theme
+            context: ExecutionContext containing plan and metadata
 
         Returns:
             Color instruction string to include in prompts, or empty string
         """
-        if not context.metadata:
-            return ""
-
-        color_theme = context.metadata.get("color_theme")
-        if not color_theme:
-            return ""
-
         primary = None
         secondary = None
+        background = None
+        accent = None
+        domain = None
 
-        # Check for preset first
-        preset = color_theme.get("preset") if isinstance(color_theme, dict) else None
-        if preset and preset.lower() in self.COLOR_PRESETS:
-            preset_colors = self.COLOR_PRESETS[preset.lower()]
-            primary = preset_colors["primary"]
-            secondary = preset_colors["secondary"]
-            logger.info(f"[ColorTheme] Using preset '{preset}': {primary}/{secondary}")
+        # PRIORITY 1: Check design_theme from Planner Agent (plan)
+        if context.plan and isinstance(context.plan, dict):
+            design_theme = context.plan.get("design_theme")
+            if design_theme and isinstance(design_theme, dict):
+                primary = design_theme.get("primary_color")
+                secondary = design_theme.get("secondary_color")
+                background = design_theme.get("background")
+                accent = design_theme.get("accent")
+                domain = design_theme.get("domain")
+                logger.info(f"[ColorTheme] Using Planner theme: domain={domain}, primary={primary}, secondary={secondary}")
 
-        # Override with explicit colors if provided
-        if isinstance(color_theme, dict):
-            if color_theme.get("primary"):
-                primary = color_theme["primary"]
-            if color_theme.get("secondary"):
-                secondary = color_theme["secondary"]
+        # PRIORITY 2: Check user-selected color_theme (overrides planner)
+        if context.metadata:
+            color_theme = context.metadata.get("color_theme")
+            if color_theme and isinstance(color_theme, dict):
+                # Check for preset first
+                preset = color_theme.get("preset")
+                if preset and preset.lower() in self.COLOR_PRESETS:
+                    preset_colors = self.COLOR_PRESETS[preset.lower()]
+                    primary = preset_colors["primary"]
+                    secondary = preset_colors["secondary"]
+                    logger.info(f"[ColorTheme] Using user preset '{preset}': {primary}/{secondary}")
+
+                # Override with explicit colors if provided
+                if color_theme.get("primary"):
+                    primary = color_theme["primary"]
+                if color_theme.get("secondary"):
+                    secondary = color_theme["secondary"]
 
         if not primary and not secondary:
             return ""
 
         # Build the instruction
+        secondary = secondary or primary
+        background = background or "from-gray-900 to-slate-900"
+        accent = accent or "orange"
+
         instruction = f"""
-🎨 USER-SELECTED COLOR THEME - USE THESE COLORS:
+🎨 DESIGN THEME - USE THESE EXACT COLORS:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DOMAIN: {domain or 'default'}
 PRIMARY COLOR: {primary}
-SECONDARY COLOR: {secondary or primary}
+SECONDARY COLOR: {secondary}
+BACKGROUND: {background}
+ACCENT: {accent}
 
 Apply these colors to ALL UI elements:
-• Gradients: from-{primary}-600 to-{secondary or primary}-600
-• Buttons: bg-gradient-to-r from-{primary}-600 to-{secondary or primary}-600
+• Background: bg-gradient-to-br {background}
+• Gradients: from-{primary}-600 to-{secondary}-600
+• Buttons: bg-gradient-to-r from-{primary}-600 to-{secondary}-600
+• Card borders: border-{primary}-500/20, hover:border-{primary}-500/50
 • Glows/Shadows: shadow-{primary}-500/25
-• Hover states: hover:border-{primary}-500/50
 • Focus rings: focus:ring-{primary}-500
-• Animated orbs: bg-{primary}-500 and bg-{secondary or primary}-500
-• Text accents: text-{primary}-400, text-{secondary or primary}-400
+• Stats/Highlights: text-{primary}-400, bg-{primary}-500/10
+• Accent elements: text-{accent}-400 (for success, warnings, etc.)
+• Animated orbs: bg-{primary}-500 and bg-{secondary}-500
 
-⚠️ IMPORTANT: Use THESE colors instead of auto-detecting from project type!
+⚠️ CRITICAL: Use THESE colors for ALL components - NOT purple/pink!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
-        logger.info(f"[ColorTheme] Color instruction built: primary={primary}, secondary={secondary}")
+        logger.info(f"[ColorTheme] Color instruction built: domain={domain}, primary={primary}, secondary={secondary}")
         return instruction
 
 
