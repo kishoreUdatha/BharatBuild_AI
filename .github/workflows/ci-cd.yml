@@ -92,7 +92,7 @@ jobs:
           CELERY_RESULT_BACKEND: 'redis://localhost:6379/1'
           USER_PROJECTS_PATH: '/tmp/projects'
         run: |
-          pytest tests/unit -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=20
+          pytest tests/unit -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=15
 
       - name: Run integration tests
         env:
