@@ -134,8 +134,8 @@ class TestContainerConfig:
         config = TECHNOLOGY_CONFIGS[Technology.NODEJS]
 
         assert config.image == "node:20-alpine"
-        # pnpm v10+ requires enabling pre-post-scripts for build tools like esbuild/swc
-        assert "pnpm install" in config.build_command
+        # Using npm (pre-installed) with --legacy-peer-deps for compatibility
+        assert "npm install" in config.build_command
         assert "--host 0.0.0.0" in config.run_command
         assert config.port == 3000
         # Memory limit may vary based on container settings
