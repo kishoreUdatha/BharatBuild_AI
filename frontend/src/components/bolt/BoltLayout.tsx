@@ -189,6 +189,12 @@ export function BoltLayout({
   // Import terminal hooks
   const { isVisible: showTerminal, height: terminalHeight, toggleTerminal, openTerminal, setHeight: setTerminalHeight, logs: terminalLogs, addLog, startSession, endSession } = useTerminal()
 
+  // Memoized terminal command handler to prevent XTerminal re-renders
+  const handleTerminalCommand = useCallback((cmd: string) => {
+    addLog({ type: 'command', content: cmd })
+    addLog({ type: 'output', content: `Command received: ${cmd}` })
+  }, [addLog])
+
   // Version control hooks
   const { canUndo, canRedo, undo, redo, history } = useVersionControl()
 
@@ -1332,16 +1338,7 @@ export function BoltLayout({
                 <div className="flex-1 overflow-auto bg-[hsl(var(--bolt-bg-primary))]">
                   <XTerminal
                     logs={terminalLogs}
-                    onCommand={(cmd) => {
-                      addLog({
-                        type: 'command',
-                        content: cmd
-                      })
-                      addLog({
-                        type: 'output',
-                        content: `Command received: ${cmd}`
-                      })
-                    }}
+                    onCommand={handleTerminalCommand}
                   />
                 </div>
               </div>

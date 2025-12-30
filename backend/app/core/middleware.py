@@ -207,10 +207,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
 
-        # Allow iframe embedding for preview routes (needed for preview iframe)
-        # Use SAMEORIGIN for preview paths, DENY for everything else
+        # Allow iframe embedding for preview routes (needed for preview iframe in bharatbuild.ai)
+        # Preview subdomain URLs (*.bharatbuild.ai) need to be embeddable in main app (bharatbuild.ai)
+        # X-Frame-Options doesn't support wildcards, so we remove it for preview and use CSP instead
         if path.startswith("/api/v1/preview/"):
-            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+            # Allow embedding from main bharatbuild.ai domain and its subdomains
+            response.headers["Content-Security-Policy"] = "frame-ancestors https://bharatbuild.ai https://*.bharatbuild.ai"
+            # Remove X-Frame-Options as CSP frame-ancestors takes precedence
         else:
             response.headers["X-Frame-Options"] = "DENY"
 
@@ -252,11 +255,85 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class SubdomainPreviewMiddleware:
+    """
+    Pure ASGI Middleware to route subdomain-based preview requests.
+
+    Enables production-grade preview URLs like Vercel/Netlify:
+    - {project_id}.bharatbuild.ai/path -> /api/v1/preview/{project_id}/path
+
+    This allows Vite/React to work at root "/" without base path hacks.
+
+    NOTE: Uses pure ASGI instead of BaseHTTPMiddleware to properly modify the scope.
+    BaseHTTPMiddleware's call_next doesn't respect modified requests.
+    """
+
+    # Domain suffix for preview subdomains
+    PREVIEW_DOMAIN = ".bharatbuild.ai"
+
+    # Subdomains to exclude (main site)
+    EXCLUDED_SUBDOMAINS = {"www", "api", "app", "dashboard", "admin", ""}
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Get host header from scope
+        headers = dict(scope.get("headers", []))
+        host = headers.get(b"host", b"").decode().lower()
+
+        # Remove port if present
+        if ":" in host:
+            host = host.split(":")[0]
+
+        # Check if this is a preview subdomain request
+        if host.endswith(self.PREVIEW_DOMAIN):
+            subdomain = host[:-len(self.PREVIEW_DOMAIN)]
+
+            # Skip main domains (www.bharatbuild.ai, bharatbuild.ai)
+            if subdomain and subdomain not in self.EXCLUDED_SUBDOMAINS:
+                # This is a preview subdomain like abc123.bharatbuild.ai
+                project_id = subdomain
+                original_path = scope.get("path", "/")
+
+                # Rewrite the request to go through preview proxy
+                # /index.html -> /api/v1/preview/{project_id}/index.html
+                new_path = f"/api/v1/preview/{project_id}{original_path}"
+
+                logger.info(
+                    f"[SubdomainPreview] Routing {host}{original_path} -> {new_path}",
+                    extra={
+                        "event_type": "subdomain_preview",
+                        "subdomain": subdomain,
+                        "project_id": project_id,
+                        "original_path": original_path,
+                        "new_path": new_path,
+                    }
+                )
+
+                # Modify scope directly - this is the key difference from BaseHTTPMiddleware
+                modified_scope = scope.copy()
+                modified_scope["path"] = new_path
+                modified_scope["raw_path"] = new_path.encode()
+
+                # Pass modified scope to app
+                await self.app(modified_scope, receive, send)
+                return
+
+        # Not a preview subdomain, proceed normally
+        await self.app(scope, receive, send)
+
+
 # Export all middleware
 __all__ = [
     "RequestLoggingMiddleware",
     "SecurityHeadersMiddleware",
     "RequestSizeLimitMiddleware",
+    "SubdomainPreviewMiddleware",
     "should_skip_logging",
     "is_streaming_path",
     "SKIP_LOGGING_PATHS",

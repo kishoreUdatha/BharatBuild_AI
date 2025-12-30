@@ -53,12 +53,20 @@ class SaveToS3Request(BaseModel):
     create_zip: bool = True
 
 
+class FileSyncError(BaseModel):
+    """Error details for a single file sync failure"""
+    path: str
+    error: str
+
+
 class FileSyncResponse(BaseModel):
     """Response for file sync operations"""
     success: bool
     message: str
     files_synced: int = 0
+    files_failed: int = 0
     layer: str = "sandbox"  # Which layer was used
+    errors: Optional[List[FileSyncError]] = None  # Per-file error details
 
 
 # ==================== LAYER 1: SANDBOX OPERATIONS ====================
@@ -199,6 +207,9 @@ async def write_multiple_to_sandbox(
     """
     Write multiple files to sandbox (Layer 1).
     Used during bulk generation.
+
+    Returns per-file error reporting for debugging.
+    Gap #14: Implements rollback on excessive failures (>50% files fail)
     """
     try:
         # Get user_id for user-scoped paths (Bolt.new structure)
@@ -207,11 +218,26 @@ async def write_multiple_to_sandbox(
         await unified_storage.create_sandbox(request.project_id, user_id)
 
         synced_count = 0
+        failed_count = 0
+        file_errors: List[FileSyncError] = []
+        written_files: List[str] = []  # Gap #14: Track for potential rollback
+
+        total_files = len(request.files)
+        rollback_threshold = max(1, total_files // 2)  # Rollback if >50% fail
+
         for file_data in request.files:
             file_path = file_data.get('path')
             content = file_data.get('content', '')
 
-            if file_path:
+            if not file_path:
+                failed_count += 1
+                file_errors.append(FileSyncError(
+                    path="(empty path)",
+                    error="File path is empty or missing"
+                ))
+                continue
+
+            try:
                 success = await unified_storage.write_to_sandbox(
                     project_id=request.project_id,
                     file_path=file_path,
@@ -220,14 +246,58 @@ async def write_multiple_to_sandbox(
                 )
                 if success:
                     synced_count += 1
+                    written_files.append(file_path)  # Track for rollback
+                else:
+                    failed_count += 1
+                    file_errors.append(FileSyncError(
+                        path=file_path,
+                        error="Write operation returned False"
+                    ))
+            except Exception as file_error:
+                failed_count += 1
+                file_errors.append(FileSyncError(
+                    path=file_path,
+                    error=str(file_error)
+                ))
+                logger.warning(f"[Layer 1] Failed to write {file_path}: {file_error}")
 
-        logger.info(f"[Layer 1] Bulk wrote {synced_count} files to sandbox: {request.project_id}")
+            # Gap #14: Check if we should rollback (too many failures)
+            if failed_count > rollback_threshold and synced_count > 0:
+                logger.warning(f"[Layer 1] Rollback triggered: {failed_count}/{total_files} failures exceed threshold")
+                # Attempt to clean up written files
+                rollback_count = 0
+                for written_path in written_files:
+                    try:
+                        await unified_storage.delete_from_sandbox(
+                            project_id=request.project_id,
+                            file_path=written_path,
+                            user_id=user_id
+                        )
+                        rollback_count += 1
+                    except Exception as rb_err:
+                        logger.warning(f"[Layer 1] Rollback failed for {written_path}: {rb_err}")
+
+                return FileSyncResponse(
+                    success=False,
+                    message=f"Sync aborted and rolled back due to excessive failures ({failed_count}/{total_files} failed, {rollback_count} cleaned up)",
+                    files_synced=0,
+                    files_failed=failed_count,
+                    layer="sandbox",
+                    errors=file_errors if file_errors else None
+                )
+
+        logger.info(f"[Layer 1] Bulk wrote {synced_count}/{total_files} files to sandbox: {request.project_id}")
+
+        if failed_count > 0:
+            logger.warning(f"[Layer 1] {failed_count} files failed: {[e.path for e in file_errors[:5]]}")
 
         return FileSyncResponse(
             success=synced_count > 0,
-            message=f"Wrote {synced_count} files to sandbox",
+            message=f"Wrote {synced_count}/{total_files} files to sandbox" + (f" ({failed_count} failed)" if failed_count > 0 else ""),
             files_synced=synced_count,
-            layer="sandbox"
+            files_failed=failed_count,
+            layer="sandbox",
+            errors=file_errors if file_errors else None
         )
 
     except Exception as e:
@@ -235,7 +305,9 @@ async def write_multiple_to_sandbox(
         return FileSyncResponse(
             success=False,
             message=str(e),
-            layer="sandbox"
+            files_failed=len(request.files),
+            layer="sandbox",
+            errors=[FileSyncError(path="(all)", error=str(e))]
         )
 
 

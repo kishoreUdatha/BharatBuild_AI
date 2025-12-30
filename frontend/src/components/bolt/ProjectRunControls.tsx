@@ -29,12 +29,13 @@ const isProduction = (): boolean => {
 }
 
 // Helper to construct preview URL with correct base
-// In production: uses API proxy URL, in development: uses localhost:port
+// In production: uses subdomain-based URL (Vercel/Netlify style)
+// In development: uses localhost:port
 const getPreviewUrl = (port: number | string, projectId?: string): string => {
   if (isProduction() && projectId) {
-    // Production: Use domain-based API preview proxy
-    const baseUrl = FRONTEND_URL || window.location.origin
-    return `${baseUrl}/api/v1/preview/${projectId}/`
+    // Production: Use subdomain-based preview URL (Vercel/Netlify style)
+    // This allows Vite to work at root "/" without path hacks
+    return `https://${projectId}.bharatbuild.ai/`
   }
   // Development: Use localhost
   const base = SANDBOX_PREVIEW_BASE.replace(/:\d+$/, '').replace(/\/$/, '')
@@ -52,6 +53,16 @@ const parsePreviewUrl = (output: string): string | null => {
   const legacyMatch = output.match(/__SERVER_STARTED__:(.+)/)
   if (legacyMatch && legacyMatch[1]) {
     return legacyMatch[1].trim()
+  }
+  return null
+}
+
+// Parse __PREVIEW_READY__ marker - only navigate to preview when this is received
+// This ensures the server has passed health checks and is ready to serve content
+const parsePreviewReady = (output: string): string | null => {
+  const readyMatch = output.match(/__PREVIEW_READY__:(.+)/)
+  if (readyMatch && readyMatch[1]) {
+    return readyMatch[1].trim()
   }
   return null
 }
@@ -247,15 +258,25 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
     console.log('[DetectServer] Checking output:', cleanOutput.substring(0, 100))
 
-    // FIRST: Check for _PREVIEW_URL_ marker from backend (production domain-based URLs)
-    const backendUrl = parsePreviewUrl(cleanOutput)
-    if (backendUrl) {
-      console.log('[DetectServer] Found _PREVIEW_URL_ marker:', backendUrl)
-      serverStartedRef.current = true // Gap #3: Mark server as started
-      setPreviewUrl(backendUrl)
+    // FIRST: Check for __PREVIEW_READY__ marker - this means health check passed
+    const readyUrl = parsePreviewReady(cleanOutput)
+    if (readyUrl) {
+      console.log('[DetectServer] Found __PREVIEW_READY__ marker - server is ready:', readyUrl)
+      serverStartedRef.current = true
+      setPreviewUrl(readyUrl)
       setStatus('running')
-      onPreviewUrlChange?.(backendUrl)
+      onPreviewUrlChange?.(readyUrl)
       return true
+    }
+
+    // SECOND: Check for _PREVIEW_URL_ marker - just set the URL but don't mark as fully ready yet
+    const backendUrl = parsePreviewUrl(cleanOutput)
+    if (backendUrl && !serverStartedRef.current) {
+      console.log('[DetectServer] Found _PREVIEW_URL_ marker (waiting for ready):', backendUrl)
+      setPreviewUrl(backendUrl)  // Set URL for display
+      setStatus('starting')      // Keep status as starting until ready
+      // Don't call onPreviewUrlChange yet - wait for __PREVIEW_READY__
+      return false  // Return false - server not fully ready yet
     }
 
     // Patterns to detect server URL and extract port (fallback for local development)

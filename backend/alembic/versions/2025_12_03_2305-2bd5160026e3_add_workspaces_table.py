@@ -16,27 +16,35 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Create workspaces table
-    op.create_table('workspaces',
-        sa.Column('id', sa.String(length=36), nullable=False),
-        sa.Column('user_id', sa.String(length=36), nullable=False),
-        sa.Column('name', sa.String(length=255), nullable=False),
-        sa.Column('description', sa.Text(), nullable=True),
-        sa.Column('is_default', sa.Boolean(), nullable=True),
-        sa.Column('storage_path', sa.String(length=500), nullable=True),
-        sa.Column('s3_prefix', sa.String(length=500), nullable=True),
-        sa.Column('created_at', sa.DateTime(), nullable=False),
-        sa.Column('updated_at', sa.DateTime(), nullable=True),
-        sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-        sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index('ix_workspaces_is_default', 'workspaces', ['is_default'], unique=False)
-    op.create_index('ix_workspaces_user_id', 'workspaces', ['user_id'], unique=False)
+    # Check if table exists before creating (idempotent migration)
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    existing_tables = inspector.get_table_names()
 
-    # Add workspace_id column to projects table
-    op.add_column('projects', sa.Column('workspace_id', sa.String(length=36), nullable=True))
-    op.create_index('ix_projects_workspace_id', 'projects', ['workspace_id'], unique=False)
-    op.create_foreign_key('fk_projects_workspace_id', 'projects', 'workspaces', ['workspace_id'], ['id'], ondelete='CASCADE')
+    # Create workspaces table if not exists
+    if 'workspaces' not in existing_tables:
+        op.create_table('workspaces',
+            sa.Column('id', sa.String(length=36), nullable=False),
+            sa.Column('user_id', sa.String(length=36), nullable=False),
+            sa.Column('name', sa.String(length=255), nullable=False),
+            sa.Column('description', sa.Text(), nullable=True),
+            sa.Column('is_default', sa.Boolean(), nullable=True),
+            sa.Column('storage_path', sa.String(length=500), nullable=True),
+            sa.Column('s3_prefix', sa.String(length=500), nullable=True),
+            sa.Column('created_at', sa.DateTime(), nullable=False),
+            sa.Column('updated_at', sa.DateTime(), nullable=True),
+            sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
+            sa.PrimaryKeyConstraint('id')
+        )
+        op.create_index('ix_workspaces_is_default', 'workspaces', ['is_default'], unique=False)
+        op.create_index('ix_workspaces_user_id', 'workspaces', ['user_id'], unique=False)
+
+    # Add workspace_id column to projects table if not exists
+    columns = [col['name'] for col in inspector.get_columns('projects')]
+    if 'workspace_id' not in columns:
+        op.add_column('projects', sa.Column('workspace_id', sa.String(length=36), nullable=True))
+        op.create_index('ix_projects_workspace_id', 'projects', ['workspace_id'], unique=False)
+        op.create_foreign_key('fk_projects_workspace_id', 'projects', 'workspaces', ['workspace_id'], ['id'], ondelete='CASCADE')
 
 
 def downgrade() -> None:

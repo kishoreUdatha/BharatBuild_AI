@@ -385,7 +385,12 @@ async def fix_runtime_error(
         user_id = str(current_user.id) if current_user else None
         project_path = get_project_path(project_id, user_id)
 
-        if not project_path.exists():
+        # In remote sandbox mode, files are on EC2 not local ECS
+        # Skip local path check in remote mode
+        sandbox_docker_host = _os.environ.get("SANDBOX_DOCKER_HOST")
+        is_remote_mode = bool(sandbox_docker_host)
+
+        if not is_remote_mode and not project_path.exists():
             raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
 
         logger.info(f"[Fixer] Auto-fixing error for project: {project_id}")
@@ -749,6 +754,21 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
         project_path = None
         needs_restore = False
         restored_count = 0
+        container_already_running = False
+
+        # CRITICAL: Check if container EXISTS (running OR stopped) FIRST
+        # If exists, files are already in the container volume - skip restoration
+        # This prevents Vite restart loops caused by file modifications
+        if sandbox_docker_host:
+            try:
+                from app.services.container_executor import ContainerExecutor
+                executor = ContainerExecutor()
+                container_already_running = executor.is_container_running(project_id, effective_user_id)
+                if container_already_running:
+                    yield emit("output", "  ♻️ Container exists - skipping file restoration (prevents restart loop)")
+                    logger.info(f"[Execution] Container exists for {project_id}, skipping restore to prevent restart loop")
+            except Exception as check_err:
+                logger.warning(f"[Execution] Error checking container status: {check_err}")
 
         # Check if sandbox exists
         if sandbox_docker_host:
@@ -808,7 +828,8 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
         yield emit("output", "  Container environment ready")
 
         # ==================== STEP 3: Restore Project Files (if needed) ====================
-        if needs_restore:
+        # CRITICAL: Skip restoration if container is already running to prevent Vite restart loops
+        if needs_restore and not container_already_running:
             yield emit("output", "\n[3/5] Restoring project files from database...")
             await asyncio.sleep(0)  # Flush immediately
 
@@ -895,6 +916,11 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                 logger.error(f"[Execution] Restore failed: {restore_err}", exc_info=True)
                 yield emit("error", f"Failed to restore project files: {str(restore_err)}")
                 return
+        elif container_already_running:
+            # Container exists - files are already in the volume, just get the path
+            yield emit("output", "\n[3/5] Using existing files (container has files) ✅")
+            project_path = unified_storage.get_sandbox_path(project_id, effective_user_id)
+            logger.info(f"[Execution] Container exists, using existing path: {project_path}")
         else:
             yield emit("output", "\n[3/5] Project files already in sandbox ✅")
 
@@ -1571,6 +1597,10 @@ async def export_project(
     _: None = Depends(require_feature("download_files"))
 ):
     """Export entire project as ZIP file"""
+    import tempfile
+    import shutil
+    from pathlib import Path
+
     # Verify project ownership (skip if no auth in dev mode)
     if current_user and not await verify_project_ownership(project_id, current_user, db):
         raise HTTPException(
@@ -1578,21 +1608,57 @@ async def export_project(
             detail="Project not found"
         )
 
+    temp_restore_path = None
+
     try:
         # Touch the project to keep it alive during export
         touch_project(project_id)
 
-        # Get project path (sandbox first, then permanent storage)
         user_id = str(current_user.id) if current_user else None
-        project_path = get_project_path(project_id, user_id)
+
+        # Check if using remote sandbox - files may not be available locally
+        sandbox_docker_host = _os.environ.get("SANDBOX_DOCKER_HOST")
+        project_path = None
+        local_file_count = 0
+
+        # Try local sandbox first (only if not using remote sandbox)
+        if not sandbox_docker_host:
+            project_path = get_project_path(project_id, user_id)
+            logger.info(f"[Export] Checking local path: {project_path}")
+
+            if project_path.exists():
+                # Count files to check if we have enough
+                local_file_count = sum(1 for _ in project_path.rglob("*") if _.is_file())
+                logger.info(f"[Export] Local path has {local_file_count} files")
+
+        # If no local path, remote sandbox, or very few local files, restore from database
+        should_restore_from_db = (
+            sandbox_docker_host or  # Using remote EC2 sandbox
+            not project_path or  # No path found
+            not project_path.exists() or  # Path doesn't exist
+            local_file_count < 3  # Very few files locally (likely incomplete)
+        )
+
+        if should_restore_from_db:
+            logger.info(f"[Export] Restoring from database (remote_sandbox={bool(sandbox_docker_host)}, local_files={local_file_count})")
+            temp_dir = tempfile.mkdtemp(prefix=f"export_{project_id[:8]}_")
+            temp_restore_path = Path(temp_dir)
+
+            # Restore files from database/S3 to temp directory
+            restored_count = await unified_storage.restore_project_to_local(db, project_id, temp_restore_path, user_id)
+            logger.info(f"[Export] Restored {restored_count} files from database to {temp_restore_path}")
+
+            if restored_count > 0:
+                project_path = temp_restore_path
+            elif project_path and project_path.exists() and local_file_count > 0:
+                # Fallback to local path if database restore returned nothing
+                logger.warning(f"[Export] Database restore empty, using local path with {local_file_count} files")
+            else:
+                raise HTTPException(status_code=404, detail=f"Project {project_id} not found or has no files")
 
         logger.info(f"[Export] Attempting to export project: {project_id}")
         logger.info(f"[Export] Project path: {project_path}")
         logger.info(f"[Export] Path exists: {project_path.exists()}")
-
-        if not project_path.exists():
-            logger.error(f"[Export] Project directory not found: {project_path}")
-            raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
 
         # Create ZIP in memory
         zip_buffer = io.BytesIO()
@@ -1660,3 +1726,11 @@ async def export_project(
     except Exception as e:
         logger.error(f"[Export] Error exporting project {project_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # Clean up temp directory if created
+        if temp_restore_path and temp_restore_path.exists():
+            try:
+                shutil.rmtree(temp_restore_path, ignore_errors=True)
+                logger.debug(f"[Export] Cleaned up temp directory: {temp_restore_path}")
+            except Exception as cleanup_err:
+                logger.warning(f"[Export] Failed to clean up temp directory: {cleanup_err}")

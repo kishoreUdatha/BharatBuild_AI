@@ -45,6 +45,9 @@ RULES:
 4. Dark theme (#0a0a0f) by default
 5. Include hover animations on all buttons/cards
 6. Make it STUNNING and BEAUTIFUL
+7. CRITICAL: In vite.config, NEVER use 'open: true' - containers have no browser
+8. Include tsconfig.node.json if using Vite with TypeScript
+9. Only use tailwind plugins that are in package.json devDependencies
 
 DO NOT GENERATE: .vscode/, .idea/, README.md
 

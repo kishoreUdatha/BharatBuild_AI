@@ -185,9 +185,15 @@ export function getShareUrl(projectId: string): string {
 
 /**
  * Get preview URL for a project
+ * Uses subdomain-based routing in production: https://{projectId}.bharatbuild.ai/
  */
 export function getPreviewUrl(projectId: string): string {
-  return `${apiConfig.baseUrl}/preview/${projectId}`
+  // Production: Use subdomain-based preview URL (Vercel/Netlify style)
+  if (typeof window !== 'undefined' && window.location.hostname.includes('bharatbuild.ai')) {
+    return `https://${projectId}.bharatbuild.ai/`
+  }
+  // Development: Use path-based preview URL
+  return `${apiConfig.baseUrl}/preview/${projectId}/`
 }
 
 /**

@@ -44,6 +44,14 @@ from threading import Lock
 from app.core.config import settings
 from app.core.logging_config import logger
 
+# Import workspace restore for fixing common project issues
+try:
+    from app.services.workspace_restore import workspace_restore
+    WORKSPACE_RESTORE_AVAILABLE = True
+except ImportError:
+    WORKSPACE_RESTORE_AVAILABLE = False
+    logger.warning("[ContainerManager] Workspace restore service not available")
+
 # Import container state service for Redis persistence
 try:
     from app.services.container_state import (
@@ -952,6 +960,15 @@ class ContainerManager:
         docker_mount_path = _to_docker_path(project_path)
         logger.info(f"Project path for {user_id}/{project_id}: {project_path}")
         logger.info(f"Docker mount path: {docker_mount_path}")
+
+        # Fix common project issues before container starts (vite open:true, missing tsconfig.node.json, etc.)
+        if WORKSPACE_RESTORE_AVAILABLE:
+            try:
+                fix_result = await workspace_restore.fix_common_issues(project_path, project_id=project_id)
+                if fix_result.get("fixes_applied"):
+                    logger.info(f"[ContainerManager] Applied pre-start fixes for {project_id}: {fix_result['fixes_applied']}")
+            except Exception as e:
+                logger.warning(f"[ContainerManager] Error applying pre-start fixes: {e}")
 
         # Always use multi-technology base image (supports Node.js, Java, Maven, Python, Go, etc.)
         # This ensures fullstack projects (e.g., Spring Boot + React) work correctly

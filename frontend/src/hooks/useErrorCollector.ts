@@ -1,4 +1,30 @@
 /**
+ * @deprecated This hook is DEPRECATED - use useLogViewer instead.
+ *
+ * ============================================================================
+ * DEPRECATION NOTICE - DO NOT USE FOR NEW CODE
+ * ============================================================================
+ *
+ * This hook implements the WRONG architecture where:
+ * - Frontend parses terminal output for errors
+ * - Frontend sends errors to backend for fixing
+ *
+ * This approach has problems:
+ * - Logs get fragmented (multi-line errors break)
+ * - Race conditions (UI may render before error completes)
+ * - Security risk (client can tamper logs)
+ * - Latency (auto-fix starts late)
+ *
+ * CORRECT ARCHITECTURE (use useLogViewer instead):
+ * - Backend captures stdout/stderr directly from container
+ * - Backend triggers auto-fixer immediately on exit code != 0
+ * - Frontend is READ-ONLY (just displays logs and fix status)
+ *
+ * See: backend/app/services/execution_context.py
+ * See: frontend/src/hooks/useLogViewer.ts
+ * ============================================================================
+ *
+ * OLD DESCRIPTION (kept for reference):
  * useErrorCollector Hook - Centralized Error Collection & Auto-Fix
  *
  * SINGLE ENTRY POINT for all error handling in the frontend.

@@ -48,6 +48,156 @@ else:
 SANDBOX_BASE_PATH = os.getenv("SANDBOX_BASE_PATH", _default_sandbox)
 S3_WORKSPACE_PREFIX = "workspaces"  # Structure: workspaces/{user_id}/{project_id}/
 
+# ===== BROWSER ERROR CAPTURE SCRIPT =====
+# This script is injected into index.html to capture browser errors and send them to the backend
+# for auto-fixing. It captures: JS errors, Promise rejections, Console errors, Network errors.
+BROWSER_ERROR_CAPTURE_SCRIPT = '''
+<!-- BharatBuild Error Capture - Auto-detects and reports browser errors -->
+<script>
+(function() {
+  'use strict';
+  // Extract project ID from URL path (e.g., /sandbox/PROJECT_ID/...)
+  var match = window.location.pathname.match(/\\/sandbox\\/([a-f0-9-]+)/i);
+  var projectId = match ? match[1] : null;
+  if (!projectId) {
+    // Try to get from parent URL or meta tag
+    var meta = document.querySelector('meta[name="bharatbuild-project-id"]');
+    if (meta) projectId = meta.content;
+  }
+  if (!projectId) return; // No project ID, skip
+
+  var CONFIG = {
+    endpoint: '/api/v1/errors/browser',
+    projectId: projectId,
+    debounceMs: 1000,
+    maxBufferSize: 5
+  };
+
+  var errorBuffer = [];
+  var debounceTimer = null;
+  var recentErrors = {};
+
+  function sendErrors() {
+    if (errorBuffer.length === 0 || !CONFIG.projectId) return;
+    var errors = errorBuffer.splice(0, errorBuffer.length);
+    fetch(CONFIG.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: CONFIG.projectId,
+        source: 'browser',
+        errors: errors,
+        timestamp: Date.now(),
+        url: window.location.href
+      }),
+      keepalive: true
+    }).catch(function() {});
+  }
+
+  function queueError(error) {
+    var key = error.type + ':' + error.message.slice(0, 100);
+    if (recentErrors[key]) return;
+    recentErrors[key] = true;
+    setTimeout(function() { delete recentErrors[key]; }, 5000);
+
+    errorBuffer.push(error);
+    if (errorBuffer.length >= CONFIG.maxBufferSize) {
+      clearTimeout(debounceTimer);
+      sendErrors();
+      return;
+    }
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(sendErrors, CONFIG.debounceMs);
+  }
+
+  // A. JS Runtime Errors
+  window.onerror = function(message, source, line, column, error) {
+    queueError({
+      type: 'JS_RUNTIME',
+      category: String(message).includes('not defined') ? 'REFERENCE_ERROR' : 'RUNTIME_ERROR',
+      message: String(message),
+      file: source,
+      line: line,
+      column: column,
+      stack: error ? error.stack : null,
+      timestamp: Date.now()
+    });
+    return false;
+  };
+
+  // B. Unhandled Promise Rejections
+  window.onunhandledrejection = function(event) {
+    var reason = event.reason;
+    queueError({
+      type: 'PROMISE_REJECTION',
+      category: 'RUNTIME_ERROR',
+      message: reason && reason.message ? reason.message : String(reason),
+      stack: reason && reason.stack ? reason.stack : null,
+      timestamp: Date.now()
+    });
+  };
+
+  // C. Console Errors
+  var originalConsoleError = console.error;
+  console.error = function() {
+    originalConsoleError.apply(console, arguments);
+    var message = Array.prototype.slice.call(arguments).map(function(arg) {
+      if (arg instanceof Error) return arg.message;
+      if (typeof arg === 'object') try { return JSON.stringify(arg); } catch(e) { return String(arg); }
+      return String(arg);
+    }).join(' ');
+
+    if (message.length > 10) {
+      queueError({
+        type: 'CONSOLE_ERROR',
+        category: message.toLowerCase().includes('not defined') ? 'REFERENCE_ERROR' : 'RUNTIME_ERROR',
+        message: message,
+        stack: arguments[0] instanceof Error ? arguments[0].stack : null,
+        timestamp: Date.now()
+      });
+    }
+  };
+
+  console.debug('[BharatBuild] Error capture initialized for project:', CONFIG.projectId);
+})();
+</script>
+'''
+
+
+def inject_error_capture_script(html_content: str, project_id: str) -> str:
+    """
+    Inject the browser error capture script into index.html.
+
+    This enables automatic browser error detection and reporting to the backend
+    for auto-fixing (like Bolt.new does).
+
+    Args:
+        html_content: The original HTML content
+        project_id: The project ID to include in error reports
+
+    Returns:
+        HTML content with error capture script injected
+    """
+    # Check if already injected
+    if 'BharatBuild Error Capture' in html_content:
+        return html_content
+
+    # Add project ID meta tag for fallback detection
+    project_meta = f'<meta name="bharatbuild-project-id" content="{project_id}">'
+
+    # Inject at the beginning of <head> for earliest capture
+    if '<head>' in html_content:
+        return html_content.replace('<head>', f'<head>\n{project_meta}\n{BROWSER_ERROR_CAPTURE_SCRIPT}')
+    elif '<HEAD>' in html_content:
+        return html_content.replace('<HEAD>', f'<HEAD>\n{project_meta}\n{BROWSER_ERROR_CAPTURE_SCRIPT}')
+    elif '<html>' in html_content:
+        return html_content.replace('<html>', f'<html>\n<head>\n{project_meta}\n{BROWSER_ERROR_CAPTURE_SCRIPT}\n</head>')
+    elif '<HTML>' in html_content:
+        return html_content.replace('<HTML>', f'<HTML>\n<head>\n{project_meta}\n{BROWSER_ERROR_CAPTURE_SCRIPT}\n</head>')
+    else:
+        # No HTML structure, prepend
+        return f'{project_meta}\n{BROWSER_ERROR_CAPTURE_SCRIPT}\n{html_content}'
+
 
 @dataclass
 class FileInfo:
@@ -233,6 +383,12 @@ class UnifiedStorageService:
                 # SANITIZE ALL SOURCE FILES: Remove leading empty lines
                 content = self._sanitize_source_content(content, file_path)
 
+            # BROWSER ERROR CAPTURE: Inject error capture script into index.html
+            # This enables automatic browser error detection and reporting to the backend
+            if file_path.endswith('index.html') or file_path.endswith('index.htm'):
+                content = inject_error_capture_script(content, project_id)
+                logger.info(f"[Sandbox] Injected browser error capture script into {file_path}")
+
             # Check if using remote EC2 sandbox
             sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
             if sandbox_docker_host:
@@ -343,6 +499,12 @@ class UnifiedStorageService:
         if not self._validate_sandbox_path(file_path):
             logger.error(f"[RemoteWrite] ✗ Invalid file path rejected: {file_path}")
             return False
+
+        # BROWSER ERROR CAPTURE: Inject error capture script into index.html
+        # This enables automatic browser error detection and reporting to the backend
+        if file_path.endswith('index.html') or file_path.endswith('index.htm'):
+            content = inject_error_capture_script(content, project_id)
+            logger.info(f"[RemoteWrite] Injected browser error capture script into {file_path}")
 
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
 
@@ -1254,18 +1416,51 @@ class UnifiedStorageService:
 
                 # Get content from S3 or inline
                 if file_record.s3_key:
-                    content_bytes = await storage_service.download_file(file_record.s3_key)
-                    content = content_bytes.decode('utf-8') if content_bytes else None
+                    logger.debug(f"[RestoreLocal] Downloading from S3: {file_record.s3_key}")
+                    try:
+                        content_bytes = await storage_service.download_file(file_record.s3_key)
+                        if content_bytes:
+                            content = content_bytes.decode('utf-8')
+                            logger.debug(f"[RestoreLocal] Downloaded {len(content)} bytes for {file_record.path}")
+                        else:
+                            logger.warning(f"[RestoreLocal] S3 download returned empty for {file_record.path} (key: {file_record.s3_key})")
+                    except Exception as s3_err:
+                        logger.error(f"[RestoreLocal] S3 download failed for {file_record.path}: {s3_err}")
                 elif file_record.content_inline:
                     content = file_record.content_inline
+                    logger.debug(f"[RestoreLocal] Using inline content for {file_record.path} ({len(content)} bytes)")
+                else:
+                    logger.warning(f"[RestoreLocal] No s3_key or content_inline for {file_record.path}")
 
                 if content:
                     file_path = target_path / file_record.path
                     file_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    # Sanitize JSON files on restore to fix duplicate keys in existing projects
+                    if file_record.path.endswith('.json'):
+                        try:
+                            import json
+                            parsed = json.loads(content)
+                            content = json.dumps(parsed, indent=2, ensure_ascii=False) + '\n'
+                            logger.debug(f"[RestoreLocal] Sanitized JSON: {file_record.path}")
+                        except json.JSONDecodeError as je:
+                            logger.warning(f"[RestoreLocal] JSON parse failed for {file_record.path}: {je}")
+                            # Try to fix trailing commas
+                            import re
+                            fixed = re.sub(r',(\s*[}\]])', r'\1', content)
+                            try:
+                                parsed = json.loads(fixed)
+                                content = json.dumps(parsed, indent=2, ensure_ascii=False) + '\n'
+                                logger.info(f"[RestoreLocal] Fixed JSON trailing commas: {file_record.path}")
+                            except json.JSONDecodeError:
+                                pass  # Keep original if still fails
+
                     file_path.write_text(content, encoding='utf-8')
                     restored_count += 1
+                else:
+                    logger.warning(f"[RestoreLocal] Skipping {file_record.path} - no content available")
 
-            logger.info(f"[RestoreLocal] Restored {restored_count} files for project {project_id} to {target_path}")
+            logger.info(f"[RestoreLocal] Restored {restored_count}/{len(files)} files for project {project_id} to {target_path}")
             return restored_count
 
         except Exception as e:
@@ -1302,7 +1497,45 @@ class UnifiedStorageService:
                 )
                 file_count = int(check_output.decode().strip() or "0")
                 if file_count > 5:  # Project has files, skip restore
-                    logger.info(f"[RemoteRestore] Project already cached on EC2 ({file_count} files), skipping restore")
+                    logger.info(f"[RemoteRestore] Project cached on EC2 ({file_count} files), running JSON sanitization")
+                    # Still run JSON sanitization even when cached to fix any corrupted files
+                    try:
+                        sanitize_script = f'''
+echo "[SANITIZE-CACHED] Starting cleanup in {workspace_path}"
+# Clear corrupted node_modules to allow fresh install
+if [ -d "{workspace_path}/node_modules" ]; then
+    echo "[SANITIZE-CACHED] Removing corrupted node_modules..."
+    rm -rf {workspace_path}/node_modules 2>/dev/null || true
+fi
+echo "[SANITIZE-CACHED] Sanitizing JSON files..."
+for json_file in $(find {workspace_path} -name "*.json" -type f ! -path "*/node_modules/*" 2>/dev/null | head -20); do
+    python3 -c "
+import json
+try:
+    with open('$json_file', 'r') as f:
+        data = json.load(f)
+    with open('$json_file', 'w') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.write('\\n')
+    print('[SANITIZE-CACHED] Fixed: $json_file')
+except Exception as e:
+    print(f'[SANITIZE-CACHED] Skip: {{e}}')
+" 2>&1 || true
+done
+echo "[SANITIZE-CACHED] Done"
+'''
+                        docker_client.containers.run(
+                            "python:3.11-slim",
+                            ["-c", sanitize_script],
+                            entrypoint="/bin/sh",
+                            volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                            remove=True,
+                            detach=False
+                        )
+                        logger.info(f"[RemoteRestore] JSON sanitization completed for cached project")
+                    except Exception as sanitize_err:
+                        logger.warning(f"[RemoteRestore] JSON sanitization for cached project failed: {sanitize_err}")
+
                     # Return file info from DB without re-downloading
                     async with AsyncSessionLocal() as session:
                         result = await session.execute(
@@ -1464,6 +1697,79 @@ class UnifiedStorageService:
                     logger.error(f"[RemoteRestore] FAILED - No files found after restore! Workspace: {workspace_path}")
             except Exception as verify_err:
                 logger.warning(f"[RemoteRestore] Could not verify restore: {verify_err}")
+
+            # SANITIZE JSON FILES: Fix duplicate keys and other issues in existing projects
+            # This is critical for projects that were created with corrupted package.json
+            try:
+                sanitize_script = f'''
+echo "[SANITIZE] Starting JSON sanitization in {workspace_path}"
+for json_file in $(find {workspace_path} -name "*.json" -type f 2>/dev/null | head -20); do
+    echo "[SANITIZE] Processing: $json_file"
+    # Use python to parse and re-serialize JSON (removes duplicate keys)
+    python3 -c "
+import json, sys
+try:
+    with open('$json_file', 'r') as f:
+        data = json.load(f)
+    with open('$json_file', 'w') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.write('\\n')
+    print('[SANITIZE] Fixed: $json_file')
+except Exception as e:
+    print(f'[SANITIZE] Skip: $json_file - {{e}}')
+" 2>&1 || echo "[SANITIZE] Python error for $json_file"
+done
+echo "[SANITIZE] Done"
+'''
+                sanitize_output = docker_client.containers.run(
+                    "python:3.11-slim",
+                    ["-c", sanitize_script],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    remove=True,
+                    detach=False
+                )
+                if sanitize_output:
+                    logger.info(f"[RemoteRestore] JSON sanitization output:\n{sanitize_output.decode()[:500]}")
+            except Exception as sanitize_err:
+                logger.warning(f"[RemoteRestore] JSON sanitization failed (non-critical): {sanitize_err}")
+
+            # BROWSER ERROR CAPTURE: Inject error capture script into index.html files
+            # This enables automatic browser error detection and reporting to the backend
+            try:
+                logger.info(f"[RemoteRestore] Starting error capture injection for project {project_id}")
+                # Use heredoc to write script to temp file, then awk to inject (avoids shell escaping issues)
+                inject_script = f'''
+echo "[INJECT] Starting"
+INDEX_FILE=$(find {workspace_path} \\( -name "index.html" -o -name "index.htm" \\) -type f 2>/dev/null | head -1)
+echo "[INJECT] Found: $INDEX_FILE"
+[ -z "$INDEX_FILE" ] && echo "[INJECT] No index.html" && exit 0
+grep -q "BharatBuild Error Capture" "$INDEX_FILE" 2>/dev/null && echo "[INJECT] Already injected" && exit 0
+# Write script to temp file using heredoc
+cat > /tmp/bb_inject.txt << 'BBEOF'
+<meta name="bharatbuild-project-id" content="{project_id}">
+<script>/* BharatBuild Error Capture */(function(){{var m=window.location.pathname.match(/\\/sandbox\\/([a-f0-9-]+)/i);var pid=m?m[1]:document.querySelector("meta[name=bharatbuild-project-id]")?.content;if(!pid)return;var buf=[],timer,r={{}};function send(){{if(!buf.length)return;fetch("/api/v1/errors/browser",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{project_id:pid,source:"browser",errors:buf.splice(0),timestamp:Date.now(),url:location.href}}),keepalive:true}}).catch(function(){{}});}}function q(e){{var k=e.type+":"+String(e.message).slice(0,100);if(r[k])return;r[k]=1;setTimeout(function(){{delete r[k];}},5000);buf.push(e);if(buf.length>=5){{clearTimeout(timer);send();return;}}clearTimeout(timer);timer=setTimeout(send,1000);}}window.onerror=function(m,s,l,c,e){{q({{type:"JS",message:String(m),file:s,line:l,stack:e?e.stack:null,timestamp:Date.now()}});return false;}};window.onunhandledrejection=function(e){{var r=e.reason;q({{type:"PROMISE",message:r&&r.message?r.message:String(r),stack:r&&r.stack?r.stack:null,timestamp:Date.now()}});}};var ce=console.error;console.error=function(){{ce.apply(console,arguments);var m=Array.prototype.slice.call(arguments).map(function(a){{return a instanceof Error?a.message:typeof a==="object"?JSON.stringify(a):String(a);}}).join(" ");if(m.length>10)q({{type:"CONSOLE",message:m,timestamp:Date.now()}});}};console.debug("[BharatBuild] Error capture active:",pid);}})();</script>
+<!-- BharatBuild Error Capture -->
+BBEOF
+# Use awk to inject after <head> (case insensitive)
+awk '/<[hH][eE][aA][dD]>/ {{print; while((getline line < "/tmp/bb_inject.txt") > 0) print line; next}} 1' "$INDEX_FILE" > "$INDEX_FILE.tmp"
+if [ -s "$INDEX_FILE.tmp" ]; then
+    mv "$INDEX_FILE.tmp" "$INDEX_FILE" && echo "[INJECT] Success"
+else
+    rm -f "$INDEX_FILE.tmp" && echo "[INJECT] Failed"
+fi
+'''
+                inject_output = docker_client.containers.run(
+                    "alpine:latest",
+                    ["-c", inject_script],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    remove=True,
+                    detach=False
+                )
+                logger.info(f"[RemoteRestore] Injection output: {inject_output.decode().strip() if inject_output else 'none'}")
+            except Exception as inject_err:
+                logger.warning(f"[RemoteRestore] Could not inject error capture script: {inject_err}")
 
             logger.info(f"[RemoteRestore] Successfully restored {len(files_with_s3)} files to EC2 sandbox")
             return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in files_with_s3]

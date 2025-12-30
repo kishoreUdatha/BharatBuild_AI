@@ -1565,6 +1565,134 @@ async def fix_multiple_errors(
         )
 
 
+# ========== Path Cleanup Endpoint ==========
+
+class PathCleanupResponse(BaseModel):
+    """Response for path cleanup operation"""
+    success: bool
+    deleted_count: int
+    updated_count: int
+    message: str
+    deleted_paths: List[str] = []
+    updated_paths: List[dict] = []
+
+
+@router.post("/{project_id}/cleanup-paths")
+async def cleanup_project_paths(
+    project_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Clean up corrupted file paths in the database.
+
+    Fixes issues like:
+    - app/frontend/... -> frontend/...
+    - app/app/... -> deleted (invalid)
+    - Files named 'app', 'backend', 'frontend' at root -> deleted
+    """
+    from sqlalchemy import select, delete, update, cast, String as SQLString, or_, and_
+    from app.models.project_file import ProjectFile
+    from uuid import UUID
+
+    try:
+        project_uuid = str(UUID(project_id))
+        logger.info(f"[PathCleanup] Starting cleanup for project: {project_id}")
+
+        # Get all files
+        result = await db.execute(
+            select(ProjectFile)
+            .where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid)
+        )
+        files = result.scalars().all()
+
+        deleted_paths = []
+        updated_paths = []
+
+        for f in files:
+            path = f.path
+
+            # DELETE: Invalid paths
+            should_delete = False
+            delete_reason = ""
+
+            # Double app/ prefix
+            if path.startswith('app/app/'):
+                should_delete = True
+                delete_reason = "double app/ prefix"
+            # Backend code leaked into frontend project
+            elif path.startswith('app/core/') or path.startswith('app/models/') or path.startswith('app/services/') or path.startswith('app/api/'):
+                should_delete = True
+                delete_reason = "backend code leak"
+            # Files named same as folders at root (no extension, short name)
+            elif path in ['app', 'backend', 'frontend', 'core', 'models', 'services']:
+                should_delete = True
+                delete_reason = "invalid root file"
+            # Empty folder markers
+            elif f.is_folder and path.startswith('app/'):
+                should_delete = True
+                delete_reason = "invalid folder with app/ prefix"
+
+            if should_delete:
+                await db.execute(
+                    delete(ProjectFile).where(ProjectFile.id == f.id)
+                )
+                deleted_paths.append(f"{path} ({delete_reason})")
+                logger.info(f"[PathCleanup] Deleted: {path} - {delete_reason}")
+                continue
+
+            # UPDATE: Fixable paths (app/frontend/... -> frontend/...)
+            new_path = None
+            if path.startswith('app/frontend/'):
+                new_path = path[4:]  # Remove 'app/'
+            elif path.startswith('app/backend/'):
+                new_path = path[4:]  # Remove 'app/'
+            elif path.startswith('app/') and '/' in path[4:]:
+                # Generic app/ prefix with subdirectory
+                new_path = path[4:]
+
+            if new_path:
+                # Check if correct path already exists
+                existing = await db.execute(
+                    select(ProjectFile)
+                    .where(cast(ProjectFile.project_id, SQLString(36)) == project_uuid)
+                    .where(ProjectFile.path == new_path)
+                )
+                if existing.scalar_one_or_none():
+                    # Delete duplicate with wrong path
+                    await db.execute(
+                        delete(ProjectFile).where(ProjectFile.id == f.id)
+                    )
+                    deleted_paths.append(f"{path} (duplicate of {new_path})")
+                    logger.info(f"[PathCleanup] Deleted duplicate: {path}")
+                else:
+                    # Update path
+                    await db.execute(
+                        update(ProjectFile)
+                        .where(ProjectFile.id == f.id)
+                        .values(path=new_path, name=new_path.split('/')[-1])
+                    )
+                    updated_paths.append({"old": path, "new": new_path})
+                    logger.info(f"[PathCleanup] Updated: {path} -> {new_path}")
+
+        await db.commit()
+
+        message = f"Cleaned up {len(deleted_paths)} deleted, {len(updated_paths)} updated"
+        logger.info(f"[PathCleanup] Complete: {message}")
+
+        return PathCleanupResponse(
+            success=True,
+            deleted_count=len(deleted_paths),
+            updated_count=len(updated_paths),
+            message=message,
+            deleted_paths=deleted_paths,
+            updated_paths=updated_paths
+        )
+
+    except Exception as e:
+        logger.error(f"[PathCleanup] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ========== Project Messages Endpoints ==========
 
 class ProjectMessageResponse(BaseModel):
@@ -1662,4 +1790,216 @@ async def get_project_messages(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
+        )
+
+
+# =============================================================================
+# PROJECT DOWNLOAD - Export for Local Development
+# =============================================================================
+
+class DownloadResponse(BaseModel):
+    """Response for download request"""
+    success: bool
+    download_url: Optional[str] = None
+    file_count: int = 0
+    total_size: int = 0
+    warnings: List[str] = []
+    errors: List[str] = []
+    readme_generated: bool = False
+    env_example_generated: bool = False
+
+
+@router.get("/{project_id}/download")
+async def download_project(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Download project as a ZIP file ready for local development.
+
+    The download includes:
+    - All project files
+    - Complete package.json with dependencies
+    - README.md with setup instructions
+    - .env.example for environment variables
+    - .gitignore
+
+    Platform-specific code (error-capture.js, etc.) is removed.
+
+    Returns a ZIP file that can be extracted and run locally with:
+    ```
+    npm install
+    npm run dev
+    ```
+    """
+    from fastapi.responses import FileResponse
+    from app.services.project_export import project_export
+    from app.core.config import settings
+    import os
+
+    try:
+        # Get project
+        project = await db.get(Project, project_id)
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found"
+            )
+
+        # Check ownership
+        if str(project.user_id) != str(current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to download this project"
+            )
+
+        # Get project path
+        project_path = os.path.join(
+            settings.SANDBOX_PATH,
+            str(current_user.id),
+            project_id
+        )
+
+        if not os.path.exists(project_path):
+            # Try alternative path
+            project_path = os.path.join(settings.SANDBOX_PATH, project_id)
+
+        if not os.path.exists(project_path):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project files not found. Please run the project first."
+            )
+
+        # Export project
+        result = await project_export.export_project(
+            project_path=project_path,
+            project_name=project.title or project_id,
+            description=project.description or "",
+            framework=project.framework
+        )
+
+        if not result.success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Export failed: {', '.join(result.errors)}"
+            )
+
+        # Return ZIP file
+        return FileResponse(
+            path=result.zip_path,
+            filename=f"{project.title or project_id}.zip",
+            media_type="application/zip",
+            headers={
+                "X-File-Count": str(result.file_count),
+                "X-Total-Size": str(result.total_size),
+                "X-Readme-Generated": str(result.readme_generated),
+                "X-Env-Example-Generated": str(result.env_example_generated),
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Download] Failed to export project {project_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@router.get("/{project_id}/download/preview")
+async def preview_download(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DownloadResponse:
+    """
+    Preview what will be included in the download.
+
+    Use this to check:
+    - File count and size
+    - Any warnings or issues
+    - Whether README and .env.example will be generated
+
+    Does not create the actual ZIP file.
+    """
+    from app.services.project_export import project_export
+    from app.core.config import settings
+    import os
+
+    try:
+        # Get project
+        project = await db.get(Project, project_id)
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found"
+            )
+
+        # Check ownership
+        if str(project.user_id) != str(current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized"
+            )
+
+        # Get project path
+        project_path = os.path.join(
+            settings.SANDBOX_PATH,
+            str(current_user.id),
+            project_id
+        )
+
+        if not os.path.exists(project_path):
+            project_path = os.path.join(settings.SANDBOX_PATH, project_id)
+
+        if not os.path.exists(project_path):
+            return DownloadResponse(
+                success=False,
+                errors=["Project files not found. Please run the project first."]
+            )
+
+        # Count files and calculate size
+        from pathlib import Path
+        path = Path(project_path)
+
+        file_count = 0
+        total_size = 0
+        warnings = []
+
+        for f in path.rglob("*"):
+            if f.is_file() and "node_modules" not in f.parts:
+                file_count += 1
+                total_size += f.stat().st_size
+
+        # Check for required files
+        if not (path / "package.json").exists() and not (path / "requirements.txt").exists():
+            warnings.append("No package.json or requirements.txt found - will be generated")
+
+        if not (path / "README.md").exists():
+            warnings.append("No README.md found - will be generated")
+
+        # Check for platform files that will be removed
+        platform_files = ["error-capture.js", ".bharatbuild", "bharatbuild.config.js"]
+        for pf in platform_files:
+            if (path / pf).exists() or any(path.rglob(pf)):
+                warnings.append(f"Platform file '{pf}' will be removed")
+
+        return DownloadResponse(
+            success=True,
+            file_count=file_count,
+            total_size=total_size,
+            warnings=warnings,
+            readme_generated=not (path / "README.md").exists(),
+            env_example_generated=not (path / ".env.example").exists()
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Download Preview] Failed for project {project_id}: {e}")
+        return DownloadResponse(
+            success=False,
+            errors=[str(e)]
         )

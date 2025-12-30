@@ -586,6 +586,89 @@ class SimpleFixer:
             complexity=complexity
         )
 
+    async def fix_from_backend(
+        self,
+        project_id: str,
+        project_path: Path,
+        payload: Dict[str, Any]
+    ) -> SimpleFixResult:
+        """
+        BACKEND-FIRST AUTO-FIX: Fix errors captured directly from container execution.
+
+        This is the CORRECT architecture - errors are captured in the backend
+        (ExecutionContext) and sent here for fixing. NO FRONTEND INVOLVEMENT.
+
+        Payload contains:
+        - stderr: Complete stderr buffer (SINGLE SOURCE OF TRUTH)
+        - stdout: Last 100 lines of stdout for context
+        - command: The command that failed
+        - runtime: Detected runtime (node, python, java, etc.)
+        - exit_code: The exit code from the container
+        - fix_attempt: Current fix attempt number
+        - error_file/error_line: Classified error location (if detected)
+
+        This is the production-grade approach used by Bolt.new and similar platforms.
+        """
+        stderr = payload.get("stderr", "")
+        stdout = payload.get("stdout", "")
+        command = payload.get("command", "")
+        runtime = payload.get("runtime", "unknown")
+        exit_code = payload.get("exit_code", 1)
+        fix_attempt = payload.get("fix_attempt", 0)
+        error_file = payload.get("error_file")
+        error_line = payload.get("error_line")
+        primary_error_type = payload.get("primary_error_type")
+
+        logger.info(
+            f"[SimpleFixer:{project_id}] fix_from_backend called: "
+            f"runtime={runtime}, exit_code={exit_code}, attempt={fix_attempt}, "
+            f"stderr_len={len(stderr)}, error_type={primary_error_type}"
+        )
+
+        # Rate limit check
+        can_fix, reason = self._can_attempt_fix(project_id)
+        if not can_fix:
+            logger.warning(f"[SimpleFixer:{project_id}] Rate limited: {reason}")
+            return SimpleFixResult(
+                success=False,
+                files_modified=[],
+                message=f"Rate limited: {reason}",
+                patches_applied=0
+            )
+
+        # Build context from stderr + stdout (stderr is primary)
+        combined_context = stderr
+        if stdout:
+            combined_context += f"\n\n--- STDOUT (for context) ---\n{stdout[-2000:]}"
+
+        # Build errors list from backend-captured data
+        errors = [{
+            "source": "terminal",
+            "type": primary_error_type or "build_error",
+            "message": stderr[:2000] if stderr else "Unknown error",
+            "file": error_file,
+            "line": error_line,
+            "severity": "error"
+        }]
+
+        # Classify error complexity for model selection
+        complexity = self._classify_error_complexity(errors, combined_context)
+
+        # Record fix attempt
+        self._record_fix_attempt(project_id)
+
+        # Execute fix with combined context
+        return await self._execute_fix_internal(
+            project_id=project_id,
+            project_path=project_path,
+            errors=errors,
+            context=combined_context,
+            command=command,
+            file_tree=None,  # Will be gathered by _gather_context_optimized
+            recently_modified=None,
+            complexity=complexity
+        )
+
     async def _execute_fix_internal(
         self,
         project_id: str,
@@ -600,7 +683,15 @@ class SimpleFixer:
         """Internal method to execute fix with cost optimizations"""
         try:
             # =================================================================
-            # STEP 0: Try deterministic CSS fix FIRST (fast, free, no API call)
+            # STEP 0a: Try deterministic React import fix (fast, free, no AI)
+            # =================================================================
+            react_fix_result = await self._try_deterministic_react_import_fix(project_path)
+            if react_fix_result:
+                logger.info(f"[SimpleFixer:{project_id}] Deterministic React import fix applied - skipping AI")
+                return react_fix_result
+
+            # =================================================================
+            # STEP 0b: Try deterministic CSS fix FIRST (fast, free, no API call)
             # =================================================================
             error_text = context or ""
             for err in errors:
@@ -1476,6 +1567,82 @@ Please analyze and fix these errors. If the output shows success or warnings onl
 
         return False
 
+    async def _try_deterministic_react_import_fix(self, project_path: Path) -> Optional[SimpleFixResult]:
+        """
+        Proactively fix missing React import in main.tsx (no AI call needed).
+
+        This fixes the common "React is not defined" browser error that happens
+        when main.tsx uses React.StrictMode without importing React.
+
+        Returns SimpleFixResult if fixed, None if no fix needed.
+        """
+        # Check common main.tsx locations
+        main_tsx_paths = [
+            project_path / "src" / "main.tsx",
+            project_path / "frontend" / "src" / "main.tsx",
+            project_path / "client" / "src" / "main.tsx",
+        ]
+
+        files_modified = []
+
+        for main_path in main_tsx_paths:
+            if not main_path.exists():
+                continue
+
+            try:
+                content = main_path.read_text(encoding='utf-8')
+
+                # Check if file uses React (React.StrictMode, React.createElement, etc.)
+                uses_react = 'React.' in content or '<React.' in content
+
+                # Check if React is already imported
+                has_react_import = bool(re.search(r'''import\s+(?:\*\s+as\s+)?React\s+from\s+['"]react['"]''', content))
+
+                if uses_react and not has_react_import:
+                    logger.info(f"[SimpleFixer] Found main.tsx using React without import: {main_path}")
+
+                    # Add React import at the top
+                    # Check if there's already a react-dom import to add after it
+                    if "import ReactDOM from 'react-dom/client'" in content:
+                        new_content = content.replace(
+                            "import ReactDOM from 'react-dom/client'",
+                            "import React from 'react'\nimport ReactDOM from 'react-dom/client'"
+                        )
+                    elif 'import ReactDOM from "react-dom/client"' in content:
+                        new_content = content.replace(
+                            'import ReactDOM from "react-dom/client"',
+                            "import React from 'react'\nimport ReactDOM from \"react-dom/client\""
+                        )
+                    else:
+                        # Just add at the very beginning
+                        new_content = "import React from 'react'\n" + content
+
+                    # Write fixed content
+                    main_path.write_text(new_content, encoding='utf-8')
+                    rel_path = str(main_path.relative_to(project_path))
+                    files_modified.append(rel_path)
+                    logger.info(f"[SimpleFixer] Added missing React import to {rel_path}")
+
+                    # Sync to S3
+                    path_parts = str(project_path).replace("\\", "/").split("/")
+                    project_id = path_parts[-1] if path_parts else None
+                    if project_id:
+                        await self._sync_to_s3(project_id, rel_path, new_content)
+
+            except Exception as e:
+                logger.warning(f"[SimpleFixer] Error checking {main_path}: {e}")
+                continue
+
+        if files_modified:
+            return SimpleFixResult(
+                success=True,
+                files_modified=files_modified,
+                message=f"Added missing 'import React from react' to {', '.join(files_modified)}",
+                patches_applied=len(files_modified)
+            )
+
+        return None
+
     async def _try_deterministic_css_fix(self, project_path: Path, output: str) -> Optional[SimpleFixResult]:
         """
         Try to fix Tailwind CSS errors deterministically (no AI call needed).
@@ -1591,7 +1758,7 @@ Please analyze and fix these errors. If the output shows success or warnings onl
         Fix an error using AI - COST OPTIMIZED.
 
         Simple flow:
-        1. TRY DETERMINISTIC FIX FIRST (fast, free) - Tailwind CSS errors
+        1. TRY DETERMINISTIC FIX FIRST (fast, free) - React import, Tailwind CSS errors
         2. Classify error complexity for model selection
         3. Gather SMALLER context (only error-mentioned files + key configs)
         4. Send to AI with selected model
@@ -1599,7 +1766,15 @@ Please analyze and fix these errors. If the output shows success or warnings onl
         """
         try:
             # =================================================================
-            # STEP 0: Try deterministic fix FIRST (fast, free, no API call)
+            # STEP 0a: Try deterministic React import fix (fast, free, no AI)
+            # =================================================================
+            react_fix_result = await self._try_deterministic_react_import_fix(project_path)
+            if react_fix_result:
+                logger.info(f"[SimpleFixer] Deterministic React import fix applied - skipping AI")
+                return react_fix_result
+
+            # =================================================================
+            # STEP 0b: Try deterministic CSS fix (fast, free, no API call)
             # =================================================================
             deterministic_result = await self._try_deterministic_css_fix(project_path, output)
             if deterministic_result:
@@ -1975,6 +2150,27 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
         """Execute a tool and return result"""
         try:
             path = tool_input.get("path", "")
+
+            # VALIDATION: Prevent creating files in new/unexpected directories
+            # AI sometimes hallucinates paths like "app/tsconfig.node.json" instead of "tsconfig.node.json"
+            if "/" in path or "\\" in path:
+                dir_path = Path(path).parent
+                full_dir_path = project_path / dir_path
+                # Only allow creating files in existing directories OR standard Vite/React directories
+                allowed_dirs = {"src", "public", "components", "pages", "hooks", "utils", "lib", "assets", "styles"}
+                if not full_dir_path.exists() and str(dir_path) not in allowed_dirs:
+                    # Check if this looks like a config file that should be at root
+                    filename = Path(path).name
+                    config_files = {"tsconfig.json", "tsconfig.node.json", "package.json", "vite.config.ts",
+                                   "vite.config.js", "tailwind.config.js", "postcss.config.js", ".env"}
+                    if filename in config_files:
+                        # Fix the path - use root instead of nested directory
+                        logger.warning(f"[SimpleFixer] Correcting path: '{path}' -> '{filename}' (config file should be at root)")
+                        path = filename
+                    else:
+                        logger.warning(f"[SimpleFixer] Rejected create_file in non-existent directory: {path}")
+                        return f"Error: Cannot create file in non-existent directory '{dir_path}'. Check the file path."
+
             full_path = project_path / path
 
             # Extract project_id and user_id from path for S3 sync
@@ -2021,6 +2217,25 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                 # Ensure file ends with single newline (standard convention)
                 content = content.rstrip() + '\n'
 
+                # For JSON files, validate and re-serialize to remove duplicate keys
+                if path.endswith('.json'):
+                    try:
+                        import json
+                        parsed = json.loads(content)
+                        content = json.dumps(parsed, indent=2, ensure_ascii=False) + '\n'
+                        logger.info(f"[SimpleFixer] Validated JSON on create: {path}")
+                    except json.JSONDecodeError as je:
+                        logger.warning(f"[SimpleFixer] JSON validation failed for {path}: {je}")
+                        # Try to fix trailing comma issues
+                        import re
+                        fixed_content = re.sub(r',(\s*[}\]])', r'\1', content)
+                        try:
+                            parsed = json.loads(fixed_content)
+                            content = json.dumps(parsed, indent=2, ensure_ascii=False) + '\n'
+                            logger.info(f"[SimpleFixer] Fixed JSON on create: {path}")
+                        except json.JSONDecodeError:
+                            logger.warning(f"[SimpleFixer] Could not fix JSON on create: {path}")
+
                 # LAYER 1: Write to sandbox
                 full_path.parent.mkdir(parents=True, exist_ok=True)
                 full_path.write_text(content, encoding='utf-8')
@@ -2041,6 +2256,26 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                 if old_str not in content:
                     return f"Error: String not found in {path}"
                 new_content = content.replace(old_str, new_str, 1)
+
+                # For JSON files, validate and re-serialize to remove duplicate keys
+                if path.endswith('.json'):
+                    try:
+                        import json
+                        parsed = json.loads(new_content)
+                        new_content = json.dumps(parsed, indent=2, ensure_ascii=False) + '\n'
+                        logger.info(f"[SimpleFixer] Validated JSON: {path}")
+                    except json.JSONDecodeError as je:
+                        logger.warning(f"[SimpleFixer] JSON validation failed for {path}: {je}")
+                        # Try to fix trailing comma issues
+                        import re
+                        fixed_content = re.sub(r',(\s*[}\]])', r'\1', new_content)
+                        try:
+                            parsed = json.loads(fixed_content)
+                            new_content = json.dumps(parsed, indent=2, ensure_ascii=False) + '\n'
+                            logger.info(f"[SimpleFixer] Fixed JSON trailing commas: {path}")
+                        except json.JSONDecodeError:
+                            # Keep original content if still fails
+                            logger.warning(f"[SimpleFixer] Could not fix JSON: {path}")
 
                 # LAYER 1: Write to sandbox
                 full_path.write_text(new_content, encoding='utf-8')

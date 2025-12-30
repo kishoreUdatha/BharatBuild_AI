@@ -67,20 +67,30 @@ run_migrations() {
 
     # Check current migration status
     echo "[Entrypoint] Checking migration status..."
-    alembic current || true
+    alembic current 2>&1 || true
 
-    # Run migrations
+    # Run migrations with error tolerance
+    # DuplicateTable errors are expected when tables already exist
     echo "[Entrypoint] Applying migrations..."
-    if alembic upgrade head; then
+    set +e  # Temporarily disable exit on error
+    MIGRATION_OUTPUT=$(alembic upgrade head 2>&1)
+    MIGRATION_EXIT=$?
+    set -e  # Re-enable exit on error
+
+    if [ $MIGRATION_EXIT -eq 0 ]; then
         echo "[Entrypoint] Migrations completed successfully!"
+    elif echo "$MIGRATION_OUTPUT" | grep -q "DuplicateTable\|already exists\|Duplicate column\|duplicate key"; then
+        echo "[Entrypoint] Tables already exist (expected), continuing..."
+        # Stamp the current revision to mark migrations as complete
+        alembic stamp head 2>&1 || true
     else
-        echo "[Entrypoint] WARNING: Migration failed, but continuing..."
-        # Don't exit - let the app try to start anyway
+        echo "[Entrypoint] WARNING: Migration had issues: $MIGRATION_OUTPUT"
+        echo "[Entrypoint] Continuing anyway..."
     fi
 
     # Show final status
     echo "[Entrypoint] Current migration status:"
-    alembic current || true
+    alembic current 2>&1 || true
 }
 
 # Initialize database tables (fallback if migrations fail)
