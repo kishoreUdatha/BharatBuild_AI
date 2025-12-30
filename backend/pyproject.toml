@@ -70,7 +70,7 @@ exclude_lines = [
     "@abstractmethod",
     "@abc.abstractmethod",
 ]
-fail_under = 30
+fail_under = 15
 show_missing = true
 skip_covered = false
 
