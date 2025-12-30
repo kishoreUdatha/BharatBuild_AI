@@ -47,6 +47,13 @@ OUTPUT FORMAT (MANDATORY):
   <project_name>A professional, descriptive name for this project (e.g., "E-Commerce Platform", "Task Management System", "AI Phishing Detection Tool")</project_name>
   <project_description>A brief 1-2 sentence description of what the project does</project_description>
   <project_type>...</project_type>
+  <design_theme>
+    <domain>energy|finance|healthcare|food|ecommerce|education|gaming|travel|realestate|business|agriculture|security|default</domain>
+    <primary_color>emerald|blue|cyan|orange|violet|indigo|pink|sky|amber|slate|lime|red|purple</primary_color>
+    <secondary_color>teal|indigo|teal|red|purple|blue|fuchsia|blue|yellow|gray|green|rose|pink</secondary_color>
+    <background>from-slate-900 to-gray-900</background>
+    <accent>yellow|green|red|amber|pink|amber|cyan|amber|green|blue|amber|green|orange</accent>
+  </design_theme>
   <tech_stack>...</tech_stack>
   <project_structure>...</project_structure>
   <files>
@@ -65,6 +72,107 @@ OUTPUT FORMAT (MANDATORY):
   </tasks>
   <notes>...</notes>
 </plan>
+
+═══════════════════════════════════════════════════════════════════════════════
+                    🎨 DESIGN THEME SELECTION (REQUIRED!)
+═══════════════════════════════════════════════════════════════════════════════
+
+You MUST select appropriate colors based on project domain. DO NOT use same colors for all projects!
+
+DOMAIN DETECTION AND COLOR MAPPING:
+
+🔋 ENERGY/UTILITIES (Keywords: power, electric, bill, solar, energy, utility, meter, consumption):
+  <domain>energy</domain>
+  <primary_color>emerald</primary_color>
+  <secondary_color>teal</secondary_color>
+  <background>from-slate-900 to-gray-900</background>
+  <accent>yellow</accent>
+
+💰 FINANCE/BANKING (Keywords: payment, bank, money, trading, crypto, budget, invoice, wallet):
+  <domain>finance</domain>
+  <primary_color>blue</primary_color>
+  <secondary_color>indigo</secondary_color>
+  <background>from-slate-950 to-blue-950</background>
+  <accent>green</accent>
+
+🏥 HEALTHCARE/MEDICAL (Keywords: hospital, doctor, patient, pharmacy, health, fitness, medical):
+  <domain>healthcare</domain>
+  <primary_color>cyan</primary_color>
+  <secondary_color>teal</secondary_color>
+  <background>from-gray-900 to-slate-900</background>
+  <accent>red</accent>
+
+🍔 FOOD/RESTAURANT (Keywords: food, restaurant, recipe, delivery, menu, order, cooking):
+  <domain>food</domain>
+  <primary_color>orange</primary_color>
+  <secondary_color>red</secondary_color>
+  <background>from-stone-900 to-neutral-900</background>
+  <accent>amber</accent>
+
+🛒 E-COMMERCE/RETAIL (Keywords: shop, store, product, cart, marketplace, buy, sell):
+  <domain>ecommerce</domain>
+  <primary_color>violet</primary_color>
+  <secondary_color>purple</secondary_color>
+  <background>from-gray-900 to-zinc-900</background>
+  <accent>pink</accent>
+
+📚 EDUCATION/LEARNING (Keywords: course, school, student, learn, quiz, exam, lms):
+  <domain>education</domain>
+  <primary_color>indigo</primary_color>
+  <secondary_color>blue</secondary_color>
+  <background>from-slate-900 to-indigo-950</background>
+  <accent>amber</accent>
+
+🎮 GAMING/ENTERTAINMENT (Keywords: game, play, stream, media, video, music):
+  <domain>gaming</domain>
+  <primary_color>pink</primary_color>
+  <secondary_color>fuchsia</secondary_color>
+  <background>from-gray-900 to-purple-950</background>
+  <accent>cyan</accent>
+
+🚗 TRAVEL/TRANSPORT (Keywords: travel, booking, flight, hotel, ride, taxi, logistics):
+  <domain>travel</domain>
+  <primary_color>sky</primary_color>
+  <secondary_color>blue</secondary_color>
+  <background>from-slate-900 to-sky-950</background>
+  <accent>amber</accent>
+
+🏠 REAL ESTATE/PROPERTY (Keywords: house, property, rent, real estate, apartment):
+  <domain>realestate</domain>
+  <primary_color>amber</primary_color>
+  <secondary_color>yellow</secondary_color>
+  <background>from-stone-900 to-amber-950</background>
+  <accent>green</accent>
+
+💼 BUSINESS/CRM (Keywords: project, task, crm, hr, employee, analytics, dashboard):
+  <domain>business</domain>
+  <primary_color>slate</primary_color>
+  <secondary_color>gray</secondary_color>
+  <background>from-gray-900 to-slate-900</background>
+  <accent>blue</accent>
+
+🌿 AGRICULTURE/ENVIRONMENT (Keywords: farm, agriculture, weather, plant, eco, green):
+  <domain>agriculture</domain>
+  <primary_color>lime</primary_color>
+  <secondary_color>green</secondary_color>
+  <background>from-green-950 to-emerald-950</background>
+  <accent>amber</accent>
+
+🔒 SECURITY/TECH (Keywords: security, auth, monitor, devops, admin, system):
+  <domain>security</domain>
+  <primary_color>red</primary_color>
+  <secondary_color>rose</secondary_color>
+  <background>from-gray-950 to-red-950</background>
+  <accent>green</accent>
+
+DEFAULT (If no specific domain matches):
+  <domain>default</domain>
+  <primary_color>purple</primary_color>
+  <secondary_color>pink</secondary_color>
+  <background>from-gray-900 via-slate-900 to-black</background>
+  <accent>orange</accent>
+
+═══════════════════════════════════════════════════════════════════════════════
 
 CRITICAL: The <files> section is MANDATORY AND MUST BE COMPLETE!
 
@@ -1571,6 +1679,28 @@ Be thorough, specific, and ensure all tasks are actionable by automation agents.
         if project_info_match:
             plan["project_info"] = project_info_match.group(1).strip()
 
+        # Extract design_theme (NEW - for domain-specific colors)
+        design_theme_match = re.search(r'<design_theme>(.*?)</design_theme>', plan_content, re.DOTALL)
+        if design_theme_match:
+            theme_content = design_theme_match.group(1)
+            plan["design_theme"] = {
+                "domain": self._extract_tag(theme_content, "domain") or "default",
+                "primary_color": self._extract_tag(theme_content, "primary_color") or "purple",
+                "secondary_color": self._extract_tag(theme_content, "secondary_color") or "pink",
+                "background": self._extract_tag(theme_content, "background") or "from-gray-900 to-slate-900",
+                "accent": self._extract_tag(theme_content, "accent") or "orange"
+            }
+            logger.info(f"[PlannerAgent] Design theme: {plan['design_theme']['domain']} - primary: {plan['design_theme']['primary_color']}")
+        else:
+            # Default theme if not specified
+            plan["design_theme"] = {
+                "domain": "default",
+                "primary_color": "purple",
+                "secondary_color": "pink",
+                "background": "from-gray-900 to-slate-900",
+                "accent": "orange"
+            }
+
         # Extract tech_stack
         tech_stack_match = re.search(r'<tech_stack>(.*?)</tech_stack>', plan_content, re.DOTALL)
         if tech_stack_match:
@@ -1608,6 +1738,12 @@ Be thorough, specific, and ensure all tasks are actionable by automation agents.
         logger.info(f"[PlannerAgent] Parsed plan with {files_count} files")
 
         return plan
+
+    def _extract_tag(self, content: str, tag_name: str) -> Optional[str]:
+        """Extract content from a simple XML tag"""
+        import re
+        match = re.search(rf'<{tag_name}>(.*?)</{tag_name}>', content, re.DOTALL)
+        return match.group(1).strip() if match else None
 
     def _parse_files_list(self, files_content: str) -> List[Dict[str, Any]]:
         """
