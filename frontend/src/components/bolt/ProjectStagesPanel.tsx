@@ -81,6 +81,7 @@ interface DocumentsContent {
     status: StageStatus
     downloadUrl?: string
   }[]
+  generationMessage?: string | null
 }
 
 // Summary stage content
@@ -180,6 +181,81 @@ export function ProjectStagesPanel() {
     f.path?.includes('.docx') || f.path?.includes('.pdf') || f.path?.includes('.pptx')
   )
 
+  // Track document generation progress from thinkingSteps
+  const documentGenerationStep = thinkingSteps.find((step: any) =>
+    step.label === 'Generating Documents' || step.label?.includes('Document')
+  )
+
+  // Parse document generation status from step details
+  const getDocumentGenerationStatus = () => {
+    if (!documentGenerationStep) return null
+
+    const details = documentGenerationStep.details || ''
+    const status = documentGenerationStep.status
+
+    // Determine individual document statuses
+    const docStatuses: Record<string, StageStatus> = {
+      'srs': 'pending',
+      'report': 'pending',
+      'ppt': 'pending',
+      'viva': 'pending'
+    }
+
+    // Check if generation is complete
+    if (status === 'complete') {
+      return {
+        srs: 'completed' as StageStatus,
+        report: 'completed' as StageStatus,
+        ppt: 'completed' as StageStatus,
+        viva: 'completed' as StageStatus,
+        isGenerating: false,
+        currentDoc: null
+      }
+    }
+
+    // Parse details to find current document and completed ones
+    const detailsLower = details.toLowerCase()
+
+    // Check for completed documents
+    if (detailsLower.includes('srs') && detailsLower.includes('completed')) docStatuses.srs = 'completed'
+    if ((detailsLower.includes('report') || detailsLower.includes('project report')) && detailsLower.includes('completed')) docStatuses.report = 'completed'
+    if ((detailsLower.includes('ppt') || detailsLower.includes('presentation')) && detailsLower.includes('completed')) docStatuses.ppt = 'completed'
+    if (detailsLower.includes('viva') && detailsLower.includes('completed')) docStatuses.viva = 'completed'
+
+    // Find currently generating document
+    let currentDoc: string | null = null
+    if (detailsLower.includes('generating')) {
+      if (detailsLower.includes('srs') && docStatuses.srs !== 'completed') {
+        currentDoc = 'srs'
+        docStatuses.srs = 'active'
+      } else if ((detailsLower.includes('report') || detailsLower.includes('project report')) && docStatuses.report !== 'completed') {
+        currentDoc = 'report'
+        docStatuses.report = 'active'
+      } else if ((detailsLower.includes('ppt') || detailsLower.includes('presentation')) && docStatuses.ppt !== 'completed') {
+        currentDoc = 'ppt'
+        docStatuses.ppt = 'active'
+      } else if (detailsLower.includes('viva') && docStatuses.viva !== 'completed') {
+        currentDoc = 'viva'
+        docStatuses.viva = 'active'
+      } else if (detailsLower.includes('all documents') || detailsLower.includes('parallel')) {
+        // Parallel generation - all are active
+        if (docStatuses.srs === 'pending') docStatuses.srs = 'active'
+        if (docStatuses.report === 'pending') docStatuses.report = 'active'
+        if (docStatuses.ppt === 'pending') docStatuses.ppt = 'active'
+        if (docStatuses.viva === 'pending') docStatuses.viva = 'active'
+        currentDoc = 'all'
+      }
+    }
+
+    return {
+      ...docStatuses,
+      isGenerating: status === 'active',
+      currentDoc
+    }
+  }
+
+  const docGenStatus = getDocumentGenerationStatus()
+
   // Extract tech stack from user prompt or planData
   const extractTechFromPrompt = (prompt: string): string[] => {
     const techKeywords = ['react', 'vue', 'angular', 'next.js', 'node', 'express', 'fastapi', 'django', 'flask',
@@ -243,7 +319,11 @@ export function ProjectStagesPanel() {
         return 'pending'
 
       case 'documents':
-        // Check if project has documents
+        // Check if documents are being generated (from thinkingSteps)
+        if (docGenStatus?.isGenerating) return 'active'
+        // Check if document generation is complete
+        if (docGenStatus && !docGenStatus.isGenerating && documentGenerationStep?.status === 'complete') return 'completed'
+        // Check if project has documents (already generated)
         if (hasDocuments) return 'completed'
         // If project is loaded but no docs, show as completed (generation done)
         if (isLoadedProject) return 'completed'
@@ -383,6 +463,12 @@ export function ProjectStagesPanel() {
                         name.includes('Viva') ? 'viva' : 'doc'
             return { type, name, status: 'completed' as StageStatus, downloadUrl: f.path }
           })
+        ] : docGenStatus ? [
+          // Show document generation progress from thinkingSteps
+          { type: 'srs', name: 'SRS Document', status: docGenStatus.srs as StageStatus },
+          { type: 'report', name: 'Project Report', status: docGenStatus.report as StageStatus },
+          { type: 'ppt', name: 'Presentation', status: docGenStatus.ppt as StageStatus },
+          { type: 'viva', name: 'Viva Q&A', status: docGenStatus.viva as StageStatus },
         ] : [
           // Default pending documents
           { type: 'srs', name: 'SRS Document', status: 'pending' as StageStatus },
@@ -390,6 +476,8 @@ export function ProjectStagesPanel() {
           { type: 'ppt', name: 'Presentation', status: 'pending' as StageStatus },
           { type: 'viva', name: 'Viva Q&A', status: 'pending' as StageStatus },
         ],
+        // Include generation message for context
+        generationMessage: docGenStatus?.isGenerating ? documentGenerationStep?.details : null,
       },
     },
     {
@@ -874,6 +962,16 @@ function BuildStageContent({ content, onFileClick }: { content: BuildContent; on
 function DocumentsStageContent({ content }: { content: DocumentsContent }) {
   return (
     <div className="pt-3 space-y-1.5">
+      {/* Generation progress message */}
+      {content.generationMessage && (
+        <div className="flex items-center gap-2 p-2 rounded-lg bg-blue-500/10 border border-blue-500/30 mb-2">
+          <Loader2 className="w-3.5 h-3.5 text-blue-500 animate-spin flex-shrink-0" />
+          <span className="text-xs text-blue-400 truncate">
+            {content.generationMessage}
+          </span>
+        </div>
+      )}
+
       {content.documents.map((doc, idx) => (
         <div
           key={idx}

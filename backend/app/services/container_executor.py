@@ -88,16 +88,90 @@ class Technology(Enum):
     UNKNOWN = "unknown"
 
 
+# Database Technology Enum
+class DatabaseType(Enum):
+    """Supported database types for full-stack projects"""
+    POSTGRESQL = "postgresql"
+    MYSQL = "mysql"
+    MONGODB = "mongodb"
+    REDIS = "redis"
+    NONE = "none"
+
+
+# Database Container Configurations
+@dataclass
+class DatabaseConfig:
+    """Configuration for database containers"""
+    db_type: DatabaseType
+    image: str
+    port: int
+    env_vars: Dict[str, str]
+    health_check_cmd: List[str]
+    connection_string_template: str
+
+
+DATABASE_CONFIGS: Dict[DatabaseType, DatabaseConfig] = {
+    DatabaseType.POSTGRESQL: DatabaseConfig(
+        db_type=DatabaseType.POSTGRESQL,
+        image="postgres:15-alpine",
+        port=5432,
+        env_vars={
+            "POSTGRES_USER": "bharatbuild",
+            "POSTGRES_PASSWORD": "bharatbuild123",
+            "POSTGRES_DB": "app_db"
+        },
+        health_check_cmd=["pg_isready", "-U", "bharatbuild"],
+        connection_string_template="postgresql://bharatbuild:bharatbuild123@{host}:5432/app_db"
+    ),
+    DatabaseType.MYSQL: DatabaseConfig(
+        db_type=DatabaseType.MYSQL,
+        image="mysql:8.0",
+        port=3306,
+        env_vars={
+            "MYSQL_ROOT_PASSWORD": "bharatbuild123",
+            "MYSQL_DATABASE": "app_db",
+            "MYSQL_USER": "bharatbuild",
+            "MYSQL_PASSWORD": "bharatbuild123"
+        },
+        health_check_cmd=["mysqladmin", "ping", "-h", "localhost", "-ubharatbuild", "-pbharatbuild123"],
+        connection_string_template="mysql://bharatbuild:bharatbuild123@{host}:3306/app_db"
+    ),
+    DatabaseType.MONGODB: DatabaseConfig(
+        db_type=DatabaseType.MONGODB,
+        image="mongo:7.0",
+        port=27017,
+        env_vars={
+            "MONGO_INITDB_ROOT_USERNAME": "bharatbuild",
+            "MONGO_INITDB_ROOT_PASSWORD": "bharatbuild123",
+            "MONGO_INITDB_DATABASE": "app_db"
+        },
+        health_check_cmd=["mongosh", "--eval", "db.adminCommand('ping')"],
+        connection_string_template="mongodb://bharatbuild:bharatbuild123@{host}:27017/app_db?authSource=admin"
+    ),
+    DatabaseType.REDIS: DatabaseConfig(
+        db_type=DatabaseType.REDIS,
+        image="redis:7-alpine",
+        port=6379,
+        env_vars={},
+        health_check_cmd=["redis-cli", "ping"],
+        connection_string_template="redis://{host}:6379"
+    ),
+}
+
+
 # Full-Stack Project Configuration
 @dataclass
 class FullStackConfig:
-    """Configuration for full-stack projects with frontend + backend"""
+    """Configuration for full-stack projects with frontend + backend + database"""
     frontend_tech: Technology
     backend_tech: Technology
     frontend_port: int = 5173
     backend_port: int = 8080
     frontend_path: str = "frontend"
     backend_path: str = "backend"
+    # Database support (NEW)
+    database_type: DatabaseType = DatabaseType.NONE
+    database_config: Optional[DatabaseConfig] = None
 
 
 # Backend technology detection patterns
@@ -113,6 +187,25 @@ FRONTEND_PATTERNS = {
     Technology.NODEJS_VITE: ["vite.config.ts", "vite.config.js", "vite.config.mjs"],
     Technology.NODEJS: ["package.json"],
     Technology.ANGULAR: ["angular.json"],
+}
+
+# Database detection patterns (file content patterns)
+DATABASE_DETECTION_PATTERNS = {
+    DatabaseType.POSTGRESQL: [
+        "postgresql", "postgres", "org.postgresql", "psycopg2", "pg8000",
+        "spring.datasource.url=jdbc:postgresql", "DATABASE_URL.*postgres"
+    ],
+    DatabaseType.MYSQL: [
+        "mysql", "mariadb", "com.mysql", "pymysql", "mysql-connector",
+        "spring.datasource.url=jdbc:mysql"
+    ],
+    DatabaseType.MONGODB: [
+        "mongodb", "mongo", "org.mongodb", "pymongo", "mongoose",
+        "spring.data.mongodb"
+    ],
+    DatabaseType.REDIS: [
+        "redis", "spring.redis", "redis-py", "ioredis"
+    ],
 }
 
 
@@ -742,6 +835,8 @@ class ContainerExecutor:
         └── backend/     # Java, Python, Go
             └── pom.xml / requirements.txt / go.mod
 
+        Also detects database requirements by scanning backend config files.
+
         Returns:
             FullStackConfig if full-stack project detected, None otherwise
         """
@@ -794,7 +889,11 @@ class ContainerExecutor:
         if not backend_tech:
             return None
 
-        logger.info(f"[ContainerExecutor] Detected full-stack project: frontend={frontend_tech.value}, backend={backend_tech.value}")
+        # Detect database type by scanning backend config files
+        database_type = self._detect_database_type(backend_path, backend_tech)
+        database_config = DATABASE_CONFIGS.get(database_type) if database_type != DatabaseType.NONE else None
+
+        logger.info(f"[ContainerExecutor] Detected full-stack project: frontend={frontend_tech.value}, backend={backend_tech.value}, database={database_type.value}")
 
         return FullStackConfig(
             frontend_tech=frontend_tech,
@@ -802,8 +901,76 @@ class ContainerExecutor:
             frontend_port=frontend_port,
             backend_port=backend_port,
             frontend_path="frontend",
-            backend_path="backend"
+            backend_path="backend",
+            database_type=database_type,
+            database_config=database_config
         )
+
+    def _detect_database_type(self, backend_path: Path, backend_tech: Technology) -> DatabaseType:
+        """
+        Detect database type by scanning backend configuration files.
+
+        Scans:
+        - Java: pom.xml, application.properties, application.yml
+        - Python: requirements.txt, pyproject.toml
+        - Go: go.mod
+        - .NET: *.csproj, appsettings.json
+
+        Returns:
+            DatabaseType enum value
+        """
+        files_to_scan = []
+
+        # Determine files to scan based on backend technology
+        if backend_tech == Technology.JAVA:
+            files_to_scan = [
+                backend_path / "pom.xml",
+                backend_path / "build.gradle",
+                backend_path / "src" / "main" / "resources" / "application.properties",
+                backend_path / "src" / "main" / "resources" / "application.yml",
+                backend_path / "src" / "main" / "resources" / "application.yaml",
+            ]
+        elif backend_tech == Technology.PYTHON:
+            files_to_scan = [
+                backend_path / "requirements.txt",
+                backend_path / "pyproject.toml",
+                backend_path / "setup.py",
+                backend_path / ".env",
+                backend_path / "config.py",
+            ]
+        elif backend_tech == Technology.GO:
+            files_to_scan = [
+                backend_path / "go.mod",
+                backend_path / ".env",
+                backend_path / "config.yaml",
+            ]
+        elif backend_tech == Technology.DOTNET:
+            files_to_scan = list(backend_path.glob("*.csproj")) + [
+                backend_path / "appsettings.json",
+                backend_path / "appsettings.Development.json",
+            ]
+
+        # Scan files for database patterns
+        combined_content = ""
+        for file_path in files_to_scan:
+            if isinstance(file_path, Path) and file_path.exists() and file_path.is_file():
+                try:
+                    content = file_path.read_text(encoding='utf-8', errors='ignore')
+                    combined_content += content.lower() + "\n"
+                except Exception as e:
+                    logger.debug(f"[ContainerExecutor] Could not read {file_path}: {e}")
+
+        if not combined_content:
+            return DatabaseType.NONE
+
+        # Check for database patterns (in priority order)
+        for db_type, patterns in DATABASE_DETECTION_PATTERNS.items():
+            for pattern in patterns:
+                if pattern.lower() in combined_content:
+                    logger.info(f"[ContainerExecutor] Detected database: {db_type.value} (pattern: {pattern})")
+                    return db_type
+
+        return DatabaseType.NONE
 
     async def create_project_network(self, project_id: str) -> str:
         """
@@ -844,14 +1011,16 @@ class ContainerExecutor:
         fullstack_config: FullStackConfig
     ) -> AsyncGenerator[str, None]:
         """
-        Run a full-stack project with both frontend and backend containers.
+        Run a full-stack project with frontend, backend, and optional database containers.
 
         Architecture:
         1. Create Docker network for inter-container communication
-        2. Start backend container first (Java/Python/Go)
-        3. Wait for backend to be healthy
-        4. Start frontend container with backend URL injected
-        5. Return frontend preview URL
+        2. Start database container first (if detected) - PostgreSQL/MySQL/MongoDB
+        3. Wait for database to be healthy
+        4. Start backend container with database connection string
+        5. Wait for backend to be healthy
+        6. Start frontend container with backend URL injected
+        7. Return frontend preview URL
 
         Args:
             project_id: Project identifier
@@ -861,20 +1030,67 @@ class ContainerExecutor:
         Yields:
             Progress messages and preview URL
         """
-        yield f"🚀 Starting full-stack project (frontend + backend)...\n"
+        yield f"🚀 Starting full-stack project...\n"
         yield f"  📦 Frontend: {fullstack_config.frontend_tech.value}\n"
-        yield f"  📦 Backend: {fullstack_config.backend_tech.value}\n\n"
+        yield f"  📦 Backend: {fullstack_config.backend_tech.value}\n"
+        if fullstack_config.database_type != DatabaseType.NONE:
+            yield f"  🗄️ Database: {fullstack_config.database_type.value}\n"
+        yield f"\n"
 
+        database_container = None
         backend_container = None
         frontend_container = None
         network_name = None
+        db_container_name = None
 
         try:
             # Step 1: Create Docker network
             yield f"📡 Creating Docker network for service communication...\n"
             network_name = await self.create_project_network(project_id)
 
-            # Step 2: Start backend container
+            # Step 2: Start database container (if needed)
+            if fullstack_config.database_type != DatabaseType.NONE and fullstack_config.database_config:
+                db_config = fullstack_config.database_config
+                yield f"\n━━━ Starting Database ({fullstack_config.database_type.value}) ━━━\n"
+
+                db_container_name = f"bharatbuild_{project_id[:8]}_db"
+                db_host_port = self._get_available_port(db_config.port)
+
+                yield f"  🗄️ Image: {db_config.image}\n"
+                yield f"  🔌 Port: {db_host_port}\n"
+
+                database_container = self.docker_client.containers.run(
+                    db_config.image,
+                    name=db_container_name,
+                    detach=True,
+                    remove=False,
+                    ports={f"{db_config.port}/tcp": db_host_port},
+                    environment=db_config.env_vars,
+                    mem_limit="512m",
+                    network=network_name,
+                    labels={
+                        "project_id": project_id,
+                        "service": "database",
+                        "managed_by": "bharatbuild"
+                    }
+                )
+
+                yield f"  ✅ Database container started: {db_container_name}\n"
+
+                # Wait for database to be healthy
+                yield f"  ⏳ Waiting for database to be ready...\n"
+                db_ready = await self._wait_for_database_ready(
+                    database_container,
+                    db_config,
+                    timeout=60
+                )
+
+                if db_ready:
+                    yield f"  ✅ Database is ready!\n"
+                else:
+                    yield f"  ⚠️ Database may still be starting (continuing anyway)...\n"
+
+            # Step 3: Start backend container
             yield f"\n━━━ Starting Backend ({fullstack_config.backend_tech.value}) ━━━\n"
             backend_path = os.path.join(project_path, fullstack_config.backend_path)
             backend_config = TECHNOLOGY_CONFIGS.get(fullstack_config.backend_tech)
@@ -894,6 +1110,43 @@ class ContainerExecutor:
             if backend_config.build_command:
                 yield f"  $ {backend_config.build_command}\n"
 
+            # Prepare backend environment variables
+            backend_env = {
+                "PORT": str(fullstack_config.backend_port),
+                "SERVER_PORT": str(fullstack_config.backend_port),
+            }
+
+            # Add database connection string if database is configured
+            if fullstack_config.database_type != DatabaseType.NONE and fullstack_config.database_config and db_container_name:
+                db_config = fullstack_config.database_config
+                db_connection_string = db_config.connection_string_template.format(host=db_container_name)
+
+                # Add various database connection environment variables
+                backend_env.update({
+                    "DATABASE_URL": db_connection_string,
+                    "DB_URL": db_connection_string,
+                    "DB_HOST": db_container_name,
+                    "DB_PORT": str(db_config.port),
+                    "DB_NAME": "app_db",
+                    "DB_USER": "bharatbuild",
+                    "DB_PASSWORD": "bharatbuild123",
+                })
+
+                # Technology-specific database config
+                if fullstack_config.backend_tech == Technology.JAVA:
+                    if fullstack_config.database_type == DatabaseType.POSTGRESQL:
+                        backend_env["SPRING_DATASOURCE_URL"] = f"jdbc:postgresql://{db_container_name}:5432/app_db"
+                        backend_env["SPRING_DATASOURCE_USERNAME"] = "bharatbuild"
+                        backend_env["SPRING_DATASOURCE_PASSWORD"] = "bharatbuild123"
+                    elif fullstack_config.database_type == DatabaseType.MYSQL:
+                        backend_env["SPRING_DATASOURCE_URL"] = f"jdbc:mysql://{db_container_name}:3306/app_db"
+                        backend_env["SPRING_DATASOURCE_USERNAME"] = "bharatbuild"
+                        backend_env["SPRING_DATASOURCE_PASSWORD"] = "bharatbuild123"
+                    elif fullstack_config.database_type == DatabaseType.MONGODB:
+                        backend_env["SPRING_DATA_MONGODB_URI"] = db_connection_string
+
+                yield f"  🔗 Database connection configured\n"
+
             backend_container = self.docker_client.containers.run(
                 backend_config.image,
                 command=f"/bin/sh -c '{backend_config.build_command} && {backend_config.run_command}'",
@@ -903,10 +1156,7 @@ class ContainerExecutor:
                 working_dir="/app",
                 volumes={backend_path: {"bind": "/app", "mode": "rw"}},
                 ports={f"{fullstack_config.backend_port}/tcp": backend_host_port},
-                environment={
-                    "PORT": str(fullstack_config.backend_port),
-                    "SERVER_PORT": str(fullstack_config.backend_port),
-                },
+                environment=backend_env,
                 mem_limit=backend_config.memory_limit,
                 cpu_quota=int(backend_config.cpu_limit * 100000),
                 network=network_name,
@@ -923,7 +1173,7 @@ class ContainerExecutor:
             yield f"  ⏳ Waiting for backend to be ready...\n"
             backend_ready = await self._wait_for_container_ready(
                 backend_container,
-                fullstack_config.backend_port,
+                backend_host_port,
                 timeout=180  # 3 minutes for Java/Maven
             )
 
@@ -932,7 +1182,7 @@ class ContainerExecutor:
             else:
                 yield f"  ✅ Backend is ready on port {backend_host_port}\n"
 
-            # Step 3: Start frontend container
+            # Step 4: Start frontend container
             yield f"\n━━━ Starting Frontend ({fullstack_config.frontend_tech.value}) ━━━\n"
             frontend_path = os.path.join(project_path, fullstack_config.frontend_path)
             frontend_config = TECHNOLOGY_CONFIGS.get(fullstack_config.frontend_tech)
@@ -998,10 +1248,11 @@ class ContainerExecutor:
             # Generate preview URL
             preview_url = _get_preview_url(frontend_host_port, project_id)
 
-            # Store both containers in active_containers
+            # Store all containers in active_containers (including database if present)
             self.active_containers[project_id] = {
                 "frontend_container": frontend_container,
                 "backend_container": backend_container,
+                "database_container": database_container,  # May be None if no DB
                 "frontend_port": frontend_host_port,
                 "backend_port": backend_host_port,
                 "network": network_name,
@@ -1038,12 +1289,64 @@ class ContainerExecutor:
                 except Exception:
                     pass
 
+            if database_container:
+                try:
+                    database_container.stop(timeout=5)
+                    database_container.remove(force=True)
+                except Exception:
+                    pass
+
             if network_name:
                 try:
                     network = self.docker_client.networks.get(network_name)
                     network.remove()
                 except Exception:
                     pass
+
+    async def _wait_for_database_ready(
+        self,
+        container,
+        db_config: DatabaseConfig,
+        timeout: int = 60
+    ) -> bool:
+        """
+        Wait for database container to be ready by running health check command.
+
+        Args:
+            container: Docker container object
+            db_config: Database configuration with health check command
+            timeout: Maximum seconds to wait
+
+        Returns:
+            True if database is ready, False if timeout
+        """
+        start_time = datetime.utcnow()
+
+        while (datetime.utcnow() - start_time).seconds < timeout:
+            try:
+                # Check container is still running
+                container.reload()
+                if container.status != "running":
+                    logger.warning(f"[ContainerExecutor] Database container stopped unexpectedly")
+                    return False
+
+                # Run health check command inside container
+                exit_code, output = container.exec_run(
+                    db_config.health_check_cmd,
+                    demux=True
+                )
+
+                if exit_code == 0:
+                    logger.info(f"[ContainerExecutor] Database {db_config.db_type.value} is ready")
+                    return True
+
+            except Exception as e:
+                logger.debug(f"[ContainerExecutor] Database health check failed: {e}")
+
+            await asyncio.sleep(2)
+
+        logger.warning(f"[ContainerExecutor] Database health check timeout after {timeout}s")
+        return False
 
     async def _wait_for_container_ready(
         self,
@@ -1099,7 +1402,7 @@ class ContainerExecutor:
 
     async def stop_fullstack_project(self, project_id: str) -> Tuple[bool, str]:
         """
-        Stop a full-stack project (both frontend and backend containers).
+        Stop a full-stack project (frontend, backend, and database containers).
 
         Args:
             project_id: Project identifier
@@ -1132,6 +1435,16 @@ class ContainerExecutor:
                 logger.info(f"[ContainerExecutor] Stopped backend container for {project_id}")
             except Exception as e:
                 errors.append(f"Backend: {e}")
+
+        # Stop database (if present)
+        database_container = container_info.get("database_container")
+        if database_container:
+            try:
+                database_container.stop(timeout=10)
+                database_container.remove(force=True)
+                logger.info(f"[ContainerExecutor] Stopped database container for {project_id}")
+            except Exception as e:
+                errors.append(f"Database: {e}")
 
         # Remove network
         network_name = container_info.get("network")
