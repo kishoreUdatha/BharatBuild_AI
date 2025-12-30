@@ -232,16 +232,16 @@ class ContainerConfig:
 import os as _os
 DEFAULT_CONTAINER_MEMORY = _os.environ.get("CONTAINER_MEMORY_LIMIT", "768m")
 
-# pnpm global store path - shared across all containers for faster installs
-PNPM_STORE_PATH = "/tmp/sandbox/pnpm-store"
+# npm cache path - shared across all containers for faster installs
+NPM_CACHE_PATH = "/tmp/sandbox/npm-cache"
 
 # Pre-built images for each technology - Universal Preview Architecture
 TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
     # ==================== FRONTEND FRAMEWORKS ====================
     Technology.NODEJS: ContainerConfig(
         image="node:20-alpine",
-        # pnpm v10+ blocks build scripts by default, enable them for esbuild/swc etc.
-        build_command="npm install -g pnpm && pnpm config set enable-pre-post-scripts true && pnpm install",
+        # Use npm (pre-installed) - simpler and works with generated package-lock.json
+        build_command="npm install --legacy-peer-deps",
         # Kill any existing node/vite processes before starting to prevent duplicates
         run_command="pkill -f 'node|vite' 2>/dev/null || true; npm run dev -- --host 0.0.0.0 --no-open",
         port=3000,
@@ -249,26 +249,26 @@ TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
     ),
     Technology.NODEJS_VITE: ContainerConfig(
         image="node:20-alpine",
-        # pnpm v10+ blocks build scripts by default, enable them for esbuild/swc etc.
+        # Use npm (pre-installed) - simpler and works with generated package-lock.json
         # IMPORTANT: Run "npx vite optimize" after install to pre-bundle dependencies
         # This creates .vite/deps BEFORE dev server starts, preventing 504 timeouts on first request
-        build_command="npm install -g pnpm && pnpm config set enable-pre-post-scripts true && pnpm install && npx vite optimize",
+        build_command="npm install --legacy-peer-deps && npx vite optimize",
         run_command="pkill -f vite 2>/dev/null || true; npm run dev -- --host 0.0.0.0 --no-open",
         port=5173,  # Vite default port
         memory_limit=DEFAULT_CONTAINER_MEMORY  # MEDIUM #8: Increased from 512m
     ),
     Technology.ANGULAR: ContainerConfig(
         image="node:20-alpine",
-        # pnpm v10+ blocks build scripts by default, enable them for esbuild/swc etc.
-        build_command="npm install -g pnpm && pnpm config set enable-pre-post-scripts true && pnpm install",
+        # Use npm (pre-installed) - simpler and works with generated package-lock.json
+        build_command="npm install --legacy-peer-deps",
         run_command="npm run start -- --host 0.0.0.0 --port 4200 --disable-host-check",
         port=4200,
         memory_limit=DEFAULT_CONTAINER_MEMORY  # MEDIUM #8: Increased from 512m
     ),
     Technology.REACT_NATIVE: ContainerConfig(
         image="node:20-alpine",
-        # pnpm v10+ blocks build scripts by default, enable them for esbuild/swc etc.
-        build_command="npm install -g pnpm && pnpm config set enable-pre-post-scripts true && pnpm install && npx expo export:web",
+        # Use npm (pre-installed) - simpler and works with generated package-lock.json
+        build_command="npm install --legacy-peer-deps && npx expo export:web",
         run_command="npx serve dist -l 3000",
         port=3000,  # Web preview for React Native
         memory_limit="1g"
@@ -342,8 +342,8 @@ TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
     # ==================== BLOCKCHAIN ====================
     Technology.BLOCKCHAIN: ContainerConfig(
         image="node:20-alpine",
-        # pnpm v10+ blocks build scripts by default, enable them for esbuild/swc etc.
-        build_command="npm install -g pnpm && pnpm config set enable-pre-post-scripts true && pnpm install",
+        # Use npm (pre-installed) - simpler and works with generated package-lock.json
+        build_command="npm install --legacy-peer-deps",
         run_command="npx hardhat node",  # Local Ethereum node
         port=8545,
         memory_limit="1g"
@@ -1821,10 +1821,10 @@ class ContainerExecutor:
                 self._frontend_subdir = False  # Reset for next project
                 logger.info(f"[ContainerExecutor] Using frontend subdirectory: {working_dir}")
 
-            # Build volumes - project path + pnpm store for faster installs
+            # Build volumes - project path + npm cache for faster installs
             container_volumes = {
                 path_str: {"bind": "/app", "mode": "rw"},
-                PNPM_STORE_PATH: {"bind": "/root/.local/share/pnpm/store", "mode": "rw"}
+                NPM_CACHE_PATH: {"bind": "/root/.npm", "mode": "rw"}
             }
 
             container = self.docker_client.containers.run(
@@ -1842,15 +1842,14 @@ class ContainerExecutor:
                     "NODE_ENV": "development",
                     "JAVA_OPTS": "-Xmx512m",
                     "PYTHONUNBUFFERED": "1",
-                    # Critical: CI=true prevents pnpm from prompting for user input
-                    # This fixes ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY error
+                    # Critical: CI=true for non-interactive npm install
                     "CI": "true",
                     # Critical #2: No custom base paths needed
                     # Proxy handles path translation, so frameworks use default root paths
                     "PUBLIC_URL": "",  # CRA: empty = use relative paths
                     "VITE_BASE_PATH": "/",  # Vite: root path (proxy strips prefix)
-                    # pnpm global store for faster installs (shared across containers)
-                    "PNPM_HOME": "/root/.local/share/pnpm",
+                    # npm cache for faster installs (shared across containers)
+                    "npm_config_cache": "/root/.npm",
                 },
                 command=f"sh -c '{config.build_command} && {run_command}'" if config.build_command else run_command,
                 labels=all_labels
@@ -2490,11 +2489,21 @@ echo "Done"
             tar_buffer = io.BytesIO()
             with tarfile.open(fileobj=tar_buffer, mode='w') as tar:
                 for rel_path in files_modified:
+                    # Normalize path - AI sometimes returns container absolute paths like /app/frontend/file.ts
+                    if rel_path.startswith("/app/"):
+                        rel_path = rel_path[5:]  # Remove "/app/" prefix
+                        logger.info(f"[ContainerExecutor] Normalized container path for sync: {rel_path}")
+                    elif rel_path.startswith("/"):
+                        rel_path = rel_path.lstrip("/")
+                        logger.info(f"[ContainerExecutor] Stripped leading slash for sync: {rel_path}")
+
                     local_path = Path(project_path) / rel_path
                     if local_path.exists():
                         # Add file to tar with correct path in container
                         tar.add(str(local_path), arcname=rel_path)
                         logger.info(f"[ContainerExecutor] Adding to sync: {rel_path}")
+                    else:
+                        logger.warning(f"[ContainerExecutor] File not found for sync: {local_path}")
 
             tar_buffer.seek(0)
 

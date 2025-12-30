@@ -795,6 +795,11 @@ Please analyze and fix these errors. If the output shows success or warnings onl
 
                         if block.name in ["create_file", "str_replace"]:
                             path = block.input.get("path", "")
+                            # Normalize path (remove /app/ prefix if present)
+                            if path.startswith("/app/"):
+                                path = path[5:]
+                            elif path.startswith("/"):
+                                path = path.lstrip("/")
                             if path and path not in files_modified:
                                 files_modified.append(path)
 
@@ -2150,6 +2155,18 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
         """Execute a tool and return result"""
         try:
             path = tool_input.get("path", "")
+
+            # CRITICAL FIX: AI sometimes returns container absolute paths like /app/frontend/file.ts
+            # These need to be converted to relative paths for local filesystem operations
+            if path.startswith("/app/"):
+                original_path = path
+                path = path[5:]  # Remove "/app/" prefix
+                logger.info(f"[SimpleFixer] Normalized container path: '{original_path}' -> '{path}'")
+            elif path.startswith("/"):
+                # Strip any leading slash to make it relative
+                original_path = path
+                path = path.lstrip("/")
+                logger.info(f"[SimpleFixer] Stripped leading slash: '{original_path}' -> '{path}'")
 
             # VALIDATION: Prevent creating files in new/unexpected directories
             # AI sometimes hallucinates paths like "app/tsconfig.node.json" instead of "tsconfig.node.json"
