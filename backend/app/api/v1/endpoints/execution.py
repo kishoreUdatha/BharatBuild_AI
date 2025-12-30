@@ -842,7 +842,9 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                     async with async_session() as restore_db:
                         from sqlalchemy import select, func
                         count_result = await restore_db.execute(
-                            select(func.count(ProjectFile.id)).where(ProjectFile.project_id == project_id)
+                            select(func.count(ProjectFile.id))
+                            .where(ProjectFile.project_id == project_id)
+                            .where(ProjectFile.is_folder == False)  # Only count actual files, not folders
                         )
                         total_files = count_result.scalar() or 0
                 except Exception as count_err:
