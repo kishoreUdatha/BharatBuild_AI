@@ -520,6 +520,19 @@ async def fix_runtime_error(
                 with open(full_path, 'w', encoding='utf-8') as f:
                     f.write(content)
 
+                # Sync to S3 for persistence (fixes survive container restarts)
+                try:
+                    from app.services.storage_service import storage_service
+                    await storage_service.upload_file(
+                        project_id=project_id,
+                        file_path=file_path_str,
+                        content=content.encode('utf-8'),
+                        content_type="text/plain"
+                    )
+                    logger.info(f"✅ Fixed and synced to S3: {file_path_str}")
+                except Exception as s3_err:
+                    logger.warning(f"⚠️ S3 sync failed for {file_path_str}: {s3_err}")
+
                 saved_files.append({
                     "path": file_path_str,
                     "content": content,

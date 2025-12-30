@@ -2668,7 +2668,7 @@ echo "Done"
 
         Yields log lines for streaming to UI.
         """
-        from app.services.simple_fixer import simple_fixer
+        from app.services.bolt_fixer import bolt_fixer
 
         while exec_ctx.should_attempt_fix():
             attempt = exec_ctx.fix_attempt + 1
@@ -2677,12 +2677,12 @@ echo "Done"
             yield f"{'='*50}\n"
             yield f"__FIX_STARTING__\n"
 
-            # Step 1: Get fix from AI
+            # Step 1: Get fix from AI (Bolt.new architecture)
             yield f"📊 Analyzing error...\n"
             payload = exec_ctx.get_fixer_payload()
 
             try:
-                fix_result = await simple_fixer.fix_from_backend(
+                fix_result = await bolt_fixer.fix_from_backend(
                     project_id=project_id,
                     project_path=Path(project_path),
                     payload=payload

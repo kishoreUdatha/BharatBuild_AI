@@ -603,13 +603,80 @@ async def execute_fix_with_notification(
 
             # STEP 5: Handle file changes
             # SOURCE files: HMR handles automatically - preview refreshes without restart
-            # CONFIG files: Saved to S3/DB - user clicks Run to apply (safe, no container crash)
-            #
-            # NOTE: We removed auto-restart because killing Vite kills the container (Vite is PID 1)
-            # This approach is safer and keeps preview working
+            # CONFIG files: Need container restart to apply (npm install, etc.)
             if config_files_modified:
-                logger.info(f"[ErrorHandler:{project_id}] Config files fixed and saved: {config_files_modified}")
-                logger.info(f"[ErrorHandler:{project_id}] Config changes will apply on next Run")
+                logger.info(f"[ErrorHandler:{project_id}] Config files fixed: {config_files_modified}")
+
+                # AUTO-RESTART: When config files change, restart container with fixed files
+                if IS_REMOTE_SANDBOX and user_id:
+                    try:
+                        logger.info(f"[ErrorHandler:{project_id}] 🔄 Auto-restarting container with fixed files...")
+
+                        from app.services.container_executor import container_executor
+
+                        # Step 1: Stop the current container
+                        container = await container_executor._get_existing_container(project_id)
+                        if container:
+                            try:
+                                container.stop(timeout=5)
+                                container.remove(force=True)
+                                logger.info(f"[ErrorHandler:{project_id}] ✓ Stopped old container")
+                            except Exception as stop_err:
+                                logger.warning(f"[ErrorHandler:{project_id}] Container stop warning: {stop_err}")
+
+                        # Step 2: Get the sandbox path
+                        sandbox_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}"
+
+                        # Step 3: Run the project again (will restore from S3, run npm install, start dev server)
+                        logger.info(f"[ErrorHandler:{project_id}] 🚀 Starting fresh container...")
+
+                        # Use asyncio to run in background so we don't block
+                        import asyncio
+
+                        async def restart_project():
+                            try:
+                                # Small delay to ensure files are synced to S3
+                                await asyncio.sleep(2)
+
+                                # Import here to avoid circular imports
+                                from app.api.v1.endpoints.execution import _execute_docker_stream_with_progress
+
+                                # Run the project
+                                async for event in _execute_docker_stream_with_progress(
+                                    project_id=project_id,
+                                    user_id=user_id
+                                ):
+                                    # Log progress but don't send to frontend (avoid confusion)
+                                    if event.get("type") == "error":
+                                        logger.error(f"[AutoRestart:{project_id}] {event.get('message', '')}")
+                                    elif event.get("type") == "preview_ready":
+                                        logger.info(f"[AutoRestart:{project_id}] ✓ Preview ready: {event.get('url', '')}")
+                                        # Notify frontend that preview is ready
+                                        await notify_fix_completed(project_id, len(config_files_modified), config_files_modified,
+                                                                   extra_message="Auto-restart complete! Preview is ready.")
+                                        break
+                                    elif "server start detected" in str(event.get("message", "")).lower():
+                                        logger.info(f"[AutoRestart:{project_id}] ✓ Server started")
+
+                            except Exception as restart_err:
+                                logger.error(f"[AutoRestart:{project_id}] Restart failed: {restart_err}")
+                                import traceback
+                                logger.error(traceback.format_exc())
+
+                        # Run restart in background
+                        asyncio.create_task(restart_project())
+                        logger.info(f"[ErrorHandler:{project_id}] Auto-restart initiated in background")
+
+                        # Notify that restart is happening
+                        await notify_fix_started(project_id, "Restarting container with fixed files...")
+                        return  # Exit early - restart task will send completion notification
+
+                    except Exception as restart_err:
+                        logger.error(f"[ErrorHandler:{project_id}] Auto-restart failed: {restart_err}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                        # Fall back to manual restart message
+                        logger.info(f"[ErrorHandler:{project_id}] Config changes will apply on next Run")
 
             if source_files_modified:
                 # Source files only - HMR handles updates, just notify completion

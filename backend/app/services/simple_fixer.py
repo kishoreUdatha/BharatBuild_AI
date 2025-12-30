@@ -1083,7 +1083,8 @@ Please analyze and fix these errors. If the output shows success or warnings onl
                         result = await self._execute_tool(
                             project_path,
                             block.name,
-                            block.input
+                            block.input,
+                            project_id=project_id
                         )
                         logger.info(f"[SimpleFixer] Tool result: {result[:200] if result else 'None'}")
 
@@ -2261,10 +2262,12 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                 tool_results = []
                 for block in response.content:
                     if block.type == "tool_use":
+                        # Note: project_id=None for terminal fix path - S3 sync will be skipped
                         result = await self._execute_tool(
                             project_path,
                             block.name,
-                            block.input
+                            block.input,
+                            project_id=None
                         )
                         tool_results.append({
                             "type": "tool_result",
@@ -2575,7 +2578,8 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
         self,
         project_path: Path,
         tool_name: str,
-        tool_input: Dict[str, Any]
+        tool_input: Dict[str, Any],
+        project_id: Optional[str] = None
     ) -> str:
         """Execute a tool and return result"""
         try:
@@ -2615,11 +2619,9 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
 
             full_path = project_path / path
 
-            # Extract project_id and user_id from path for S3 sync
-            # Path format: /tmp/sandbox/workspace/{user_id}/{project_id}/
-            path_parts = str(project_path).replace("\\", "/").split("/")
-            project_id = path_parts[-1] if path_parts else None
-            user_id = path_parts[-2] if len(path_parts) >= 2 else None
+            # Use the passed project_id directly - no need to extract from path
+            # The project_id is passed in from fix_from_frontend which has the actual UUID
+            # Old code tried to extract from path which fails for temp directories like /tmp/fixer_xxx
 
             if tool_name == "create_file":
                 content = tool_input.get("content", "")
