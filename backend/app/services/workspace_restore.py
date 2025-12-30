@@ -807,7 +807,81 @@ class WorkspaceRestoreService:
         errors = []
 
         # =====================================================
-        # FIRST: Clear Vite cache to prevent corrupted cache issues
+        # FIRST: Fix Package Manager Conflicts (Bolt.new style)
+        # This MUST run before anything else to ensure npm install works
+        # =====================================================
+        try:
+            # Check for package manager conflicts in root and common subdirectories
+            check_paths = [workspace_path]
+            for subdir in ['frontend', 'client', 'web', 'app']:
+                subdir_path = workspace_path / subdir
+                if subdir_path.exists():
+                    check_paths.append(subdir_path)
+
+            for check_path in check_paths:
+                pkg_json_path = check_path / 'package.json'
+                pnpm_lock = check_path / 'pnpm-lock.yaml'
+                yarn_lock = check_path / 'yarn.lock'
+                npm_lock = check_path / 'package-lock.json'
+                node_modules = check_path / 'node_modules'
+                pnpm_store = check_path / '.pnpm-store'
+
+                # Remove packageManager field from package.json (forces npm)
+                if pkg_json_path.exists():
+                    try:
+                        pkg_content = pkg_json_path.read_text(encoding='utf-8')
+                        if '"packageManager"' in pkg_content:
+                            # Remove the packageManager line
+                            import re as regex
+                            new_content = regex.sub(r',?\s*"packageManager"\s*:\s*"[^"]*"', '', pkg_content)
+                            # Clean up any trailing commas before }
+                            new_content = regex.sub(r',(\s*})', r'\1', new_content)
+                            pkg_json_path.write_text(new_content, encoding='utf-8')
+                            rel_path = check_path.relative_to(workspace_path) if check_path != workspace_path else Path('.')
+                            fixes_applied.append(f"Removed packageManager field from {rel_path}/package.json")
+                            logger.info(f"[WorkspaceRestore] Removed packageManager field from {pkg_json_path}")
+                    except Exception as e:
+                        logger.warning(f"[WorkspaceRestore] Could not fix packageManager in {pkg_json_path}: {e}")
+
+                # Remove conflicting lockfiles (keep only package-lock.json for npm)
+                for lockfile in [pnpm_lock, yarn_lock]:
+                    if lockfile.exists():
+                        try:
+                            lockfile.unlink()
+                            rel_path = check_path.relative_to(workspace_path) if check_path != workspace_path else Path('.')
+                            fixes_applied.append(f"Removed {lockfile.name} from {rel_path}")
+                            logger.info(f"[WorkspaceRestore] Removed conflicting lockfile: {lockfile}")
+                        except Exception as e:
+                            logger.warning(f"[WorkspaceRestore] Could not remove {lockfile}: {e}")
+
+                # Remove .pnpm-store directory
+                if pnpm_store.exists():
+                    try:
+                        shutil.rmtree(pnpm_store)
+                        rel_path = check_path.relative_to(workspace_path) if check_path != workspace_path else Path('.')
+                        fixes_applied.append(f"Removed .pnpm-store from {rel_path}")
+                        logger.info(f"[WorkspaceRestore] Removed .pnpm-store: {pnpm_store}")
+                    except Exception as e:
+                        logger.warning(f"[WorkspaceRestore] Could not remove .pnpm-store: {e}")
+
+                # If pnpm/yarn was used but node_modules exists, it may be corrupted
+                # Clear node_modules to allow clean npm install
+                if node_modules.exists() and (pnpm_lock.exists() or yarn_lock.exists() or
+                    (pkg_json_path.exists() and '"packageManager"' in pkg_json_path.read_text(encoding='utf-8', errors='ignore'))):
+                    try:
+                        shutil.rmtree(node_modules)
+                        rel_path = check_path.relative_to(workspace_path) if check_path != workspace_path else Path('.')
+                        fixes_applied.append(f"Cleared corrupted node_modules from {rel_path}")
+                        logger.info(f"[WorkspaceRestore] Cleared corrupted node_modules: {node_modules}")
+                    except Exception as e:
+                        logger.warning(f"[WorkspaceRestore] Could not clear node_modules: {e}")
+
+        except Exception as e:
+            logger.error(f"[WorkspaceRestore] Error fixing package manager conflicts: {e}")
+            errors.append(f"Package manager fix error: {e}")
+
+        # =====================================================
+        # Clear Vite cache to prevent corrupted cache issues
         # =====================================================
         vite_cache_path = workspace_path / 'node_modules' / '.vite'
         if vite_cache_path.exists():
