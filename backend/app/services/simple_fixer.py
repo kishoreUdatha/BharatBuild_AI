@@ -57,6 +57,133 @@ class ErrorComplexity(str, Enum):
     COMPLEX = "complex"    # Architecture, runtime logic -> Sonnet
 
 
+class ErrorCategory(str, Enum):
+    """Error category for specialized fixing (Bolt.new style)"""
+    CODE = "code"           # Syntax, type, logic errors -> Code Agent
+    DEPENDENCY = "dependency"  # npm/pnpm, missing packages -> Dependency Agent
+    INFRASTRUCTURE = "infrastructure"  # Docker, ports, containers -> Infra Agent
+    NETWORK = "network"     # Timeouts, DNS, registry -> NOT fixable by code
+    UNKNOWN = "unknown"     # Needs investigation
+
+
+def classify_error(error_message: str, context: str = "") -> tuple[ErrorCategory, str]:
+    """
+    Classify error into category for specialized handling (Bolt.new style).
+
+    Returns:
+        Tuple of (ErrorCategory, reason_for_classification)
+    """
+    error_lower = error_message.lower()
+    context_lower = context.lower()
+    combined = f"{error_lower} {context_lower}"
+
+    # =====================================================
+    # NETWORK ERRORS - NOT fixable by code changes
+    # =====================================================
+    network_patterns = [
+        ("ETIMEDOUT", "npm registry timeout"),
+        ("ENOTFOUND", "DNS resolution failed"),
+        ("ECONNREFUSED", "connection refused"),
+        ("ECONNRESET", "connection reset"),
+        ("socket hang up", "network socket error"),
+        ("network timeout", "network timeout"),
+        ("fetch failed", "fetch failed"),
+        ("ERR_INTERNET_DISCONNECTED", "no internet"),
+        ("getaddrinfo", "DNS lookup failed"),
+        ("CERT_", "SSL certificate error"),
+    ]
+    for pattern, reason in network_patterns:
+        if pattern.lower() in combined:
+            return ErrorCategory.NETWORK, reason
+
+    # =====================================================
+    # INFRASTRUCTURE ERRORS - Docker, ports, containers
+    # =====================================================
+    infra_patterns = [
+        ("port already in use", "port conflict"),
+        ("address already in use", "port conflict"),
+        ("EADDRINUSE", "port already allocated"),
+        ("container", "container issue"),
+        ("docker", "docker issue"),
+        ("permission denied", "permission issue"),
+        ("EACCES", "permission error"),
+        ("disk full", "disk space"),
+        ("no space left", "disk space"),
+        ("out of memory", "memory exhausted"),
+        ("OOMKilled", "container killed by OOM"),
+        ("sandbox", "sandbox issue"),
+        ("Cannot connect to Docker", "docker not running"),
+    ]
+    for pattern, reason in infra_patterns:
+        if pattern.lower() in combined:
+            return ErrorCategory.INFRASTRUCTURE, reason
+
+    # =====================================================
+    # DEPENDENCY ERRORS - npm/pnpm/yarn conflicts
+    # =====================================================
+    dependency_patterns = [
+        ("npm ERR!", "npm error"),
+        ("pnpm ERR!", "pnpm error"),
+        ("yarn error", "yarn error"),
+        ("ERESOLVE", "dependency resolution conflict"),
+        ("peer dep", "peer dependency issue"),
+        ("Could not resolve dependency", "dependency conflict"),
+        ("ERR_PNPM_", "pnpm specific error"),
+        ("EOVERRIDE", "dependency override needed"),
+        ("lockfile", "lockfile mismatch"),
+        ("package-lock", "lockfile issue"),
+        ("pnpm-lock", "lockfile issue"),
+        ("Cannot find module", "missing module"),
+        ("MODULE_NOT_FOUND", "module not found"),
+        ("missing dependencies", "missing deps"),
+        ("npm install", "install failure"),
+        ("node_modules", "node_modules issue"),
+        ("packageManager", "package manager mismatch"),
+    ]
+    for pattern, reason in dependency_patterns:
+        if pattern.lower() in combined:
+            return ErrorCategory.DEPENDENCY, reason
+
+    # =====================================================
+    # CODE ERRORS - Syntax, type, logic (fixable by AI)
+    # =====================================================
+    code_patterns = [
+        ("SyntaxError", "syntax error"),
+        ("TypeError", "type error"),
+        ("ReferenceError", "reference error"),
+        ("NameError", "name error"),
+        ("ImportError", "import error"),
+        ("IndentationError", "indentation error"),
+        ("TS2", "TypeScript error"),  # TS2304, TS2322, etc.
+        ("TS6", "TypeScript warning"),
+        ("error TS", "TypeScript error"),
+        ("ESLint", "lint error"),
+        ("Parsing error", "parse error"),
+        ("Unexpected token", "syntax error"),
+        ("is not defined", "undefined variable"),
+        ("Cannot read property", "null reference"),
+        ("Cannot read properties", "null reference"),
+        ("is not a function", "type error"),
+        ("declared but", "unused declaration"),
+        ("Property '", "property error"),
+        ("does not exist on type", "type error"),
+        ("Expected", "syntax error"),
+        ("Unexpected", "syntax error"),
+        ("missing", "missing element"),
+        ("Cannot find name", "undefined name"),
+        ("build failed", "build error"),
+        ("compilation failed", "compile error"),
+        ("vite", "vite build error"),
+        ("webpack", "webpack error"),
+    ]
+    for pattern, reason in code_patterns:
+        if pattern.lower() in combined:
+            return ErrorCategory.CODE, reason
+
+    # Default to CODE for unknown errors (let AI try to fix)
+    return ErrorCategory.UNKNOWN, "unclassified error"
+
+
 @dataclass
 class PendingFix:
     """Pending fix awaiting user confirmation"""
@@ -518,6 +645,117 @@ class SimpleFixer:
             _fix_timestamps[project_id] = []
         _fix_timestamps[project_id].append(time.time())
 
+    # ==================== BOLT.NEW STYLE ERROR ROUTING ====================
+    async def _handle_by_category(
+        self,
+        project_id: str,
+        project_path: Path,
+        error_category: ErrorCategory,
+        category_reason: str,
+        errors: List[Dict[str, Any]],
+        context: str,
+        command: Optional[str] = None
+    ) -> Optional[SimpleFixResult]:
+        """
+        Bolt.new style specialized handling based on error category.
+
+        Routes errors to the appropriate fixer:
+        - NETWORK: Return early (not fixable by code)
+        - DEPENDENCY: Try package manager fixes first
+        - INFRASTRUCTURE: Handle container/port issues
+        - CODE/UNKNOWN: Return None to continue to AI fixer
+
+        Returns:
+            SimpleFixResult if handled, None if should continue to AI fixer
+        """
+        logger.info(f"[SimpleFixer:{project_id}] Error classified as {error_category.value}: {category_reason}")
+
+        # =====================================================
+        # NETWORK ERRORS - Not fixable by code changes
+        # =====================================================
+        if error_category == ErrorCategory.NETWORK:
+            logger.warning(f"[SimpleFixer:{project_id}] Network error detected - not fixable by code")
+            return SimpleFixResult(
+                success=False,
+                files_modified=[],
+                message=f"Network error ({category_reason}) - cannot be fixed by code changes. "
+                        "Please check your internet connection or wait for registry availability.",
+                patches_applied=0
+            )
+
+        # =====================================================
+        # DEPENDENCY ERRORS - Try package manager fixes first
+        # =====================================================
+        if error_category == ErrorCategory.DEPENDENCY:
+            logger.info(f"[SimpleFixer:{project_id}] Dependency error - trying package manager fixes first")
+            try:
+                from app.services.workspace_restore import workspace_restore
+
+                # Run the common issues fixer which handles package manager conflicts
+                fix_result = await workspace_restore.fix_common_issues(
+                    workspace_path=project_path,
+                    project_id=project_id
+                )
+
+                if fix_result.get("fixes_applied", []):
+                    fixes_list = fix_result.get("fixes_applied", [])
+                    logger.info(f"[SimpleFixer:{project_id}] Applied {len(fixes_list)} dependency fixes")
+
+                    # Check if we fixed package manager conflicts specifically
+                    pkg_manager_fixed = any(
+                        "package manager" in str(f).lower() or
+                        "pnpm" in str(f).lower() or
+                        "lockfile" in str(f).lower()
+                        for f in fixes_list
+                    )
+
+                    if pkg_manager_fixed:
+                        return SimpleFixResult(
+                            success=True,
+                            files_modified=fix_result.get("modified_files", []),
+                            message=f"Fixed dependency issues: {', '.join(fixes_list[:3])}",
+                            patches_applied=len(fixes_list)
+                        )
+
+                    # For other dependency fixes, still continue to AI if error persists
+                    logger.info(f"[SimpleFixer:{project_id}] Dependency fixes applied, but may need AI fix too")
+
+            except Exception as e:
+                logger.warning(f"[SimpleFixer:{project_id}] Dependency fix failed: {e}")
+
+            # Continue to AI fixer for remaining dependency issues
+            return None
+
+        # =====================================================
+        # INFRASTRUCTURE ERRORS - Container/port issues
+        # =====================================================
+        if error_category == ErrorCategory.INFRASTRUCTURE:
+            logger.info(f"[SimpleFixer:{project_id}] Infrastructure error - checking for fixable issues")
+
+            # Port conflicts - can sometimes be fixed by changing the port in config
+            if "port" in category_reason.lower():
+                # This could be fixed by modifying vite.config or similar
+                # Let AI handle it, but log the specific issue
+                logger.info(f"[SimpleFixer:{project_id}] Port conflict - letting AI modify config")
+                return None
+
+            # Permission errors on sandbox might be transient
+            if "permission" in category_reason.lower():
+                logger.warning(f"[SimpleFixer:{project_id}] Permission error - may need container restart")
+                return SimpleFixResult(
+                    success=False,
+                    files_modified=[],
+                    message=f"Infrastructure error ({category_reason}) - may require container restart. "
+                            "If this persists, try stopping and starting the preview again.",
+                    patches_applied=0
+                )
+
+            # Other infrastructure errors
+            return None
+
+        # CODE and UNKNOWN - Continue to AI fixer
+        return None
+
     async def fix_from_frontend(
         self,
         project_id: str,
@@ -569,6 +807,35 @@ class SimpleFixer:
                 pending_confirmation=True,
                 pending_fix_id=project_id
             )
+
+        # =================================================================
+        # BOLT.NEW STYLE: Classify error by category FIRST
+        # Route to specialized handlers before AI fixer
+        # =================================================================
+        error_text = context
+        for err in errors:
+            error_text += " " + err.get("message", "")
+
+        error_category, category_reason = classify_error(error_text, context)
+
+        # Try specialized handler first
+        category_result = await self._handle_by_category(
+            project_id=project_id,
+            project_path=project_path,
+            error_category=error_category,
+            category_reason=category_reason,
+            errors=errors,
+            context=context,
+            command=command
+        )
+
+        # If specialized handler returned a result, use it
+        if category_result is not None:
+            return category_result
+
+        # =================================================================
+        # Continue to AI fixer for CODE/UNKNOWN errors
+        # =================================================================
 
         # COST OPTIMIZATION #2: Classify error complexity for model selection
         complexity = self._classify_error_complexity(errors, context)
@@ -650,6 +917,31 @@ class SimpleFixer:
             "line": error_line,
             "severity": "error"
         }]
+
+        # =================================================================
+        # BOLT.NEW STYLE: Classify error by category FIRST
+        # Route to specialized handlers before AI fixer
+        # =================================================================
+        error_category, category_reason = classify_error(stderr, combined_context)
+
+        # Try specialized handler first
+        category_result = await self._handle_by_category(
+            project_id=project_id,
+            project_path=project_path,
+            error_category=error_category,
+            category_reason=category_reason,
+            errors=errors,
+            context=combined_context,
+            command=command
+        )
+
+        # If specialized handler returned a result, use it
+        if category_result is not None:
+            return category_result
+
+        # =================================================================
+        # Continue to AI fixer for CODE/UNKNOWN errors
+        # =================================================================
 
         # Classify error complexity for model selection
         complexity = self._classify_error_complexity(errors, combined_context)
