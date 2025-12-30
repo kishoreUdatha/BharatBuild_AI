@@ -189,14 +189,26 @@ class StorageService:
         return hashlib.sha256(content).hexdigest()
 
     @staticmethod
-    def generate_s3_key(project_id: str, file_path: str, content_hash: str) -> str:
+    def generate_s3_key(project_id: str, file_path: str, content_hash: str = None) -> str:
         """
-        Generate S3 key with structure for efficient storage
-        Format: projects/{project_id}/files/{content_hash[:2]}/{content_hash}
+        Generate S3 key with simple path-based structure.
+        Format: projects/{project_id}/{file_path}
+
+        Benefits of path-based storage:
+        - Simple to understand and debug
+        - Easy to browse in S3 console
+        - Direct mapping: file path = S3 key
+        - Updates naturally overwrite (same path = same key)
+        - Industry standard (GitHub, Replit, Bolt.new use this)
+
+        Note: content_hash kept for backwards compatibility but not used in key.
         """
-        # Use hash prefix for better S3 partitioning (improves performance)
-        hash_prefix = content_hash[:2]
-        return f"projects/{project_id}/files/{hash_prefix}/{content_hash}"
+        # Normalize path separators
+        normalized_path = file_path.replace("\\", "/")
+        # Remove leading slash if present
+        if normalized_path.startswith("/"):
+            normalized_path = normalized_path[1:]
+        return f"projects/{project_id}/{normalized_path}"
 
     async def upload_file(
         self,
@@ -209,6 +221,9 @@ class StorageService:
         """
         Upload file to S3/MinIO with retry logic.
 
+        Uses path-based storage: projects/{project_id}/{file_path}
+        Updates naturally overwrite existing files at the same path.
+
         Returns:
             dict with s3_key, content_hash, size_bytes
 
@@ -218,23 +233,13 @@ class StorageService:
             - Max 3 retries by default
         """
         content_hash = self.calculate_hash(content)
-        s3_key = self.generate_s3_key(project_id, file_path, content_hash)
+        s3_key = self.generate_s3_key(project_id, file_path)
         size_bytes = len(content)
 
         client = self._get_client()
 
-        # Check if file already exists (deduplication) - no retry needed
-        try:
-            client.head_object(Bucket=self._bucket_name, Key=s3_key)
-            logger.debug(f"File already exists (deduplicated): {s3_key}")
-            return {
-                's3_key': s3_key,
-                'content_hash': content_hash,
-                'size_bytes': size_bytes,
-                'deduplicated': True
-            }
-        except ClientError:
-            pass  # File doesn't exist, proceed with upload
+        # Path-based storage: just upload (overwrites if exists)
+        # No deduplication check needed - same path = same file
 
         # Upload file with retry logic
         last_exception = None
