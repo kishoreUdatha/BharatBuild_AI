@@ -15,6 +15,8 @@ Supported Technologies:
 """
 
 import asyncio
+import socket
+import subprocess
 import docker
 from docker.errors import NotFound, APIError
 from typing import Optional, Dict, Any, Tuple, AsyncGenerator, List
@@ -1835,12 +1837,23 @@ class ContainerExecutor:
 
         return False
 
+    def _is_port_free(self, port: int) -> bool:
+        """Check if a port is actually free on the host (not just Docker)."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(1)
+                result = sock.connect_ex(('0.0.0.0', port))
+                return result != 0  # 0 means connection succeeded (port in use)
+        except Exception:
+            return True  # Assume free if check fails
+
     def _get_available_port(self, preferred_port: int) -> int:
         """
         Get an available port, starting from preferred port.
 
-        IMPORTANT: Queries Docker daemon for used ports to avoid conflicts
-        with containers from previous ECS task sessions.
+        IMPORTANT:
+        1. Queries Docker daemon for used ports
+        2. Also checks if port is actually bindable on host (non-Docker processes)
         """
         # Get all used ports from Docker containers
         used_ports = set()
@@ -1871,7 +1884,7 @@ class ContainerExecutor:
         max_attempts = 100
 
         for _ in range(max_attempts):
-            if port not in used_ports:
+            if port not in used_ports and self._is_port_free(port):
                 logger.info(f"[ContainerExecutor] Selected port {port} (preferred: {preferred_port})")
                 return port
             port += 1
@@ -1983,6 +1996,236 @@ class ContainerExecutor:
 
         mode = "single container" if is_single_container else "multi-container"
         return True, f"Full-stack project stopped successfully ({mode} mode)"
+
+    async def health_check_compose(self, project_id: str) -> Tuple[bool, Dict[str, str]]:
+        """
+        Health check for docker-compose services.
+
+        Returns:
+            Tuple of (all_healthy, service_status_dict)
+        """
+        container_info = self.active_containers.get(project_id)
+        if not container_info or not container_info.get("docker_compose"):
+            return False, {"error": "Not a docker-compose project"}
+
+        compose_project = container_info.get("compose_project")
+        compose_file = container_info.get("compose_file")
+        project_path = container_info.get("project_path")
+
+        try:
+            cmd = f"docker-compose -p {compose_project} -f {compose_file} ps --format json"
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode != 0:
+                return False, {"error": result.stderr}
+
+            # Parse service status
+            import json
+            services_status = {}
+            all_healthy = True
+
+            for line in result.stdout.strip().split('\n'):
+                if line:
+                    try:
+                        service = json.loads(line)
+                        name = service.get("Service", service.get("Name", "unknown"))
+                        state = service.get("State", "unknown")
+                        services_status[name] = state
+                        if state != "running":
+                            all_healthy = False
+                    except json.JSONDecodeError:
+                        pass
+
+            logger.info(f"[ContainerExecutor] Compose health check: {services_status}")
+            return all_healthy, services_status
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Compose health check failed: {e}")
+            return False, {"error": str(e)}
+
+    async def restart_compose_project(self, project_id: str) -> Tuple[bool, str]:
+        """
+        Restart all services in a docker-compose project.
+
+        Returns:
+            Tuple of (success, message)
+        """
+        container_info = self.active_containers.get(project_id)
+        if not container_info or not container_info.get("docker_compose"):
+            return False, "Not a docker-compose project"
+
+        compose_project = container_info.get("compose_project")
+        compose_file = container_info.get("compose_file")
+        project_path = container_info.get("project_path")
+
+        try:
+            # Restart all services
+            cmd = f"docker-compose -p {compose_project} -f {compose_file} restart"
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+
+            if result.returncode == 0:
+                logger.info(f"[ContainerExecutor] Restarted compose project: {project_id}")
+                return True, "All services restarted successfully"
+            else:
+                logger.error(f"[ContainerExecutor] Compose restart failed: {result.stderr}")
+                return False, f"Restart failed: {result.stderr}"
+
+        except subprocess.TimeoutExpired:
+            return False, "Restart timed out"
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Compose restart error: {e}")
+            return False, str(e)
+
+    async def restart_compose_service(self, project_id: str, service_name: str) -> Tuple[bool, str]:
+        """
+        Restart a specific service in a docker-compose project.
+
+        Args:
+            project_id: Project identifier
+            service_name: Name of the service to restart (e.g., 'frontend', 'backend')
+
+        Returns:
+            Tuple of (success, message)
+        """
+        container_info = self.active_containers.get(project_id)
+        if not container_info or not container_info.get("docker_compose"):
+            return False, "Not a docker-compose project"
+
+        compose_project = container_info.get("compose_project")
+        compose_file = container_info.get("compose_file")
+        project_path = container_info.get("project_path")
+
+        try:
+            cmd = f"docker-compose -p {compose_project} -f {compose_file} restart {service_name}"
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+
+            if result.returncode == 0:
+                logger.info(f"[ContainerExecutor] Restarted service {service_name} for {project_id}")
+                return True, f"Service '{service_name}' restarted successfully"
+            else:
+                return False, f"Restart failed: {result.stderr}"
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Service restart error: {e}")
+            return False, str(e)
+
+    def get_container_exit_logs(self, container, tail: int = 100) -> str:
+        """
+        Get the last N lines of container logs (useful on exit/crash).
+
+        Args:
+            container: Docker container object
+            tail: Number of lines to retrieve
+
+        Returns:
+            Log string
+        """
+        try:
+            logs = container.logs(tail=tail, timestamps=True)
+            if isinstance(logs, bytes):
+                return logs.decode('utf-8', errors='replace')
+            return str(logs)
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Failed to get exit logs: {e}")
+            return f"Failed to retrieve logs: {e}"
+
+    async def handle_container_exit(
+        self,
+        project_id: str,
+        container,
+        auto_restart: bool = False
+    ) -> Tuple[str, int, str]:
+        """
+        Handle container exit - capture logs, exit code, and optionally restart.
+
+        Args:
+            project_id: Project identifier
+            container: Docker container object
+            auto_restart: Whether to automatically restart on non-zero exit
+
+        Returns:
+            Tuple of (status, exit_code, logs)
+        """
+        try:
+            container.reload()
+            status = container.status
+            exit_code = container.attrs.get('State', {}).get('ExitCode', -1)
+
+            # Capture exit logs
+            logs = self.get_container_exit_logs(container, tail=100)
+
+            logger.info(f"[ContainerExecutor] Container {project_id} exited with code {exit_code}")
+
+            # Auto-restart on failure if enabled
+            if auto_restart and exit_code != 0 and status == "exited":
+                logger.info(f"[ContainerExecutor] Auto-restarting container {project_id}")
+                try:
+                    container.restart(timeout=10)
+                    return "restarted", exit_code, logs
+                except Exception as e:
+                    logger.error(f"[ContainerExecutor] Auto-restart failed: {e}")
+                    return "restart_failed", exit_code, logs
+
+            return status, exit_code, logs
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Handle exit error: {e}")
+            return "error", -1, str(e)
+
+    async def force_kill_container(self, container, timeout: int = 10) -> bool:
+        """
+        Force kill a container if graceful stop fails.
+
+        Args:
+            container: Docker container object
+            timeout: Seconds to wait for graceful stop before force kill
+
+        Returns:
+            True if container was killed successfully
+        """
+        try:
+            # Try graceful stop first
+            try:
+                container.stop(timeout=timeout)
+                logger.info(f"[ContainerExecutor] Container stopped gracefully")
+                return True
+            except Exception:
+                pass
+
+            # Force kill if still running
+            container.reload()
+            if container.status == "running":
+                container.kill()
+                logger.info(f"[ContainerExecutor] Container force killed")
+
+            # Remove the container
+            container.remove(force=True)
+            return True
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Force kill failed: {e}")
+            return False
 
     def validate_technology_detection(
         self,
