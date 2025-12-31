@@ -875,9 +875,7 @@ export function BoltLayout({
               }
             }}
             onOutput={(line) => {
-              // Always open terminal when output is received (so user sees logs)
-              openTerminal()
-              // Always add output to terminal buffer
+              // Add output to terminal buffer (terminal is already opened by onStartSession)
               addLog({
                 type: 'output',
                 content: line

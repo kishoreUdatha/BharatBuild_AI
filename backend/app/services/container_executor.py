@@ -1323,12 +1323,14 @@ class ContainerExecutor:
             # Add volumes section
             compose_config["volumes"] = {"db_data": {}}
 
-        # Write docker-compose.yml
+        # Write docker-compose.yml (handles both local and remote sandbox)
         compose_file = os.path.join(project_path, "docker-compose.yml")
         try:
-            with open(compose_file, 'w') as f:
-                yaml.dump(compose_config, f, default_flow_style=False, sort_keys=False)
-            yield f"  ✅ Generated docker-compose.yml\n"
+            compose_content = yaml.dump(compose_config, default_flow_style=False, sort_keys=False)
+            if self._write_file_to_sandbox(compose_file, compose_content):
+                yield f"  ✅ Generated docker-compose.yml\n"
+            else:
+                raise Exception("Failed to write docker-compose.yml to sandbox")
         except Exception as e:
             logger.error(f"[ContainerExecutor] Failed to write docker-compose.yml: {e}")
             yield f"  ❌ Failed to generate docker-compose.yml: {e}\n"
@@ -1340,35 +1342,41 @@ class ContainerExecutor:
         project_path: str,
         fullstack_config: FullStackConfig
     ) -> AsyncGenerator[str, None]:
-        """Run docker-compose up and stream output."""
-        import subprocess
+        """
+        Run docker-compose up and stream output.
+
+        Handles both local and remote sandbox modes:
+        - Local: Uses subprocess directly
+        - Remote: Uses helper containers with docker-compose
+        """
         import yaml
 
         yield f"\n━━━ Running Docker Compose ━━━\n"
 
-        # Read docker-compose.yml to get port mappings
+        # Read docker-compose.yml to get port mappings (handles remote sandbox)
         compose_file = os.path.join(project_path, "docker-compose.yml")
-        if not os.path.exists(compose_file):
+        if not self._file_exists_on_sandbox(compose_file):
             compose_file = os.path.join(project_path, "docker-compose.yaml")
 
         frontend_port = fullstack_config.frontend_port
         backend_port = fullstack_config.backend_port
 
         try:
-            with open(compose_file, 'r') as f:
-                compose_config = yaml.safe_load(f)
+            compose_content = self._read_file_from_sandbox(compose_file)
+            if compose_content:
+                compose_config = yaml.safe_load(compose_content)
 
-            # Extract ports from compose file
-            services = compose_config.get("services", {})
-            for name, service in services.items():
-                ports = service.get("ports", [])
-                for port_mapping in ports:
-                    if isinstance(port_mapping, str) and ":" in port_mapping:
-                        host_port = int(port_mapping.split(":")[0])
-                        if "frontend" in name.lower() or "web" in name.lower() or "ui" in name.lower():
-                            frontend_port = host_port
-                        elif "backend" in name.lower() or "api" in name.lower() or "server" in name.lower():
-                            backend_port = host_port
+                # Extract ports from compose file
+                services = compose_config.get("services", {})
+                for name, service in services.items():
+                    ports = service.get("ports", [])
+                    for port_mapping in ports:
+                        if isinstance(port_mapping, str) and ":" in port_mapping:
+                            host_port = int(port_mapping.split(":")[0])
+                            if "frontend" in name.lower() or "web" in name.lower() or "ui" in name.lower():
+                                frontend_port = host_port
+                            elif "backend" in name.lower() or "api" in name.lower() or "server" in name.lower():
+                                backend_port = host_port
         except Exception as e:
             yield f"  ⚠️ Could not parse compose file: {e}\n"
 
@@ -1378,40 +1386,30 @@ class ContainerExecutor:
 
         try:
             cleanup_cmd = f"docker-compose -p {project_name} -f {compose_file} down --remove-orphans"
-            subprocess.run(cleanup_cmd, shell=True, cwd=project_path, capture_output=True, timeout=30)
-        except Exception:
-            pass
+            exit_code, output = self._run_shell_on_sandbox(cleanup_cmd, working_dir=project_path, timeout=30)
+            if exit_code != 0:
+                logger.warning(f"[ContainerExecutor] Cleanup had issues: {output}")
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Cleanup failed: {e}")
 
         # Run docker-compose up
         yield f"  $ docker-compose up -d\n"
 
         try:
             cmd = f"docker-compose -p {project_name} -f {compose_file} up -d --build"
-            process = subprocess.Popen(
-                cmd,
-                shell=True,
-                cwd=project_path,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True
-            )
+            exit_code, output = self._run_shell_on_sandbox(cmd, working_dir=project_path, timeout=300)
 
-            # Stream output
-            for line in iter(process.stdout.readline, ''):
-                if line:
-                    yield f"  {line}"
+            # Stream output lines
+            for line in output.split('\n'):
+                if line.strip():
+                    yield f"  {line}\n"
 
-            process.wait()
-
-            if process.returncode != 0:
-                yield f"\n❌ Docker Compose failed with exit code {process.returncode}\n"
+            if exit_code != 0:
+                yield f"\n❌ Docker Compose failed with exit code {exit_code}\n"
                 return
 
             yield f"\n  ✅ Docker Compose started successfully\n"
 
-        except subprocess.TimeoutExpired:
-            yield f"\n❌ Docker Compose timed out\n"
-            return
         except Exception as e:
             yield f"\n❌ Error: {str(e)}\n"
             return
@@ -1847,6 +1845,191 @@ class ContainerExecutor:
         except Exception:
             return True  # Assume free if check fails
 
+    def _is_remote_sandbox(self) -> bool:
+        """Check if we're using a remote Docker sandbox (EC2)."""
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+        return bool(sandbox_docker_host and self.docker_client)
+
+    def _write_file_to_sandbox(self, file_path: str, content: str) -> bool:
+        """
+        Write a file to the sandbox filesystem.
+
+        Handles both local and remote modes:
+        - Local: Uses standard open() to write
+        - Remote: Uses a helper container to write via echo/cat
+
+        Args:
+            file_path: Absolute path to the file (e.g., /tmp/sandbox/workspace/.../file.txt)
+            content: Content to write to the file
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if not self._is_remote_sandbox():
+                # Local mode - direct write
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                with open(file_path, 'w') as f:
+                    f.write(content)
+                logger.info(f"[ContainerExecutor] Wrote file locally: {file_path}")
+                return True
+
+            # Remote mode - use helper container
+            # Escape content for shell (use base64 to handle special chars)
+            import base64
+            encoded_content = base64.b64encode(content.encode()).decode()
+
+            # Create directory and write file
+            script = f'''
+mkdir -p "$(dirname {file_path})"
+echo "{encoded_content}" | base64 -d > "{file_path}"
+'''
+
+            result = self.docker_client.containers.run(
+                "alpine:latest",
+                ["-c", script],
+                entrypoint="/bin/sh",
+                volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                remove=True,
+                detach=False
+            )
+
+            logger.info(f"[ContainerExecutor] Wrote file via helper container: {file_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Failed to write file {file_path}: {e}")
+            return False
+
+    def _run_shell_on_sandbox(
+        self,
+        command: str,
+        working_dir: str = None,
+        timeout: int = 60
+    ) -> Tuple[int, str]:
+        """
+        Run a shell command on the sandbox filesystem.
+
+        Handles both local and remote modes:
+        - Local: Uses subprocess
+        - Remote: Uses a helper container
+
+        Args:
+            command: Shell command to run
+            working_dir: Working directory for the command
+            timeout: Timeout in seconds
+
+        Returns:
+            Tuple of (exit_code, output)
+        """
+        try:
+            if not self._is_remote_sandbox():
+                # Local mode - use subprocess
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    cwd=working_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout
+                )
+                output = result.stdout + result.stderr
+                return result.returncode, output
+
+            # Remote mode - use helper container with docker-compose installed
+            cd_cmd = f'cd "{working_dir}" && ' if working_dir else ''
+            script = f'{cd_cmd}{command}'
+
+            # Use docker/compose image which has docker-compose installed
+            result = self.docker_client.containers.run(
+                "docker/compose:latest",
+                ["-c", script],
+                entrypoint="/bin/sh",
+                volumes={
+                    "/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"},
+                    "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}
+                },
+                remove=True,
+                detach=False,
+                network_mode="host"
+            )
+
+            output = result.decode() if isinstance(result, bytes) else str(result)
+            logger.info(f"[ContainerExecutor] Ran command via helper: {command[:50]}...")
+            return 0, output
+
+        except subprocess.TimeoutExpired:
+            return 1, "Command timed out"
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Failed to run command: {e}")
+            return 1, str(e)
+
+    def _file_exists_on_sandbox(self, file_path: str) -> bool:
+        """
+        Check if a file exists on the sandbox filesystem.
+
+        Args:
+            file_path: Absolute path to check
+
+        Returns:
+            True if file exists, False otherwise
+        """
+        try:
+            if not self._is_remote_sandbox():
+                return os.path.exists(file_path)
+
+            # Remote mode - use helper container
+            result = self.docker_client.containers.run(
+                "alpine:latest",
+                ["-c", f'test -f "{file_path}" && echo "EXISTS" || echo "MISSING"'],
+                entrypoint="/bin/sh",
+                volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                remove=True,
+                detach=False
+            )
+
+            return b"EXISTS" in result
+
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Failed to check file existence: {e}")
+            return False
+
+    def _read_file_from_sandbox(self, file_path: str) -> Optional[str]:
+        """
+        Read a file from the sandbox filesystem.
+
+        Args:
+            file_path: Absolute path to the file
+
+        Returns:
+            File content as string, or None if failed
+        """
+        try:
+            if not self._is_remote_sandbox():
+                if os.path.exists(file_path):
+                    with open(file_path, 'r') as f:
+                        return f.read()
+                return None
+
+            # Remote mode - use helper container
+            result = self.docker_client.containers.run(
+                "alpine:latest",
+                ["-c", f'cat "{file_path}" 2>/dev/null || echo "__FILE_NOT_FOUND__"'],
+                entrypoint="/bin/sh",
+                volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                remove=True,
+                detach=False
+            )
+
+            content = result.decode() if isinstance(result, bytes) else str(result)
+            if "__FILE_NOT_FOUND__" in content:
+                return None
+            return content
+
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Failed to read file {file_path}: {e}")
+            return None
+
     def _get_available_port(self, preferred_port: int) -> int:
         """
         Get an available port, starting from preferred port.
@@ -1925,18 +2108,11 @@ class ContainerExecutor:
 
             try:
                 cmd = f"docker-compose -p {compose_project} -f {compose_file} down --remove-orphans"
-                result = subprocess.run(
-                    cmd,
-                    shell=True,
-                    cwd=project_path,
-                    capture_output=True,
-                    text=True,
-                    timeout=60
-                )
-                if result.returncode == 0:
+                exit_code, output = self._run_shell_on_sandbox(cmd, working_dir=project_path, timeout=60)
+                if exit_code == 0:
                     logger.info(f"[ContainerExecutor] Stopped docker-compose project for {project_id}")
                 else:
-                    errors.append(f"docker-compose down failed: {result.stderr}")
+                    errors.append(f"docker-compose down failed: {output}")
             except Exception as e:
                 errors.append(f"Docker Compose: {e}")
 
@@ -2014,24 +2190,17 @@ class ContainerExecutor:
 
         try:
             cmd = f"docker-compose -p {compose_project} -f {compose_file} ps --format json"
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                cwd=project_path,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
+            exit_code, output = self._run_shell_on_sandbox(cmd, working_dir=project_path, timeout=30)
 
-            if result.returncode != 0:
-                return False, {"error": result.stderr}
+            if exit_code != 0:
+                return False, {"error": output}
 
             # Parse service status
             import json
             services_status = {}
             all_healthy = True
 
-            for line in result.stdout.strip().split('\n'):
+            for line in output.strip().split('\n'):
                 if line:
                     try:
                         service = json.loads(line)
@@ -2068,24 +2237,15 @@ class ContainerExecutor:
         try:
             # Restart all services
             cmd = f"docker-compose -p {compose_project} -f {compose_file} restart"
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                cwd=project_path,
-                capture_output=True,
-                text=True,
-                timeout=120
-            )
+            exit_code, output = self._run_shell_on_sandbox(cmd, working_dir=project_path, timeout=120)
 
-            if result.returncode == 0:
+            if exit_code == 0:
                 logger.info(f"[ContainerExecutor] Restarted compose project: {project_id}")
                 return True, "All services restarted successfully"
             else:
-                logger.error(f"[ContainerExecutor] Compose restart failed: {result.stderr}")
-                return False, f"Restart failed: {result.stderr}"
+                logger.error(f"[ContainerExecutor] Compose restart failed: {output}")
+                return False, f"Restart failed: {output}"
 
-        except subprocess.TimeoutExpired:
-            return False, "Restart timed out"
         except Exception as e:
             logger.error(f"[ContainerExecutor] Compose restart error: {e}")
             return False, str(e)
@@ -2111,20 +2271,13 @@ class ContainerExecutor:
 
         try:
             cmd = f"docker-compose -p {compose_project} -f {compose_file} restart {service_name}"
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                cwd=project_path,
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
+            exit_code, output = self._run_shell_on_sandbox(cmd, working_dir=project_path, timeout=60)
 
-            if result.returncode == 0:
+            if exit_code == 0:
                 logger.info(f"[ContainerExecutor] Restarted service {service_name} for {project_id}")
                 return True, f"Service '{service_name}' restarted successfully"
             else:
-                return False, f"Restart failed: {result.stderr}"
+                return False, f"Restart failed: {output}"
 
         except Exception as e:
             logger.error(f"[ContainerExecutor] Service restart error: {e}")
