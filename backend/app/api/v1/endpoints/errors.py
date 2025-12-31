@@ -640,23 +640,27 @@ async def execute_fix_with_notification(
 
                                 # Import here to avoid circular imports
                                 from app.api.v1.endpoints.execution import _execute_docker_stream_with_progress
+                                from app.core.database import AsyncSessionLocal
 
-                                # Run the project
-                                async for event in _execute_docker_stream_with_progress(
-                                    project_id=project_id,
-                                    user_id=user_id
-                                ):
-                                    # Log progress but don't send to frontend (avoid confusion)
-                                    if event.get("type") == "error":
-                                        logger.error(f"[AutoRestart:{project_id}] {event.get('message', '')}")
-                                    elif event.get("type") == "preview_ready":
-                                        logger.info(f"[AutoRestart:{project_id}] ✓ Preview ready: {event.get('url', '')}")
-                                        # Notify frontend that preview is ready
-                                        await notify_fix_completed(project_id, len(config_files_modified), config_files_modified,
-                                                                   extra_message="Auto-restart complete! Preview is ready.")
-                                        break
-                                    elif "server start detected" in str(event.get("message", "")).lower():
-                                        logger.info(f"[AutoRestart:{project_id}] ✓ Server started")
+                                # Create a database session for the restart operation
+                                async with AsyncSessionLocal() as db:
+                                    # Run the project
+                                    async for event in _execute_docker_stream_with_progress(
+                                        project_id=project_id,
+                                        user_id=user_id,
+                                        db=db
+                                    ):
+                                        # Log progress but don't send to frontend (avoid confusion)
+                                        if event.get("type") == "error":
+                                            logger.error(f"[AutoRestart:{project_id}] {event.get('message', '')}")
+                                        elif event.get("type") == "preview_ready":
+                                            logger.info(f"[AutoRestart:{project_id}] ✓ Preview ready: {event.get('url', '')}")
+                                            # Notify frontend that preview is ready
+                                            await notify_fix_completed(project_id, len(config_files_modified), config_files_modified,
+                                                                       extra_message="Auto-restart complete! Preview is ready.")
+                                            break
+                                        elif "server start detected" in str(event.get("message", "")).lower():
+                                            logger.info(f"[AutoRestart:{project_id}] ✓ Server started")
 
                             except Exception as restart_err:
                                 logger.error(f"[AutoRestart:{project_id}] Restart failed: {restart_err}")

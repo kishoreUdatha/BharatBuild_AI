@@ -462,7 +462,7 @@ class LogBus:
 
                 if "vite" in deps:
                     env["framework"] = "vite"
-                    env["ports"].append(5173)
+                    env["ports"].append(3000)
                 elif "next" in deps:
                     env["framework"] = "nextjs"
                     env["ports"].append(3000)

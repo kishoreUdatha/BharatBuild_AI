@@ -165,7 +165,7 @@ class FullStackConfig:
     """Configuration for full-stack projects with frontend + backend + database"""
     frontend_tech: Technology
     backend_tech: Technology
-    frontend_port: int = 5173
+    frontend_port: int = 3000
     backend_port: int = 8080
     frontend_path: str = "frontend"
     backend_path: str = "backend"
@@ -254,7 +254,7 @@ TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
         # This creates .vite/deps BEFORE dev server starts, preventing 504 timeouts on first request
         build_command="npm install --legacy-peer-deps && npx vite optimize",
         run_command="pkill -f vite 2>/dev/null || true; npm run dev -- --host 0.0.0.0 --no-open",
-        port=5173,  # Vite default port
+        port=3000,  # Vite port (changed from 5173 for consistency)
         memory_limit=DEFAULT_CONTAINER_MEMORY  # MEDIUM #8: Increased from 512m
     ),
     Technology.ANGULAR: ContainerConfig(
@@ -489,6 +489,10 @@ class ContainerExecutor:
         # CRITICAL: Remote Docker mode - check filesystem on remote EC2 sandbox
         # When SANDBOX_DOCKER_HOST is set, local path.exists() will always fail
         # because files are on the remote sandbox, not local ECS container.
+        #
+        # NOTE: In remote mode, files are stored in database/S3 and synced at
+        # container runtime. Validation failures are NON-BLOCKING (warnings only)
+        # because the directory may not exist yet on EC2.
         # =====================================================================
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
         if sandbox_docker_host and self.docker_client:
@@ -504,7 +508,9 @@ class ContainerExecutor:
                     detach=False
                 )
                 if b"MISSING" in check_result:
-                    return False, f"Workspace path does not exist on remote sandbox: {project_path}", ["workspace_directory"]
+                    # NON-BLOCKING: Files are in storage, will sync at container runtime
+                    logger.warning(f"[ContainerExecutor] Remote workspace not found yet (will sync at runtime): {project_path}")
+                    return True, "Remote mode: workspace will be created at container runtime", []
 
                 # Check for frontend subdirectory on remote
                 frontend_check = self.docker_client.containers.run(
@@ -545,14 +551,17 @@ class ContainerExecutor:
                         missing.append(required_file)
 
                 if missing:
-                    return False, f"Missing critical files on remote sandbox: {', '.join(missing)}", missing
+                    # NON-BLOCKING: Log warning but continue - files may sync at runtime
+                    logger.warning(f"[ContainerExecutor] Missing files on remote (may sync at runtime): {missing}")
+                    return True, f"Remote mode: missing files will be synced at runtime", missing
 
                 logger.info(f"[ContainerExecutor] Remote workspace validation passed for {project_path}")
                 return True, "Workspace validated successfully on remote sandbox", []
 
             except Exception as remote_err:
-                logger.warning(f"[ContainerExecutor] Remote validation failed: {remote_err}, falling back to local check")
-                # Fall through to local check
+                # NON-BLOCKING: Validation failed but continue anyway
+                logger.warning(f"[ContainerExecutor] Remote validation error (continuing): {remote_err}")
+                return True, "Remote mode: validation skipped due to error, continuing", []
 
         # Local filesystem check (non-remote mode)
         # Check if path exists
@@ -894,6 +903,70 @@ class ContainerExecutor:
 
         return Technology.UNKNOWN
 
+    def _remote_files_exist(self, project_path: str, paths_to_check: list) -> dict:
+        """
+        Check if files/directories exist on remote EC2 Docker host.
+
+        Args:
+            project_path: Base project path on EC2
+            paths_to_check: List of relative paths to check (e.g., ["frontend", "frontend/package.json"])
+
+        Returns:
+            Dict mapping path to existence boolean
+        """
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+        if not sandbox_docker_host or not self.docker_client:
+            # Local mode - use Path.exists()
+            result = {}
+            for p in paths_to_check:
+                full_path = Path(project_path) / p
+                result[p] = full_path.exists()
+            return result
+
+        # Remote mode - use Docker to check
+        try:
+            # Build a shell script that checks all paths
+            checks = []
+            for p in paths_to_check:
+                full_path = f"{project_path}/{p}"
+                checks.append(f'[ -e "{full_path}" ] && echo "{p}:EXISTS" || echo "{p}:MISSING"')
+
+            check_script = " && ".join(checks)
+
+            parent_mount = "/tmp/sandbox/workspace"
+            container = self.docker_client.containers.create(
+                "alpine:latest",
+                command=["-c", check_script],
+                entrypoint="/bin/sh",
+                volumes={parent_mount: {"bind": parent_mount, "mode": "ro"}},
+            )
+            try:
+                container.start()
+                container.wait(timeout=30)
+                output = container.logs(stdout=True, stderr=False).decode('utf-8').strip()
+            finally:
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    pass
+
+            # Parse output
+            result = {}
+            for line in output.split('\n'):
+                if ':EXISTS' in line:
+                    path = line.replace(':EXISTS', '')
+                    result[path] = True
+                elif ':MISSING' in line:
+                    path = line.replace(':MISSING', '')
+                    result[path] = False
+
+            logger.info(f"[ContainerExecutor] Remote file check: {result}")
+            return result
+
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Remote file check failed: {e}")
+            return {p: False for p in paths_to_check}
+
     def detect_fullstack_project(self, project_path: str) -> Optional[FullStackConfig]:
         """
         Detect if project is a full-stack project with separate frontend and backend.
@@ -907,26 +980,48 @@ class ContainerExecutor:
 
         Also detects database requirements by scanning backend config files.
 
+        Now remote-aware: works with files on EC2 Docker host.
+
         Returns:
             FullStackConfig if full-stack project detected, None otherwise
         """
         path = Path(project_path)
-        frontend_path = path / "frontend"
-        backend_path = path / "backend"
+
+        # Check paths needed for fullstack detection (remote-aware)
+        paths_to_check = [
+            "frontend",
+            "backend",
+            "frontend/package.json",
+            "frontend/vite.config.ts",
+            "frontend/vite.config.js",
+            "frontend/vite.config.mjs",
+            "frontend/angular.json",
+            "backend/pom.xml",
+            "backend/build.gradle",
+            "backend/build.gradle.kts",
+            "backend/requirements.txt",
+            "backend/pyproject.toml",
+            "backend/go.mod",
+        ]
+
+        file_exists = self._remote_files_exist(project_path, paths_to_check)
 
         # Check if both frontend/ and backend/ directories exist
-        if not (frontend_path.exists() and backend_path.exists()):
+        if not (file_exists.get("frontend", False) and file_exists.get("backend", False)):
+            logger.info(f"[ContainerExecutor] Fullstack detection: frontend={file_exists.get('frontend')}, backend={file_exists.get('backend')}")
             return None
 
         # Detect frontend technology
         frontend_tech = None
-        if (frontend_path / "package.json").exists():
-            if (frontend_path / "vite.config.ts").exists() or \
-               (frontend_path / "vite.config.js").exists() or \
-               (frontend_path / "vite.config.mjs").exists():
+        frontend_port = 3000
+
+        if file_exists.get("frontend/package.json", False):
+            if file_exists.get("frontend/vite.config.ts", False) or \
+               file_exists.get("frontend/vite.config.js", False) or \
+               file_exists.get("frontend/vite.config.mjs", False):
                 frontend_tech = Technology.NODEJS_VITE
-                frontend_port = 5173
-            elif (frontend_path / "angular.json").exists():
+                frontend_port = 3000
+            elif file_exists.get("frontend/angular.json", False):
                 frontend_tech = Technology.ANGULAR
                 frontend_port = 4200
             else:
@@ -934,32 +1029,33 @@ class ContainerExecutor:
                 frontend_port = 3000
 
         if not frontend_tech:
+            logger.info(f"[ContainerExecutor] Fullstack detection: no frontend tech detected")
             return None
 
         # Detect backend technology
         backend_tech = None
         backend_port = 8080
 
-        if (backend_path / "pom.xml").exists() or \
-           (backend_path / "build.gradle").exists() or \
-           (backend_path / "build.gradle.kts").exists():
+        if file_exists.get("backend/pom.xml", False) or \
+           file_exists.get("backend/build.gradle", False) or \
+           file_exists.get("backend/build.gradle.kts", False):
             backend_tech = Technology.JAVA
             backend_port = 8080
-        elif (backend_path / "requirements.txt").exists() or \
-             (backend_path / "pyproject.toml").exists():
+        elif file_exists.get("backend/requirements.txt", False) or \
+             file_exists.get("backend/pyproject.toml", False):
             backend_tech = Technology.PYTHON
             backend_port = 8000
-        elif (backend_path / "go.mod").exists():
+        elif file_exists.get("backend/go.mod", False):
             backend_tech = Technology.GO
             backend_port = 8080
-        elif list(backend_path.glob("*.csproj")) or list(backend_path.glob("*.fsproj")):
-            backend_tech = Technology.DOTNET
-            backend_port = 5000
+        # Note: .NET detection with glob not supported in remote mode for now
 
         if not backend_tech:
+            logger.info(f"[ContainerExecutor] Fullstack detection: no backend tech detected")
             return None
 
         # Detect database type by scanning backend config files
+        backend_path = path / "backend"
         database_type = self._detect_database_type(backend_path, backend_tech)
         database_config = DATABASE_CONFIGS.get(database_type) if database_type != DatabaseType.NONE else None
 
@@ -1451,24 +1547,48 @@ class ContainerExecutor:
         return False
 
     def _get_available_port(self, preferred_port: int) -> int:
-        """Get an available port, starting from preferred port."""
-        import socket
+        """
+        Get an available port, starting from preferred port.
 
+        IMPORTANT: Queries Docker daemon for used ports to avoid conflicts
+        with containers from previous ECS task sessions.
+        """
+        # Get all used ports from Docker containers
+        used_ports = set()
+
+        # Add in-memory tracked ports
+        for info in self.active_containers.values():
+            port = info.get("host_port") or info.get("port", 0)
+            if port:
+                used_ports.add(port)
+
+        # Query Docker daemon for ALL containers with port mappings
+        if self.docker_client:
+            try:
+                all_containers = self.docker_client.containers.list(all=True)
+                for container in all_containers:
+                    ports = container.attrs.get('NetworkSettings', {}).get('Ports', {}) or {}
+                    for port_binding in ports.values():
+                        if port_binding:
+                            for binding in port_binding:
+                                host_port = binding.get('HostPort')
+                                if host_port:
+                                    used_ports.add(int(host_port))
+            except Exception as e:
+                logger.warning(f"[ContainerExecutor] Failed to query Docker for ports: {e}")
+
+        # Find an available port starting from preferred
         port = preferred_port
         max_attempts = 100
 
         for _ in range(max_attempts):
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.bind(("", port))
-                    return port
-            except OSError:
-                port += 1
+            if port not in used_ports:
+                logger.info(f"[ContainerExecutor] Selected port {port} (preferred: {preferred_port})")
+                return port
+            port += 1
 
-        # Fallback: let system assign port
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            return s.getsockname()[1]
+        # Fallback: use _find_available_port for wider range
+        return self._find_available_port()
 
     async def stop_fullstack_project(self, project_id: str) -> Tuple[bool, str]:
         """
@@ -1818,6 +1938,20 @@ class ContainerExecutor:
         # Find available port
         host_port = self._find_available_port()
 
+        # Ensure bharatbuild-sandbox network exists (auto-create if missing)
+        try:
+            existing_networks = self.docker_client.networks.list(names=["bharatbuild-sandbox"])
+            if not existing_networks:
+                logger.info("[ContainerExecutor] Creating bharatbuild-sandbox network...")
+                self.docker_client.networks.create(
+                    "bharatbuild-sandbox",
+                    driver="bridge",
+                    labels={"managed_by": "bharatbuild"}
+                )
+                logger.info("[ContainerExecutor] Network bharatbuild-sandbox created successfully")
+        except Exception as net_err:
+            logger.warning(f"[ContainerExecutor] Network check/create failed: {net_err}")
+
         try:
             logger.info(f"[ContainerExecutor] Creating container for {project_id} ({technology.value})")
 
@@ -1851,7 +1985,7 @@ class ContainerExecutor:
             if technology == Technology.NODEJS_VITE:
                 # Vite: Use --base=/ (root) since proxy handles path translation
                 # This ensures HMR WebSocket and asset loading work correctly
-                run_command = f"npm run dev -- --host 0.0.0.0 --port 5173"
+                run_command = f"npm run dev -- --host 0.0.0.0 --port 3000"
                 logger.info(f"[ContainerExecutor] Using Vite with default --base=/ (proxy handles path translation)")
 
             # Traefik routes /api/v1/preview/{project_id}/... to container
@@ -2087,23 +2221,58 @@ class ContainerExecutor:
             return False, f"Error: {str(e)}"
 
     def _find_available_port(self, start: int = 10000, end: int = 20000) -> int:
-        """Find an available port for container mapping"""
-        import socket
+        """
+        Find an available port for container mapping on the Docker host.
 
-        # Get all used host ports from active containers (check both "host_port" and "port" keys)
-        used_ports = {info.get("host_port") or info.get("port", 0) for info in self.active_containers.values()}
+        IMPORTANT: This queries the REMOTE Docker daemon to get actual used ports,
+        not local ports on the ECS task container.
+        """
+        import random
 
-        for port in range(start, end):
-            if port in used_ports:
-                continue
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                try:
-                    s.bind(("", port))
-                    return port
-                except OSError:
-                    continue
+        # Get all used ports from Docker containers (not just in-memory tracking)
+        used_ports = set()
 
-        raise RuntimeError("No available ports")
+        # Add in-memory tracked ports (from current session)
+        for info in self.active_containers.values():
+            port = info.get("host_port") or info.get("port", 0)
+            if port:
+                used_ports.add(port)
+
+        # Query Docker daemon for ALL containers with port mappings
+        # This catches containers from previous ECS task sessions
+        if self.docker_client:
+            try:
+                all_containers = self.docker_client.containers.list(all=True)
+                for container in all_containers:
+                    # Get port mappings from container
+                    ports = container.attrs.get('NetworkSettings', {}).get('Ports', {}) or {}
+                    for port_binding in ports.values():
+                        if port_binding:  # May be None if not mapped
+                            for binding in port_binding:
+                                host_port = binding.get('HostPort')
+                                if host_port:
+                                    used_ports.add(int(host_port))
+                logger.debug(f"[ContainerExecutor] Docker reports used ports: {sorted(used_ports)}")
+            except Exception as e:
+                logger.warning(f"[ContainerExecutor] Failed to query Docker for ports: {e}")
+
+        # Find an available port, starting from a random offset to reduce collisions
+        # This helps when multiple requests come in simultaneously
+        offset = random.randint(0, 1000)
+        search_start = start + offset
+
+        for port in range(search_start, end):
+            if port not in used_ports:
+                logger.info(f"[ContainerExecutor] Selected available port: {port}")
+                return port
+
+        # Wrap around if we started with an offset
+        for port in range(start, search_start):
+            if port not in used_ports:
+                logger.info(f"[ContainerExecutor] Selected available port (wrap): {port}")
+                return port
+
+        raise RuntimeError(f"No available ports in range {start}-{end}. Used ports: {len(used_ports)}")
 
     async def _get_existing_container(self, project_id: str):
         """
@@ -2258,6 +2427,26 @@ POSTCSS_EOF
         if [ -f "$WORKSPACE/tailwind.config.js" ] && grep -q 'module.exports' "$WORKSPACE/tailwind.config.js" 2>/dev/null; then
             sed -i 's/module\.exports *= */export default /g' "$WORKSPACE/tailwind.config.js"
             echo "Fixed tailwind.config.js (converted to ESM)"
+        fi
+    fi
+
+    # PROACTIVE DEPENDENCY VALIDATION: Ensure tailwindcss is installed if postcss.config.js references it
+    if [ -f "$WORKSPACE/postcss.config.js" ] && grep -q 'tailwindcss' "$WORKSPACE/postcss.config.js" 2>/dev/null; then
+        if ! grep -q '"tailwindcss"' "$WORKSPACE/package.json" 2>/dev/null; then
+            echo "Adding missing tailwindcss dependency..."
+            # Use node to add to devDependencies
+            node -e "
+                const fs = require('fs');
+                const pkg = JSON.parse(fs.readFileSync('$WORKSPACE/package.json', 'utf8'));
+                if (!pkg.devDependencies) pkg.devDependencies = {};
+                if (!pkg.devDependencies.tailwindcss && !pkg.dependencies?.tailwindcss) {
+                    pkg.devDependencies.tailwindcss = '^3.3.6';
+                    pkg.devDependencies.autoprefixer = pkg.devDependencies.autoprefixer || '^10.4.16';
+                    pkg.devDependencies.postcss = pkg.devDependencies.postcss || '^8.4.32';
+                    fs.writeFileSync('$WORKSPACE/package.json', JSON.stringify(pkg, null, 2));
+                    console.log('Added tailwindcss, autoprefixer, postcss to devDependencies');
+                }
+            " 2>/dev/null || echo "Could not auto-add tailwindcss"
         fi
     fi
 fi
@@ -2939,10 +3128,13 @@ echo "Done"
                 project_type = tech_type_map.get(technology, "node")
 
                 # Check workspace status and auto-restore if needed
+                # FIX: Keep user_id as "anonymous" instead of None to maintain path consistency
+                # execution.py uses "anonymous" -> /tmp/sandbox/workspace/anonymous/{project_id}
+                # This must match here to avoid path mismatch bugs
                 restore_result = await workspace_restore.auto_restore(
                     project_id=project_id,
                     db=db,
-                    user_id=user_id if user_id != "anonymous" else None,
+                    user_id=user_id,  # Keep as "anonymous" if that's what execution.py used
                     project_type=project_type
                 )
 
@@ -3319,7 +3511,16 @@ echo "Done"
                                 # HEALTH CHECK: Verify URL is actually reachable before enabling
                                 # Critical #1 & #3: Extended retries with fallback on failure
                                 # ================================================================
-                                internal_url = f"http://localhost:{host_port}"
+                                # Use nginx gateway (port 8080) for health check - direct ports are blocked
+                                sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST", "")
+                                sandbox_ip = "localhost"
+                                if sandbox_docker_host and "://" in sandbox_docker_host:
+                                    from urllib.parse import urlparse
+                                    parsed = urlparse(sandbox_docker_host)
+                                    sandbox_ip = parsed.hostname or "localhost"
+                                # Route through nginx gateway (port 8080) instead of direct container port
+                                # Direct ports are blocked by security groups
+                                internal_url = f"http://{sandbox_ip}:8080/sandbox/{host_port}/"
                                 health_check_passed = False
                                 max_health_attempts = 8  # Critical #3: More retries for slow servers
 

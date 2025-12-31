@@ -436,6 +436,8 @@ I'll keep trying to help!`)
           resetAllStores()
 
           // Create new empty project with temporary ID (will be replaced by project_id_updated event)
+          // IMPORTANT: isSynced MUST be true to prevent build/page.tsx effect from trying to reload files
+          // Files will be streamed in via SSE events during generation
           const newProjectId = `project-${Date.now()}`
           projectStore.setCurrentProject({
             id: newProjectId,
@@ -443,7 +445,7 @@ I'll keep trying to help!`)
             files: [],
             createdAt: new Date(),
             updatedAt: new Date(),
-            isSynced: false
+            isSynced: true  // FIX: Set true to prevent file reload during generation
           })
           console.log(`[useChat] Created fresh project: ${newProjectId}`)
 
@@ -509,7 +511,7 @@ I'll keep trying to help!`)
         files: [],
         createdAt: new Date(),
         updatedAt: new Date(),
-        isSynced: false
+        isSynced: true  // FIX: Set true to prevent file reload during generation
       })
       console.log(`[useChat] Created new project for generation: ${newProjectId} (${extractedName})`)
     }
@@ -631,6 +633,23 @@ I'll keep trying to help!`)
             case 'status':
               // Handle workflow status updates - DON'T show in chat, only log
               console.log('[status] Status event:', event.data?.message)
+
+              // Handle documents_skipped event - show in thinking steps
+              if (event.data?.documents_skipped) {
+                console.log('[status] Documents skipped:', event.data.skip_reason)
+                // Update thinking steps to show why documents were skipped
+                addThinkingStep(aiMessageId, {
+                  label: 'Documents Skipped',
+                  status: 'complete',
+                  description: event.data.skip_reason || 'Academic documents not available for your account',
+                  details: event.data.role_required
+                    ? 'Update your profile to student/faculty role to access academic documents'
+                    : event.data.upgrade_required
+                    ? 'Upgrade to PRO for academic documents (SRS, PPT, Viva Q&A)'
+                    : event.data.message
+                })
+              }
+
               // Don't append status messages to chat - they clutter the UI
               break
 

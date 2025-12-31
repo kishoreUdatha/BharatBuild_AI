@@ -134,12 +134,12 @@ class SmartProjectAnalyzer:
 
     # Default ports per technology
     DEFAULT_PORTS: Dict[Technology, int] = {
-        Technology.REACT_VITE: 5173,
+        Technology.REACT_VITE: 3000,
         Technology.REACT_CRA: 3000,
         Technology.NEXTJS: 3000,
-        Technology.VUE_VITE: 5173,
+        Technology.VUE_VITE: 3000,
         Technology.ANGULAR: 4200,
-        Technology.SVELTE: 5173,
+        Technology.SVELTE: 3000,
         Technology.EXPRESS: 3000,
         Technology.FASTAPI: 8000,
         Technology.DJANGO: 8000,
@@ -724,7 +724,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',
-    port: 5173,
+    port: 3000,
   },
 })
 '''

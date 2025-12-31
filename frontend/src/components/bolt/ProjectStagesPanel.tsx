@@ -82,6 +82,8 @@ interface DocumentsContent {
     downloadUrl?: string
   }[]
   generationMessage?: string | null
+  documentsSkipped?: boolean
+  skipReason?: string
 }
 
 // Summary stage content
@@ -184,6 +186,11 @@ export function ProjectStagesPanel() {
   // Track document generation progress from thinkingSteps
   const documentGenerationStep = thinkingSteps.find((step: any) =>
     step.label === 'Generating Documents' || step.label?.includes('Document')
+  )
+
+  // Check if documents were skipped (user doesn't have student role or PRO subscription)
+  const documentsSkippedStep = thinkingSteps.find((step: any) =>
+    step.label === 'Documents Skipped'
   )
 
   // Parse document generation status from step details
@@ -319,6 +326,8 @@ export function ProjectStagesPanel() {
         return 'pending'
 
       case 'documents':
+        // Check if documents were skipped (user not eligible)
+        if (documentsSkippedStep) return 'completed'
         // Check if documents are being generated (from thinkingSteps)
         if (docGenStatus?.isGenerating) return 'active'
         // Check if document generation is complete
@@ -463,6 +472,9 @@ export function ProjectStagesPanel() {
                         name.includes('Viva') ? 'viva' : 'doc'
             return { type, name, status: 'completed' as StageStatus, downloadUrl: f.path }
           })
+        ] : documentsSkippedStep ? [
+          // Documents were skipped - show as "skipped" (not pending)
+          { type: 'info', name: 'Academic Documents Skipped', status: 'completed' as StageStatus },
         ] : docGenStatus ? [
           // Show document generation progress from thinkingSteps
           { type: 'srs', name: 'SRS Document', status: docGenStatus.srs as StageStatus },
@@ -476,8 +488,11 @@ export function ProjectStagesPanel() {
           { type: 'ppt', name: 'Presentation', status: 'pending' as StageStatus },
           { type: 'viva', name: 'Viva Q&A', status: 'pending' as StageStatus },
         ],
-        // Include generation message for context
-        generationMessage: docGenStatus?.isGenerating ? documentGenerationStep?.details : null,
+        // Include generation message for context or skip reason
+        generationMessage: documentsSkippedStep?.description ||
+          (docGenStatus?.isGenerating ? documentGenerationStep?.details : null),
+        documentsSkipped: !!documentsSkippedStep,
+        skipReason: documentsSkippedStep?.details,
       },
     },
     {
@@ -962,8 +977,23 @@ function BuildStageContent({ content, onFileClick }: { content: BuildContent; on
 function DocumentsStageContent({ content }: { content: DocumentsContent }) {
   return (
     <div className="pt-3 space-y-1.5">
-      {/* Generation progress message */}
-      {content.generationMessage && (
+      {/* Documents skipped message */}
+      {content.documentsSkipped && (
+        <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 mb-2">
+          <div className="flex items-start gap-2">
+            <Shield className="w-4 h-4 text-yellow-500 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs text-yellow-400 font-medium">Academic Documents Not Available</p>
+              <p className="text-[10px] text-yellow-500/80 mt-1">
+                {content.skipReason || content.generationMessage || 'Update your profile to student/faculty role or upgrade to PRO to access SRS, PPT, and Project Reports.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Generation progress message (only if not skipped) */}
+      {!content.documentsSkipped && content.generationMessage && (
         <div className="flex items-center gap-2 p-2 rounded-lg bg-blue-500/10 border border-blue-500/30 mb-2">
           <Loader2 className="w-3.5 h-3.5 text-blue-500 animate-spin flex-shrink-0" />
           <span className="text-xs text-blue-400 truncate">
@@ -972,7 +1002,8 @@ function DocumentsStageContent({ content }: { content: DocumentsContent }) {
         </div>
       )}
 
-      {content.documents.map((doc, idx) => (
+      {/* Only show document list if not skipped */}
+      {!content.documentsSkipped && content.documents.map((doc, idx) => (
         <div
           key={idx}
           className={`flex items-center justify-between p-2 rounded-lg ${

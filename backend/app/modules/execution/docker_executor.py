@@ -504,12 +504,12 @@ CMD ["npm", "start"]
 # Default ports for each framework
 DEFAULT_PORTS: Dict[FrameworkType, int] = {
     # Frontend
-    FrameworkType.REACT_VITE: 5173,
+    FrameworkType.REACT_VITE: 3000,
     FrameworkType.REACT_CRA: 3000,
     FrameworkType.NEXTJS: 3000,
-    FrameworkType.VUE: 5173,
+    FrameworkType.VUE: 3000,
     FrameworkType.ANGULAR: 4200,
-    FrameworkType.SVELTE: 5173,
+    FrameworkType.SVELTE: 3000,
     FrameworkType.STATIC_HTML: 80,
 
     # Backend Node.js
@@ -540,9 +540,9 @@ DEFAULT_PORTS: Dict[FrameworkType, int] = {
     FrameworkType.RUST_SOLANA: 8899,  # Solana validator default
 
     # Fullstack (frontend port - backend gets +1000)
-    FrameworkType.FULLSTACK_REACT_SPRING: 5173,
-    FrameworkType.FULLSTACK_REACT_EXPRESS: 5173,
-    FrameworkType.FULLSTACK_REACT_FASTAPI: 5173,
+    FrameworkType.FULLSTACK_REACT_SPRING: 3000,
+    FrameworkType.FULLSTACK_REACT_EXPRESS: 3000,
+    FrameworkType.FULLSTACK_REACT_FASTAPI: 3000,
 
     # Other
     FrameworkType.UNKNOWN: 3000,

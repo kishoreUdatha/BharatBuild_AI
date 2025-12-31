@@ -85,7 +85,7 @@ export default defineConfig({
   },
   server: {
     host: '0.0.0.0',
-    port: 5173,
+    port: 3000,
   },
 })
 """,
@@ -462,7 +462,41 @@ def get_template(file_path: str, project_type: str = "vite-react") -> str | None
 
 def get_all_essential_files(project_type: str = "vite-react") -> dict:
     """
-    Get all essential file templates for a project type.
+    Get only essential CONFIG files that are often missed by AI generation.
+
+    This returns config files like tsconfig.node.json, postcss.config.js, etc.
+    but NOT source files like App.tsx, main.tsx which should be AI-generated.
+
+    Returns:
+        Dict mapping file paths to content
+    """
+    # Essential config files for Vite/React - only configs, not source files
+    VITE_ESSENTIAL_CONFIGS = {
+        "tsconfig.node.json": VITE_REACT_TEMPLATES.get("tsconfig.node.json", ""),
+        "postcss.config.js": VITE_REACT_TEMPLATES.get("postcss.config.js", ""),
+    }
+
+    # Essential config files for Next.js
+    NEXTJS_ESSENTIAL_CONFIGS = {
+        "postcss.config.js": NEXTJS_TEMPLATES.get("postcss.config.js", ""),
+    }
+
+    if project_type in ["vite-react", "react", "vite"]:
+        return VITE_ESSENTIAL_CONFIGS
+    elif project_type in ["nextjs", "next"]:
+        return NEXTJS_ESSENTIAL_CONFIGS
+    elif project_type in ["fastapi", "python"]:
+        return {}  # Python projects don't have commonly missed configs
+    elif project_type in ["spring", "spring-boot", "java"]:
+        return {}  # Spring projects don't have commonly missed configs
+    return {}
+
+
+def get_all_template_files(project_type: str = "vite-react") -> dict:
+    """
+    Get ALL file templates for a project type (including source files).
+
+    Use this for fallback/recovery scenarios, not for initial generation.
 
     Returns:
         Dict mapping file paths to content
