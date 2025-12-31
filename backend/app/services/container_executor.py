@@ -1225,6 +1225,9 @@ class ContainerExecutor:
                 yield f"  🗄️ Image: {db_config.image}\n"
                 yield f"  🔌 Port: {db_host_port}\n"
 
+                # Remove existing container with same name to avoid 409 Conflict
+                self._remove_container_by_name(db_container_name)
+
                 database_container = self.docker_client.containers.run(
                     db_config.image,
                     name=db_container_name,
@@ -1313,6 +1316,9 @@ class ContainerExecutor:
 
                 yield f"  🔗 Database connection configured\n"
 
+            # Remove existing container with same name to avoid 409 Conflict
+            self._remove_container_by_name(backend_container_name)
+
             backend_container = self.docker_client.containers.run(
                 backend_config.image,
                 command=f"/bin/sh -c '{backend_config.build_command} && {backend_config.run_command}'",
@@ -1380,6 +1386,9 @@ class ContainerExecutor:
             frontend_run_cmd = frontend_config.run_command
             if fullstack_config.frontend_tech == Technology.NODEJS_VITE:
                 frontend_run_cmd = f"npm run dev -- --host 0.0.0.0 --port {fullstack_config.frontend_port}"
+
+            # Remove existing container with same name to avoid 409 Conflict
+            self._remove_container_by_name(frontend_container_name)
 
             frontend_container = self.docker_client.containers.run(
                 frontend_config.image,
@@ -2634,6 +2643,26 @@ echo "Done"
 
         except Exception as e:
             logger.error(f"[ContainerExecutor] Error cleaning up project container: {e}")
+
+    def _remove_container_by_name(self, container_name: str) -> None:
+        """
+        Remove an existing container by name before creating a new one.
+        Handles the 409 Conflict error when container name is already in use.
+        """
+        if not self.docker_client:
+            return
+
+        try:
+            existing = self.docker_client.containers.get(container_name)
+            logger.info(f"[ContainerExecutor] Found existing container '{container_name}', removing it...")
+            if existing.status == "running":
+                existing.stop(timeout=5)
+            existing.remove(force=True)
+            logger.info(f"[ContainerExecutor] Successfully removed container '{container_name}'")
+        except docker.errors.NotFound:
+            pass  # Container doesn't exist, good
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Error removing container '{container_name}': {e}")
 
     async def _cleanup_loop(self):
         """Background task to cleanup expired containers"""
