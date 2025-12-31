@@ -1476,12 +1476,31 @@ class WorkspaceRestoreService:
                         fixes_applied.append(f"Fixed import paths in {len(files_fixed)} source files")
 
             # =====================================================
-            # 10. FIX DOCKERFILE: Replace npm ci with npm install AND remove npm run build
+            # 10. FIX DOCKERFILE: Replace production multi-stage builds with dev Dockerfiles
             # - npm ci requires package-lock.json which AI-generated projects don't have
             # - npm run build fails on TypeScript errors, but dev containers don't need it
+            # - Multi-stage builds with COPY --from expect dist/ which doesn't exist without build
             # =====================================================
             dockerfile_patterns = ['Dockerfile', 'Dockerfile.*', '*/Dockerfile', 'frontend/Dockerfile', 'backend/Dockerfile']
             dockerfiles_fixed = []
+
+            # Development Dockerfile templates
+            VITE_DEV_DOCKERFILE = '''FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 5173
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+'''
+            REACT_DEV_DOCKERFILE = '''FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 3000
+CMD ["npm", "run", "dev"]
+'''
 
             for pattern in dockerfile_patterns:
                 for dockerfile_path in workspace_path.glob(pattern):
@@ -1491,17 +1510,25 @@ class WorkspaceRestoreService:
                             original = content
                             fixes = []
 
-                            # Fix npm ci -> npm install
-                            if 'npm ci' in content:
-                                content = content.replace('npm ci', 'npm install')
-                                fixes.append('npm_ci')
+                            # Check if it's a multi-stage Node.js production build
+                            is_multistage = 'npm run build' in content and 'COPY --from' in content
 
-                            # Remove RUN npm run build line (dev containers don't need build step)
-                            if 'RUN npm run build' in content:
-                                lines = content.split('\n')
-                                lines = [l for l in lines if 'RUN npm run build' not in l]
-                                content = '\n'.join(lines)
-                                fixes.append('npm_build')
+                            if is_multistage:
+                                # Replace entire Dockerfile with development version
+                                is_vite = '5173' in content or 'vite' in content.lower()
+                                content = VITE_DEV_DOCKERFILE if is_vite else REACT_DEV_DOCKERFILE
+                                fixes.append('replaced_multistage')
+                            else:
+                                # Simple fixes for non-multi-stage Dockerfiles
+                                if 'npm ci' in content:
+                                    content = content.replace('npm ci', 'npm install')
+                                    fixes.append('npm_ci')
+
+                                if 'RUN npm run build' in content:
+                                    lines = content.split('\n')
+                                    lines = [l for l in lines if 'RUN npm run build' not in l]
+                                    content = '\n'.join(lines)
+                                    fixes.append('npm_build')
 
                             if content != original:
                                 dockerfile_path.write_text(content, encoding='utf-8')
