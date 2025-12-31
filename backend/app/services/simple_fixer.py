@@ -2592,8 +2592,20 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                 original_path = path
                 path = path[5:]  # Remove "/app/" prefix
                 logger.info(f"[SimpleFixer] Normalized container path: '{original_path}' -> '{path}'")
+            elif path.startswith("/tmp/sandbox/workspace/"):
+                # Remote sandbox absolute path - extract just the relative path
+                # Path format: /tmp/sandbox/workspace/{user_id}/{project_id}/{relative_path}
+                original_path = path
+                path_parts = path.split("/")
+                # Find relative path after project_id (index 6: ['', 'tmp', 'sandbox', 'workspace', 'user_id', 'project_id', ...])
+                if len(path_parts) > 6:
+                    path = "/".join(path_parts[6:])
+                    logger.info(f"[SimpleFixer] Extracted relative path from sandbox: '{original_path}' -> '{path}'")
+                else:
+                    path = path_parts[-1] if path_parts else path
+                    logger.warning(f"[SimpleFixer] Could not parse sandbox path, using filename: '{original_path}' -> '{path}'")
             elif path.startswith("/"):
-                # Strip any leading slash to make it relative
+                # Other absolute path - strip leading slash
                 original_path = path
                 path = path.lstrip("/")
                 logger.info(f"[SimpleFixer] Stripped leading slash: '{original_path}' -> '{path}'")
