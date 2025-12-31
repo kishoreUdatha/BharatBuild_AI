@@ -133,11 +133,13 @@ export default function BuildPage() {
   // Reload project files from backend if project exists but isn't synced
   // This handles page refresh where we only persist project ID, not files
   // IMPORTANT: First verify the project exists in the database to avoid loading stale localStorage data
+  // FIX: Also check isStreaming to prevent file reload during active generation
   useEffect(() => {
-    if (!isMounted || !authChecked || projectReloaded) return
+    if (!isMounted || !authChecked || projectReloaded || isStreaming) return
 
     const reloadProjectFiles = async () => {
       // If there's a current project that isn't synced and has no files, reload from backend
+      // IMPORTANT: Do NOT reload if isSynced is true (means we're streaming files in)
       if (currentProject && !currentProject.isSynced && currentProject.files.length === 0) {
         console.log('[BuildPage] Verifying project exists in database:', currentProject.id)
 
@@ -186,7 +188,7 @@ export default function BuildPage() {
     }
 
     reloadProjectFiles()
-  }, [isMounted, authChecked, currentProject, projectReloaded, switchProject])
+  }, [isMounted, authChecked, currentProject, projectReloaded, switchProject, isStreaming])
 
   // Load token balance, workspace, and check for initial prompt on mount
   useEffect(() => {

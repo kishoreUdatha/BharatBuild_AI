@@ -84,7 +84,7 @@ class PreviewServerManager:
         self.base_path = Path(base_path)
         self.running_servers: Dict[str, ServerProcess] = {}
         self.default_ports = {
-            "vite": 5173,
+            "vite": 3000,
             "next": 3000,
             "create-react-app": 3000,
             "webpack": 8080,
@@ -141,7 +141,7 @@ class PreviewServerManager:
 
             # Get port
             if port is None:
-                port = self.default_ports.get(build_tool, 5173)
+                port = self.default_ports.get(build_tool, 3000)
 
             # Check if port is available
             if not await self._is_port_available(port):

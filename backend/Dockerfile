@@ -3,8 +3,9 @@
 # With Full AI/ML/Deep Learning Support
 # ============================================
 
-# Use NVIDIA CUDA base image for GPU support
-FROM nvidia/cuda:12.2.0-cudnn8-devel-ubuntu22.04
+# Use Ubuntu base image (CUDA not needed for ECS deployment)
+# For GPU support, switch to: nvidia/cuda:12.2.0-cudnn8-devel-ubuntu22.04
+FROM ubuntu:22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive \

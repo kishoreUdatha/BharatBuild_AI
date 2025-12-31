@@ -164,12 +164,13 @@ async def create_container(
 
     # Restore workspace from database if needed (Bolt.new style)
     try:
-        # Pass None if user_id is "anonymous" so restore service can get real user_id from project
-        restore_user_id = user_id if user_id != "anonymous" else None
+        # FIX: Keep user_id as "anonymous" instead of converting to None
+        # This ensures path consistency with execution.py which uses "anonymous" for anonymous users
+        # Path: /tmp/sandbox/workspace/anonymous/{project_id}
         restore_result = await workspace_restore.auto_restore(
             project_id=project_id,
             db=db,
-            user_id=restore_user_id,
+            user_id=user_id,  # Keep as "anonymous" if that's what the caller used
             project_type=request.project_type  # Pass project type for essential file check
         )
         if restore_result.get("success"):

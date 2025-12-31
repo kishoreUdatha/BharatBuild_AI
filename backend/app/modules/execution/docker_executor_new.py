@@ -361,10 +361,10 @@ CMD ["npm", "start"]
 
 # Default ports for each framework
 DEFAULT_PORTS: Dict[FrameworkType, int] = {
-    FrameworkType.REACT_VITE: 5173,
+    FrameworkType.REACT_VITE: 3000,
     FrameworkType.REACT_CRA: 3000,
     FrameworkType.NEXTJS: 3000,
-    FrameworkType.VUE: 5173,
+    FrameworkType.VUE: 3000,
     FrameworkType.ANGULAR: 4200,
     FrameworkType.NODE_EXPRESS: 3000,
     FrameworkType.PYTHON_FLASK: 5000,

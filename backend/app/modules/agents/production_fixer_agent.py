@@ -466,9 +466,37 @@ Be surgical. Fix only what's broken. Output valid JSON only.
                 "suggestion": "Manual intervention required"
             }
 
-        # Analyze error first
+        # ============= EXTRACT FILES FROM ALL SOURCES =============
+        # The frontend error_message is often truncated. Use ALL available sources:
+        # 1. affected_files from LogBus (already extracted by LogBus)
+        # 2. error_logs["build"] messages (full build errors with file paths)
+        # 3. error_message and stack_trace (fallback)
+
+        # Source 1: Pre-extracted affected_files from LogBus
+        logbus_affected_files = metadata.get("affected_files", [])
+        logger.info(f"[ProductionFixerAgent] Source 1 - LogBus affected_files: {logbus_affected_files}")
+
+        # Source 2: Extract files from full build error messages
+        error_logs = metadata.get("error_logs", {})
+        build_errors = error_logs.get("build", [])
+        build_error_files = []
+        full_error_text = error_message  # Start with frontend error
+
+        for err in build_errors:
+            # Get rebuilt or original error message
+            err_msg = err.get("rebuilt", err.get("original", "")) if isinstance(err, dict) else str(err)
+            full_error_text += "\n" + err_msg
+            # Extract files from this error
+            build_error_files.extend(self._extract_files_from_error(err_msg))
+
+        logger.info(f"[ProductionFixerAgent] Source 2 - Build error files: {list(set(build_error_files))}")
+
+        # Combine all file sources BEFORE analysis
+        pre_extracted_files = list(set(logbus_affected_files + build_error_files))
+
+        # Analyze error with the FULL error text (not just truncated frontend message)
         analysis = await self._analyze_error(
-            error_message=error_message,
+            error_message=full_error_text,  # Use combined full error text
             stack_trace=stack_trace,
             context=context
         )
@@ -481,8 +509,8 @@ Be surgical. Fix only what's broken. Output valid JSON only.
 
         project_files = metadata.get("project_files", [])
 
-        # Step 1: Get files mentioned in error/stack trace (dynamic extraction)
-        error_mentioned_files = analysis.suggested_files_to_fix
+        # Step 1: Get files from ALL sources (analysis + pre-extracted)
+        error_mentioned_files = list(set(analysis.suggested_files_to_fix + pre_extracted_files))
         logger.info(f"[ProductionFixerAgent] DYNAMIC Step 1: Error mentions files: {error_mentioned_files}")
 
         # Step 2: Find which error-mentioned files exist in project

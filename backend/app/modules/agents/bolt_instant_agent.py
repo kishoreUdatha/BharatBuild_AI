@@ -405,7 +405,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',
-    port: 5173,
+    port: 3000,
     // Proxy API requests to backend
     // Uses VITE_API_URL env var (set in docker-compose) or defaults to localhost
     proxy: {

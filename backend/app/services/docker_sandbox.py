@@ -237,9 +237,9 @@ DEFAULT_PORTS = {
     ProjectType.NODEJS: 3000,
     ProjectType.REACT: 3000,
     ProjectType.NEXTJS: 3000,
-    ProjectType.VUE: 5173,
+    ProjectType.VUE: 3000,
     ProjectType.ANGULAR: 4200,
-    ProjectType.SVELTE: 5173,
+    ProjectType.SVELTE: 3000,
 
     # Python
     ProjectType.PYTHON: 8000,

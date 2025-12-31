@@ -115,7 +115,7 @@ DEFAULT_CONFIGS: Dict[ProjectType, DockerConfig] = {
     ProjectType.VUE: DockerConfig(
         image="node:20-alpine",
         command=["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"],
-        port=5173
+        port=3000
     ),
     ProjectType.PYTHON: DockerConfig(
         image="python:3.11-slim",

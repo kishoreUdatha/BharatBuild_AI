@@ -1,0 +1,12 @@
+# Quick patch Dockerfile - builds on existing image
+FROM 930030325663.dkr.ecr.ap-south-1.amazonaws.com/bharatbuild/backend:port-3000-fix
+
+# Copy only the updated Python files
+COPY app/services/container_executor.py /app/app/services/container_executor.py
+COPY app/services/bolt_fixer.py /app/app/services/bolt_fixer.py
+COPY app/modules/orchestrator/dynamic_orchestrator.py /app/app/modules/orchestrator/dynamic_orchestrator.py
+COPY app/utils/config_templates.py /app/app/utils/config_templates.py
+COPY app/modules/agents/production_fixer_agent.py /app/app/modules/agents/production_fixer_agent.py
+COPY app/api/v1/endpoints/errors.py /app/app/api/v1/endpoints/errors.py
+
+# Keep existing entrypoint
