@@ -1536,22 +1536,51 @@ echo "[SANITIZE-CACHED] Done"
                     except Exception as sanitize_err:
                         logger.warning(f"[RemoteRestore] JSON sanitization for cached project failed: {sanitize_err}")
 
-                    # Fix npm ci and npm run build in Dockerfiles for cached projects
+                    # Fix Dockerfiles: Replace production multi-stage builds with development Dockerfiles
                     try:
                         dockerfile_fix_script = f'''
-echo "[DOCKERFILE-FIX-CACHED] Checking for npm ci and npm run build..."
+echo "[DOCKERFILE-FIX-CACHED] Checking Dockerfiles..."
 for dockerfile in $(find {workspace_path} -name "Dockerfile*" -type f 2>/dev/null); do
-    FIXED=""
-    if grep -q "npm ci" "$dockerfile" 2>/dev/null; then
-        sed -i 's/npm ci/npm install/g' "$dockerfile"
-        FIXED="$FIXED npm_ci"
-    fi
-    if grep -q "RUN npm run build" "$dockerfile" 2>/dev/null; then
-        sed -i '/RUN npm run build/d' "$dockerfile"
-        FIXED="$FIXED npm_build"
-    fi
-    if [ -n "$FIXED" ]; then
-        echo "[DOCKERFILE-FIX-CACHED] Fixed:$FIXED in $dockerfile"
+    # Check if it's a multi-stage Node.js production build (has npm run build AND COPY --from)
+    if grep -q "npm run build" "$dockerfile" 2>/dev/null && grep -q "COPY --from" "$dockerfile" 2>/dev/null; then
+        echo "[DOCKERFILE-FIX-CACHED] Replacing multi-stage build with dev Dockerfile: $dockerfile"
+        # Detect if it's Vite (port 5173) or Next.js/React (port 3000)
+        if grep -q "5173" "$dockerfile" 2>/dev/null || grep -qi "vite" "$dockerfile" 2>/dev/null; then
+            cat > "$dockerfile" << 'DEVEOF'
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 5173
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+DEVEOF
+        else
+            cat > "$dockerfile" << 'DEVEOF'
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 3000
+CMD ["npm", "run", "dev"]
+DEVEOF
+        fi
+        echo "[DOCKERFILE-FIX-CACHED] Replaced: $dockerfile"
+    else
+        # Simple fix for non-multi-stage Dockerfiles
+        FIXED=""
+        if grep -q "npm ci" "$dockerfile" 2>/dev/null; then
+            sed -i 's/npm ci/npm install/g' "$dockerfile"
+            FIXED="$FIXED npm_ci"
+        fi
+        if grep -q "RUN npm run build" "$dockerfile" 2>/dev/null; then
+            sed -i '/RUN npm run build/d' "$dockerfile"
+            FIXED="$FIXED npm_build"
+        fi
+        if [ -n "$FIXED" ]; then
+            echo "[DOCKERFILE-FIX-CACHED] Fixed:$FIXED in $dockerfile"
+        fi
     fi
 done
 '''
@@ -1764,25 +1793,54 @@ echo "[SANITIZE] Done"
             except Exception as sanitize_err:
                 logger.warning(f"[RemoteRestore] JSON sanitization failed (non-critical): {sanitize_err}")
 
-            # FIX DOCKERFILES: Replace npm ci with npm install AND remove npm run build
+            # FIX DOCKERFILES: Replace production multi-stage builds with development Dockerfiles
             # - npm ci requires package-lock.json which AI-generated projects don't have
             # - npm run build fails on TypeScript errors, but dev containers don't need it
+            # - Multi-stage builds with COPY --from expect dist/ which doesn't exist without build
             try:
                 dockerfile_fix_script = f'''
-echo "[DOCKERFILE-FIX] Checking for npm ci and npm run build in Dockerfiles..."
+echo "[DOCKERFILE-FIX] Checking Dockerfiles..."
 for dockerfile in $(find {workspace_path} -name "Dockerfile*" -type f 2>/dev/null); do
-    FIXED=""
-    if grep -q "npm ci" "$dockerfile" 2>/dev/null; then
-        sed -i 's/npm ci/npm install/g' "$dockerfile"
-        FIXED="$FIXED npm_ci"
-    fi
-    # Remove RUN npm run build line (development containers don't need build step)
-    if grep -q "RUN npm run build" "$dockerfile" 2>/dev/null; then
-        sed -i '/RUN npm run build/d' "$dockerfile"
-        FIXED="$FIXED npm_build"
-    fi
-    if [ -n "$FIXED" ]; then
-        echo "[DOCKERFILE-FIX] Fixed:$FIXED in $dockerfile"
+    # Check if it's a multi-stage Node.js production build (has npm run build AND COPY --from)
+    if grep -q "npm run build" "$dockerfile" 2>/dev/null && grep -q "COPY --from" "$dockerfile" 2>/dev/null; then
+        echo "[DOCKERFILE-FIX] Replacing multi-stage build with dev Dockerfile: $dockerfile"
+        # Detect if it's Vite (port 5173) or Next.js/React (port 3000)
+        if grep -q "5173" "$dockerfile" 2>/dev/null || grep -qi "vite" "$dockerfile" 2>/dev/null; then
+            cat > "$dockerfile" << 'DEVEOF'
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 5173
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+DEVEOF
+        else
+            cat > "$dockerfile" << 'DEVEOF'
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 3000
+CMD ["npm", "run", "dev"]
+DEVEOF
+        fi
+        echo "[DOCKERFILE-FIX] Replaced: $dockerfile"
+    else
+        # Simple fix for non-multi-stage Dockerfiles
+        FIXED=""
+        if grep -q "npm ci" "$dockerfile" 2>/dev/null; then
+            sed -i 's/npm ci/npm install/g' "$dockerfile"
+            FIXED="$FIXED npm_ci"
+        fi
+        if grep -q "RUN npm run build" "$dockerfile" 2>/dev/null; then
+            sed -i '/RUN npm run build/d' "$dockerfile"
+            FIXED="$FIXED npm_build"
+        fi
+        if [ -n "$FIXED" ]; then
+            echo "[DOCKERFILE-FIX] Fixed:$FIXED in $dockerfile"
+        fi
     fi
 done
 echo "[DOCKERFILE-FIX] Done"
