@@ -1567,6 +1567,15 @@ CMD ["npm", "run", "dev"]
 DEVEOF
         fi
         echo "[DOCKERFILE-FIX-CACHED] Replaced: $dockerfile"
+    # Check if it's a Java/Spring Boot Dockerfile with mvnw (Maven wrapper often missing)
+    elif grep -q "./mvnw" "$dockerfile" 2>/dev/null; then
+        echo "[DOCKERFILE-FIX-CACHED] Fixing Java Dockerfile (mvnw -> mvn): $dockerfile"
+        # Replace ./mvnw with mvn (Maven is in base image)
+        sed -i 's|./mvnw|mvn|g' "$dockerfile"
+        # Also remove the mvnw copy step if present
+        sed -i '/COPY mvnw/d' "$dockerfile"
+        sed -i '/COPY .mvn/d' "$dockerfile"
+        echo "[DOCKERFILE-FIX-CACHED] Fixed Java Dockerfile: $dockerfile"
     else
         # Simple fix for non-multi-stage Dockerfiles
         FIXED=""
@@ -1797,6 +1806,7 @@ echo "[SANITIZE] Done"
             # - npm ci requires package-lock.json which AI-generated projects don't have
             # - npm run build fails on TypeScript errors, but dev containers don't need it
             # - Multi-stage builds with COPY --from expect dist/ which doesn't exist without build
+            # - Java Dockerfiles may use ./mvnw which often doesn't exist
             try:
                 dockerfile_fix_script = f'''
 echo "[DOCKERFILE-FIX] Checking Dockerfiles..."
@@ -1827,6 +1837,15 @@ CMD ["npm", "run", "dev"]
 DEVEOF
         fi
         echo "[DOCKERFILE-FIX] Replaced: $dockerfile"
+    # Check if it's a Java/Spring Boot Dockerfile with mvnw (Maven wrapper often missing)
+    elif grep -q "./mvnw" "$dockerfile" 2>/dev/null; then
+        echo "[DOCKERFILE-FIX] Fixing Java Dockerfile (mvnw -> mvn): $dockerfile"
+        # Replace ./mvnw with mvn (Maven is in base image)
+        sed -i 's|./mvnw|mvn|g' "$dockerfile"
+        # Also remove the mvnw copy step if present
+        sed -i '/COPY mvnw/d' "$dockerfile"
+        sed -i '/COPY .mvn/d' "$dockerfile"
+        echo "[DOCKERFILE-FIX] Fixed Java Dockerfile: $dockerfile"
     else
         # Simple fix for non-multi-stage Dockerfiles
         FIXED=""
