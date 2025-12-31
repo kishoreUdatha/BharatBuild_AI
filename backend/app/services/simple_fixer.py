@@ -38,6 +38,7 @@ from anthropic import AsyncAnthropic
 
 from app.core.logging_config import logger
 from app.core.config import settings
+from app.services.unified_file_manager import unified_file_manager
 
 
 # Rate limiting to prevent infinite loops
@@ -2596,6 +2597,23 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                 original_path = path
                 path = path.lstrip("/")
                 logger.info(f"[SimpleFixer] Stripped leading slash: '{original_path}' -> '{path}'")
+
+            # NORMALIZE PATH: Apply project structure rules (fullstack -> frontend/ or backend/)
+            # This ensures files go to correct folders based on project type
+            if project_id:
+                # Try to extract user_id from project_path (format: /tmp/sandbox/workspace/{user_id}/{project_id})
+                try:
+                    path_parts = str(project_path).split("/")
+                    if "workspace" in path_parts:
+                        workspace_idx = path_parts.index("workspace")
+                        if len(path_parts) > workspace_idx + 1:
+                            user_id = path_parts[workspace_idx + 1]
+                            original_path = path
+                            path = unified_file_manager.normalize_path(path, project_id, user_id)
+                            if path != original_path:
+                                logger.info(f"[SimpleFixer] Normalized for project structure: '{original_path}' -> '{path}'")
+                except Exception as e:
+                    logger.warning(f"[SimpleFixer] Could not normalize path: {e}")
 
             # VALIDATION: Prevent creating files in new/unexpected directories
             # AI sometimes hallucinates paths like "app/tsconfig.node.json" instead of "tsconfig.node.json"

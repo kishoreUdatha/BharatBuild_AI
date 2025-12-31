@@ -63,6 +63,7 @@ from app.modules.agents.summarizer_agent import SummarizerAgent  # Internal help
 from app.modules.agents.verification_agent import VerificationAgent
 from app.modules.agents.document_generator_agent import DocumentGeneratorAgent
 from app.modules.agents.bolt_instant_agent import BoltInstantAgent  # For beautiful UI-only projects
+from app.services.unified_file_manager import unified_file_manager, ProjectStructure
 
 
 # ============================================================================
@@ -1356,7 +1357,7 @@ class DynamicOrchestrator:
 
         return False
 
-    async def save_file(self, project_id: str, file_path: str, content: str, session_id: str = None, user_id: str = None) -> bool:
+    async def save_file(self, project_id: str, file_path: str, content: str, session_id: str = None, user_id: str = None, component: str = None) -> bool:
         """
         Save file - routes to all configured storage layers with retry logic.
 
@@ -1372,11 +1373,17 @@ class DynamicOrchestrator:
             content: File content
             session_id: Temp session ID (for ephemeral mode)
             user_id: User identifier for user-scoped storage (like Bolt.new)
+            component: Optional hint ("frontend" or "backend") for path normalization
 
         Returns:
             True if saved successfully to all critical layers
         """
         import asyncio
+
+        # NORMALIZE PATH: Apply project structure rules (fullstack -> frontend/ or backend/)
+        # This ensures files go to the correct folder based on project type
+        if user_id:
+            file_path = unified_file_manager.normalize_path(file_path, project_id, user_id, component)
 
         # AUTO-SANITIZE: Clean file path and content for Docker/EC2 compatibility
         try:
@@ -3284,8 +3291,41 @@ Generate ONLY the file content, no explanations. Output the complete, working co
         complexity_info = self._detect_project_complexity(context.user_request)
         logger.info(f"[Planner] Complexity: {complexity_info['complexity']}, Max files: {complexity_info['max_files']}")
 
+        # SET PROJECT STRUCTURE for UnifiedFileManager (centralizes path normalization)
+        # This ensures all files go to the correct folders (frontend/ or backend/)
+        include_frontend = complexity_info.get('include_frontend', True)
+        include_backend = complexity_info.get('include_backend', False)
+        user_id = context.metadata.get("user_id") if context.metadata else None
+
+        if include_frontend and include_backend:
+            # Fullstack project: frontend/ and backend/ folders
+            unified_file_manager.set_project_structure(
+                context.project_id,
+                user_id or "anonymous",
+                ProjectStructure.FULLSTACK,
+                frontend_path="frontend",
+                backend_path="backend"
+            )
+            logger.info(f"[Planner] Set project structure: FULLSTACK (frontend/ + backend/)")
+        elif include_backend and not include_frontend:
+            # Backend only
+            unified_file_manager.set_project_structure(
+                context.project_id,
+                user_id or "anonymous",
+                ProjectStructure.BACKEND_ONLY,
+                backend_path=""  # At root
+            )
+            logger.info(f"[Planner] Set project structure: BACKEND_ONLY")
+        else:
+            # Frontend only (flat structure at root)
+            unified_file_manager.set_project_structure(
+                context.project_id,
+                user_id or "anonymous",
+                ProjectStructure.FLAT
+            )
+            logger.info(f"[Planner] Set project structure: FLAT (frontend at root)")
+
         # Build complexity-aware prompt (no hard file limits - planner decides)
-        include_frontend = complexity_info.get('include_frontend', True)  # Default to True for backward compatibility
         complexity_hint = f"""
 COMPLEXITY DETECTION RESULT:
 - Detected Complexity: {complexity_info['complexity'].upper()}
