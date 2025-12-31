@@ -289,25 +289,105 @@ async def execute_command(
     - etc.
 
     Returns: Server-Sent Events stream with real-time output
+
+    Response format (each event):
+    {
+        "type": "stdout|stderr|exit|error|done",
+        "data": "raw message (unchanged for fixers)",
+        "display": {
+            "level": "info|success|warning|error",
+            "category": "build|install|server|test|error|general",
+            "icon": "emoji/symbol",
+            "label": "SHORT_LABEL",
+            "color": "#hexcolor"
+        },
+        "timestamp": "HH:MM:SS"
+    }
     """
+    from app.services.terminal_log_formatter import terminal_formatter
+
     manager = safe_get_container_manager()
 
     async def event_stream():
-        """Generate SSE events from command execution"""
+        """Generate SSE events from command execution with display hints"""
         try:
+            # Send start event
+            start_event = {
+                "type": "system",
+                "data": f"Running: {request.command}",
+                "display": {
+                    "level": "system",
+                    "category": "general",
+                    "icon": "▶",
+                    "label": "START",
+                    "color": "#90CAF9"
+                }
+            }
+            yield f"data: {json.dumps(start_event)}\n\n"
+
             async for event in manager.execute_command(
                 project_id=project_id,
                 command=request.command,
                 timeout=request.timeout,
             ):
-                # Format as SSE
-                yield f"data: {json.dumps(event)}\n\n"
+                # Format for display (adds hints, keeps raw data)
+                formatted = terminal_formatter.format_event(event)
+
+                # Build response with raw data + display hints
+                response = {
+                    # Raw data - UNCHANGED for fixers
+                    "type": event.get("type"),
+                    "data": event.get("data"),
+                    # Display hints - for UI
+                    "display": {
+                        "level": formatted.level.value,
+                        "category": formatted.category.value,
+                        "icon": formatted.icon,
+                        "label": formatted.label,
+                        "color": formatted.color,
+                    },
+                    "timestamp": formatted.timestamp,
+                }
+
+                # Include file/line if detected
+                if formatted.file_path:
+                    response["file"] = formatted.file_path
+                if formatted.line_number:
+                    response["line"] = formatted.line_number
+
+                # Include exit-specific fields
+                if event.get("type") == "exit":
+                    response["success"] = event.get("success", False)
+
+                yield f"data: {json.dumps(response)}\n\n"
 
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
+            error_event = {
+                "type": "error",
+                "data": str(e),
+                "display": {
+                    "level": "error",
+                    "category": "error",
+                    "icon": "✗",
+                    "label": "ERROR",
+                    "color": "#E57373"
+                }
+            }
+            yield f"data: {json.dumps(error_event)}\n\n"
 
         # Send done event
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        done_event = {
+            "type": "done",
+            "data": "",
+            "display": {
+                "level": "system",
+                "category": "general",
+                "icon": "■",
+                "label": "DONE",
+                "color": "#90CAF9"
+            }
+        }
+        yield f"data: {json.dumps(done_event)}\n\n"
 
     return StreamingResponse(
         event_stream(),
@@ -679,27 +759,88 @@ async def batch_execute_commands(
 
     Common use case: npm install && npm run build && npm run dev
     """
+    from app.services.terminal_log_formatter import terminal_formatter
+
     manager = safe_get_container_manager()
 
     async def event_stream():
         for i, command in enumerate(request.commands):
-            yield f"data: {json.dumps({'type': 'command_start', 'index': i, 'command': command})}\n\n"
+            # Command start event with display hints
+            start_event = {
+                "type": "command_start",
+                "index": i,
+                "command": command,
+                "data": f"[{i+1}/{len(request.commands)}] {command}",
+                "display": {
+                    "level": "system",
+                    "category": "general",
+                    "icon": "▶",
+                    "label": f"CMD {i+1}",
+                    "color": "#90CAF9"
+                }
+            }
+            yield f"data: {json.dumps(start_event)}\n\n"
 
             error_occurred = False
             async for event in manager.execute_command(project_id, command):
-                yield f"data: {json.dumps(event)}\n\n"
+                # Format for display
+                formatted = terminal_formatter.format_event(event)
+
+                response = {
+                    "type": event.get("type"),
+                    "data": event.get("data"),
+                    "display": {
+                        "level": formatted.level.value,
+                        "category": formatted.category.value,
+                        "icon": formatted.icon,
+                        "label": formatted.label,
+                        "color": formatted.color,
+                    },
+                    "timestamp": formatted.timestamp,
+                }
+
+                if formatted.file_path:
+                    response["file"] = formatted.file_path
+                if formatted.line_number:
+                    response["line"] = formatted.line_number
+                if event.get("type") == "exit":
+                    response["success"] = event.get("success", False)
+
+                yield f"data: {json.dumps(response)}\n\n"
 
                 if event.get("type") == "error":
                     error_occurred = True
-
                 if event.get("type") == "exit" and not event.get("success"):
                     error_occurred = True
 
             if error_occurred and request.stop_on_error:
-                yield f"data: {json.dumps({'type': 'batch_stopped', 'reason': 'error'})}\n\n"
+                stop_event = {
+                    "type": "batch_stopped",
+                    "reason": "error",
+                    "data": f"Batch stopped at command {i+1} due to error",
+                    "display": {
+                        "level": "error",
+                        "category": "error",
+                        "icon": "⏹",
+                        "label": "STOPPED",
+                        "color": "#E57373"
+                    }
+                }
+                yield f"data: {json.dumps(stop_event)}\n\n"
                 break
 
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        done_event = {
+            "type": "done",
+            "data": "",
+            "display": {
+                "level": "system",
+                "category": "general",
+                "icon": "■",
+                "label": "DONE",
+                "color": "#90CAF9"
+            }
+        }
+        yield f"data: {json.dumps(done_event)}\n\n"
 
     return StreamingResponse(
         event_stream(),
