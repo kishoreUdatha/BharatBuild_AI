@@ -34,6 +34,7 @@ from enum import Enum
 from pathlib import Path
 
 from app.core.logging_config import logger
+from app.services.unified_file_manager import unified_file_manager
 
 
 class ErrorCategory(Enum):
@@ -634,3 +635,92 @@ def clear_terminal_fixer(project_id: str, user_id: str = None):
     key = f"{project_id}:{user_id or 'anon'}"
     if key in _fixer_instances:
         del _fixer_instances[key]
+
+
+# ============================================================================
+# UnifiedFixer Integration Bridge
+# ============================================================================
+
+async def fix_with_unified(
+    error_output: str,
+    project_path: str,
+    project_id: str,
+    user_id: str,
+    file_path: str = None
+) -> Dict[str, Any]:
+    """
+    Bridge function to use UnifiedFixer with TerminalErrorFixer compatibility.
+
+    Uses the optimized 3-tier architecture:
+    - Tier 1: Deterministic (FREE) - pattern-based fixes
+    - Tier 2: Haiku AI ($0.001) - simple AI fixes
+    - Tier 3: Sonnet AI ($0.01) - complex AI fixes
+
+    Args:
+        error_output: Error message/output
+        project_path: Path to project
+        project_id: Project ID
+        user_id: User ID
+        file_path: Optional file path with error
+
+    Returns:
+        Dict compatible with TerminalErrorFixer results:
+            - fixed: bool
+            - fix_type: str ("tier1", "tier2", "tier3", "cache")
+            - files_modified: List[str]
+            - cost: float
+            - time_ms: int
+            - error: Optional[str]
+    """
+    try:
+        from app.services.unified_fixer import UnifiedFixer, FixTier
+
+        # Get or create unified fixer
+        fixer = UnifiedFixer(
+            file_manager=unified_file_manager,
+            enable_cache=True,
+            escalate_on_fail=True
+        )
+
+        # Attempt fix
+        result = await fixer.fix(
+            error=error_output,
+            project_path=project_path,
+            project_id=project_id,
+            user_id=user_id,
+            file_path=file_path
+        )
+
+        # Convert to compatible format
+        fix_type_map = {
+            FixTier.DETERMINISTIC: "tier1",
+            FixTier.HAIKU: "tier2",
+            FixTier.SONNET: "tier3"
+        }
+
+        return {
+            "fixed": result.success,
+            "fix_type": "cache" if result.from_cache else fix_type_map.get(result.final_tier, "unknown"),
+            "files_modified": result.files_modified,
+            "command_run": result.command_run,
+            "cost": result.total_cost,
+            "time_ms": result.total_time_ms,
+            "category": result.error_category.value,
+            "error": result.error,
+            "attempts": len(result.attempts)
+        }
+
+    except ImportError:
+        logger.warning("[TerminalFixer] UnifiedFixer not available, using legacy fixer")
+        return {
+            "fixed": False,
+            "fix_type": None,
+            "error": "UnifiedFixer not available"
+        }
+    except Exception as e:
+        logger.error(f"[TerminalFixer] UnifiedFixer error: {e}")
+        return {
+            "fixed": False,
+            "fix_type": None,
+            "error": str(e)
+        }
