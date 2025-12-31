@@ -1536,6 +1536,28 @@ echo "[SANITIZE-CACHED] Done"
                     except Exception as sanitize_err:
                         logger.warning(f"[RemoteRestore] JSON sanitization for cached project failed: {sanitize_err}")
 
+                    # Fix npm ci in Dockerfiles for cached projects
+                    try:
+                        dockerfile_fix_script = f'''
+echo "[DOCKERFILE-FIX-CACHED] Checking for npm ci..."
+for dockerfile in $(find {workspace_path} -name "Dockerfile*" -type f 2>/dev/null); do
+    if grep -q "npm ci" "$dockerfile" 2>/dev/null; then
+        sed -i 's/npm ci/npm install/g' "$dockerfile"
+        echo "[DOCKERFILE-FIX-CACHED] Fixed: $dockerfile"
+    fi
+done
+'''
+                        docker_client.containers.run(
+                            "alpine:latest",
+                            ["-c", dockerfile_fix_script],
+                            entrypoint="/bin/sh",
+                            volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                            remove=True,
+                            detach=False
+                        )
+                    except Exception as fix_err:
+                        logger.warning(f"[RemoteRestore] Dockerfile fix for cached project failed: {fix_err}")
+
                     # Return file info from DB without re-downloading
                     async with AsyncSessionLocal() as session:
                         result = await session.execute(
@@ -1733,6 +1755,33 @@ echo "[SANITIZE] Done"
                     logger.info(f"[RemoteRestore] JSON sanitization output:\n{sanitize_output.decode()[:500]}")
             except Exception as sanitize_err:
                 logger.warning(f"[RemoteRestore] JSON sanitization failed (non-critical): {sanitize_err}")
+
+            # FIX DOCKERFILES: Replace npm ci with npm install
+            # npm ci requires package-lock.json which AI-generated projects don't have
+            try:
+                dockerfile_fix_script = f'''
+echo "[DOCKERFILE-FIX] Checking for npm ci in Dockerfiles..."
+for dockerfile in $(find {workspace_path} -name "Dockerfile*" -type f 2>/dev/null); do
+    if grep -q "npm ci" "$dockerfile" 2>/dev/null; then
+        echo "[DOCKERFILE-FIX] Fixing: $dockerfile"
+        sed -i 's/npm ci/npm install/g' "$dockerfile"
+        echo "[DOCKERFILE-FIX] Fixed: $dockerfile"
+    fi
+done
+echo "[DOCKERFILE-FIX] Done"
+'''
+                fix_output = docker_client.containers.run(
+                    "alpine:latest",
+                    ["-c", dockerfile_fix_script],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    remove=True,
+                    detach=False
+                )
+                if fix_output:
+                    logger.info(f"[RemoteRestore] Dockerfile fix output:\n{fix_output.decode()[:500]}")
+            except Exception as dockerfile_err:
+                logger.warning(f"[RemoteRestore] Dockerfile fix failed (non-critical): {dockerfile_err}")
 
             # BROWSER ERROR CAPTURE: Inject error capture script into index.html files
             # This enables automatic browser error detection and reporting to the backend

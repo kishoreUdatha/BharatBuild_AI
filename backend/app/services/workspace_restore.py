@@ -1476,7 +1476,31 @@ class WorkspaceRestoreService:
                         fixes_applied.append(f"Fixed import paths in {len(files_fixed)} source files")
 
             # =====================================================
-            # 10. FIX INCORRECT PATHS AND TAGS IN INDEX.HTML
+            # 10. FIX DOCKERFILE: Replace npm ci with npm install
+            # npm ci requires package-lock.json which AI-generated projects don't have
+            # =====================================================
+            dockerfile_patterns = ['Dockerfile', 'Dockerfile.*', '*/Dockerfile', 'frontend/Dockerfile', 'backend/Dockerfile']
+            dockerfiles_fixed = []
+
+            for pattern in dockerfile_patterns:
+                for dockerfile_path in workspace_path.glob(pattern):
+                    if dockerfile_path.is_file():
+                        try:
+                            content = dockerfile_path.read_text(encoding='utf-8')
+                            if 'npm ci' in content:
+                                new_content = content.replace('npm ci', 'npm install')
+                                dockerfile_path.write_text(new_content, encoding='utf-8')
+                                rel_path = dockerfile_path.relative_to(workspace_path)
+                                dockerfiles_fixed.append(str(rel_path))
+                        except Exception as e:
+                            errors.append(f"Error fixing Dockerfile {dockerfile_path.name}: {e}")
+
+            if dockerfiles_fixed:
+                fixes_applied.append(f"Fixed npm ci -> npm install in: {', '.join(dockerfiles_fixed)}")
+                logger.info(f"[WorkspaceRestore] Fixed npm ci in Dockerfiles: {dockerfiles_fixed}")
+
+            # =====================================================
+            # 11. FIX INCORRECT PATHS AND TAGS IN INDEX.HTML
             # =====================================================
             index_html_path = workspace_path / 'index.html'
             if index_html_path.exists():
