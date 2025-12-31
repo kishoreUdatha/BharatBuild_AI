@@ -1208,21 +1208,33 @@ class ContainerExecutor:
             yield f"  🗄️ Database: {fullstack_config.database_type.value}\n"
         yield f"\n"
 
+        # ALWAYS use .yml extension - we generate with .yml
         compose_file = os.path.join(project_path, "docker-compose.yml")
         compose_yaml_file = os.path.join(project_path, "docker-compose.yaml")
+        generated_compose = False
 
-        # Check if docker-compose file exists
-        has_compose = os.path.exists(compose_file) or os.path.exists(compose_yaml_file)
+        # Check if docker-compose file exists (handles both local and remote sandbox)
+        yml_exists = self._file_exists_on_sandbox(compose_file)
+        yaml_exists = self._file_exists_on_sandbox(compose_yaml_file)
+        has_compose = yml_exists or yaml_exists
 
         if has_compose:
-            yield f"📋 Found docker-compose.yml, using it directly...\n"
+            # Use the existing file
+            if yml_exists:
+                compose_file = os.path.join(project_path, "docker-compose.yml")
+            else:
+                compose_file = os.path.join(project_path, "docker-compose.yaml")
+            yield f"📋 Found {os.path.basename(compose_file)}, using it directly...\n"
         else:
             yield f"📝 Generating docker-compose.yml for your project...\n"
             async for msg in self._generate_docker_compose(project_path, fullstack_config):
                 yield msg
+            # We just generated it - ALWAYS use .yml extension
+            compose_file = os.path.join(project_path, "docker-compose.yml")
+            generated_compose = True
 
-        # Run docker-compose
-        async for msg in self._run_docker_compose(project_id, project_path, fullstack_config):
+        # Run docker-compose - pass the exact compose file path we're using
+        async for msg in self._run_docker_compose(project_id, project_path, fullstack_config, compose_file, generated_compose):
             yield msg
 
     async def _generate_docker_compose(
@@ -1340,7 +1352,9 @@ class ContainerExecutor:
         self,
         project_id: str,
         project_path: str,
-        fullstack_config: FullStackConfig
+        fullstack_config: FullStackConfig,
+        compose_file: str = None,
+        just_generated: bool = False
     ) -> AsyncGenerator[str, None]:
         """
         Run docker-compose up and stream output.
@@ -1348,15 +1362,43 @@ class ContainerExecutor:
         Handles both local and remote sandbox modes:
         - Local: Uses subprocess directly
         - Remote: Uses helper containers with docker-compose
+
+        Args:
+            project_id: Project identifier
+            project_path: Path to project
+            fullstack_config: Full-stack configuration
+            compose_file: Path to compose file (if known from caller)
+            just_generated: True if we just generated the file (skip existence check)
         """
         import yaml
 
         yield f"\n━━━ Running Docker Compose ━━━\n"
 
-        # Read docker-compose.yml to get port mappings (handles remote sandbox)
-        compose_file = os.path.join(project_path, "docker-compose.yml")
-        if not self._file_exists_on_sandbox(compose_file):
-            compose_file = os.path.join(project_path, "docker-compose.yaml")
+        # Use provided compose_file, or detect it
+        if compose_file is None:
+            compose_file = os.path.join(project_path, "docker-compose.yml")
+
+        # In remote sandbox, add a small delay to ensure file sync after generation
+        if self._is_remote_sandbox() and just_generated:
+            await asyncio.sleep(0.5)
+
+        # If we just generated the file, trust that it exists with .yml extension
+        # Only do existence check if we didn't just generate it
+        if not just_generated:
+            yml_file = os.path.join(project_path, "docker-compose.yml")
+            yaml_file = os.path.join(project_path, "docker-compose.yaml")
+            yml_exists = self._file_exists_on_sandbox(yml_file)
+            yaml_exists = self._file_exists_on_sandbox(yaml_file)
+
+            if yml_exists:
+                compose_file = yml_file
+            elif yaml_exists:
+                compose_file = yaml_file
+                yield f"  📄 Using docker-compose.yaml\n"
+            else:
+                yield f"  ⚠️ Could not verify docker-compose file exists, using {os.path.basename(compose_file)}\n"
+
+        yield f"  📄 Compose file: {os.path.basename(compose_file)}\n"
 
         frontend_port = fullstack_config.frontend_port
         backend_port = fullstack_config.backend_port
@@ -1366,18 +1408,32 @@ class ContainerExecutor:
             if compose_content:
                 compose_config = yaml.safe_load(compose_content)
 
-                # Extract ports from compose file
-                services = compose_config.get("services", {})
-                for name, service in services.items():
-                    ports = service.get("ports", [])
-                    for port_mapping in ports:
-                        if isinstance(port_mapping, str) and ":" in port_mapping:
-                            host_port = int(port_mapping.split(":")[0])
-                            if "frontend" in name.lower() or "web" in name.lower() or "ui" in name.lower():
-                                frontend_port = host_port
-                            elif "backend" in name.lower() or "api" in name.lower() or "server" in name.lower():
-                                backend_port = host_port
+                # Validate compose_config is a dict
+                if not isinstance(compose_config, dict):
+                    logger.warning(f"[ContainerExecutor] Compose file parsed but not a dict: {type(compose_config)}")
+                    yield f"  ⚠️ Compose file format invalid, using default ports\n"
+                else:
+                    # Extract ports from compose file
+                    services = compose_config.get("services", {})
+                    if isinstance(services, dict):
+                        for name, service in services.items():
+                            if not isinstance(service, dict):
+                                continue
+                            ports = service.get("ports", [])
+                            for port_mapping in ports:
+                                if isinstance(port_mapping, str) and ":" in port_mapping:
+                                    try:
+                                        host_port = int(port_mapping.split(":")[0])
+                                        if "frontend" in name.lower() or "web" in name.lower() or "ui" in name.lower():
+                                            frontend_port = host_port
+                                        elif "backend" in name.lower() or "api" in name.lower() or "server" in name.lower():
+                                            backend_port = host_port
+                                    except ValueError:
+                                        pass  # Skip invalid port mappings
+            else:
+                yield f"  ⚠️ Could not read compose file, using default ports\n"
         except Exception as e:
+            logger.warning(f"[ContainerExecutor] Could not parse compose file: {e}")
             yield f"  ⚠️ Could not parse compose file: {e}\n"
 
         # Stop any existing containers for this project
@@ -1976,22 +2032,84 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
         """
         try:
             if not self._is_remote_sandbox():
-                return os.path.exists(file_path)
+                exists = os.path.exists(file_path)
+                logger.debug(f"[ContainerExecutor] Local file check: {file_path} -> {exists}")
+                return exists
 
-            # Remote mode - use helper container
-            result = self.docker_client.containers.run(
-                "alpine:latest",
-                ["-c", f'test -f "{file_path}" && echo "EXISTS" || echo "MISSING"'],
-                entrypoint="/bin/sh",
-                volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
-                remove=True,
-                detach=False
-            )
+            # Remote mode - use helper container with multiple checks
+            logger.info(f"[ContainerExecutor] Checking file in remote sandbox: {file_path}")
 
-            return b"EXISTS" in result
+            # First try: use test -f
+            try:
+                result = self.docker_client.containers.run(
+                    "alpine:latest",
+                    ["-c", f'test -f "{file_path}" && echo "EXISTS" || echo "MISSING"'],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    remove=True,
+                    detach=False
+                )
+
+                output = result.decode() if isinstance(result, bytes) else str(result)
+                exists = "EXISTS" in output
+                logger.info(f"[ContainerExecutor] File check result: {file_path} -> {exists} (output: {output.strip()})")
+
+                if exists:
+                    return True
+
+            except Exception as e1:
+                logger.warning(f"[ContainerExecutor] test -f check failed: {e1}")
+
+            # Second try: use ls to check
+            try:
+                result = self.docker_client.containers.run(
+                    "alpine:latest",
+                    ["-c", f'ls -la "{file_path}" 2>&1'],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    remove=True,
+                    detach=False
+                )
+
+                output = result.decode() if isinstance(result, bytes) else str(result)
+                # If ls succeeds, the file exists
+                exists = "No such file" not in output and "cannot access" not in output
+                logger.info(f"[ContainerExecutor] ls check result: {file_path} -> {exists}")
+
+                if exists:
+                    return True
+
+            except Exception as e2:
+                logger.warning(f"[ContainerExecutor] ls check failed: {e2}")
+
+            # Third try: list directory to see what files exist
+            try:
+                dir_path = os.path.dirname(file_path)
+                result = self.docker_client.containers.run(
+                    "alpine:latest",
+                    ["-c", f'ls -la "{dir_path}" 2>&1 | head -20'],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    remove=True,
+                    detach=False
+                )
+                output = result.decode() if isinstance(result, bytes) else str(result)
+                logger.info(f"[ContainerExecutor] Directory listing for {dir_path}:\n{output[:500]}")
+
+                # Check if the filename is in the listing
+                filename = os.path.basename(file_path)
+                if filename in output:
+                    logger.info(f"[ContainerExecutor] Found {filename} in directory listing!")
+                    return True
+
+            except Exception as e3:
+                logger.warning(f"[ContainerExecutor] Directory listing failed: {e3}")
+
+            logger.warning(f"[ContainerExecutor] File not found in remote sandbox: {file_path}")
+            return False
 
         except Exception as e:
-            logger.warning(f"[ContainerExecutor] Failed to check file existence: {e}")
+            logger.error(f"[ContainerExecutor] Failed to check file existence: {e}")
             return False
 
     def _read_file_from_sandbox(self, file_path: str) -> Optional[str]:

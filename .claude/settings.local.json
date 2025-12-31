@@ -7,7 +7,8 @@
       "Bash(git push:*)",
       "Bash(MSYS_NO_PATHCONV=1 aws ecs describe-services:*)",
       "Bash(docker build:*)",
-      "Bash(MSYS_NO_PATHCONV=1 aws ssm get-command-invocation:*)"
+      "Bash(MSYS_NO_PATHCONV=1 aws ssm get-command-invocation:*)",
+      "Bash(mkdir:*)"
     ]
   }
 }
