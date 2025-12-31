@@ -275,13 +275,36 @@ async def get_container_internal_address(project_id: str) -> Optional[tuple[str,
             ports = container.attrs.get('NetworkSettings', {}).get('Ports', {})
             host_port = None
 
-            # Find the host port mapping
-            for container_port, bindings in ports.items():
-                if bindings:
-                    host_port = int(bindings[0].get('HostPort', 0))
+            # Priority: frontend ports (3000, 5173) over backend ports (8080)
+            # For fullstack projects, we want to show the frontend UI, not the API
+            frontend_ports = ['3000/tcp', '5173/tcp', '5174/tcp', '3001/tcp']
+            backend_ports = ['8080/tcp', '8000/tcp', '8081/tcp']
+
+            # First, try to find a frontend port
+            for port_key in frontend_ports:
+                if port_key in ports and ports[port_key]:
+                    host_port = int(ports[port_key][0].get('HostPort', 0))
                     if host_port:
-                        logger.info(f"[Preview] Found host port mapping: {container_port} -> {host_port}")
+                        logger.info(f"[Preview] Found frontend port mapping: {port_key} -> {host_port}")
                         break
+
+            # If no frontend port, try any port except backend ports
+            if not host_port:
+                for container_port, bindings in ports.items():
+                    if bindings and container_port not in backend_ports:
+                        host_port = int(bindings[0].get('HostPort', 0))
+                        if host_port:
+                            logger.info(f"[Preview] Found port mapping: {container_port} -> {host_port}")
+                            break
+
+            # Last resort: any port
+            if not host_port:
+                for container_port, bindings in ports.items():
+                    if bindings:
+                        host_port = int(bindings[0].get('HostPort', 0))
+                        if host_port:
+                            logger.info(f"[Preview] Found fallback port mapping: {container_port} -> {host_port}")
+                            break
 
             if not host_port:
                 logger.error(f"[Preview] No host port mapping found for container {container.name}")
