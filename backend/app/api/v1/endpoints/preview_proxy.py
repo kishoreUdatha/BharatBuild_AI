@@ -247,6 +247,23 @@ async def get_container_internal_address(project_id: str) -> Optional[tuple[str,
                 filters={"label": f"project_id={project_id}", "status": "running"}
             )
 
+            # Fallback: Search by container name pattern for docker-compose containers
+            # Docker-compose creates containers like: bharatbuild_{project_id[:8]}_frontend_1
+            if not containers:
+                project_prefix = project_id[:8]
+                logger.info(f"[Preview] No labeled container found, searching by name pattern: bharatbuild_{project_prefix}_*")
+                all_containers = docker_client.containers.list(filters={"status": "running"})
+                for c in all_containers:
+                    if f"bharatbuild_{project_prefix}" in c.name:
+                        # Prefer frontend container for preview
+                        if "frontend" in c.name:
+                            containers = [c]
+                            logger.info(f"[Preview] Found docker-compose frontend container: {c.name}")
+                            break
+                        elif not containers:
+                            containers = [c]
+                            logger.info(f"[Preview] Found docker-compose container: {c.name}")
+
             if not containers:
                 logger.warning(f"[Preview] No running container found for {project_id}")
                 return None
