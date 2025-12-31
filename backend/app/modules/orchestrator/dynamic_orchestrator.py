@@ -7140,7 +7140,7 @@ Stream code in chunks for real-time display.
 FROM node:18-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm install
 
 FROM node:18-alpine AS builder
 WORKDIR /app
