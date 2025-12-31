@@ -1536,14 +1536,22 @@ echo "[SANITIZE-CACHED] Done"
                     except Exception as sanitize_err:
                         logger.warning(f"[RemoteRestore] JSON sanitization for cached project failed: {sanitize_err}")
 
-                    # Fix npm ci in Dockerfiles for cached projects
+                    # Fix npm ci and npm run build in Dockerfiles for cached projects
                     try:
                         dockerfile_fix_script = f'''
-echo "[DOCKERFILE-FIX-CACHED] Checking for npm ci..."
+echo "[DOCKERFILE-FIX-CACHED] Checking for npm ci and npm run build..."
 for dockerfile in $(find {workspace_path} -name "Dockerfile*" -type f 2>/dev/null); do
+    FIXED=""
     if grep -q "npm ci" "$dockerfile" 2>/dev/null; then
         sed -i 's/npm ci/npm install/g' "$dockerfile"
-        echo "[DOCKERFILE-FIX-CACHED] Fixed: $dockerfile"
+        FIXED="$FIXED npm_ci"
+    fi
+    if grep -q "RUN npm run build" "$dockerfile" 2>/dev/null; then
+        sed -i '/RUN npm run build/d' "$dockerfile"
+        FIXED="$FIXED npm_build"
+    fi
+    if [ -n "$FIXED" ]; then
+        echo "[DOCKERFILE-FIX-CACHED] Fixed:$FIXED in $dockerfile"
     fi
 done
 '''
@@ -1756,16 +1764,25 @@ echo "[SANITIZE] Done"
             except Exception as sanitize_err:
                 logger.warning(f"[RemoteRestore] JSON sanitization failed (non-critical): {sanitize_err}")
 
-            # FIX DOCKERFILES: Replace npm ci with npm install
-            # npm ci requires package-lock.json which AI-generated projects don't have
+            # FIX DOCKERFILES: Replace npm ci with npm install AND remove npm run build
+            # - npm ci requires package-lock.json which AI-generated projects don't have
+            # - npm run build fails on TypeScript errors, but dev containers don't need it
             try:
                 dockerfile_fix_script = f'''
-echo "[DOCKERFILE-FIX] Checking for npm ci in Dockerfiles..."
+echo "[DOCKERFILE-FIX] Checking for npm ci and npm run build in Dockerfiles..."
 for dockerfile in $(find {workspace_path} -name "Dockerfile*" -type f 2>/dev/null); do
+    FIXED=""
     if grep -q "npm ci" "$dockerfile" 2>/dev/null; then
-        echo "[DOCKERFILE-FIX] Fixing: $dockerfile"
         sed -i 's/npm ci/npm install/g' "$dockerfile"
-        echo "[DOCKERFILE-FIX] Fixed: $dockerfile"
+        FIXED="$FIXED npm_ci"
+    fi
+    # Remove RUN npm run build line (development containers don't need build step)
+    if grep -q "RUN npm run build" "$dockerfile" 2>/dev/null; then
+        sed -i '/RUN npm run build/d' "$dockerfile"
+        FIXED="$FIXED npm_build"
+    fi
+    if [ -n "$FIXED" ]; then
+        echo "[DOCKERFILE-FIX] Fixed:$FIXED in $dockerfile"
     fi
 done
 echo "[DOCKERFILE-FIX] Done"
