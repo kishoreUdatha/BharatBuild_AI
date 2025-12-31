@@ -41,7 +41,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   startSession: () => {
     // Mark session as active AND open terminal to show logs
-    console.log('[Terminal] Starting session - opening terminal for logs')
     set({
       sessionActive: true,
       isVisible: true,
@@ -51,8 +50,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   endSession: () => {
     // Keep terminal open but mark session as ended
-    // IMPORTANT: Do NOT set isVisible to false here
-    console.log('[Terminal] Ending session - keeping terminal visible')
     set({ sessionActive: false, isExecuting: false })
   },
 
@@ -75,23 +72,25 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const state = get()
     const now = Date.now()
 
+    // Skip if already in desired state (prevents unnecessary re-renders)
+    if (state.isVisible === visible) {
+      return
+    }
+
     // Debounce: Prevent closing terminal within 500ms of opening
     // This prevents race conditions during rapid state changes
     if (!visible && state.isVisible) {
       const timeSinceOpen = now - state.lastVisibilityChange
       if (timeSinceOpen < 500) {
-        console.log('[Terminal] Ignoring close request - too soon after open:', timeSinceOpen, 'ms')
         return
       }
 
       // Don't close if session is active (running something)
       if (state.sessionActive) {
-        console.log('[Terminal] Ignoring close request - session is active')
         return
       }
     }
 
-    console.log('[Terminal] setVisible:', visible)
     set({ isVisible: visible, lastVisibilityChange: now })
   },
 

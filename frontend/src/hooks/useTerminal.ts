@@ -20,19 +20,16 @@ export const useTerminal = () => {
   } = useTerminalStore()
 
   const toggleTerminal = useCallback(() => {
-    console.log('[useTerminal] toggleTerminal called, current isVisible:', isVisible)
     setVisible(!isVisible)
   }, [isVisible, setVisible])
 
   // Open terminal explicitly (avoids race conditions with toggle)
   const openTerminal = useCallback(() => {
-    console.log('[useTerminal] openTerminal called')
     setVisible(true)
   }, [setVisible])
 
   // Close terminal explicitly
   const closeTerminal = useCallback(() => {
-    console.log('[useTerminal] closeTerminal called')
     setVisible(false)
   }, [setVisible])
 
