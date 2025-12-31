@@ -1177,19 +1177,19 @@ class ContainerExecutor:
         fullstack_config: FullStackConfig
     ) -> AsyncGenerator[str, None]:
         """
-        Run a full-stack project using SINGLE CONTAINER architecture.
+        Run a full-stack project using Docker Compose.
 
-        New Architecture (Single Container):
-        1. Build frontend (npm run build) -> creates dist/ folder
-        2. Copy dist/ to backend's static resources folder
-        3. Start ONLY backend container (serves both API + static files)
-        4. Single port, no network conflicts!
+        Architecture (Docker Compose):
+        1. Check if docker-compose.yml exists
+        2. If not, generate one from detected config
+        3. Run docker-compose up
+        4. FixerAgent handles any errors automatically
 
         Benefits:
-        - No port conflicts between containers
-        - Simpler networking (no Docker network needed for frontend-backend)
-        - Less resources (one container instead of two)
-        - Production-like deployment
+        - Industry standard approach
+        - Supports any stack (React, Vue, Java, Python, Node, Go, etc.)
+        - Supports microservices
+        - FixerAgent can fix docker-compose issues
 
         Args:
             project_id: Project identifier
@@ -1199,13 +1199,229 @@ class ContainerExecutor:
         Yields:
             Progress messages and preview URL
         """
-        yield f"🚀 Starting full-stack project (Single Container Mode)...\n"
+        yield f"🚀 Starting full-stack project (Docker Compose Mode)...\n"
         yield f"  📦 Frontend: {fullstack_config.frontend_tech.value}\n"
         yield f"  📦 Backend: {fullstack_config.backend_tech.value}\n"
         if fullstack_config.database_type != DatabaseType.NONE:
             yield f"  🗄️ Database: {fullstack_config.database_type.value}\n"
         yield f"\n"
 
+        compose_file = os.path.join(project_path, "docker-compose.yml")
+        compose_yaml_file = os.path.join(project_path, "docker-compose.yaml")
+
+        # Check if docker-compose file exists
+        has_compose = os.path.exists(compose_file) or os.path.exists(compose_yaml_file)
+
+        if has_compose:
+            yield f"📋 Found docker-compose.yml, using it directly...\n"
+        else:
+            yield f"📝 Generating docker-compose.yml for your project...\n"
+            async for msg in self._generate_docker_compose(project_path, fullstack_config):
+                yield msg
+
+        # Run docker-compose
+        async for msg in self._run_docker_compose(project_id, project_path, fullstack_config):
+            yield msg
+
+    async def _generate_docker_compose(
+        self,
+        project_path: str,
+        fullstack_config: FullStackConfig
+    ) -> AsyncGenerator[str, None]:
+        """Generate docker-compose.yml for the project."""
+        import yaml
+
+        compose_config = {
+            "version": "3.8",
+            "services": {}
+        }
+
+        # Get available ports
+        frontend_port = self._get_available_port(fullstack_config.frontend_port)
+        backend_port = self._get_available_port(fullstack_config.backend_port)
+
+        # Frontend service
+        frontend_config = TECHNOLOGY_CONFIGS.get(fullstack_config.frontend_tech)
+        if frontend_config:
+            compose_config["services"]["frontend"] = {
+                "build": {
+                    "context": f"./{fullstack_config.frontend_path}",
+                    "dockerfile": "Dockerfile"
+                },
+                "image": frontend_config.image,
+                "working_dir": "/app",
+                "volumes": [f"./{fullstack_config.frontend_path}:/app"],
+                "ports": [f"{frontend_port}:{fullstack_config.frontend_port}"],
+                "command": f"/bin/sh -c '{frontend_config.build_command} && npm run dev -- --host 0.0.0.0 --port {fullstack_config.frontend_port}'",
+                "environment": {
+                    "VITE_API_URL": f"http://backend:{fullstack_config.backend_port}",
+                    "REACT_APP_API_URL": f"http://backend:{fullstack_config.backend_port}"
+                },
+                "depends_on": ["backend"]
+            }
+
+        # Backend service
+        backend_config = TECHNOLOGY_CONFIGS.get(fullstack_config.backend_tech)
+        if backend_config:
+            compose_config["services"]["backend"] = {
+                "image": backend_config.image,
+                "working_dir": "/app",
+                "volumes": [f"./{fullstack_config.backend_path}:/app"],
+                "ports": [f"{backend_port}:{fullstack_config.backend_port}"],
+                "command": f"/bin/sh -c '{backend_config.build_command} && {backend_config.run_command}'",
+                "environment": {
+                    "PORT": str(fullstack_config.backend_port),
+                    "SERVER_PORT": str(fullstack_config.backend_port)
+                }
+            }
+
+        # Database service (if needed)
+        if fullstack_config.database_type != DatabaseType.NONE and fullstack_config.database_config:
+            db_config = fullstack_config.database_config
+            db_port = self._get_available_port(db_config.port)
+
+            compose_config["services"]["database"] = {
+                "image": db_config.image,
+                "ports": [f"{db_port}:{db_config.port}"],
+                "environment": db_config.env_vars,
+                "volumes": ["db_data:/var/lib/postgresql/data"] if "postgres" in db_config.image else []
+            }
+
+            # Add database dependency to backend
+            if "backend" in compose_config["services"]:
+                compose_config["services"]["backend"]["depends_on"] = ["database"]
+                compose_config["services"]["backend"]["environment"].update({
+                    "DATABASE_URL": db_config.connection_string_template.format(host="database"),
+                    "DB_HOST": "database"
+                })
+
+            # Add volumes section
+            compose_config["volumes"] = {"db_data": {}}
+
+        # Write docker-compose.yml
+        compose_file = os.path.join(project_path, "docker-compose.yml")
+        with open(compose_file, 'w') as f:
+            yaml.dump(compose_config, f, default_flow_style=False, sort_keys=False)
+
+        yield f"  ✅ Generated docker-compose.yml\n"
+
+    async def _run_docker_compose(
+        self,
+        project_id: str,
+        project_path: str,
+        fullstack_config: FullStackConfig
+    ) -> AsyncGenerator[str, None]:
+        """Run docker-compose up and stream output."""
+        import subprocess
+        import yaml
+
+        yield f"\n━━━ Running Docker Compose ━━━\n"
+
+        # Read docker-compose.yml to get port mappings
+        compose_file = os.path.join(project_path, "docker-compose.yml")
+        if not os.path.exists(compose_file):
+            compose_file = os.path.join(project_path, "docker-compose.yaml")
+
+        frontend_port = fullstack_config.frontend_port
+        backend_port = fullstack_config.backend_port
+
+        try:
+            with open(compose_file, 'r') as f:
+                compose_config = yaml.safe_load(f)
+
+            # Extract ports from compose file
+            services = compose_config.get("services", {})
+            for name, service in services.items():
+                ports = service.get("ports", [])
+                for port_mapping in ports:
+                    if isinstance(port_mapping, str) and ":" in port_mapping:
+                        host_port = int(port_mapping.split(":")[0])
+                        if "frontend" in name.lower() or "web" in name.lower() or "ui" in name.lower():
+                            frontend_port = host_port
+                        elif "backend" in name.lower() or "api" in name.lower() or "server" in name.lower():
+                            backend_port = host_port
+        except Exception as e:
+            yield f"  ⚠️ Could not parse compose file: {e}\n"
+
+        # Stop any existing containers for this project
+        project_name = f"bharatbuild_{project_id[:8]}"
+        yield f"  🧹 Cleaning up existing containers...\n"
+
+        try:
+            cleanup_cmd = f"docker-compose -p {project_name} -f {compose_file} down --remove-orphans"
+            subprocess.run(cleanup_cmd, shell=True, cwd=project_path, capture_output=True, timeout=30)
+        except Exception:
+            pass
+
+        # Run docker-compose up
+        yield f"  $ docker-compose up -d\n"
+
+        try:
+            cmd = f"docker-compose -p {project_name} -f {compose_file} up -d --build"
+            process = subprocess.Popen(
+                cmd,
+                shell=True,
+                cwd=project_path,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True
+            )
+
+            # Stream output
+            for line in iter(process.stdout.readline, ''):
+                if line:
+                    yield f"  {line}"
+
+            process.wait()
+
+            if process.returncode != 0:
+                yield f"\n❌ Docker Compose failed with exit code {process.returncode}\n"
+                return
+
+            yield f"\n  ✅ Docker Compose started successfully\n"
+
+        except subprocess.TimeoutExpired:
+            yield f"\n❌ Docker Compose timed out\n"
+            return
+        except Exception as e:
+            yield f"\n❌ Error: {str(e)}\n"
+            return
+
+        # Wait for services to be ready
+        yield f"\n  ⏳ Waiting for services to be ready...\n"
+        await asyncio.sleep(5)  # Give services time to start
+
+        # Generate preview URL
+        preview_url = _get_preview_url(frontend_port, project_id)
+
+        # Store container info
+        self.active_containers[project_id] = {
+            "compose_project": project_name,
+            "compose_file": compose_file,
+            "project_path": project_path,
+            "frontend_port": frontend_port,
+            "backend_port": backend_port,
+            "technology": Technology.FULLSTACK,
+            "fullstack_config": fullstack_config,
+            "started_at": datetime.utcnow(),
+            "preview_url": preview_url,
+            "docker_compose": True  # Flag for compose-based deployment
+        }
+
+        yield f"\n━━━ Full-Stack Application Running ━━━\n"
+        yield f"  🌐 Frontend: http://localhost:{frontend_port}\n"
+        yield f"  🔧 Backend: http://localhost:{backend_port}\n"
+        yield f"\n🚀 Preview URL: {preview_url}\n"
+        yield f"_PREVIEW_URL_:{preview_url}\n"
+        yield f"__PREVIEW_READY__:{preview_url}\n"
+
+    async def _run_fullstack_legacy(
+        self,
+        project_id: str,
+        project_path: str,
+        fullstack_config: FullStackConfig
+    ) -> AsyncGenerator[str, None]:
+        """Legacy method - kept for reference. Uses individual container spawning."""
         database_container = None
         backend_container = None
         network_name = None
@@ -1640,8 +1856,9 @@ class ContainerExecutor:
         """
         Stop a full-stack project.
 
-        Supports both architectures:
-        - Single container mode: Only backend container (serves both API + static)
+        Supports multiple architectures:
+        - Docker Compose mode: Uses docker-compose down
+        - Single container mode: Only backend container
         - Legacy mode: Separate frontend + backend containers
 
         Args:
@@ -1650,12 +1867,45 @@ class ContainerExecutor:
         Returns:
             Tuple of (success, message)
         """
+        import subprocess
+
         container_info = self.active_containers.get(project_id)
         if not container_info:
             return False, "No running full-stack project found"
 
         errors = []
+        is_docker_compose = container_info.get("docker_compose", False)
         is_single_container = container_info.get("single_container", False)
+
+        # Docker Compose mode - use docker-compose down
+        if is_docker_compose:
+            compose_project = container_info.get("compose_project")
+            compose_file = container_info.get("compose_file")
+            project_path = container_info.get("project_path")
+
+            try:
+                cmd = f"docker-compose -p {compose_project} -f {compose_file} down --remove-orphans"
+                result = subprocess.run(
+                    cmd,
+                    shell=True,
+                    cwd=project_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+                if result.returncode == 0:
+                    logger.info(f"[ContainerExecutor] Stopped docker-compose project for {project_id}")
+                else:
+                    errors.append(f"docker-compose down failed: {result.stderr}")
+            except Exception as e:
+                errors.append(f"Docker Compose: {e}")
+
+            # Remove from active containers
+            del self.active_containers[project_id]
+
+            if errors:
+                return True, f"Stopped with warnings: {', '.join(errors)}"
+            return True, "Full-stack project stopped successfully (docker-compose mode)"
 
         # Stop frontend (only in legacy mode)
         frontend_container = container_info.get("frontend_container")
