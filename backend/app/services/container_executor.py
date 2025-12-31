@@ -1243,16 +1243,27 @@ class ContainerExecutor:
         # Frontend service
         frontend_config = TECHNOLOGY_CONFIGS.get(fullstack_config.frontend_tech)
         if frontend_config:
+            # Detect package manager (npm, yarn, pnpm)
+            frontend_full_path = os.path.join(project_path, fullstack_config.frontend_path)
+            if os.path.exists(os.path.join(frontend_full_path, "pnpm-lock.yaml")):
+                pkg_manager = "pnpm"
+                install_cmd = "pnpm install"
+                dev_cmd = "pnpm run dev"
+            elif os.path.exists(os.path.join(frontend_full_path, "yarn.lock")):
+                pkg_manager = "yarn"
+                install_cmd = "yarn install"
+                dev_cmd = "yarn dev"
+            else:
+                pkg_manager = "npm"
+                install_cmd = "npm install"
+                dev_cmd = "npm run dev"
+
             compose_config["services"]["frontend"] = {
-                "build": {
-                    "context": f"./{fullstack_config.frontend_path}",
-                    "dockerfile": "Dockerfile"
-                },
                 "image": frontend_config.image,
                 "working_dir": "/app",
-                "volumes": [f"./{fullstack_config.frontend_path}:/app"],
+                "volumes": [f"./{fullstack_config.frontend_path}:/app", f"./{fullstack_config.frontend_path}/node_modules:/app/node_modules"],
                 "ports": [f"{frontend_port}:{fullstack_config.frontend_port}"],
-                "command": f"/bin/sh -c '{frontend_config.build_command} && npm run dev -- --host 0.0.0.0 --port {fullstack_config.frontend_port}'",
+                "command": f"/bin/sh -c '{install_cmd} && {dev_cmd} -- --host 0.0.0.0 --port {fullstack_config.frontend_port}'",
                 "environment": {
                     "VITE_API_URL": f"http://backend:{fullstack_config.backend_port}",
                     "REACT_APP_API_URL": f"http://backend:{fullstack_config.backend_port}"
@@ -1280,11 +1291,23 @@ class ContainerExecutor:
             db_config = fullstack_config.database_config
             db_port = self._get_available_port(db_config.port)
 
+            # Determine volume path based on database type
+            if "postgres" in db_config.image:
+                db_volume = "db_data:/var/lib/postgresql/data"
+            elif "mysql" in db_config.image or "mariadb" in db_config.image:
+                db_volume = "db_data:/var/lib/mysql"
+            elif "mongo" in db_config.image:
+                db_volume = "db_data:/data/db"
+            elif "redis" in db_config.image:
+                db_volume = "db_data:/data"
+            else:
+                db_volume = None
+
             compose_config["services"]["database"] = {
                 "image": db_config.image,
                 "ports": [f"{db_port}:{db_config.port}"],
                 "environment": db_config.env_vars,
-                "volumes": ["db_data:/var/lib/postgresql/data"] if "postgres" in db_config.image else []
+                "volumes": [db_volume] if db_volume else []
             }
 
             # Add database dependency to backend
@@ -1300,10 +1323,14 @@ class ContainerExecutor:
 
         # Write docker-compose.yml
         compose_file = os.path.join(project_path, "docker-compose.yml")
-        with open(compose_file, 'w') as f:
-            yaml.dump(compose_config, f, default_flow_style=False, sort_keys=False)
-
-        yield f"  ✅ Generated docker-compose.yml\n"
+        try:
+            with open(compose_file, 'w') as f:
+                yaml.dump(compose_config, f, default_flow_style=False, sort_keys=False)
+            yield f"  ✅ Generated docker-compose.yml\n"
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Failed to write docker-compose.yml: {e}")
+            yield f"  ❌ Failed to generate docker-compose.yml: {e}\n"
+            raise
 
     async def _run_docker_compose(
         self,
@@ -1489,7 +1516,7 @@ class ContainerExecutor:
             # Determine static folder path based on backend technology
             if fullstack_config.backend_tech == Technology.JAVA:
                 static_folder = os.path.join(backend_path, "src", "main", "resources", "static")
-            elif fullstack_config.backend_tech in [Technology.PYTHON, Technology.PYTHON_FASTAPI, Technology.PYTHON_FLASK]:
+            elif fullstack_config.backend_tech in [Technology.PYTHON, Technology.PYTHON_ML]:
                 static_folder = os.path.join(backend_path, "static")
             elif fullstack_config.backend_tech == Technology.NODEJS:
                 static_folder = os.path.join(backend_path, "public")
