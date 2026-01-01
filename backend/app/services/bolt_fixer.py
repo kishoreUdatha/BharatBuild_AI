@@ -570,80 +570,51 @@ BUILD LOG:
         import re
         import glob
 
-        # Patterns to extract Java class names from errors
-        class_patterns = [
-            # "no suitable constructor found for ClassName(...)"
-            r'no\s+suitable\s+constructor\s+found\s+for\s+([A-Z][a-zA-Z0-9_]*)',
-            # "constructor ClassName.ClassName(...) is not applicable"
-            r'constructor\s+([A-Z][a-zA-Z0-9_]*)\.([A-Z][a-zA-Z0-9_]*)',
-            # "cannot find symbol... class ClassName"
-            r'cannot\s+find\s+symbol.*?(?:class|variable)\s+([A-Z][a-zA-Z0-9_]*)',
-            # "Type ClassName is not assignable"
-            r'[Tt]ype\s+([A-Z][a-zA-Z0-9_]*)\s+is\s+not',
-            # "incompatible types: ClassName cannot be converted"
-            r'incompatible\s+types:?\s+([A-Z][a-zA-Z0-9_]*)',
-            # "method in class ClassName cannot be applied"
-            r'method\s+\w+\s+in\s+class\s+([A-Z][a-zA-Z0-9_]*)',
-            # Generic: com.package.ClassName references
-            r'com\.[a-z.]+\.([A-Z][a-zA-Z0-9_]*)',
-        ]
+        # Simple approach: Find all Java files in project, check if class name appears in error
+        # Let the AI fixer decide which files are relevant
 
-        # Extract unique class names
-        class_names = set()
-        for pattern in class_patterns:
-            for match in re.finditer(pattern, error_output):
-                # Get the last group (class name)
-                class_name = match.group(match.lastindex) if match.lastindex else match.group(1)
-                if class_name and len(class_name) > 1:
-                    class_names.add(class_name)
-
-        # Get the class name from current file to exclude it
+        # Get current file's class name to exclude
         current_class = None
         if current_file:
-            current_class = Path(current_file).stem  # e.g., "TodoService" from "TodoService.java"
+            current_class = Path(current_file).stem
 
-        # Remove current file's class from the set
-        if current_class:
-            class_names.discard(current_class)
-
-        if not class_names:
-            return ""
-
-        logger.info(f"[BoltFixer] Found related Java classes: {class_names}")
-
-        # Find and read the Java files
-        related_contents = []
+        # Find all Java files in the project
         project_str = str(project_path)
+        all_java_files = glob.glob(f"{project_str}/**/*.java", recursive=True)
 
-        for class_name in list(class_names)[:5]:  # Limit to 5 related files
-            # Search for ClassName.java in the project
-            search_patterns = [
-                f"{project_str}/**/{class_name}.java",
-                f"{project_str}/backend/**/{class_name}.java",
-                f"{project_str}/src/**/{class_name}.java",
-            ]
+        # Check which class names appear in the error output
+        related_contents = []
+        files_found = 0
 
-            found_file = None
-            for pattern in search_patterns:
-                matches = glob.glob(pattern, recursive=True)
-                if matches:
-                    found_file = matches[0]
-                    break
+        for java_file in all_java_files:
+            if files_found >= 5:  # Limit to 5 related files
+                break
 
-            if found_file:
+            class_name = Path(java_file).stem  # e.g., "Todo" from "Todo.java"
+
+            # Skip current file
+            if class_name == current_class:
+                continue
+
+            # Check if this class name appears in the error output
+            # Use word boundary to avoid partial matches
+            if re.search(rf'\b{re.escape(class_name)}\b', error_output):
                 try:
-                    content = Path(found_file).read_text(encoding='utf-8')
-                    # Get relative path for display
-                    rel_path = Path(found_file).relative_to(project_path)
+                    content = Path(java_file).read_text(encoding='utf-8')
+                    rel_path = Path(java_file).relative_to(project_path)
                     related_contents.append(f"""
 --- {rel_path} ---
 ```java
 {content[:8000]}
 ```
 """)
+                    files_found += 1
                     logger.info(f"[BoltFixer] Read related file: {rel_path} ({len(content)} chars)")
                 except Exception as e:
-                    logger.warning(f"[BoltFixer] Could not read {found_file}: {e}")
+                    logger.warning(f"[BoltFixer] Could not read {java_file}: {e}")
+
+        if related_contents:
+            logger.info(f"[BoltFixer] Found {files_found} related Java files")
 
         return "\n".join(related_contents)
 
