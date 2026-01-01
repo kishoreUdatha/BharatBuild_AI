@@ -1452,7 +1452,8 @@ class ContainerExecutor:
         yield f"  $ docker-compose up -d\n"
 
         try:
-            cmd = f"docker-compose -p {project_name} -f {compose_file} up -d --build"
+            # Use legacy build mode (buildx 0.17+ not available on EC2)
+            cmd = f"COMPOSE_DOCKER_CLI_BUILD=0 DOCKER_BUILDKIT=0 docker-compose -p {project_name} -f {compose_file} up -d --build"
             exit_code, output = self._run_shell_on_sandbox(cmd, working_dir=project_path, timeout=300)
 
             # Stream output lines
@@ -1608,8 +1609,8 @@ class ContainerExecutor:
                         down_cmd = f"docker-compose -p {project_name} -f {compose_file} down --remove-orphans"
                         self._run_shell_on_sandbox(down_cmd, working_dir=project_path, timeout=30)
 
-                        # Rebuild and start
-                        up_cmd = f"docker-compose -p {project_name} -f {compose_file} up -d --build"
+                        # Rebuild and start (use legacy build mode)
+                        up_cmd = f"COMPOSE_DOCKER_CLI_BUILD=0 DOCKER_BUILDKIT=0 docker-compose -p {project_name} -f {compose_file} up -d --build"
                         exit_code, output = self._run_shell_on_sandbox(up_cmd, working_dir=project_path, timeout=300)
 
                         if exit_code == 0:
