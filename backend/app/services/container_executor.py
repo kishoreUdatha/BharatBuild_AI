@@ -1483,11 +1483,20 @@ class ContainerExecutor:
             await asyncio.sleep(10)
 
             try:
-                check_cmd = f"docker-compose -p {project_name} -f {compose_file} ps 2>/dev/null"
+                # Use docker ps directly for more reliable detection
+                # Check for ANY exited containers with our project prefix
+                check_cmd = f"docker ps -a --filter 'name={project_name}' --format '{{{{.Names}}}} {{{{.Status}}}}'"
                 exit_code, ps_output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
 
-                # Check for exited containers
-                if "Exit" in ps_output or "exited" in ps_output.lower():
+                logger.info(f"[ContainerExecutor] Container status for {project_name}:\n{ps_output}")
+
+                # Check for exited containers (any container with "Exited" in status)
+                has_exited = any("Exited" in line or "Exit" in line for line in ps_output.split('\n') if line.strip())
+
+                # Also check if we have running containers
+                has_running = any("Up" in line for line in ps_output.split('\n') if line.strip())
+
+                if has_exited:
                     fix_attempt += 1
                     yield f"\n⚠️ Some containers have stopped. Checking logs...\n"
 
@@ -1502,7 +1511,7 @@ class ContainerExecutor:
                             yield f"  {line}\n"
 
                     # Try auto-fix if we have attempts left
-                    if fix_attempt < max_fix_attempts:
+                    if fix_attempt <= max_fix_attempts:
                         yield f"\n🔧 AUTO-FIX: Attempt {fix_attempt}/{max_fix_attempts}\n"
                         yield f"__FIX_STARTING__\n"
 
@@ -1561,14 +1570,16 @@ class ContainerExecutor:
                         yield f"\n❌ Containers failed after {fix_attempt} fix attempts.\n"
                         return
                 else:
-                    # Containers are running - do stability check
+                    # No exited containers - do stability check
                     if not containers_healthy:
                         yield f"  ✅ Containers started, verifying stability...\n"
                         await asyncio.sleep(5)  # Quick stability check
 
-                        # Re-check
+                        # Re-check using same command
                         _, ps_output2 = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
-                        if "Exit" not in ps_output2 and "exited" not in ps_output2.lower():
+                        has_exited2 = any("Exited" in line or "Exit" in line for line in ps_output2.split('\n') if line.strip())
+
+                        if not has_exited2:
                             containers_healthy = True
                             yield f"  ✅ All containers are running and stable\n"
                         else:
