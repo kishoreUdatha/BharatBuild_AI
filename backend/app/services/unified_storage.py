@@ -1626,6 +1626,65 @@ done
                     except Exception as fix_err:
                         logger.warning(f"[RemoteRestore] Dockerfile fix for cached project failed: {fix_err}")
 
+                    # Fix missing Vite config files (tsconfig.node.json, etc.)
+                    try:
+                        vite_fix_script = f'''
+echo "[VITE-FIX-CACHED] Checking for Vite projects..."
+for pkg_json in $(find {workspace_path} -name "package.json" -type f 2>/dev/null); do
+    pkg_dir=$(dirname "$pkg_json")
+    # Check if this is a Vite project
+    if grep -q '"vite"' "$pkg_json" 2>/dev/null; then
+        echo "[VITE-FIX-CACHED] Found Vite project: $pkg_dir"
+
+        # Create tsconfig.node.json if missing
+        if [ ! -f "$pkg_dir/tsconfig.node.json" ]; then
+            echo "[VITE-FIX-CACHED] Creating tsconfig.node.json"
+            cat > "$pkg_dir/tsconfig.node.json" << 'TSEOF'
+{{
+  "compilerOptions": {{
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "strict": true
+  }},
+  "include": ["vite.config.ts", "vite.config.js"]
+}}
+TSEOF
+        fi
+
+        # Create vite.config.ts if missing and no vite.config.js exists
+        if [ ! -f "$pkg_dir/vite.config.ts" ] && [ ! -f "$pkg_dir/vite.config.js" ]; then
+            echo "[VITE-FIX-CACHED] Creating vite.config.ts"
+            cat > "$pkg_dir/vite.config.ts" << 'VITEEOF'
+import {{ defineConfig }} from "vite"
+import react from "@vitejs/plugin-react"
+
+export default defineConfig({{
+  plugins: [react()],
+  server: {{
+    host: "0.0.0.0",
+    port: 5173,
+  }},
+}})
+VITEEOF
+        fi
+    fi
+done
+echo "[VITE-FIX-CACHED] Done"
+'''
+                        docker_client.containers.run(
+                            "alpine:latest",
+                            ["-c", vite_fix_script],
+                            entrypoint="/bin/sh",
+                            volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                            remove=True,
+                            detach=False
+                        )
+                    except Exception as vite_err:
+                        logger.warning(f"[RemoteRestore] Vite fix for cached project failed: {vite_err}")
+
                     # Return file info from DB without re-downloading
                     async with AsyncSessionLocal() as session:
                         result = await session.execute(
@@ -1920,6 +1979,67 @@ echo "[DOCKERFILE-FIX] Done"
                     logger.info(f"[RemoteRestore] Dockerfile fix output:\n{fix_output.decode()[:500]}")
             except Exception as dockerfile_err:
                 logger.warning(f"[RemoteRestore] Dockerfile fix failed (non-critical): {dockerfile_err}")
+
+            # FIX MISSING VITE CONFIG FILES: Create tsconfig.node.json if missing
+            try:
+                vite_fix_script = f'''
+echo "[VITE-FIX] Checking for Vite projects..."
+for pkg_json in $(find {workspace_path} -name "package.json" -type f 2>/dev/null); do
+    pkg_dir=$(dirname "$pkg_json")
+    # Check if this is a Vite project
+    if grep -q '"vite"' "$pkg_json" 2>/dev/null; then
+        echo "[VITE-FIX] Found Vite project: $pkg_dir"
+
+        # Create tsconfig.node.json if missing
+        if [ ! -f "$pkg_dir/tsconfig.node.json" ]; then
+            echo "[VITE-FIX] Creating tsconfig.node.json"
+            cat > "$pkg_dir/tsconfig.node.json" << 'TSEOF'
+{{
+  "compilerOptions": {{
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "strict": true
+  }},
+  "include": ["vite.config.ts", "vite.config.js"]
+}}
+TSEOF
+        fi
+
+        # Create vite.config.ts if missing and no vite.config.js exists
+        if [ ! -f "$pkg_dir/vite.config.ts" ] && [ ! -f "$pkg_dir/vite.config.js" ]; then
+            echo "[VITE-FIX] Creating vite.config.ts"
+            cat > "$pkg_dir/vite.config.ts" << 'VITEEOF'
+import {{ defineConfig }} from "vite"
+import react from "@vitejs/plugin-react"
+
+export default defineConfig({{
+  plugins: [react()],
+  server: {{
+    host: "0.0.0.0",
+    port: 5173,
+  }},
+}})
+VITEEOF
+        fi
+    fi
+done
+echo "[VITE-FIX] Done"
+'''
+                vite_output = docker_client.containers.run(
+                    "alpine:latest",
+                    ["-c", vite_fix_script],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    remove=True,
+                    detach=False
+                )
+                if vite_output:
+                    logger.info(f"[RemoteRestore] Vite fix output:\n{vite_output.decode()[:500]}")
+            except Exception as vite_err:
+                logger.warning(f"[RemoteRestore] Vite fix failed (non-critical): {vite_err}")
 
             # BROWSER ERROR CAPTURE: Inject error capture script into index.html files
             # This enables automatic browser error detection and reporting to the backend
