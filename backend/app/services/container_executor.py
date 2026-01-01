@@ -1563,12 +1563,19 @@ class ContainerExecutor:
             fix_attempt += 1
             yield f"\n⚠️ Some containers have stopped. Checking logs...\n"
 
-            # Get logs from failed containers
-            logs_cmd = f"docker-compose -p {project_name} -f {compose_file} logs --tail=50 2>&1"
-            _, logs_output = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
+            # Get logs from failed containers using docker logs (works with awslogs driver)
+            # First get list of exited containers for this project
+            logs_output = ""
+            for line in project_lines:
+                if "Exit" in line:
+                    container_name = line.split()[0]
+                    logs_cmd = f"docker logs {container_name} 2>&1 | tail -100"
+                    _, container_logs = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
+                    if container_logs:
+                        logs_output += f"\n=== {container_name} ===\n{container_logs}\n"
 
             # Show error logs
-            log_lines = logs_output.strip().split('\n')[-30:]
+            log_lines = logs_output.strip().split('\n')[-50:]
             for line in log_lines:
                 if line.strip():
                     yield f"  {line}\n"
