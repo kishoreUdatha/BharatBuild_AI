@@ -1473,14 +1473,18 @@ class ContainerExecutor:
         # Wait for services to be ready and verify they stay running
         yield f"\n  ⏳ Waiting for services to be ready...\n"
 
-        # Two-phase health check with auto-fix: check at 10s and 20s
+        # Health check with auto-fix
+        # Java/Maven projects need 30s+ to compile, so wait longer on first check
         max_fix_attempts = 3
         fix_attempt = 0
         containers_healthy = False
+        initial_wait = 30  # Wait 30s on first check (Java/Maven needs time to compile)
 
         while fix_attempt < max_fix_attempts and not containers_healthy:
             # Wait for containers to start/stabilize
-            await asyncio.sleep(10)
+            wait_time = initial_wait if fix_attempt == 0 else 15
+            yield f"\n  ⏳ Waiting {wait_time}s for services to compile and start...\n"
+            await asyncio.sleep(wait_time)
 
             try:
                 # Use docker ps directly for more reliable detection
