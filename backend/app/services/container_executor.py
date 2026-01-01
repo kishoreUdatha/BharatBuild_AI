@@ -1481,7 +1481,8 @@ class ContainerExecutor:
 
         # Check schedule: 20s, 40s, 60s (3 checks before declaring healthy)
         check_intervals = [20, 20, 20]  # Total: 60 seconds of monitoring
-        check_cmd = f"docker ps -a --filter 'name={project_name}' --format '{{{{.Names}}}} {{{{.Status}}}}'"
+        # Use docker-compose ps which is more reliable than docker ps with filters
+        check_cmd = f"docker-compose -p {project_name} -f {compose_file} ps -a 2>/dev/null || docker ps -a --filter name={project_name} --format '{{{{.Names}}}} {{{{.Status}}}}'"
 
         while fix_attempt < max_fix_attempts and not containers_healthy:
             # Do multiple stability checks before declaring healthy
@@ -1498,25 +1499,34 @@ class ContainerExecutor:
 
                     # Display per-service status
                     yield f"  📦 Service Status:\n"
-                    for line in ps_output.strip().split('\n'):
-                        if not line.strip():
-                            continue
-                        parts = line.split(maxsplit=1)
-                        if len(parts) >= 2:
-                            container_name = parts[0]
-                            status = parts[1]
-                            name_parts = container_name.replace(f"{project_name}-", "").rsplit("-", 1)
-                            service_name = name_parts[0] if name_parts else container_name
+                    output_lines = ps_output.strip().split('\n') if ps_output else []
 
-                            if "Up" in status:
-                                yield f"     ✅ {service_name}: Running\n"
-                            elif "Exited" in status or "Exit" in status:
-                                yield f"     ❌ {service_name}: Stopped\n"
-                            else:
-                                yield f"     ⏳ {service_name}: {status}\n"
+                    if not output_lines or (len(output_lines) == 1 and not output_lines[0].strip()):
+                        yield f"     ⚠️ No container status available\n"
+                    else:
+                        for line in output_lines:
+                            line = line.strip()
+                            if not line or line.startswith('NAME') or line.startswith('---'):
+                                continue  # Skip header lines
 
-                    # Check for exited containers
-                    has_exited = any("Exited" in line or "Exit" in line for line in ps_output.split('\n') if line.strip())
+                            # Extract service name from line (works for both docker ps and docker-compose ps)
+                            # docker-compose ps: "name   command   state   ports"
+                            # docker ps: "name status"
+                            parts = line.split()
+                            if parts:
+                                container_name = parts[0]
+                                # Extract service name from container name
+                                service_name = container_name.replace(f"{project_name}_", "").rsplit("_", 1)[0]
+
+                                if "Up" in line or "running" in line.lower():
+                                    yield f"     ✅ {service_name}: Running\n"
+                                elif "Exit" in line or "exited" in line.lower():
+                                    yield f"     ❌ {service_name}: Stopped\n"
+                                else:
+                                    yield f"     ⏳ {service_name}: {line[:50]}\n"
+
+                    # Check for exited containers (case insensitive)
+                    has_exited = any("exit" in line.lower() for line in output_lines if line.strip())
 
                     if has_exited:
                         failure_detected = True
