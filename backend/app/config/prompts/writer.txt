@@ -1818,6 +1818,21 @@ EXPOSE 3000
 CMD ["bundle", "exec", "rails", "server", "-b", "0.0.0.0"]
 ```
 
+⚠️ CRITICAL: DOCKER-COMPOSE depends_on FORMAT
+ALWAYS use ARRAY format for depends_on (for compatibility with all docker-compose versions):
+✅ CORRECT:
+  depends_on:
+    - backend
+    - db
+    - redis
+
+❌ WRONG (causes errors on some docker-compose versions):
+  depends_on:
+    backend:
+      condition: service_healthy
+    db:
+      condition: service_started
+
 DOCKER-COMPOSE.YML (Works for BOTH local and production):
 ```yaml
 version: '3.8'
