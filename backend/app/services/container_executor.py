@@ -2161,8 +2161,8 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
             logger.info(f"[ContainerExecutor] Running via helper container: {script[:100]}...")
 
             # Use docker/compose image which has docker-compose installed
-            # Explicitly capture both stdout and stderr
-            result = self.docker_client.containers.run(
+            # Create container, start, wait, get logs, remove (more reliable for TCP)
+            container = self.docker_client.containers.create(
                 "docker/compose:latest",
                 ["-c", script],
                 entrypoint="/bin/sh",
@@ -2170,25 +2170,29 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
                     "/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"},
                     "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}
                 },
-                remove=True,
-                detach=False,
-                network_mode="host",
-                stdout=True,
-                stderr=True
+                network_mode="host"
             )
 
-            # Handle result - could be bytes, string, or None
-            if result is None:
-                logger.warning("[ContainerExecutor] Helper container returned None")
-                output = ""
-            elif isinstance(result, bytes):
-                output = result.decode('utf-8', errors='replace')
-            else:
-                output = str(result)
+            try:
+                # Start and wait for completion
+                container.start()
+                exit_result = container.wait(timeout=timeout)
+                exit_code = exit_result.get('StatusCode', 0)
 
-            logger.info(f"[ContainerExecutor] Ran command via helper: {command[:50]}... Output length: {len(output)}")
-            logger.debug(f"[ContainerExecutor] Full output: {output[:500]}")
-            return 0, output
+                # Get logs (both stdout and stderr)
+                output = container.logs(stdout=True, stderr=True).decode('utf-8', errors='replace')
+
+                logger.info(f"[ContainerExecutor] Ran command via helper: {command[:50]}... exit_code={exit_code}, output_len={len(output)}")
+                logger.debug(f"[ContainerExecutor] Full output: {output[:500]}")
+
+                return exit_code, output
+
+            finally:
+                # Always cleanup
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    pass
 
         except subprocess.TimeoutExpired:
             return 1, "Command timed out"
