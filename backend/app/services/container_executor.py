@@ -1472,7 +1472,35 @@ class ContainerExecutor:
 
         # Wait for services to be ready
         yield f"\n  ⏳ Waiting for services to be ready...\n"
-        await asyncio.sleep(5)  # Give services time to start
+        await asyncio.sleep(8)  # Give services time to start and potentially fail
+
+        # Verify containers are still running (health check)
+        try:
+            check_cmd = f"docker-compose -p {project_name} -f {compose_file} ps --format json 2>/dev/null || docker-compose -p {project_name} -f {compose_file} ps"
+            exit_code, ps_output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
+
+            # Check for exited containers
+            if "Exit" in ps_output or "exited" in ps_output.lower():
+                yield f"\n⚠️ Some containers have stopped. Checking logs...\n"
+
+                # Get logs from failed containers
+                logs_cmd = f"docker-compose -p {project_name} -f {compose_file} logs --tail=30 2>&1"
+                _, logs_output = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
+
+                # Show last 20 lines of logs
+                log_lines = logs_output.strip().split('\n')[-20:]
+                for line in log_lines:
+                    if line.strip():
+                        yield f"  {line}\n"
+
+                yield f"\n❌ Containers failed to start properly. Check errors above.\n"
+                return
+
+            yield f"  ✅ All containers are running\n"
+
+        except Exception as health_err:
+            logger.warning(f"[ContainerExecutor] Health check failed: {health_err}")
+            # Continue anyway - container might still be working
 
         # Generate preview URL
         preview_url = _get_preview_url(frontend_port, project_id)

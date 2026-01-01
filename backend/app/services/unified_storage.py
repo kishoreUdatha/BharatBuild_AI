@@ -1591,6 +1591,17 @@ JAVAEOF
             sed -i '/RUN npm run build/d' "$dockerfile"
             FIXED="$FIXED npm_build"
         fi
+        # Fix npm start -> npm run dev for Vite projects
+        if grep -q 'npm.*start' "$dockerfile" 2>/dev/null; then
+            # Check if this is a Vite project (port 5173 or vite in Dockerfile or nearby package.json)
+            dockerfile_dir=$(dirname "$dockerfile")
+            if grep -q "5173" "$dockerfile" 2>/dev/null || grep -qi "vite" "$dockerfile" 2>/dev/null || ([ -f "$dockerfile_dir/package.json" ] && grep -q '"vite"' "$dockerfile_dir/package.json" 2>/dev/null); then
+                sed -i 's/CMD \["npm", "start"\]/CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]/g' "$dockerfile"
+                sed -i 's/CMD \["npm", "start", "--", "--host", "0.0.0.0"\]/CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]/g' "$dockerfile"
+                sed -i 's/npm start/npm run dev -- --host 0.0.0.0/g' "$dockerfile"
+                FIXED="$FIXED vite_cmd"
+            fi
+        fi
         if [ -n "$FIXED" ]; then
             echo "[DOCKERFILE-FIX-CACHED] Fixed:$FIXED in $dockerfile"
         fi
@@ -1864,6 +1875,17 @@ JAVAEOF
         if grep -q "RUN npm run build" "$dockerfile" 2>/dev/null; then
             sed -i '/RUN npm run build/d' "$dockerfile"
             FIXED="$FIXED npm_build"
+        fi
+        # Fix npm start -> npm run dev for Vite projects
+        if grep -q 'npm.*start' "$dockerfile" 2>/dev/null; then
+            # Check if this is a Vite project (port 5173 or vite in Dockerfile or nearby package.json)
+            dockerfile_dir=$(dirname "$dockerfile")
+            if grep -q "5173" "$dockerfile" 2>/dev/null || grep -qi "vite" "$dockerfile" 2>/dev/null || ([ -f "$dockerfile_dir/package.json" ] && grep -q '"vite"' "$dockerfile_dir/package.json" 2>/dev/null); then
+                sed -i 's/CMD \["npm", "start"\]/CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]/g' "$dockerfile"
+                sed -i 's/CMD \["npm", "start", "--", "--host", "0.0.0.0"\]/CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]/g' "$dockerfile"
+                sed -i 's/npm start/npm run dev -- --host 0.0.0.0/g' "$dockerfile"
+                FIXED="$FIXED vite_cmd"
+            fi
         fi
         if [ -n "$FIXED" ]; then
             echo "[DOCKERFILE-FIX] Fixed:$FIXED in $dockerfile"
