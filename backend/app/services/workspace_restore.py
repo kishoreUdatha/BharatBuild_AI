@@ -1568,6 +1568,59 @@ CMD ["npm", "run", "dev"]
                 logger.info(f"[WorkspaceRestore] Fixed Dockerfiles: {dockerfiles_fixed}")
 
             # =====================================================
+            # 10b. FIX MISSING VITE CONFIG FILES
+            # =====================================================
+            vite_configs_created = []
+
+            # Find all package.json files that indicate Vite projects
+            for pkg_json in workspace_path.rglob('package.json'):
+                try:
+                    pkg_content = pkg_json.read_text(encoding='utf-8')
+                    if '"vite"' in pkg_content:
+                        pkg_dir = pkg_json.parent
+
+                        # Create tsconfig.node.json if missing
+                        tsconfig_node = pkg_dir / 'tsconfig.node.json'
+                        if not tsconfig_node.exists():
+                            tsconfig_content = '''{
+  "compilerOptions": {
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "strict": true
+  },
+  "include": ["vite.config.ts", "vite.config.js"]
+}'''
+                            tsconfig_node.write_text(tsconfig_content, encoding='utf-8')
+                            vite_configs_created.append(str(tsconfig_node.relative_to(workspace_path)))
+
+                        # Create vite.config.ts if neither vite.config.ts nor vite.config.js exists
+                        vite_config_ts = pkg_dir / 'vite.config.ts'
+                        vite_config_js = pkg_dir / 'vite.config.js'
+                        if not vite_config_ts.exists() and not vite_config_js.exists():
+                            vite_content = '''import { defineConfig } from "vite"
+import react from "@vitejs/plugin-react"
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    host: "0.0.0.0",
+    port: 5173,
+  },
+})'''
+                            vite_config_ts.write_text(vite_content, encoding='utf-8')
+                            vite_configs_created.append(str(vite_config_ts.relative_to(workspace_path)))
+
+                except Exception as e:
+                    errors.append(f"Error fixing Vite config in {pkg_json.parent}: {e}")
+
+            if vite_configs_created:
+                fixes_applied.append(f"Created Vite configs: {', '.join(vite_configs_created)}")
+                logger.info(f"[WorkspaceRestore] Created Vite configs: {vite_configs_created}")
+
+            # =====================================================
             # 11. FIX INCORRECT PATHS AND TAGS IN INDEX.HTML
             # =====================================================
             index_html_path = workspace_path / 'index.html'
