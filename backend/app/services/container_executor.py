@@ -1481,8 +1481,8 @@ class ContainerExecutor:
 
         # Check schedule: 20s, 40s, 60s (3 checks before declaring healthy)
         check_intervals = [20, 20, 20]  # Total: 60 seconds of monitoring
-        # Use docker-compose ps which is more reliable than docker ps with filters
-        check_cmd = f"docker-compose -p {project_name} -f {compose_file} ps -a 2>/dev/null || docker ps -a --filter name={project_name} --format '{{{{.Names}}}} {{{{.Status}}}}'"
+        # Simple command - just list all containers, filter in Python
+        check_cmd = "docker ps -a --format 'table {{.Names}}\t{{.Status}}'"
 
         while fix_attempt < max_fix_attempts and not containers_healthy:
             # Do multiple stability checks before declaring healthy
@@ -1495,38 +1495,52 @@ class ContainerExecutor:
                 # Check container status after each wait
                 try:
                     exit_code, ps_output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
+                    logger.info(f"[ContainerExecutor] Check {check_num} - exit_code={exit_code}, output_len={len(ps_output) if ps_output else 0}")
                     logger.info(f"[ContainerExecutor] Check {check_num} - Status:\n{ps_output}")
+
+                    # Check for command failure
+                    if exit_code != 0 or not ps_output:
+                        yield f"  ⚠️ Failed to get container status (exit_code={exit_code})\n"
+                        if ps_output:
+                            yield f"     Error: {ps_output[:200]}\n"
+                        failure_detected = True
+                        break
 
                     # Display per-service status
                     yield f"  📦 Service Status:\n"
                     output_lines = ps_output.strip().split('\n') if ps_output else []
 
-                    if not output_lines or (len(output_lines) == 1 and not output_lines[0].strip()):
-                        yield f"     ⚠️ No container status available\n"
-                    else:
-                        for line in output_lines:
-                            line = line.strip()
-                            if not line or line.startswith('NAME') or line.startswith('---'):
-                                continue  # Skip header lines
+                    # Filter lines for our project only (case-insensitive to be safe)
+                    project_lines = [line for line in output_lines if project_name.lower() in line.lower()]
 
-                            # Extract service name from line (works for both docker ps and docker-compose ps)
-                            # docker-compose ps: "name   command   state   ports"
-                            # docker ps: "name status"
+                    logger.info(f"[ContainerExecutor] Raw output: {ps_output[:500] if ps_output else 'EMPTY'}")
+                    logger.info(f"[ContainerExecutor] Looking for: {project_name}")
+                    logger.info(f"[ContainerExecutor] Project lines: {project_lines}")
+
+                    if not project_lines:
+                        yield f"     ⚠️ No containers found for {project_name}\n"
+                        # If no containers at all, consider it a failure
+                        failure_detected = True
+                        yield f"\n  ⚠️ No containers running - possible startup failure\n"
+                        break
+                    else:
+                        for line in project_lines:
+                            line = line.strip()
                             parts = line.split()
                             if parts:
                                 container_name = parts[0]
-                                # Extract service name from container name
+                                # Extract service name: bharatbuild_xxx_frontend_1 -> frontend
                                 service_name = container_name.replace(f"{project_name}_", "").rsplit("_", 1)[0]
 
-                                if "Up" in line or "running" in line.lower():
+                                if "Up" in line:
                                     yield f"     ✅ {service_name}: Running\n"
-                                elif "Exit" in line or "exited" in line.lower():
+                                elif "Exit" in line:
                                     yield f"     ❌ {service_name}: Stopped\n"
                                 else:
-                                    yield f"     ⏳ {service_name}: {line[:50]}\n"
+                                    yield f"     ⏳ {service_name}: Starting...\n"
 
-                    # Check for exited containers (case insensitive)
-                    has_exited = any("exit" in line.lower() for line in output_lines if line.strip())
+                    # Check for exited containers in our project
+                    has_exited = any("Exit" in line for line in project_lines)
 
                     if has_exited:
                         failure_detected = True
@@ -2144,7 +2158,10 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
             cd_cmd = f'cd "{working_dir}" && ' if working_dir else ''
             script = f'{cd_cmd}{command}'
 
+            logger.info(f"[ContainerExecutor] Running via helper container: {script[:100]}...")
+
             # Use docker/compose image which has docker-compose installed
+            # Explicitly capture both stdout and stderr
             result = self.docker_client.containers.run(
                 "docker/compose:latest",
                 ["-c", script],
@@ -2155,11 +2172,22 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
                 },
                 remove=True,
                 detach=False,
-                network_mode="host"
+                network_mode="host",
+                stdout=True,
+                stderr=True
             )
 
-            output = result.decode() if isinstance(result, bytes) else str(result)
-            logger.info(f"[ContainerExecutor] Ran command via helper: {command[:50]}...")
+            # Handle result - could be bytes, string, or None
+            if result is None:
+                logger.warning("[ContainerExecutor] Helper container returned None")
+                output = ""
+            elif isinstance(result, bytes):
+                output = result.decode('utf-8', errors='replace')
+            else:
+                output = str(result)
+
+            logger.info(f"[ContainerExecutor] Ran command via helper: {command[:50]}... Output length: {len(output)}")
+            logger.debug(f"[ContainerExecutor] Full output: {output[:500]}")
             return 0, output
 
         except subprocess.TimeoutExpired:
