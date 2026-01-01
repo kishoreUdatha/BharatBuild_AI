@@ -134,6 +134,34 @@ class ErrorClassifier:
         (r'vite\.config|tsconfig|babel\.config|webpack\.config',
          ErrorType.CONFIG_ERROR,
          "Fix configuration file", 0.85),
+
+        # Java compilation errors
+        (r'no\s+suitable\s+constructor\s+found|constructor.*is\s+not\s+applicable',
+         ErrorType.TYPE_ERROR,
+         "Fix Java constructor mismatch", 0.95),
+        (r'cannot\s+find\s+symbol|symbol:\s+(?:class|variable|method)',
+         ErrorType.UNDEFINED_VARIABLE,
+         "Fix missing Java symbol", 0.9),
+        (r'incompatible\s+types|required:.*found:',
+         ErrorType.TYPE_ERROR,
+         "Fix Java type mismatch", 0.9),
+        (r'method\s+.*\s+cannot\s+be\s+applied|actual\s+and\s+formal\s+argument\s+lists\s+differ',
+         ErrorType.TYPE_ERROR,
+         "Fix Java method argument mismatch", 0.9),
+        (r'package\s+.*\s+does\s+not\s+exist|cannot\s+access\s+class',
+         ErrorType.IMPORT_ERROR,
+         "Fix Java import", 0.85),
+
+        # Spring/Bean errors
+        (r'No\s+qualifying\s+bean|expected\s+at\s+least\s+1\s+bean',
+         ErrorType.CONFIG_ERROR,
+         "Fix Spring bean configuration", 0.85),
+        (r'UnsatisfiedDependencyException|BeanCreationException',
+         ErrorType.CONFIG_ERROR,
+         "Fix Spring dependency injection", 0.85),
+        (r'@Autowired.*failed|Could\s+not\s+autowire',
+         ErrorType.CONFIG_ERROR,
+         "Fix Spring autowiring", 0.85),
     ]
 
     # Patterns for errors Claude CANNOT fix (infrastructure issues)
@@ -180,10 +208,16 @@ class ErrorClassifier:
 
     # Patterns to extract file path and line number
     FILE_PATTERNS = [
+        # JavaScript/TypeScript patterns
         r'(?:at\s+|in\s+|file:\s*)?([a-zA-Z0-9_\-./\\]+\.[jt]sx?):(\d+)',  # file.tsx:123
         r'([a-zA-Z0-9_\-./\\]+\.[jt]sx?)\s*\((\d+),\s*\d+\)',  # file.tsx (123, 45)
         r'Error\s+in\s+([a-zA-Z0-9_\-./\\]+\.[jt]sx?):(\d+)',  # Error in file.tsx:123
         r'→\s*([a-zA-Z0-9_\-./\\]+\.[jt]sx?):(\d+)',  # → file.tsx:123
+        # Java patterns
+        r'\[ERROR\]\s*(/[a-zA-Z0-9_\-./\\]+\.java):\[(\d+),\d+\]',  # [ERROR] /path/File.java:[42,21]
+        r'([a-zA-Z0-9_\-./\\]+\.java):\[(\d+),\s*\d+\]',  # File.java:[42,21]
+        r'at\s+[a-zA-Z0-9_.]+\(([a-zA-Z0-9_]+\.java):(\d+)\)',  # at com.foo.Bar(File.java:42)
+        r'([a-zA-Z0-9_\-./\\]+\.java):(\d+):',  # File.java:42:
     ]
 
     @classmethod
@@ -262,8 +296,34 @@ class ErrorClassifier:
                 line_number = int(match.group(2)) if match.lastindex >= 2 else None
                 # Normalize path
                 file_path = file_path.replace('\\', '/')
+                # Strip container path prefixes (Docker containers use /app as workdir)
+                file_path = cls._normalize_container_path(file_path)
                 return file_path, line_number
         return None, None
+
+    @classmethod
+    def _normalize_container_path(cls, file_path: str) -> str:
+        """
+        Normalize container paths to local project paths.
+
+        Container paths like /app/src/main/java/... need to be mapped to:
+        - backend/src/main/java/... for Java files
+        - frontend/src/... for JS/TS files (if in /app/src without java)
+        """
+        # Strip common container workdir prefixes
+        container_prefixes = ['/app/', '/workspace/', '/home/app/', '/var/app/']
+        for prefix in container_prefixes:
+            if file_path.startswith(prefix):
+                file_path = file_path[len(prefix):]
+                break
+
+        # For Java files, ensure backend/ prefix if it's a src/main/java path
+        if file_path.endswith('.java'):
+            if file_path.startswith('src/main/java/') or file_path.startswith('src/test/java/'):
+                # This is likely a backend Java file
+                file_path = 'backend/' + file_path
+
+        return file_path
 
     @classmethod
     def _extract_context(cls, text: str, error_type: ErrorType) -> Dict[str, Any]:
@@ -335,19 +395,24 @@ Return ONLY a unified diff.""",
 
             ErrorType.IMPORT_ERROR: """Error type: IMPORT_ERROR
 Fix the import statement.
-Return ONLY a unified diff.""",
+For Java: add missing package import (e.g., import java.time.LocalDateTime;)
+For JavaScript/TypeScript: fix the import path or named import.
+Return ONLY a unified diff or <file path="...">complete content</file>.""",
 
             ErrorType.SYNTAX_ERROR: """Error type: SYNTAX_ERROR
 Fix the syntax error (mismatched brackets/tokens).
 Return the COMPLETE fixed file using <file path="...">content</file>""",
 
             ErrorType.TYPE_ERROR: """Error type: TYPE_ERROR
-Fix the TypeScript type error.
-Return ONLY a unified diff.""",
+Fix the type error (TypeScript or Java).
+For Java constructor errors: add the missing constructor or fix method signatures.
+For TypeScript: fix the type annotation.
+Return ONLY a unified diff or <file path="...">complete content</file> for Java.""",
 
             ErrorType.UNDEFINED_VARIABLE: """Error type: UNDEFINED_VARIABLE
-Fix the undefined variable by adding import or declaration.
-Return ONLY a unified diff.""",
+Fix the undefined variable/symbol by adding import or declaration.
+For Java: add missing import statement or declare the missing class/method.
+Return ONLY a unified diff or <file path="...">complete content</file>.""",
 
             ErrorType.REACT_ERROR: """Error type: REACT_ERROR
 Fix the React error.

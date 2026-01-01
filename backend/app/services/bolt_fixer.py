@@ -184,18 +184,27 @@ No explanations. Only the <file> block."""
         # STEP 4: GATHER CONTEXT (file content for Claude)
         # =================================================================
         file_content = ""
+        related_files_content = ""
         target_file = classified.file_path or error_file
 
         if target_file and project_path:
             file_path = project_path / target_file
             if not file_path.exists():
                 file_path = project_path / "frontend" / target_file
+            if not file_path.exists():
+                file_path = project_path / "backend" / target_file
             if file_path.exists():
                 try:
                     file_content = file_path.read_text(encoding='utf-8')
                     logger.info(f"[BoltFixer:{project_id}] Read file: {target_file} ({len(file_content)} chars)")
                 except Exception as e:
                     logger.warning(f"[BoltFixer:{project_id}] Could not read {target_file}: {e}")
+
+        # For Java errors, also read related class files mentioned in the error
+        if target_file and target_file.endswith('.java'):
+            related_files_content = await self._read_related_java_files(
+                project_path, combined_output, target_file
+            )
 
         # =================================================================
         # STEP 5: CALL CLAUDE (strict prompt)
@@ -210,6 +219,15 @@ No explanations. Only the <file> block."""
 
         # Build user prompt
         error_type_template = ErrorClassifier.get_claude_prompt_template(classified.error_type)
+
+        # Include related files section if available
+        related_section = ""
+        if related_files_content:
+            related_section = f"""
+RELATED FILES (may need modification):
+{related_files_content}
+"""
+
         user_prompt = f"""{error_type_template}
 
 ERROR: {combined_output[:2000]}
@@ -220,7 +238,7 @@ FILE CONTENT:
 ```
 {file_content[:10000] if file_content else 'No file content available'}
 ```
-
+{related_section}
 BUILD LOG:
 {combined_output[-2000:]}
 """
@@ -293,6 +311,8 @@ BUILD LOG:
             target_path = project_path / actual_file
             if not target_path.exists():
                 target_path = project_path / "frontend" / actual_file
+            if not target_path.exists():
+                target_path = project_path / "backend" / actual_file
 
             if target_path.exists():
                 try:
@@ -323,6 +343,8 @@ BUILD LOG:
             target_path = project_path / file_path
             if not target_path.exists():
                 target_path = project_path / "frontend" / file_path
+            if not target_path.exists():
+                target_path = project_path / "backend" / file_path
 
             try:
                 target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -454,36 +476,176 @@ BUILD LOG:
         files_modified: List[str]
     ) -> None:
         """
-        Sync fixed files to S3 for persistence.
+        Sync fixed files to S3 and update database for persistence.
 
         This ensures fixes survive container restarts.
-        Database stores metadata only, S3 stores content.
+        Database stores metadata, S3 stores content.
         """
+        from uuid import UUID
+        from sqlalchemy import select
+        from app.database import AsyncSessionLocal
+        from app.models.project import ProjectFile
+
         for file_path in files_modified:
             try:
                 # Read the fixed content from sandbox
                 full_path = project_path / file_path
+                actual_path = file_path  # Path to use for DB lookup
+
                 if not full_path.exists():
+                    # Try frontend subdirectory
                     full_path = project_path / "frontend" / file_path
+                    if full_path.exists():
+                        actual_path = f"frontend/{file_path}"
+
+                if not full_path.exists():
+                    # Try backend subdirectory
+                    full_path = project_path / "backend" / file_path
+                    if full_path.exists():
+                        actual_path = f"backend/{file_path}"
 
                 if not full_path.exists():
                     logger.warning(f"[BoltFixer:{project_id}] File not found for S3 sync: {file_path}")
                     continue
 
                 content = full_path.read_text(encoding='utf-8')
+                content_bytes = content.encode('utf-8')
 
                 # Upload to S3
-                await storage_service.upload_file(
+                result = await storage_service.upload_file(
                     project_id=project_id,
-                    file_path=file_path,
-                    content=content.encode('utf-8'),
+                    file_path=actual_path,
+                    content=content_bytes,
                     content_type="text/plain"
                 )
 
-                logger.info(f"[BoltFixer:{project_id}] ✓ Synced to S3: {file_path}")
+                # Update database record with new size and hash
+                try:
+                    async with AsyncSessionLocal() as session:
+                        # Find existing file record
+                        stmt = select(ProjectFile).where(
+                            ProjectFile.project_id == UUID(project_id),
+                            ProjectFile.path == actual_path
+                        )
+                        db_result = await session.execute(stmt)
+                        file_record = db_result.scalar_one_or_none()
+
+                        if file_record:
+                            # Update existing record
+                            file_record.s3_key = result['s3_key']
+                            file_record.size_bytes = result['size_bytes']
+                            file_record.content_hash = result['content_hash']
+                            await session.commit()
+                            logger.info(f"[BoltFixer:{project_id}] ✓ Updated DB: {actual_path}")
+                        else:
+                            logger.warning(f"[BoltFixer:{project_id}] No DB record for: {actual_path}")
+                except Exception as db_err:
+                    logger.warning(f"[BoltFixer:{project_id}] DB update failed for {actual_path}: {db_err}")
+
+                logger.info(f"[BoltFixer:{project_id}] ✓ Synced to S3: {actual_path}")
 
             except Exception as e:
                 logger.error(f"[BoltFixer:{project_id}] ✗ S3 sync failed for {file_path}: {e}")
+
+    async def _read_related_java_files(
+        self,
+        project_path: Path,
+        error_output: str,
+        current_file: str
+    ) -> str:
+        """
+        Extract and read Java class files mentioned in compilation errors.
+
+        For errors like "no suitable constructor found for Todo(...)",
+        this finds and reads Todo.java so Claude can fix it.
+
+        Args:
+            project_path: Root path of the project
+            error_output: Full error output from compilation
+            current_file: The file already being read (to avoid duplicates)
+
+        Returns:
+            Formatted string with related file contents
+        """
+        import re
+        import glob
+
+        # Patterns to extract Java class names from errors
+        class_patterns = [
+            # "no suitable constructor found for ClassName(...)"
+            r'no\s+suitable\s+constructor\s+found\s+for\s+([A-Z][a-zA-Z0-9_]*)',
+            # "constructor ClassName.ClassName(...) is not applicable"
+            r'constructor\s+([A-Z][a-zA-Z0-9_]*)\.([A-Z][a-zA-Z0-9_]*)',
+            # "cannot find symbol... class ClassName"
+            r'cannot\s+find\s+symbol.*?(?:class|variable)\s+([A-Z][a-zA-Z0-9_]*)',
+            # "Type ClassName is not assignable"
+            r'[Tt]ype\s+([A-Z][a-zA-Z0-9_]*)\s+is\s+not',
+            # "incompatible types: ClassName cannot be converted"
+            r'incompatible\s+types:?\s+([A-Z][a-zA-Z0-9_]*)',
+            # "method in class ClassName cannot be applied"
+            r'method\s+\w+\s+in\s+class\s+([A-Z][a-zA-Z0-9_]*)',
+            # Generic: com.package.ClassName references
+            r'com\.[a-z.]+\.([A-Z][a-zA-Z0-9_]*)',
+        ]
+
+        # Extract unique class names
+        class_names = set()
+        for pattern in class_patterns:
+            for match in re.finditer(pattern, error_output):
+                # Get the last group (class name)
+                class_name = match.group(match.lastindex) if match.lastindex else match.group(1)
+                if class_name and len(class_name) > 1:
+                    class_names.add(class_name)
+
+        # Get the class name from current file to exclude it
+        current_class = None
+        if current_file:
+            current_class = Path(current_file).stem  # e.g., "TodoService" from "TodoService.java"
+
+        # Remove current file's class from the set
+        if current_class:
+            class_names.discard(current_class)
+
+        if not class_names:
+            return ""
+
+        logger.info(f"[BoltFixer] Found related Java classes: {class_names}")
+
+        # Find and read the Java files
+        related_contents = []
+        project_str = str(project_path)
+
+        for class_name in list(class_names)[:5]:  # Limit to 5 related files
+            # Search for ClassName.java in the project
+            search_patterns = [
+                f"{project_str}/**/{class_name}.java",
+                f"{project_str}/backend/**/{class_name}.java",
+                f"{project_str}/src/**/{class_name}.java",
+            ]
+
+            found_file = None
+            for pattern in search_patterns:
+                matches = glob.glob(pattern, recursive=True)
+                if matches:
+                    found_file = matches[0]
+                    break
+
+            if found_file:
+                try:
+                    content = Path(found_file).read_text(encoding='utf-8')
+                    # Get relative path for display
+                    rel_path = Path(found_file).relative_to(project_path)
+                    related_contents.append(f"""
+--- {rel_path} ---
+```java
+{content[:8000]}
+```
+""")
+                    logger.info(f"[BoltFixer] Read related file: {rel_path} ({len(content)} chars)")
+                except Exception as e:
+                    logger.warning(f"[BoltFixer] Could not read {found_file}: {e}")
+
+        return "\n".join(related_contents)
 
 
 # Singleton instance

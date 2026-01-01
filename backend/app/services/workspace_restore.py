@@ -1596,6 +1596,26 @@ CMD ["npm", "run", "dev"]
                             tsconfig_node.write_text(tsconfig_content, encoding='utf-8')
                             vite_configs_created.append(str(tsconfig_node.relative_to(workspace_path)))
 
+                        # Fix existing vite.config to disable HMR (prevents WebSocket errors in iframe)
+                        for vite_cfg in [pkg_dir / 'vite.config.ts', pkg_dir / 'vite.config.js']:
+                            if vite_cfg.exists():
+                                try:
+                                    cfg_content = vite_cfg.read_text(encoding='utf-8')
+                                    # Add hmr: false if server config exists but hmr is not configured
+                                    if 'server:' in cfg_content or 'server :' in cfg_content:
+                                        if 'hmr' not in cfg_content:
+                                            # Add hmr: false after host or port line
+                                            import re
+                                            cfg_content = re.sub(
+                                                r"(host:\s*['\"]?[^,\n]+['\"]?,?\s*\n)",
+                                                r"\1    hmr: false,  // Disable HMR for preview\n",
+                                                cfg_content
+                                            )
+                                            vite_cfg.write_text(cfg_content, encoding='utf-8')
+                                            vite_configs_created.append(f"{vite_cfg.name} (hmr disabled)")
+                                except Exception as e:
+                                    logger.warning(f"[WorkspaceRestore] Could not patch {vite_cfg}: {e}")
+
                         # Create vite.config.ts if neither vite.config.ts nor vite.config.js exists
                         vite_config_ts = pkg_dir / 'vite.config.ts'
                         vite_config_js = pkg_dir / 'vite.config.js'
@@ -1608,6 +1628,7 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 5173,
+    hmr: false,  // Disable HMR for preview (avoids WebSocket issues)
   },
 })'''
                             vite_config_ts.write_text(vite_content, encoding='utf-8')
