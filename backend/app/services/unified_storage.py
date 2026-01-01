@@ -1587,6 +1587,13 @@ JAVAEOF
             sed -i 's/npm ci/npm install/g' "$dockerfile"
             FIXED="$FIXED npm_ci"
         fi
+        # Fix --only=production (skips devDependencies like vite)
+        if grep -q "\-\-only=production\|\-\-omit=dev" "$dockerfile" 2>/dev/null; then
+            sed -i 's/npm install --only=production/npm install/g' "$dockerfile"
+            sed -i 's/npm install --omit=dev/npm install/g' "$dockerfile"
+            sed -i 's/--production//g' "$dockerfile"
+            FIXED="$FIXED prod_deps"
+        fi
         if grep -q "RUN npm run build" "$dockerfile" 2>/dev/null; then
             sed -i '/RUN npm run build/d' "$dockerfile"
             FIXED="$FIXED npm_build"
@@ -1871,6 +1878,13 @@ JAVAEOF
         if grep -q "npm ci" "$dockerfile" 2>/dev/null; then
             sed -i 's/npm ci/npm install/g' "$dockerfile"
             FIXED="$FIXED npm_ci"
+        fi
+        # Fix --only=production (skips devDependencies like vite)
+        if grep -q "\-\-only=production\|\-\-omit=dev" "$dockerfile" 2>/dev/null; then
+            sed -i 's/npm install --only=production/npm install/g' "$dockerfile"
+            sed -i 's/npm install --omit=dev/npm install/g' "$dockerfile"
+            sed -i 's/--production//g' "$dockerfile"
+            FIXED="$FIXED prod_deps"
         fi
         if grep -q "RUN npm run build" "$dockerfile" 2>/dev/null; then
             sed -i '/RUN npm run build/d' "$dockerfile"

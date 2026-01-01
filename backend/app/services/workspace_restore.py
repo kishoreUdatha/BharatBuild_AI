@@ -1524,6 +1524,13 @@ CMD ["npm", "run", "dev"]
                                     content = content.replace('npm ci', 'npm install')
                                     fixes.append('npm_ci')
 
+                                # Fix --only=production (skips devDependencies like vite)
+                                if '--only=production' in content or '--omit=dev' in content:
+                                    content = content.replace('npm install --only=production', 'npm install')
+                                    content = content.replace('npm install --omit=dev', 'npm install')
+                                    content = content.replace('--production', '')
+                                    fixes.append('prod_deps')
+
                                 if 'RUN npm run build' in content:
                                     lines = content.split('\n')
                                     lines = [l for l in lines if 'RUN npm run build' not in l]

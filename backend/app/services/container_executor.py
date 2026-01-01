@@ -1470,37 +1470,44 @@ class ContainerExecutor:
             yield f"\n❌ Error: {str(e)}\n"
             return
 
-        # Wait for services to be ready
+        # Wait for services to be ready and verify they stay running
         yield f"\n  ⏳ Waiting for services to be ready...\n"
-        await asyncio.sleep(8)  # Give services time to start and potentially fail
 
-        # Verify containers are still running (health check)
-        try:
-            check_cmd = f"docker-compose -p {project_name} -f {compose_file} ps --format json 2>/dev/null || docker-compose -p {project_name} -f {compose_file} ps"
-            exit_code, ps_output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
+        # Two-phase health check: check at 10s and 20s to ensure stability
+        for check_num, wait_time in enumerate([(10, "initial"), (10, "stability")], 1):
+            await asyncio.sleep(wait_time[0])
 
-            # Check for exited containers
-            if "Exit" in ps_output or "exited" in ps_output.lower():
-                yield f"\n⚠️ Some containers have stopped. Checking logs...\n"
+            try:
+                check_cmd = f"docker-compose -p {project_name} -f {compose_file} ps 2>/dev/null"
+                exit_code, ps_output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
 
-                # Get logs from failed containers
-                logs_cmd = f"docker-compose -p {project_name} -f {compose_file} logs --tail=30 2>&1"
-                _, logs_output = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
+                # Check for exited containers
+                if "Exit" in ps_output or "exited" in ps_output.lower():
+                    yield f"\n⚠️ Some containers have stopped. Checking logs...\n"
 
-                # Show last 20 lines of logs
-                log_lines = logs_output.strip().split('\n')[-20:]
-                for line in log_lines:
-                    if line.strip():
-                        yield f"  {line}\n"
+                    # Get logs from failed containers
+                    logs_cmd = f"docker-compose -p {project_name} -f {compose_file} logs --tail=40 2>&1"
+                    _, logs_output = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
 
-                yield f"\n❌ Containers failed to start properly. Check errors above.\n"
-                return
+                    # Show last 30 lines of logs
+                    log_lines = logs_output.strip().split('\n')[-30:]
+                    for line in log_lines:
+                        if line.strip():
+                            yield f"  {line}\n"
 
-            yield f"  ✅ All containers are running\n"
+                    yield f"\n❌ Containers failed to start properly. Check errors above.\n"
+                    return
 
-        except Exception as health_err:
-            logger.warning(f"[ContainerExecutor] Health check failed: {health_err}")
-            # Continue anyway - container might still be working
+                if check_num == 1:
+                    yield f"  ✅ Containers started, verifying stability...\n"
+                else:
+                    yield f"  ✅ All containers are running and stable\n"
+
+            except Exception as health_err:
+                logger.warning(f"[ContainerExecutor] Health check {check_num} failed: {health_err}")
+                if check_num == 2:
+                    # Only continue if second check fails - first check failure should retry
+                    pass
 
         # Generate preview URL
         preview_url = _get_preview_url(frontend_port, project_id)
