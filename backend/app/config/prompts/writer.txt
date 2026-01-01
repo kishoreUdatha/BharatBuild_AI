@@ -2047,7 +2047,7 @@ networks:
 
 DOCKERFILE.DEV (Frontend - for local development with hot reload):
 ```dockerfile
-FROM node:20-alpine
+FROM node:20
 WORKDIR /app
 COPY package*.json ./
 RUN npm install
