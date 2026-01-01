@@ -1431,26 +1431,13 @@ class ContainerExecutor:
                                     except ValueError:
                                         pass  # Skip invalid port mappings
 
-                        # Inject Spring Boot / framework-specific database env vars
-                        # This ensures AI-generated docker-compose files work with Spring Boot
-                        compose_modified = self._inject_database_env_vars(compose_config, services)
-                        if compose_modified:
-                            try:
-                                updated_compose = yaml.dump(compose_config, default_flow_style=False, sort_keys=False)
-                                if self._write_file_to_sandbox(compose_file, updated_compose):
-                                    yield f"  ✅ Injected database environment variables for backend\n"
-                                else:
-                                    logger.warning("[ContainerExecutor] Failed to write updated compose file")
-                            except Exception as e:
-                                logger.warning(f"[ContainerExecutor] Failed to update compose file: {e}")
-
-                        # Fix frontend proxy config to use Docker service names instead of localhost
-                        # This ensures API calls work when previewing in browser
+                        # Normalize depends_on format for docker-compose compatibility
+                        # AI sometimes generates dict format which older docker-compose doesn't support
                         try:
-                            if self._fix_frontend_proxy_config(project_path, services):
-                                yield f"  ✅ Fixed frontend proxy config (localhost → Docker service)\n"
+                            if self._normalize_depends_on_format(compose_file, compose_content):
+                                yield f"  ✅ Normalized depends_on format for compatibility\n"
                         except Exception as e:
-                            logger.warning(f"[ContainerExecutor] Failed to fix frontend proxy config: {e}")
+                            logger.warning(f"[ContainerExecutor] Failed to normalize depends_on: {e}")
             else:
                 yield f"  ⚠️ Could not read compose file, using default ports\n"
         except Exception as e:
@@ -2097,335 +2084,77 @@ class ContainerExecutor:
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
         return bool(sandbox_docker_host and self.docker_client)
 
-    def _inject_database_env_vars(self, compose_config: dict, services: dict) -> bool:
+    def _normalize_depends_on_format(self, compose_file: str, compose_content: str) -> bool:
         """
-        Inject framework-specific database environment variables into backend service.
+        Convert dict-style depends_on to array format for docker-compose compatibility.
 
-        This reads database credentials from the compose file and adds the appropriate
-        environment variables for Spring Boot, Django, etc. to ensure the backend
-        can connect to the database regardless of what credentials the AI generated.
+        AI sometimes generates depends_on in dict format with conditions:
+            depends_on:
+              db:
+                condition: service_healthy
+
+        Older docker-compose versions may not support this. This method converts to array format:
+            depends_on:
+              - db
+
+        Uses simple string replacement to avoid YAML parse/dump reformatting the entire file.
 
         Args:
-            compose_config: The parsed docker-compose.yml config (will be modified in place)
-            services: The services dict from compose_config
+            compose_file: Path to docker-compose.yml
+            compose_content: Current content of the file
 
         Returns:
-            True if compose_config was modified, False otherwise
-        """
-        # Find database service and extract credentials
-        db_service = None
-        db_type = None
-        db_env = {}
-
-        for name, service in services.items():
-            if not isinstance(service, dict):
-                continue
-            image = service.get("image", "").lower()
-            if "postgres" in image:
-                db_service = name
-                db_type = "postgresql"
-                env = service.get("environment", {})
-                # Handle both dict and list format for environment
-                if isinstance(env, dict):
-                    db_env = env
-                elif isinstance(env, list):
-                    db_env = {}
-                    for item in env:
-                        if "=" in str(item):
-                            key, val = str(item).split("=", 1)
-                            db_env[key] = val
-                break
-            elif "mysql" in image or "mariadb" in image:
-                db_service = name
-                db_type = "mysql"
-                env = service.get("environment", {})
-                if isinstance(env, dict):
-                    db_env = env
-                elif isinstance(env, list):
-                    db_env = {}
-                    for item in env:
-                        if "=" in str(item):
-                            key, val = str(item).split("=", 1)
-                            db_env[key] = val
-                break
-            elif "mongo" in image:
-                db_service = name
-                db_type = "mongodb"
-                env = service.get("environment", {})
-                if isinstance(env, dict):
-                    db_env = env
-                elif isinstance(env, list):
-                    db_env = {}
-                    for item in env:
-                        if "=" in str(item):
-                            key, val = str(item).split("=", 1)
-                            db_env[key] = val
-                break
-
-        if not db_service or not db_type:
-            logger.debug("[ContainerExecutor] No database service found in compose file")
-            return False
-
-        # Extract credentials based on database type
-        if db_type == "postgresql":
-            db_user = db_env.get("POSTGRES_USER", "postgres")
-            db_pass = db_env.get("POSTGRES_PASSWORD", "postgres")
-            db_name = db_env.get("POSTGRES_DB", db_user)  # Postgres defaults DB to username
-            db_port = "5432"
-        elif db_type == "mysql":
-            db_user = db_env.get("MYSQL_USER", "root")
-            db_pass = db_env.get("MYSQL_PASSWORD") or db_env.get("MYSQL_ROOT_PASSWORD", "")
-            db_name = db_env.get("MYSQL_DATABASE", "app")
-            db_port = "3306"
-        elif db_type == "mongodb":
-            db_user = db_env.get("MONGO_INITDB_ROOT_USERNAME", "")
-            db_pass = db_env.get("MONGO_INITDB_ROOT_PASSWORD", "")
-            db_name = db_env.get("MONGO_INITDB_DATABASE", "app")
-            db_port = "27017"
-        else:
-            return False
-
-        logger.info(f"[ContainerExecutor] Found {db_type} database service: {db_service}, user={db_user}, db={db_name}")
-
-        # Find backend service and inject environment variables
-        backend_service = None
-        for name, service in services.items():
-            if not isinstance(service, dict):
-                continue
-            name_lower = name.lower()
-            if "backend" in name_lower or "api" in name_lower or "server" in name_lower or "app" in name_lower:
-                # Skip if it's the database service
-                if name == db_service:
-                    continue
-                backend_service = name
-                break
-
-        if not backend_service:
-            logger.debug("[ContainerExecutor] No backend service found to inject env vars")
-            return False
-
-        # Ensure environment dict exists
-        if "environment" not in services[backend_service]:
-            services[backend_service]["environment"] = {}
-
-        backend_env = services[backend_service]["environment"]
-
-        # Convert list format to dict if needed
-        if isinstance(backend_env, list):
-            env_dict = {}
-            for item in backend_env:
-                if "=" in str(item):
-                    key, val = str(item).split("=", 1)
-                    env_dict[key] = val
-            services[backend_service]["environment"] = env_dict
-            backend_env = env_dict
-
-        # Build environment variables to inject
-        env_vars_to_add = {}
-
-        if db_type == "postgresql":
-            env_vars_to_add = {
-                # Spring Boot
-                "SPRING_DATASOURCE_URL": f"jdbc:postgresql://{db_service}:{db_port}/{db_name}",
-                "SPRING_DATASOURCE_USERNAME": db_user,
-                "SPRING_DATASOURCE_PASSWORD": db_pass,
-                "SPRING_DATASOURCE_DRIVER_CLASS_NAME": "org.postgresql.Driver",
-                "SPRING_JPA_DATABASE_PLATFORM": "org.hibernate.dialect.PostgreSQLDialect",
-                # Generic
-                "DATABASE_URL": f"postgresql://{db_user}:{db_pass}@{db_service}:{db_port}/{db_name}",
-                "DB_HOST": db_service,
-                "DB_PORT": db_port,
-                "DB_NAME": db_name,
-                "DB_USER": db_user,
-                "DB_PASSWORD": db_pass,
-                # PostgreSQL specific
-                "PGHOST": db_service,
-                "PGPORT": db_port,
-                "PGDATABASE": db_name,
-                "PGUSER": db_user,
-                "PGPASSWORD": db_pass,
-            }
-        elif db_type == "mysql":
-            env_vars_to_add = {
-                # Spring Boot
-                "SPRING_DATASOURCE_URL": f"jdbc:mysql://{db_service}:{db_port}/{db_name}",
-                "SPRING_DATASOURCE_USERNAME": db_user,
-                "SPRING_DATASOURCE_PASSWORD": db_pass,
-                "SPRING_DATASOURCE_DRIVER_CLASS_NAME": "com.mysql.cj.jdbc.Driver",
-                "SPRING_JPA_DATABASE_PLATFORM": "org.hibernate.dialect.MySQLDialect",
-                # Generic
-                "DATABASE_URL": f"mysql://{db_user}:{db_pass}@{db_service}:{db_port}/{db_name}",
-                "DB_HOST": db_service,
-                "DB_PORT": db_port,
-                "DB_NAME": db_name,
-                "DB_USER": db_user,
-                "DB_PASSWORD": db_pass,
-            }
-        elif db_type == "mongodb":
-            mongo_uri = f"mongodb://{db_service}:{db_port}/{db_name}"
-            if db_user and db_pass:
-                mongo_uri = f"mongodb://{db_user}:{db_pass}@{db_service}:{db_port}/{db_name}?authSource=admin"
-            env_vars_to_add = {
-                # Spring Boot
-                "SPRING_DATA_MONGODB_URI": mongo_uri,
-                "SPRING_DATA_MONGODB_DATABASE": db_name,
-                # Generic
-                "MONGODB_URI": mongo_uri,
-                "MONGO_URL": mongo_uri,
-                "DATABASE_URL": mongo_uri,
-                "DB_HOST": db_service,
-                "DB_PORT": db_port,
-                "DB_NAME": db_name,
-            }
-
-        # Only add env vars that don't already exist (don't override user's settings)
-        added_count = 0
-        for key, value in env_vars_to_add.items():
-            if key not in backend_env:
-                backend_env[key] = value
-                added_count += 1
-
-        if added_count > 0:
-            logger.info(f"[ContainerExecutor] Injected {added_count} database env vars into {backend_service}")
-            return True
-
-        return False
-
-    def _fix_frontend_proxy_config(self, project_path: str, services: dict) -> bool:
-        """
-        Fix frontend proxy configuration to use Docker service names instead of localhost.
-
-        When previewing in a browser, the frontend runs in Vite dev server (inside Docker).
-        Vite's proxy can reach other containers via Docker service names, but AI often
-        generates configs with 'localhost' which doesn't work inside Docker.
-
-        This method scans vite.config.ts/js and replaces localhost:PORT with the
-        correct Docker service name (e.g., 'backend:8080').
-
-        Args:
-            project_path: Path to the project root
-            services: The services dict from docker-compose.yml
-
-        Returns:
-            True if any file was modified, False otherwise
+            True if file was modified, False otherwise
         """
         import re
 
-        # Find backend service name and its internal port
-        backend_service = None
-        backend_internal_port = "8080"
+        # Pattern to find dict-style depends_on blocks
+        # Matches: depends_on:\n    service_name:\n      condition: ...
+        pattern = r'(depends_on:\s*\n)((?:\s+\w+:\s*\n(?:\s+condition:\s*\w+\s*\n?)+)+)'
 
-        for name, service in services.items():
-            if not isinstance(service, dict):
-                continue
-            name_lower = name.lower()
-            # Identify backend service
-            if "backend" in name_lower or "api" in name_lower or "server" in name_lower:
-                # Skip database services
-                image = service.get("image", "").lower()
-                if any(db in image for db in ["postgres", "mysql", "mongo", "redis", "mariadb"]):
-                    continue
-                backend_service = name
-                # Extract internal port from port mapping (e.g., "8088:8080" -> 8080)
-                ports = service.get("ports", [])
-                for port_mapping in ports:
-                    if isinstance(port_mapping, str) and ":" in port_mapping:
-                        parts = port_mapping.split(":")
-                        if len(parts) == 2:
-                            backend_internal_port = parts[1].split("/")[0]  # Remove /tcp if present
-                            break
-                break
+        def convert_to_array(match):
+            """Convert a dict-style depends_on block to array format."""
+            prefix = match.group(1)  # "depends_on:\n"
+            block = match.group(2)   # The indented service blocks
 
-        if not backend_service:
-            logger.debug("[ContainerExecutor] No backend service found for proxy fix")
-            return False
+            # Extract service names from the block
+            # Matches lines like "    postgres:" or "      redis:"
+            service_pattern = r'^(\s+)(\w+):\s*$'
+            services_found = []
+            base_indent = None
 
-        logger.info(f"[ContainerExecutor] Found backend service: {backend_service}:{backend_internal_port}")
+            for line in block.split('\n'):
+                service_match = re.match(service_pattern, line)
+                if service_match:
+                    indent = service_match.group(1)
+                    service_name = service_match.group(2)
+                    # Only capture the first level services (not nested keys like "condition")
+                    if base_indent is None:
+                        base_indent = len(indent)
+                        services_found.append((indent, service_name))
+                    elif len(indent) == base_indent:
+                        services_found.append((indent, service_name))
 
-        # Find frontend directory
-        frontend_paths = []
-        for name, service in services.items():
-            if not isinstance(service, dict):
-                continue
-            name_lower = name.lower()
-            if "frontend" in name_lower or "web" in name_lower or "ui" in name_lower or "client" in name_lower:
-                # Get build context path
-                build = service.get("build", {})
-                if isinstance(build, dict):
-                    context = build.get("context", f"./{name}")
-                elif isinstance(build, str):
-                    context = build
-                else:
-                    context = f"./{name}"
-                # Normalize path
-                if context.startswith("./"):
-                    context = context[2:]
-                frontend_paths.append(context)
+            if not services_found:
+                return match.group(0)  # No change if no services found
 
-        if not frontend_paths:
-            frontend_paths = ["frontend", "client", "web", "."]  # Common frontend paths
+            # Build array format
+            indent = services_found[0][0]
+            array_lines = [f"{indent}- {svc}" for _, svc in services_found]
+            return prefix + '\n'.join(array_lines) + '\n'
 
-        # Config files to check
-        config_files = [
-            "vite.config.ts",
-            "vite.config.js",
-            "vite.config.mjs",
-            "webpack.config.js",
-            "vue.config.js",
-            "next.config.js",
-            "next.config.mjs",
-        ]
+        new_content = re.sub(pattern, convert_to_array, compose_content, flags=re.MULTILINE)
 
-        files_modified = 0
+        if new_content != compose_content:
+            # Write the modified content back
+            if self._write_file_to_sandbox(compose_file, new_content):
+                logger.info(f"[ContainerExecutor] Normalized depends_on format in {compose_file}")
+                return True
+            else:
+                logger.warning(f"[ContainerExecutor] Failed to write normalized compose file")
+                return False
 
-        for frontend_path in frontend_paths:
-            for config_file in config_files:
-                if frontend_path == ".":
-                    file_path = os.path.join(project_path, config_file)
-                else:
-                    file_path = os.path.join(project_path, frontend_path, config_file)
-
-                # Read the config file
-                content = self._read_file_from_sandbox(file_path)
-                if not content:
-                    continue
-
-                original_content = content
-
-                # Pattern to match localhost URLs in proxy config
-                # Matches: http://localhost:PORT, http://127.0.0.1:PORT
-                # Captures the port number for reference
-                localhost_patterns = [
-                    # http://localhost:8080 or http://localhost:8088 etc
-                    (r"http://localhost:(\d+)", f"http://{backend_service}:{backend_internal_port}"),
-                    # http://127.0.0.1:8080
-                    (r"http://127\.0\.0\.1:(\d+)", f"http://{backend_service}:{backend_internal_port}"),
-                    # https variants (less common for local dev)
-                    (r"https://localhost:(\d+)", f"http://{backend_service}:{backend_internal_port}"),
-                ]
-
-                for pattern, replacement in localhost_patterns:
-                    # Only replace if it looks like a backend port (8xxx, 3xxx for API, 5xxx for Flask)
-                    matches = re.findall(pattern, content)
-                    for port in matches:
-                        port_int = int(port)
-                        # Backend ports are typically: 8080, 8000, 8888, 3000-3999 (API), 5000-5999 (Flask)
-                        # Skip frontend ports like 3000, 5173 (Vite)
-                        if port_int in [3000, 5173, 5174, 4200]:  # Common frontend ports
-                            continue
-                        # Replace this specific localhost:port with backend service
-                        specific_pattern = pattern.replace(r"(\d+)", port)
-                        content = re.sub(specific_pattern, replacement, content)
-
-                if content != original_content:
-                    # Write the fixed config back
-                    if self._write_file_to_sandbox(file_path, content):
-                        logger.info(f"[ContainerExecutor] Fixed proxy config in {file_path}")
-                        files_modified += 1
-                    else:
-                        logger.warning(f"[ContainerExecutor] Failed to write fixed config to {file_path}")
-
-        return files_modified > 0
+        return False
 
     def _write_file_to_sandbox(self, file_path: str, content: str) -> bool:
         """
