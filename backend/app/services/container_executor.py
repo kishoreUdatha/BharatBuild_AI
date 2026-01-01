@@ -2429,20 +2429,18 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
                         return f.read()
                 return None
 
-            # Remote mode - use helper container
-            result = self.docker_client.containers.run(
-                "alpine:latest",
-                ["-c", f'cat "{file_path}" 2>/dev/null || echo "__FILE_NOT_FOUND__"'],
-                entrypoint="/bin/sh",
-                volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
-                remove=True,
-                detach=False
+            # Remote mode - use _run_shell_on_sandbox which is more reliable
+            exit_code, output = self._run_shell_on_sandbox(
+                f'cat "{file_path}" 2>/dev/null',
+                timeout=30
             )
 
-            content = result.decode() if isinstance(result, bytes) else str(result)
-            if "__FILE_NOT_FOUND__" in content:
+            if exit_code != 0 or not output.strip():
+                logger.warning(f"[ContainerExecutor] File read failed: {file_path}, exit_code={exit_code}")
                 return None
-            return content
+
+            logger.debug(f"[ContainerExecutor] Read file {file_path}: {len(output)} bytes")
+            return output
 
         except Exception as e:
             logger.warning(f"[ContainerExecutor] Failed to read file {file_path}: {e}")
