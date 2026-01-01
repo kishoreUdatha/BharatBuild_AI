@@ -1473,9 +1473,14 @@ class ContainerExecutor:
         # Wait for services to be ready and verify they stay running
         yield f"\n  ⏳ Waiting for services to be ready...\n"
 
-        # Two-phase health check: check at 10s and 20s to ensure stability
-        for check_num, wait_time in enumerate([(10, "initial"), (10, "stability")], 1):
-            await asyncio.sleep(wait_time[0])
+        # Two-phase health check with auto-fix: check at 10s and 20s
+        max_fix_attempts = 3
+        fix_attempt = 0
+        containers_healthy = False
+
+        while fix_attempt < max_fix_attempts and not containers_healthy:
+            # Wait for containers to start/stabilize
+            await asyncio.sleep(10)
 
             try:
                 check_cmd = f"docker-compose -p {project_name} -f {compose_file} ps 2>/dev/null"
@@ -1483,31 +1488,100 @@ class ContainerExecutor:
 
                 # Check for exited containers
                 if "Exit" in ps_output or "exited" in ps_output.lower():
+                    fix_attempt += 1
                     yield f"\n⚠️ Some containers have stopped. Checking logs...\n"
 
                     # Get logs from failed containers
-                    logs_cmd = f"docker-compose -p {project_name} -f {compose_file} logs --tail=40 2>&1"
+                    logs_cmd = f"docker-compose -p {project_name} -f {compose_file} logs --tail=50 2>&1"
                     _, logs_output = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
 
-                    # Show last 30 lines of logs
+                    # Show error logs
                     log_lines = logs_output.strip().split('\n')[-30:]
                     for line in log_lines:
                         if line.strip():
                             yield f"  {line}\n"
 
-                    yield f"\n❌ Containers failed to start properly. Check errors above.\n"
-                    return
+                    # Try auto-fix if we have attempts left
+                    if fix_attempt < max_fix_attempts:
+                        yield f"\n🔧 AUTO-FIX: Attempt {fix_attempt}/{max_fix_attempts}\n"
+                        yield f"__FIX_STARTING__\n"
 
-                if check_num == 1:
-                    yield f"  ✅ Containers started, verifying stability...\n"
+                        # Import BoltFixer
+                        from app.services.bolt_fixer import BoltFixer
+                        bolt_fixer = BoltFixer()
+
+                        # Prepare payload for fixer
+                        payload = {
+                            "stderr": logs_output,
+                            "stdout": "",
+                            "exit_code": 1,
+                            "primary_error_type": "container_crash"
+                        }
+
+                        try:
+                            fix_result = await bolt_fixer.fix_from_backend(
+                                project_id=project_id,
+                                project_path=Path(project_path),
+                                payload=payload
+                            )
+
+                            if fix_result.success and fix_result.files_modified:
+                                yield f"✅ Fixed {len(fix_result.files_modified)} file(s):\n"
+                                for f in fix_result.files_modified:
+                                    yield f"   📝 {f}\n"
+
+                                # Rebuild and restart docker-compose
+                                yield f"\n🔄 Rebuilding containers with fixes...\n"
+
+                                # Stop containers
+                                down_cmd = f"docker-compose -p {project_name} -f {compose_file} down --remove-orphans"
+                                self._run_shell_on_sandbox(down_cmd, working_dir=project_path, timeout=30)
+
+                                # Rebuild and start
+                                up_cmd = f"docker-compose -p {project_name} -f {compose_file} up -d --build"
+                                exit_code, output = self._run_shell_on_sandbox(up_cmd, working_dir=project_path, timeout=300)
+
+                                if exit_code == 0:
+                                    yield f"  ✅ Containers rebuilt successfully\n"
+                                    yield f"  ⏳ Waiting for services to start...\n"
+                                    continue  # Loop back to check health again
+                                else:
+                                    yield f"  ❌ Rebuild failed: {output[:200]}\n"
+                            else:
+                                yield f"❌ Could not generate fix: {fix_result.message}\n"
+                                yield f"__FIX_FAILED__:{fix_result.message}\n"
+
+                        except Exception as fix_err:
+                            logger.error(f"[ContainerExecutor] Auto-fix error: {fix_err}")
+                            yield f"❌ Fix error: {fix_err}\n"
+                            yield f"__FIX_FAILED__:{fix_err}\n"
+
+                    # If we've exhausted all attempts
+                    if fix_attempt >= max_fix_attempts:
+                        yield f"\n❌ Containers failed after {fix_attempt} fix attempts.\n"
+                        return
                 else:
-                    yield f"  ✅ All containers are running and stable\n"
+                    # Containers are running - do stability check
+                    if not containers_healthy:
+                        yield f"  ✅ Containers started, verifying stability...\n"
+                        await asyncio.sleep(5)  # Quick stability check
+
+                        # Re-check
+                        _, ps_output2 = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
+                        if "Exit" not in ps_output2 and "exited" not in ps_output2.lower():
+                            containers_healthy = True
+                            yield f"  ✅ All containers are running and stable\n"
+                        else:
+                            yield f"  ⚠️ Container crashed during stability check\n"
+                            continue
 
             except Exception as health_err:
-                logger.warning(f"[ContainerExecutor] Health check {check_num} failed: {health_err}")
-                if check_num == 2:
-                    # Only continue if second check fails - first check failure should retry
-                    pass
+                logger.warning(f"[ContainerExecutor] Health check failed: {health_err}")
+                fix_attempt += 1
+
+        if not containers_healthy:
+            yield f"\n❌ Failed to start containers after {max_fix_attempts} attempts.\n"
+            return
 
         # Generate preview URL
         preview_url = _get_preview_url(frontend_port, project_id)
