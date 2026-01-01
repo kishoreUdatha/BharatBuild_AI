@@ -2088,16 +2088,17 @@ class ContainerExecutor:
         """
         Convert dict-style depends_on to array format for docker-compose compatibility.
 
-        AI sometimes generates depends_on in dict format with conditions:
+        AI sometimes generates depends_on in dict format:
             depends_on:
               db:
                 condition: service_healthy
+        OR just:
+            depends_on:
+              db:
 
-        Older docker-compose versions may not support this. This method converts to array format:
+        This method converts to array format:
             depends_on:
               - db
-
-        Uses simple string replacement to avoid YAML parse/dump reformatting the entire file.
 
         Args:
             compose_file: Path to docker-compose.yml
@@ -2108,45 +2109,76 @@ class ContainerExecutor:
         """
         import re
 
-        # Pattern to find dict-style depends_on blocks
-        # Matches: depends_on:\n    service_name:\n      condition: ...
-        pattern = r'(depends_on:\s*\n)((?:\s+\w+:\s*\n(?:\s+condition:\s*\w+\s*\n?)+)+)'
+        lines = compose_content.split('\n')
+        new_lines = []
+        i = 0
+        modified = False
 
-        def convert_to_array(match):
-            """Convert a dict-style depends_on block to array format."""
-            prefix = match.group(1)  # "depends_on:\n"
-            block = match.group(2)   # The indented service blocks
+        while i < len(lines):
+            line = lines[i]
 
-            # Extract service names from the block
-            # Matches lines like "    postgres:" or "      redis:"
-            service_pattern = r'^(\s+)(\w+):\s*$'
-            services_found = []
-            base_indent = None
+            # Check if this is a depends_on line (with nothing after the colon)
+            depends_match = re.match(r'^(\s*)depends_on:\s*$', line)
+            if depends_match:
+                depends_indent = len(depends_match.group(1))
+                new_lines.append(line)
+                i += 1
 
-            for line in block.split('\n'):
-                service_match = re.match(service_pattern, line)
-                if service_match:
-                    indent = service_match.group(1)
-                    service_name = service_match.group(2)
-                    # Only capture the first level services (not nested keys like "condition")
-                    if base_indent is None:
-                        base_indent = len(indent)
-                        services_found.append((indent, service_name))
-                    elif len(indent) == base_indent:
-                        services_found.append((indent, service_name))
+                # Collect all service names in this depends_on block
+                services = []
+                service_indent = None
 
-            if not services_found:
-                return match.group(0)  # No change if no services found
+                while i < len(lines):
+                    next_line = lines[i]
 
-            # Build array format
-            indent = services_found[0][0]
-            array_lines = [f"{indent}- {svc}" for _, svc in services_found]
-            return prefix + '\n'.join(array_lines) + '\n'
+                    # Empty line - skip
+                    if not next_line.strip():
+                        i += 1
+                        continue
 
-        new_content = re.sub(pattern, convert_to_array, compose_content, flags=re.MULTILINE)
+                    next_indent = len(next_line) - len(next_line.lstrip())
 
-        if new_content != compose_content:
-            # Write the modified content back
+                    # If we're back to same or less indent, depends_on block is done
+                    if next_indent <= depends_indent:
+                        break
+
+                    # Check if this line is already array format (starts with -)
+                    if re.match(r'^\s+-\s+\w', next_line):
+                        # Already array format, keep as-is
+                        new_lines.append(next_line)
+                        i += 1
+                        continue
+
+                    # Check if this is a service name line (key with colon, nothing after)
+                    service_match = re.match(r'^(\s+)([\w][\w-]*):\s*$', next_line)
+                    if service_match:
+                        indent = service_match.group(1)
+                        service_name = service_match.group(2)
+
+                        # First service determines the indent level
+                        if service_indent is None:
+                            service_indent = len(indent)
+                            services.append((indent, service_name))
+                            modified = True
+                        elif len(indent) == service_indent:
+                            services.append((indent, service_name))
+                        # Deeper indent = nested property (condition:), skip
+                        i += 1
+                    else:
+                        # Other line (like condition: service_healthy), skip
+                        i += 1
+
+                # Add collected services in array format
+                if services:
+                    for indent, svc in services:
+                        new_lines.append(f"{indent}- {svc}")
+                continue
+            else:
+                new_lines.append(line)
+            i += 1
+
+        if modified:
+            new_content = '\n'.join(new_lines)
             if self._write_file_to_sandbox(compose_file, new_content):
                 logger.info(f"[ContainerExecutor] Normalized depends_on format in {compose_file}")
                 return True
