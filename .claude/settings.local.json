@@ -8,7 +8,8 @@
       "Bash(MSYS_NO_PATHCONV=1 aws ecs describe-services:*)",
       "Bash(docker build:*)",
       "Bash(MSYS_NO_PATHCONV=1 aws ssm get-command-invocation:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(\"C:\\\\Program Files\\\\Amazon\\\\AWSCLIV2\\\\aws.exe\" ecr describe-repositories:*)"
     ]
   }
 }
