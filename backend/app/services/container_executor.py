@@ -1490,6 +1490,27 @@ class ContainerExecutor:
 
                 logger.info(f"[ContainerExecutor] Container status for {project_name}:\n{ps_output}")
 
+                # Display per-service status
+                yield f"\n  📦 Service Status:\n"
+                for line in ps_output.strip().split('\n'):
+                    if not line.strip():
+                        continue
+                    # Parse: "project-service-1 Up 10 seconds" or "project-service-1 Exited (1) 5s ago"
+                    parts = line.split(maxsplit=1)
+                    if len(parts) >= 2:
+                        container_name = parts[0]
+                        status = parts[1]
+                        # Extract service name from container name (project-service-1 -> service)
+                        name_parts = container_name.replace(f"{project_name}-", "").rsplit("-", 1)
+                        service_name = name_parts[0] if name_parts else container_name
+
+                        if "Up" in status:
+                            yield f"     ✅ {service_name}: Running ({status})\n"
+                        elif "Exited" in status or "Exit" in status:
+                            yield f"     ❌ {service_name}: Stopped ({status})\n"
+                        else:
+                            yield f"     ⏳ {service_name}: {status}\n"
+
                 # Check for exited containers (any container with "Exited" in status)
                 has_exited = any("Exited" in line or "Exit" in line for line in ps_output.split('\n') if line.strip())
 
