@@ -1567,15 +1567,19 @@ CMD ["npm", "run", "dev"]
 DEVEOF
         fi
         echo "[DOCKERFILE-FIX-CACHED] Replaced: $dockerfile"
-    # Check if it's a Java/Spring Boot Dockerfile with mvnw (Maven wrapper often missing)
-    elif grep -q "./mvnw" "$dockerfile" 2>/dev/null; then
-        echo "[DOCKERFILE-FIX-CACHED] Fixing Java Dockerfile (mvnw -> mvn): $dockerfile"
-        # Replace ./mvnw with mvn (Maven is in base image)
-        sed -i 's|./mvnw|mvn|g' "$dockerfile"
-        # Also remove the mvnw copy step if present
-        sed -i '/COPY mvnw/d' "$dockerfile"
-        sed -i '/COPY .mvn/d' "$dockerfile"
-        echo "[DOCKERFILE-FIX-CACHED] Fixed Java Dockerfile: $dockerfile"
+    # Check if it's a Java/Spring Boot Dockerfile - replace with dev Dockerfile
+    elif grep -q "mvnw\|mvn.*package\|spring-boot" "$dockerfile" 2>/dev/null; then
+        echo "[DOCKERFILE-FIX-CACHED] Replacing Java Dockerfile with dev version: $dockerfile"
+        cat > "$dockerfile" << 'JAVAEOF'
+FROM maven:3.9-eclipse-temurin-17
+WORKDIR /app
+COPY pom.xml .
+RUN mvn dependency:go-offline -B || true
+COPY src ./src
+EXPOSE 8080
+CMD ["mvn", "spring-boot:run", "-Dspring-boot.run.jvmArguments=-Xmx512m"]
+JAVAEOF
+        echo "[DOCKERFILE-FIX-CACHED] Replaced Java Dockerfile: $dockerfile"
     else
         # Simple fix for non-multi-stage Dockerfiles
         FIXED=""
@@ -1837,15 +1841,19 @@ CMD ["npm", "run", "dev"]
 DEVEOF
         fi
         echo "[DOCKERFILE-FIX] Replaced: $dockerfile"
-    # Check if it's a Java/Spring Boot Dockerfile with mvnw (Maven wrapper often missing)
-    elif grep -q "./mvnw" "$dockerfile" 2>/dev/null; then
-        echo "[DOCKERFILE-FIX] Fixing Java Dockerfile (mvnw -> mvn): $dockerfile"
-        # Replace ./mvnw with mvn (Maven is in base image)
-        sed -i 's|./mvnw|mvn|g' "$dockerfile"
-        # Also remove the mvnw copy step if present
-        sed -i '/COPY mvnw/d' "$dockerfile"
-        sed -i '/COPY .mvn/d' "$dockerfile"
-        echo "[DOCKERFILE-FIX] Fixed Java Dockerfile: $dockerfile"
+    # Check if it's a Java/Spring Boot Dockerfile - replace with dev Dockerfile
+    elif grep -q "mvnw\|mvn.*package\|spring-boot" "$dockerfile" 2>/dev/null; then
+        echo "[DOCKERFILE-FIX] Replacing Java Dockerfile with dev version: $dockerfile"
+        cat > "$dockerfile" << 'JAVAEOF'
+FROM maven:3.9-eclipse-temurin-17
+WORKDIR /app
+COPY pom.xml .
+RUN mvn dependency:go-offline -B || true
+COPY src ./src
+EXPOSE 8080
+CMD ["mvn", "spring-boot:run", "-Dspring-boot.run.jvmArguments=-Xmx512m"]
+JAVAEOF
+        echo "[DOCKERFILE-FIX] Replaced Java Dockerfile: $dockerfile"
     else
         # Simple fix for non-multi-stage Dockerfiles
         FIXED=""
