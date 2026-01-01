@@ -1530,6 +1530,25 @@ CMD ["npm", "run", "dev"]
                                     content = '\n'.join(lines)
                                     fixes.append('npm_build')
 
+                                # Fix npm start -> npm run dev for Vite projects
+                                if 'npm' in content and 'start' in content:
+                                    # Check if this is a Vite project
+                                    is_vite = '5173' in content or 'vite' in content.lower()
+                                    # Also check package.json in same directory
+                                    if not is_vite:
+                                        pkg_json = dockerfile_path.parent / 'package.json'
+                                        if pkg_json.exists():
+                                            try:
+                                                pkg_content = pkg_json.read_text(encoding='utf-8')
+                                                is_vite = '"vite"' in pkg_content
+                                            except:
+                                                pass
+                                    if is_vite:
+                                        content = content.replace('CMD ["npm", "start"]', 'CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]')
+                                        content = content.replace('CMD ["npm", "start", "--", "--host", "0.0.0.0"]', 'CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]')
+                                        content = content.replace('npm start', 'npm run dev -- --host 0.0.0.0')
+                                        fixes.append('vite_cmd')
+
                             if content != original:
                                 dockerfile_path.write_text(content, encoding='utf-8')
                                 rel_path = dockerfile_path.relative_to(workspace_path)
