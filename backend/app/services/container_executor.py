@@ -1474,146 +1474,139 @@ class ContainerExecutor:
         yield f"\n  ⏳ Waiting for services to be ready...\n"
 
         # Health check with auto-fix
-        # Java/Maven projects need 30s+ to compile, so wait longer on first check
+        # Java/Maven projects need time to compile - check multiple times over 60s
         max_fix_attempts = 3
         fix_attempt = 0
         containers_healthy = False
-        initial_wait = 30  # Wait 30s on first check (Java/Maven needs time to compile)
+
+        # Check schedule: 20s, 40s, 60s (3 checks before declaring healthy)
+        check_intervals = [20, 20, 20]  # Total: 60 seconds of monitoring
+        check_cmd = f"docker ps -a --filter 'name={project_name}' --format '{{{{.Names}}}} {{{{.Status}}}}'"
 
         while fix_attempt < max_fix_attempts and not containers_healthy:
-            # Wait for containers to start/stabilize
-            wait_time = initial_wait if fix_attempt == 0 else 15
-            yield f"\n  ⏳ Waiting {wait_time}s for services to compile and start...\n"
-            await asyncio.sleep(wait_time)
+            # Do multiple stability checks before declaring healthy
+            failure_detected = False
 
-            try:
-                # Use docker ps directly for more reliable detection
-                # Check for ANY exited containers with our project prefix
-                check_cmd = f"docker ps -a --filter 'name={project_name}' --format '{{{{.Names}}}} {{{{.Status}}}}'"
-                exit_code, ps_output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
+            for check_num, wait_time in enumerate(check_intervals, 1):
+                yield f"\n  ⏳ Health check {check_num}/3: waiting {wait_time}s...\n"
+                await asyncio.sleep(wait_time)
 
-                logger.info(f"[ContainerExecutor] Container status for {project_name}:\n{ps_output}")
+                # Check container status after each wait
+                try:
+                    exit_code, ps_output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
+                    logger.info(f"[ContainerExecutor] Check {check_num} - Status:\n{ps_output}")
 
-                # Display per-service status
-                yield f"\n  📦 Service Status:\n"
-                for line in ps_output.strip().split('\n'):
-                    if not line.strip():
-                        continue
-                    # Parse: "project-service-1 Up 10 seconds" or "project-service-1 Exited (1) 5s ago"
-                    parts = line.split(maxsplit=1)
-                    if len(parts) >= 2:
-                        container_name = parts[0]
-                        status = parts[1]
-                        # Extract service name from container name (project-service-1 -> service)
-                        name_parts = container_name.replace(f"{project_name}-", "").rsplit("-", 1)
-                        service_name = name_parts[0] if name_parts else container_name
-
-                        if "Up" in status:
-                            yield f"     ✅ {service_name}: Running ({status})\n"
-                        elif "Exited" in status or "Exit" in status:
-                            yield f"     ❌ {service_name}: Stopped ({status})\n"
-                        else:
-                            yield f"     ⏳ {service_name}: {status}\n"
-
-                # Check for exited containers (any container with "Exited" in status)
-                has_exited = any("Exited" in line or "Exit" in line for line in ps_output.split('\n') if line.strip())
-
-                # Also check if we have running containers
-                has_running = any("Up" in line for line in ps_output.split('\n') if line.strip())
-
-                if has_exited:
-                    fix_attempt += 1
-                    yield f"\n⚠️ Some containers have stopped. Checking logs...\n"
-
-                    # Get logs from failed containers
-                    logs_cmd = f"docker-compose -p {project_name} -f {compose_file} logs --tail=50 2>&1"
-                    _, logs_output = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
-
-                    # Show error logs
-                    log_lines = logs_output.strip().split('\n')[-30:]
-                    for line in log_lines:
-                        if line.strip():
-                            yield f"  {line}\n"
-
-                    # Try auto-fix if we have attempts left
-                    if fix_attempt <= max_fix_attempts:
-                        yield f"\n🔧 AUTO-FIX: Attempt {fix_attempt}/{max_fix_attempts}\n"
-                        yield f"__FIX_STARTING__\n"
-
-                        # Import BoltFixer
-                        from app.services.bolt_fixer import BoltFixer
-                        bolt_fixer = BoltFixer()
-
-                        # Prepare payload for fixer
-                        payload = {
-                            "stderr": logs_output,
-                            "stdout": "",
-                            "exit_code": 1,
-                            "primary_error_type": "container_crash"
-                        }
-
-                        try:
-                            fix_result = await bolt_fixer.fix_from_backend(
-                                project_id=project_id,
-                                project_path=Path(project_path),
-                                payload=payload
-                            )
-
-                            if fix_result.success and fix_result.files_modified:
-                                yield f"✅ Fixed {len(fix_result.files_modified)} file(s):\n"
-                                for f in fix_result.files_modified:
-                                    yield f"   📝 {f}\n"
-
-                                # Rebuild and restart docker-compose
-                                yield f"\n🔄 Rebuilding containers with fixes...\n"
-
-                                # Stop containers
-                                down_cmd = f"docker-compose -p {project_name} -f {compose_file} down --remove-orphans"
-                                self._run_shell_on_sandbox(down_cmd, working_dir=project_path, timeout=30)
-
-                                # Rebuild and start
-                                up_cmd = f"docker-compose -p {project_name} -f {compose_file} up -d --build"
-                                exit_code, output = self._run_shell_on_sandbox(up_cmd, working_dir=project_path, timeout=300)
-
-                                if exit_code == 0:
-                                    yield f"  ✅ Containers rebuilt successfully\n"
-                                    yield f"  ⏳ Waiting for services to start...\n"
-                                    continue  # Loop back to check health again
-                                else:
-                                    yield f"  ❌ Rebuild failed: {output[:200]}\n"
-                            else:
-                                yield f"❌ Could not generate fix: {fix_result.message}\n"
-                                yield f"__FIX_FAILED__:{fix_result.message}\n"
-
-                        except Exception as fix_err:
-                            logger.error(f"[ContainerExecutor] Auto-fix error: {fix_err}")
-                            yield f"❌ Fix error: {fix_err}\n"
-                            yield f"__FIX_FAILED__:{fix_err}\n"
-
-                    # If we've exhausted all attempts
-                    if fix_attempt >= max_fix_attempts:
-                        yield f"\n❌ Containers failed after {fix_attempt} fix attempts.\n"
-                        return
-                else:
-                    # No exited containers - do stability check
-                    if not containers_healthy:
-                        yield f"  ✅ Containers started, verifying stability...\n"
-                        await asyncio.sleep(5)  # Quick stability check
-
-                        # Re-check using same command
-                        _, ps_output2 = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
-                        has_exited2 = any("Exited" in line or "Exit" in line for line in ps_output2.split('\n') if line.strip())
-
-                        if not has_exited2:
-                            containers_healthy = True
-                            yield f"  ✅ All containers are running and stable\n"
-                        else:
-                            yield f"  ⚠️ Container crashed during stability check\n"
+                    # Display per-service status
+                    yield f"  📦 Service Status:\n"
+                    for line in ps_output.strip().split('\n'):
+                        if not line.strip():
                             continue
+                        parts = line.split(maxsplit=1)
+                        if len(parts) >= 2:
+                            container_name = parts[0]
+                            status = parts[1]
+                            name_parts = container_name.replace(f"{project_name}-", "").rsplit("-", 1)
+                            service_name = name_parts[0] if name_parts else container_name
 
-            except Exception as health_err:
-                logger.warning(f"[ContainerExecutor] Health check failed: {health_err}")
-                fix_attempt += 1
+                            if "Up" in status:
+                                yield f"     ✅ {service_name}: Running\n"
+                            elif "Exited" in status or "Exit" in status:
+                                yield f"     ❌ {service_name}: Stopped\n"
+                            else:
+                                yield f"     ⏳ {service_name}: {status}\n"
+
+                    # Check for exited containers
+                    has_exited = any("Exited" in line or "Exit" in line for line in ps_output.split('\n') if line.strip())
+
+                    if has_exited:
+                        failure_detected = True
+                        yield f"\n  ⚠️ Container failure detected at check {check_num}/3\n"
+                        break  # Exit the check loop, trigger auto-fix
+
+                except Exception as e:
+                    logger.warning(f"[ContainerExecutor] Health check {check_num} failed: {e}")
+                    failure_detected = True
+                    break
+
+            # If all 3 checks passed without failure
+            if not failure_detected:
+                containers_healthy = True
+                yield f"\n  ✅ All containers stable after 60s monitoring\n"
+                break
+
+            # Failure detected - trigger auto-fix
+            fix_attempt += 1
+            yield f"\n⚠️ Some containers have stopped. Checking logs...\n"
+
+            # Get logs from failed containers
+            logs_cmd = f"docker-compose -p {project_name} -f {compose_file} logs --tail=50 2>&1"
+            _, logs_output = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
+
+            # Show error logs
+            log_lines = logs_output.strip().split('\n')[-30:]
+            for line in log_lines:
+                if line.strip():
+                    yield f"  {line}\n"
+
+            # Try auto-fix if we have attempts left
+            if fix_attempt <= max_fix_attempts:
+                yield f"\n🔧 AUTO-FIX: Attempt {fix_attempt}/{max_fix_attempts}\n"
+                yield f"__FIX_STARTING__\n"
+
+                # Import BoltFixer
+                from app.services.bolt_fixer import BoltFixer
+                bolt_fixer = BoltFixer()
+
+                # Prepare payload for fixer
+                payload = {
+                    "stderr": logs_output,
+                    "stdout": "",
+                    "exit_code": 1,
+                    "primary_error_type": "container_crash"
+                }
+
+                try:
+                    fix_result = await bolt_fixer.fix_from_backend(
+                        project_id=project_id,
+                        project_path=Path(project_path),
+                        payload=payload
+                    )
+
+                    if fix_result.success and fix_result.files_modified:
+                        yield f"✅ Fixed {len(fix_result.files_modified)} file(s):\n"
+                        for f in fix_result.files_modified:
+                            yield f"   📝 {f}\n"
+
+                        # Rebuild and restart docker-compose
+                        yield f"\n🔄 Rebuilding containers with fixes...\n"
+
+                        # Stop containers
+                        down_cmd = f"docker-compose -p {project_name} -f {compose_file} down --remove-orphans"
+                        self._run_shell_on_sandbox(down_cmd, working_dir=project_path, timeout=30)
+
+                        # Rebuild and start
+                        up_cmd = f"docker-compose -p {project_name} -f {compose_file} up -d --build"
+                        exit_code, output = self._run_shell_on_sandbox(up_cmd, working_dir=project_path, timeout=300)
+
+                        if exit_code == 0:
+                            yield f"  ✅ Containers rebuilt successfully\n"
+                            yield f"  ⏳ Waiting for services to start...\n"
+                            continue  # Loop back to check health again
+                        else:
+                            yield f"  ❌ Rebuild failed: {output[:200]}\n"
+                    else:
+                        yield f"❌ Could not generate fix: {fix_result.message}\n"
+                        yield f"__FIX_FAILED__:{fix_result.message}\n"
+
+                except Exception as fix_err:
+                    logger.error(f"[ContainerExecutor] Auto-fix error: {fix_err}")
+                    yield f"❌ Fix error: {fix_err}\n"
+                    yield f"__FIX_FAILED__:{fix_err}\n"
+
+            # If we've exhausted all attempts
+            if fix_attempt >= max_fix_attempts:
+                yield f"\n❌ Containers failed after {fix_attempt} fix attempts.\n"
+                return
 
         if not containers_healthy:
             yield f"\n❌ Failed to start containers after {max_fix_attempts} attempts.\n"
