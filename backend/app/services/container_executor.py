@@ -1851,8 +1851,21 @@ class ContainerExecutor:
         fix_attempt = 0
         containers_healthy = False
 
-        # Check schedule: 15s, 15s, 15s (3 checks over 45 seconds)
-        check_intervals = [15, 15, 15]  # Total: 45 seconds of stability monitoring
+        # Check schedule depends on project type
+        # Java/Maven projects need longer waits due to slow compilation (60-120 seconds)
+        is_java_project = False
+        try:
+            pom_check = f"test -f {project_path}/pom.xml -o -f {project_path}/backend/pom.xml && echo 'java'"
+            _, pom_result = self._run_shell_on_sandbox(pom_check, working_dir=project_path, timeout=5)
+            is_java_project = pom_result and 'java' in pom_result.lower()
+            if is_java_project:
+                logger.info(f"[ContainerExecutor] Java project detected - using extended stability checks")
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Error detecting Java project: {e}")
+
+        # Java: 4 checks × 25s = 100 seconds total (Maven needs time to compile)
+        # Other: 3 checks × 15s = 45 seconds total
+        check_intervals = [25, 25, 25, 25] if is_java_project else [15, 15, 15]
 
         while fix_attempt < max_fix_attempts and not containers_healthy:
             # Do multiple stability checks before declaring healthy
@@ -1915,7 +1928,24 @@ class ContainerExecutor:
                     # Restarting means the container is crash-looping!
                     has_exited = any("Exit" in line or "Restarting" in line for line in project_lines)
 
-                    if has_exited:
+                    # JAVA FIX: Also check backend logs for Maven build errors even if container is "Up"
+                    # Maven can still be compiling and show "Up" but have build errors
+                    has_build_error = False
+                    backend_containers = [line.split()[0] for line in project_lines if 'backend' in line.lower()]
+                    for backend_container in backend_containers:
+                        if "Up" in [line for line in project_lines if backend_container in line][0]:
+                            # Container is "Up" but check logs for Maven errors
+                            logs_cmd = f"docker logs {backend_container} 2>&1 | tail -50"
+                            _, backend_logs = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=10)
+                            if backend_logs:
+                                # Check for Maven build failure indicators
+                                if "[ERROR]" in backend_logs and "BUILD FAILURE" in backend_logs:
+                                    has_build_error = True
+                                    logger.warning(f"[ContainerExecutor] Maven BUILD FAILURE detected in {backend_container} logs")
+                                    yield f"     ⚠️ {backend_container.split('_')[-2]}: Build error detected in logs\n"
+                                    break
+
+                    if has_exited or has_build_error:
                         failure_detected = True
                         yield f"\n  ⚠️ Container failure detected at check {check_num}/3\n"
                         break  # Exit the check loop, trigger auto-fix
@@ -1936,12 +1966,29 @@ class ContainerExecutor:
             yield f"\n⚠️ Container failure detected. Checking logs...\n"
 
             # Get logs from failed containers using docker logs (works with awslogs driver)
-            # Includes both "Exit" (stopped) and "Restarting" (crash-looping) containers
+            # Includes: Exit (stopped), Restarting (crash-looping), or backend with build errors
             logs_output = ""
             for line in project_lines:
-                if "Exit" in line or "Restarting" in line:
-                    container_name = line.split()[0]
-                    status_type = "CRASH-LOOPING" if "Restarting" in line else "STOPPED"
+                container_name = line.split()[0] if line.split() else ""
+                if not container_name:
+                    continue
+
+                # Get logs from containers that exited, are restarting, or are backend with possible build errors
+                should_get_logs = False
+                status_type = "UNKNOWN"
+
+                if "Exit" in line:
+                    should_get_logs = True
+                    status_type = "STOPPED"
+                elif "Restarting" in line:
+                    should_get_logs = True
+                    status_type = "CRASH-LOOPING"
+                elif "backend" in container_name.lower() and "Up" in line:
+                    # Also check backend logs even if "Up" - might have Maven errors
+                    should_get_logs = True
+                    status_type = "BUILD-ERROR"
+
+                if should_get_logs:
                     logs_cmd = f"docker logs {container_name} 2>&1 | tail -100"
                     _, container_logs = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
                     if container_logs:
