@@ -249,12 +249,12 @@ class PlanXMLSchema:
     @staticmethod
     def parse_files_from_plan(xml_string: str) -> List[Dict[str, Any]]:
         """
-        Parse <files> from plan XML - new file-based format
+        Parse <files> from plan XML - new file-based format with dependency graph
 
         PRODUCTION FIX: Falls back to <project_structure> if <files> is missing
 
         Returns:
-            List of file dicts with path, description, priority
+            List of file dicts with path, description, priority, depends_on, exports, imports
         """
         files = []
 
@@ -266,22 +266,34 @@ class PlanXMLSchema:
                 for file_elem in files_elem.findall('file'):
                     path = file_elem.get('path', '')
                     priority = int(file_elem.get('priority', '99'))
+                    depends_on = file_elem.get('depends_on', '')
 
                     # Get description from nested <description> tag
                     desc_elem = file_elem.find('description')
                     description = desc_elem.text.strip() if desc_elem is not None and desc_elem.text else ''
+
+                    # Get exports from nested <exports> tag
+                    exports_elem = file_elem.find('exports')
+                    exports = exports_elem.text.strip() if exports_elem is not None and exports_elem.text else ''
+
+                    # Get imports from nested <imports> tag
+                    imports_elem = file_elem.find('imports')
+                    imports = imports_elem.text.strip() if imports_elem is not None and imports_elem.text else ''
 
                     if path:
                         files.append({
                             'path': path.strip(),
                             'description': description,
                             'priority': priority,
+                            'depends_on': [d.strip() for d in depends_on.split(',') if d.strip()],
+                            'exports': [e.strip() for e in exports.split(',') if e.strip()],
+                            'imports': imports,
                             'status': 'pending'
                         })
 
-                # Sort by priority
+                # Sort by priority (lower priority = generated first = dependencies come first)
                 files.sort(key=lambda x: x['priority'])
-                logger.info(f"[PlanXMLSchema] Parsed {len(files)} files from <files> section")
+                logger.info(f"[PlanXMLSchema] Parsed {len(files)} files from <files> section with dependency graph")
 
             # PRODUCTION FIX: Fallback to <project_structure> if no <files>
             if not files:
@@ -1849,28 +1861,40 @@ class DynamicOrchestrator:
         }
 
         try:
-            # NEW: First check for <files> tag (file-based plan format)
+            # NEW: First check for <files> tag (file-based plan format with dependency graph)
             files_elem = dom.find('files')
             if files_elem is not None:
                 for i, file_elem in enumerate(files_elem.findall('file')):
                     file_path = file_elem.get('path', '')
                     priority = file_elem.get('priority', str(i + 1))
+                    depends_on = file_elem.get('depends_on', '')
 
                     # Get description from nested <description> tag
                     desc_elem = file_elem.find('description')
                     description = desc_elem.text.strip() if desc_elem is not None and desc_elem.text else ''
+
+                    # Get exports from nested <exports> tag
+                    exports_elem = file_elem.find('exports')
+                    exports = exports_elem.text.strip() if exports_elem is not None and exports_elem.text else ''
+
+                    # Get imports from nested <imports> tag
+                    imports_elem = file_elem.find('imports')
+                    imports = imports_elem.text.strip() if imports_elem is not None and imports_elem.text else ''
 
                     if file_path:
                         result['files'].append({
                             "path": file_path.strip(),
                             "description": description,
                             "priority": int(priority) if priority.isdigit() else i + 1,
+                            "depends_on": [d.strip() for d in depends_on.split(',') if d.strip()],
+                            "exports": [e.strip() for e in exports.split(',') if e.strip()],
+                            "imports": imports,
                             "status": "pending"
                         })
 
-                # Sort files by priority
+                # Sort files by priority (lower = generated first = leaf dependencies first)
                 result['files'].sort(key=lambda x: x['priority'])
-                logger.info(f"[lxml DOM Parser] [OK] Extracted {len(result['files'])} files from plan (file-by-file mode)")
+                logger.info(f"[lxml DOM Parser] [OK] Extracted {len(result['files'])} files with dependency graph (file-by-file mode)")
 
             # LEGACY: Check for <tasks> tag (old task-based format)
             tasks_elem = dom.find('tasks')
@@ -4427,7 +4451,41 @@ Ensure every import in every file has a corresponding file in the plan.
         # Build color theme instruction if user specified colors
         color_instruction = self._build_color_instruction(context)
 
-        # Build prompt for single file generation
+        # Build prompt for single file generation with dependency context
+        # Get dependency info for this file from the plan
+        file_info = None
+        for f in (context.plan.get('files', []) if context.plan else []):
+            if f.get('path') == file_path:
+                file_info = f
+                break
+
+        # Build context about available dependencies (what can be imported)
+        available_exports = []
+        if context.files_created:
+            for created_file in context.files_created[-20:]:  # Last 20 files
+                created_path = created_file.get('path', '')
+                created_exports = created_file.get('exports', [])
+                if created_exports:
+                    available_exports.append(f"  - {created_path}: exports {', '.join(created_exports)}")
+                else:
+                    available_exports.append(f"  - {created_path}")
+
+        dependency_context = ""
+        if file_info:
+            depends_on = file_info.get('depends_on', [])
+            imports_needed = file_info.get('imports', '')
+            expected_exports = file_info.get('exports', [])
+
+            if depends_on or imports_needed:
+                dependency_context = f"""
+DEPENDENCIES FOR THIS FILE:
+- This file depends on: {', '.join(depends_on) if depends_on else 'None'}
+- Imports needed: {imports_needed if imports_needed else 'None'}
+- This file should export: {', '.join(expected_exports) if expected_exports else 'As needed'}
+
+⚠️ CRITICAL: Make sure to import from the correct paths listed above!
+"""
+
         user_prompt = f"""
 FILE TO GENERATE:
 Path: {file_path}
@@ -4438,12 +4496,13 @@ User Request: {context.user_request}
 Project Type: {context.project_type or 'Web Application'}
 Tech Stack: {json.dumps(context.tech_stack) if context.tech_stack else 'React + TypeScript + Tailwind'}
 
-FILES ALREADY CREATED:
-{chr(10).join([f"- {f.get('path', 'unknown')}" for f in context.files_created[-10:]]) if context.files_created else "None yet"}
-
+FILES ALREADY CREATED (you can import from these):
+{chr(10).join(available_exports) if available_exports else "None yet - this may be a leaf file with no dependencies"}
+{dependency_context}
 Generate ONLY the file: {file_path}
 Output using <file path="{file_path}">CONTENT</file> format.
 Make sure the file is COMPLETE and PRODUCTION-READY.
+Include all necessary imports at the top.
 """
 
         # Initialize Bolt streaming buffer
@@ -4547,10 +4606,19 @@ Make sure the file is COMPLETE and PRODUCTION-READY.
                         )
 
                         if save_success:
+                            # Get exports from plan for dependency tracking
+                            file_exports = []
+                            if context.plan and context.plan.get('files'):
+                                for pf in context.plan['files']:
+                                    if pf.get('path') == extracted_path:
+                                        file_exports = pf.get('exports', [])
+                                        break
+
                             context.files_created.append({
                                 'path': extracted_path,
                                 'content': file_content,
-                                'saved': True
+                                'saved': True,
+                                'exports': file_exports  # Track exports for dependency resolution
                             })
 
                             # ============================================================
