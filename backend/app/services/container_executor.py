@@ -1481,14 +1481,103 @@ class ContainerExecutor:
 
         # Verify Dockerfiles exist before running docker-compose
         yield f"  🔍 Verifying build files...\n"
+
+        # Debug: Show actual directory structure
+        yield f"  📂 Directory structure:\n"
+        ls_cmd = "ls -la"
+        exit_code, ls_output = self._run_shell_on_sandbox(ls_cmd, working_dir=project_path, timeout=10)
+        if exit_code == 0:
+            for line in ls_output.split('\n')[:15]:
+                if line.strip():
+                    yield f"     {line}\n"
+
+        # Debug: Show docker-compose.yml build sections
+        yield f"  📄 docker-compose.yml build config:\n"
+        grep_cmd = f'grep -A2 "build:" "{compose_file}" | head -20'
+        exit_code, grep_output = self._run_shell_on_sandbox(grep_cmd, working_dir=project_path, timeout=10)
+        if exit_code == 0 and grep_output:
+            for line in grep_output.split('\n'):
+                yield f"     {line}\n"
+
+        dockerfile_locations = {}  # Map service type to actual Dockerfile path
         dockerfile_paths = ["Dockerfile", "frontend/Dockerfile", "backend/Dockerfile"]
         for df_path in dockerfile_paths:
             check_cmd = f'test -f "{df_path}" && head -1 "{df_path}"'
             exit_code, output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=10)
             if exit_code == 0:
                 yield f"     ✅ {df_path}: exists\n"
+                # Track where Dockerfiles actually are
+                if df_path == "frontend/Dockerfile":
+                    dockerfile_locations["frontend"] = "./frontend"
+                elif df_path == "backend/Dockerfile":
+                    dockerfile_locations["backend"] = "./backend"
+                elif df_path == "Dockerfile":
+                    dockerfile_locations["root"] = "."
             else:
                 yield f"     ⚠️ {df_path}: not found\n"
+
+        # Auto-fix docker-compose.yml if Dockerfiles are in subdirectories but compose points to root
+        if dockerfile_locations and "root" not in dockerfile_locations:
+            yield f"  🔧 Auto-fixing docker-compose.yml build paths...\n"
+            try:
+                # Read current compose file
+                read_cmd = f'cat "{compose_file}"'
+                exit_code, compose_content = self._run_shell_on_sandbox(read_cmd, working_dir=project_path, timeout=10)
+                if exit_code == 0 and compose_content:
+                    import yaml
+                    compose_data = yaml.safe_load(compose_content)
+
+                    if compose_data and 'services' in compose_data:
+                        modified = False
+                        for service_name, service in compose_data['services'].items():
+                            if not isinstance(service, dict):
+                                continue
+
+                            # Check if service has build configuration
+                            if 'build' in service:
+                                build_config = service['build']
+
+                                # Handle string format: build: .
+                                if isinstance(build_config, str) and build_config in ['.', './']:
+                                    # Need to fix - determine correct path based on service name
+                                    if 'frontend' in service_name.lower() and 'frontend' in dockerfile_locations:
+                                        service['build'] = {'context': './frontend', 'dockerfile': 'Dockerfile'}
+                                        modified = True
+                                        yield f"     ✅ Fixed {service_name}: context -> ./frontend\n"
+                                    elif 'backend' in service_name.lower() and 'backend' in dockerfile_locations:
+                                        service['build'] = {'context': './backend', 'dockerfile': 'Dockerfile'}
+                                        modified = True
+                                        yield f"     ✅ Fixed {service_name}: context -> ./backend\n"
+
+                                # Handle dict format: build: { context: . }
+                                elif isinstance(build_config, dict):
+                                    context = build_config.get('context', '.')
+                                    if context in ['.', './']:
+                                        if 'frontend' in service_name.lower() and 'frontend' in dockerfile_locations:
+                                            build_config['context'] = './frontend'
+                                            modified = True
+                                            yield f"     ✅ Fixed {service_name}: context -> ./frontend\n"
+                                        elif 'backend' in service_name.lower() and 'backend' in dockerfile_locations:
+                                            build_config['context'] = './backend'
+                                            modified = True
+                                            yield f"     ✅ Fixed {service_name}: context -> ./backend\n"
+
+                        # Write fixed compose file
+                        if modified:
+                            fixed_yaml = yaml.dump(compose_data, default_flow_style=False, sort_keys=False)
+                            # Write using base64 to avoid escaping issues
+                            import base64
+                            encoded = base64.b64encode(fixed_yaml.encode()).decode()
+                            write_cmd = f'echo "{encoded}" | base64 -d > "{compose_file}"'
+                            exit_code, _ = self._run_shell_on_sandbox(write_cmd, working_dir=project_path, timeout=10)
+                            if exit_code == 0:
+                                yield f"     ✅ docker-compose.yml updated\n"
+                            else:
+                                yield f"     ⚠️ Failed to update docker-compose.yml\n"
+
+            except Exception as e:
+                logger.warning(f"[ContainerExecutor] Failed to auto-fix compose: {e}")
+                yield f"     ⚠️ Auto-fix skipped: {e}\n"
 
         # Run docker-compose up
         yield f"  $ docker-compose up -d\n"
