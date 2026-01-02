@@ -680,7 +680,11 @@ class DockerInfraFixerAgent:
     # ========================================================================
 
     async def _validate_and_fix_dockerfile(self, project_path: str, sandbox_runner: callable) -> List[FixResult]:
-        """Validate and fix Dockerfile issues (works with remote sandbox)."""
+        """Validate and fix Dockerfile issues (works with remote sandbox).
+
+        CONSERVATIVE APPROACH: Only fix files that have actual problems.
+        We verify the Dockerfile is valid before and after any changes.
+        """
         fixes = []
 
         # Check multiple possible Dockerfile locations
@@ -696,48 +700,78 @@ class DockerInfraFixerAgent:
 
             try:
                 content = self._read_file_from_sandbox(dockerfile_path, sandbox_runner)
-                if not content:
+                if not content or not content.strip():
+                    logger.warning(f"[DockerInfraFixer] Dockerfile is empty or unreadable: {dockerfile_path}")
+                    continue
+
+                # Validate Dockerfile has basic structure
+                if 'FROM' not in content.upper():
+                    logger.warning(f"[DockerInfraFixer] Dockerfile missing FROM instruction: {dockerfile_path}")
                     continue
 
                 fixed_content = content
                 changes = []
 
-                # Fix base images
+                # ONLY fix base images that are EXACT matches (not partial)
+                # This prevents accidentally modifying valid images like node:18-alpine
                 for old_image, new_image in DOCKERFILE_FIXES.items():
-                    pattern = rf'^FROM\s+{re.escape(old_image)}\s*$'
-                    if re.search(pattern, fixed_content, re.MULTILINE | re.IGNORECASE):
-                        fixed_content = re.sub(pattern, f'FROM {new_image}', fixed_content, flags=re.MULTILINE | re.IGNORECASE)
-                        changes.append(f"Changed base image: {old_image} -> {new_image}")
+                    # Very strict pattern: FROM <exact-image> end-of-line or AS
+                    # This won't match "node:18-alpine" when looking for "node:18"
+                    pattern = rf'^(FROM\s+){re.escape(old_image)}(\s*(?:AS\s+\w+)?\s*)$'
+                    match = re.search(pattern, fixed_content, re.MULTILINE | re.IGNORECASE)
+                    if match:
+                        # Only replace if the image doesn't already have a variant
+                        image_in_file = match.group(0).split()[1]  # Get the actual image name
+                        if image_in_file.lower() == old_image.lower():
+                            # Check if this exact image (without variant) needs replacement
+                            fixed_content = re.sub(
+                                pattern,
+                                rf'\g<1>{new_image}\g<2>',
+                                fixed_content,
+                                flags=re.MULTILINE | re.IGNORECASE
+                            )
+                            changes.append(f"Changed base image: {old_image} -> {new_image}")
 
-                # Fix missing WORKDIR
-                if 'WORKDIR' not in fixed_content and ('COPY' in fixed_content or 'RUN' in fixed_content):
-                    # Add WORKDIR /app after FROM
-                    fixed_content = re.sub(
-                        r'^(FROM .+)$',
-                        r'\1\nWORKDIR /app',
-                        fixed_content,
-                        count=1,
-                        flags=re.MULTILINE
-                    )
-                    changes.append("Added WORKDIR /app")
+                # ONLY add WORKDIR if truly missing AND there are COPY/RUN commands
+                # that would fail without it
+                has_workdir = bool(re.search(r'^WORKDIR\s+', fixed_content, re.MULTILINE | re.IGNORECASE))
+                has_copy_or_run = bool(re.search(r'^(COPY|RUN)\s+', fixed_content, re.MULTILINE | re.IGNORECASE))
 
-                # Fix common syntax issues
-                # Remove duplicate blank lines
-                fixed_content = re.sub(r'\n{3,}', '\n\n', fixed_content)
+                if not has_workdir and has_copy_or_run:
+                    # Only add WORKDIR for simple Dockerfiles that clearly need it
+                    # Skip multi-stage builds which handle their own WORKDIR
+                    from_count = len(re.findall(r'^FROM\s+', fixed_content, re.MULTILINE | re.IGNORECASE))
+                    if from_count == 1:
+                        fixed_content = re.sub(
+                            r'^(FROM .+)$',
+                            r'\1\nWORKDIR /app',
+                            fixed_content,
+                            count=1,
+                            flags=re.MULTILINE
+                        )
+                        changes.append("Added WORKDIR /app")
 
-                # Ensure file ends with newline
-                if not fixed_content.endswith('\n'):
-                    fixed_content += '\n'
+                # ONLY write if we have MEANINGFUL changes (not just whitespace)
+                if changes:
+                    logger.info(f"[DockerInfraFixer] Applying Dockerfile fixes: {changes}")
 
-                if changes and fixed_content != content:
                     if self._write_file_to_sandbox(dockerfile_path, fixed_content, sandbox_runner):
-                        fixes.append(FixResult(
-                            success=True,
-                            message=f"Fixed Dockerfile: {dockerfile_path.split('/')[-1]}",
-                            file_modified=dockerfile_path,
-                            changes_made="; ".join(changes)
-                        ))
-                        logger.info(f"[DockerInfraFixer] Fixed Dockerfile: {changes}")
+                        # Verify the Dockerfile is still valid after our changes
+                        verify_content = self._read_file_from_sandbox(dockerfile_path, sandbox_runner)
+                        if verify_content and 'FROM' in verify_content.upper():
+                            fixes.append(FixResult(
+                                success=True,
+                                message=f"Fixed Dockerfile: {dockerfile_path.split('/')[-1]}",
+                                file_modified=dockerfile_path,
+                                changes_made="; ".join(changes)
+                            ))
+                            logger.info(f"[DockerInfraFixer] Successfully fixed Dockerfile: {changes}")
+                        else:
+                            logger.error(f"[DockerInfraFixer] Dockerfile corrupted after fix, backup should restore")
+                    else:
+                        logger.warning(f"[DockerInfraFixer] Failed to write Dockerfile fixes")
+                else:
+                    logger.debug(f"[DockerInfraFixer] Dockerfile looks valid, no fixes needed: {dockerfile_path}")
 
             except Exception as e:
                 logger.warning(f"[DockerInfraFixer] Dockerfile fix failed for {dockerfile_path}: {e}")
@@ -881,12 +915,53 @@ class DockerInfraFixerAgent:
     def _write_file_to_sandbox(self, file_path: str, content: str, sandbox_runner: callable) -> bool:
         """Write a file to the sandbox (works for both local and remote)."""
         try:
-            # Escape content for shell - use base64 to avoid escaping issues
             import base64
+
+            # Create a backup first
+            backup_path = f"{file_path}.bak"
+            sandbox_runner(f'cp "{file_path}" "{backup_path}" 2>/dev/null || true', None, 10)
+
+            # Write using base64 encoding to avoid shell escaping issues
             encoded = base64.b64encode(content.encode()).decode()
-            cmd = f'echo "{encoded}" | base64 -d > "{file_path}"'
-            exit_code, output = sandbox_runner(cmd, None, 30)
-            return exit_code == 0
+
+            # Use printf instead of echo for more reliable handling
+            # Write encoded content to temp file first, then decode
+            temp_file = f"{file_path}.b64tmp"
+
+            # Write base64 to temp file (safer for long content)
+            write_cmd = f"printf '%s' '{encoded}' > '{temp_file}'"
+            exit_code, output = sandbox_runner(write_cmd, None, 30)
+
+            if exit_code != 0:
+                logger.warning(f"[DockerInfraFixer] Failed to write temp file: {output}")
+                # Restore backup
+                sandbox_runner(f'mv "{backup_path}" "{file_path}" 2>/dev/null || true', None, 10)
+                return False
+
+            # Decode temp file to final file
+            decode_cmd = f'base64 -d "{temp_file}" > "{file_path}" && rm -f "{temp_file}"'
+            exit_code, output = sandbox_runner(decode_cmd, None, 30)
+
+            if exit_code != 0:
+                logger.warning(f"[DockerInfraFixer] Failed to decode file: {output}")
+                # Restore backup
+                sandbox_runner(f'mv "{backup_path}" "{file_path}" 2>/dev/null || true', None, 10)
+                return False
+
+            # Verify the file exists and has content
+            verify_code, verify_output = sandbox_runner(f'test -s "{file_path}" && head -1 "{file_path}"', None, 10)
+            if verify_code != 0:
+                logger.warning(f"[DockerInfraFixer] File verification failed: {file_path}")
+                # Restore backup
+                sandbox_runner(f'mv "{backup_path}" "{file_path}" 2>/dev/null || true', None, 10)
+                return False
+
+            # Clean up backup
+            sandbox_runner(f'rm -f "{backup_path}"', None, 10)
+
+            logger.info(f"[DockerInfraFixer] Successfully wrote {file_path}")
+            return True
+
         except Exception as e:
             logger.warning(f"[DockerInfraFixer] Failed to write {file_path}: {e}")
             return False
@@ -900,7 +975,11 @@ class DockerInfraFixerAgent:
             return False
 
     async def _validate_and_fix_compose(self, project_path: str, sandbox_runner: callable) -> List[FixResult]:
-        """Validate and fix docker-compose.yml issues (works with remote sandbox)."""
+        """Validate and fix docker-compose.yml issues (works with remote sandbox).
+
+        CONSERVATIVE APPROACH: Only fix known issues, preserve all other settings.
+        We use targeted string replacements when possible to avoid YAML reformatting.
+        """
         fixes = []
         compose_file = f"{project_path}/docker-compose.yml"
 
@@ -916,6 +995,7 @@ class DockerInfraFixerAgent:
                 logger.warning(f"[DockerInfraFixer] Could not read docker-compose.yml")
                 return fixes
 
+            original_content = content  # Keep original for comparison
             data = yaml.safe_load(content)
             modified = False
             changes = []
@@ -923,12 +1003,12 @@ class DockerInfraFixerAgent:
             if not isinstance(data, dict):
                 return fixes
 
-            # Fix depends_on format
+            # Fix depends_on format - convert dict format to simple list
             for service_name, service in data.get('services', {}).items():
                 if not isinstance(service, dict):
                     continue
 
-                # Fix depends_on: convert dict to list
+                # Fix depends_on: convert dict to list format
                 if 'depends_on' in service:
                     depends = service['depends_on']
                     if isinstance(depends, dict):
@@ -936,26 +1016,24 @@ class DockerInfraFixerAgent:
                         service['depends_on'] = list(depends.keys())
                         modified = True
                         changes.append(f"Fixed depends_on format for {service_name}")
-
-                # Ensure ports are strings
-                if 'ports' in service:
-                    fixed_ports = []
-                    for port in service['ports']:
-                        if isinstance(port, int):
-                            fixed_ports.append(str(port))
+                    elif isinstance(depends, list):
+                        # Normalize list items to simple strings
+                        normalized = []
+                        for item in depends:
+                            if isinstance(item, dict):
+                                # Extract service name from dict format
+                                normalized.extend(item.keys())
+                            else:
+                                normalized.append(str(item))
+                        if normalized != depends:
+                            service['depends_on'] = normalized
                             modified = True
-                        else:
-                            fixed_ports.append(port)
-                    if modified:
-                        service['ports'] = fixed_ports
-                        changes.append(f"Fixed port format for {service_name}")
+                            changes.append(f"Normalized depends_on for {service_name}")
 
             # Remove top-level networks section to avoid pool overlap issues
             if 'networks' in data:
-                # Check if using custom networks
                 networks = data['networks']
                 if isinstance(networks, dict):
-                    # Remove the networks section - let Docker create default network
                     del data['networks']
                     modified = True
                     changes.append("Removed custom networks (prevents pool overlap)")
@@ -967,21 +1045,43 @@ class DockerInfraFixerAgent:
                             changes.append(f"Removed network reference from {service_name}")
 
             if modified:
-                # Write fixed content back to sandbox
-                fixed_content = yaml.dump(data, default_flow_style=False, sort_keys=False)
+                # Use custom YAML dump to preserve formatting as much as possible
+                fixed_content = yaml.dump(
+                    data,
+                    default_flow_style=False,
+                    sort_keys=False,
+                    allow_unicode=True,
+                    width=1000  # Prevent line wrapping
+                )
+
+                logger.info(f"[DockerInfraFixer] Applying compose fixes: {changes}")
+
                 if self._write_file_to_sandbox(compose_file, fixed_content, sandbox_runner):
-                    fixes.append(FixResult(
-                        success=True,
-                        message="Fixed docker-compose.yml issues",
-                        file_modified=compose_file,
-                        changes_made="; ".join(changes)
-                    ))
-                    logger.info(f"[DockerInfraFixer] Fixed compose file: {changes}")
+                    # Verify the file is still valid YAML and has services
+                    verify_content = self._read_file_from_sandbox(compose_file, sandbox_runner)
+                    if verify_content:
+                        try:
+                            verify_data = yaml.safe_load(verify_content)
+                            if verify_data and 'services' in verify_data:
+                                fixes.append(FixResult(
+                                    success=True,
+                                    message="Fixed docker-compose.yml issues",
+                                    file_modified=compose_file,
+                                    changes_made="; ".join(changes)
+                                ))
+                                logger.info(f"[DockerInfraFixer] Successfully fixed compose file: {changes}")
+                            else:
+                                logger.error(f"[DockerInfraFixer] Compose file missing services after fix")
+                        except yaml.YAMLError:
+                            logger.error(f"[DockerInfraFixer] Compose file invalid YAML after fix")
                 else:
                     logger.warning(f"[DockerInfraFixer] Failed to write fixed compose file")
+            else:
+                logger.debug(f"[DockerInfraFixer] docker-compose.yml looks valid, no fixes needed")
 
         except yaml.YAMLError as e:
             # YAML syntax error - try to fix common issues
+            logger.warning(f"[DockerInfraFixer] YAML parse error: {e}")
             fix = await self._fix_compose_syntax(project_path, sandbox_runner)
             if fix.success:
                 fixes.append(fix)
