@@ -62,6 +62,7 @@ class InfraErrorType(Enum):
     DOCKERFILE_COPY_ERROR = "dockerfile_copy_error"
     DOCKERFILE_WORKDIR = "dockerfile_workdir"
     DOCKERFILE_MISSING = "dockerfile_missing"  # Cannot locate specified Dockerfile
+    DOCKERFILE_TARGET_MISSING = "dockerfile_target_missing"  # target stage not found in Dockerfile
     # Docker Compose
     COMPOSE_SYNTAX = "compose_syntax"
     COMPOSE_DEPENDS_ON = "compose_depends_on"
@@ -186,6 +187,12 @@ ERROR_PATTERNS: List[Tuple[str, InfraErrorType, str, Optional[str]]] = [
      "Dockerfile not found - service may need 'image:' instead of 'build:'",
      None),
 
+    # Target stage not found (AI added 'target: dev' but Dockerfile has no multi-stage build)
+    (r"target stage .* could not be found|failed to solve.*target.*not found",
+     InfraErrorType.DOCKERFILE_TARGET_MISSING,
+     "Target stage not found - remove 'target:' from docker-compose.yml build config",
+     None),
+
     # Docker Compose errors
     (r"yaml:|YAML|error validating|mapping values are not allowed|could not find expected",
      InfraErrorType.COMPOSE_SYNTAX,
@@ -298,6 +305,7 @@ class DockerInfraFixerAgent:
             InfraErrorType.VOLUME_PERMISSION,
             InfraErrorType.COMPOSE_VOLUME,  # Volume mount errors (file/directory mismatch)
             InfraErrorType.DOCKERFILE_MISSING,  # Missing Dockerfile (e.g., nginx with build: .)
+            InfraErrorType.DOCKERFILE_TARGET_MISSING,  # Target stage not found (remove 'target:')
         }
         return error_type in fixable_types
 
@@ -399,6 +407,7 @@ class DockerInfraFixerAgent:
             InfraErrorType.VOLUME_PERMISSION: lambda sr: self._fix_volume_permissions(error_message, project_path, sr),
             InfraErrorType.COMPOSE_VOLUME: lambda sr: self._fix_volume_mount(error_message, project_path, sr),
             InfraErrorType.DOCKERFILE_MISSING: lambda sr: self._fix_missing_dockerfile(error_message, project_path, sr),
+            InfraErrorType.DOCKERFILE_TARGET_MISSING: lambda sr: self._fix_missing_target(error_message, project_path, sr),
         }
 
         handler = fix_handlers.get(error.error_type)
@@ -957,6 +966,69 @@ http {
         except Exception as e:
             logger.error(f"[DockerInfraFixer] Missing Dockerfile fix failed: {e}")
             return FixResult(success=False, message=f"Missing Dockerfile fix failed: {e}")
+
+    async def _fix_missing_target(self, error_message: str, project_path: str, sandbox_runner: callable) -> FixResult:
+        """
+        Fix "target stage could not be found" error.
+
+        Common cause: AI fixer added 'target: dev' to docker-compose.yml build config,
+        but the Dockerfile doesn't have multi-stage builds with that target name.
+
+        Fix: Remove 'target:' from all service build configurations in docker-compose.yml.
+        """
+        try:
+            compose_file = f"{project_path}/docker-compose.yml"
+
+            content = self._read_file_from_sandbox(compose_file, sandbox_runner)
+            if not content:
+                return FixResult(
+                    success=False,
+                    message="Could not read docker-compose.yml"
+                )
+
+            compose_data = yaml.safe_load(content)
+            if not compose_data or 'services' not in compose_data:
+                return FixResult(
+                    success=False,
+                    message="Invalid docker-compose.yml structure"
+                )
+
+            modified = False
+            fixed_services = []
+
+            for service_name, service in compose_data.get('services', {}).items():
+                if not isinstance(service, dict):
+                    continue
+
+                # Check if service has build config with 'target' key
+                if 'build' in service:
+                    build_config = service.get('build')
+
+                    if isinstance(build_config, dict) and 'target' in build_config:
+                        # Remove the target key
+                        del build_config['target']
+                        modified = True
+                        fixed_services.append(service_name)
+                        logger.info(f"[DockerInfraFixer] Removed 'target:' from {service_name} build config")
+
+            if modified:
+                fixed_yaml = yaml.dump(compose_data, default_flow_style=False, sort_keys=False)
+                if self._write_file_to_sandbox(compose_file, fixed_yaml, sandbox_runner):
+                    return FixResult(
+                        success=True,
+                        message=f"Removed invalid 'target:' from: {', '.join(fixed_services)}",
+                        file_modified=compose_file,
+                        changes_made="Removed 'target:' key from build configurations"
+                    )
+
+            return FixResult(
+                success=False,
+                message="Could not find 'target:' in docker-compose.yml to remove"
+            )
+
+        except Exception as e:
+            logger.error(f"[DockerInfraFixer] Missing target fix failed: {e}")
+            return FixResult(success=False, message=f"Missing target fix failed: {e}")
 
     async def _validate_volume_mounts(self, project_path: str, sandbox_runner: callable) -> List[FixResult]:
         """

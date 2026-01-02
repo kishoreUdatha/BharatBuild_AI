@@ -334,6 +334,15 @@ BUILD LOG:
             file_path = file_info.get("path", "")
             content = file_info.get("content", "")
 
+            # PROTECTION: Block full docker-compose.yml replacement
+            # AI has been known to corrupt docker-compose.yml by deleting services
+            if "docker-compose" in file_path.lower():
+                logger.warning(
+                    f"[BoltFixer:{project_id}] BLOCKING full docker-compose.yml replacement - "
+                    "AI must use patches, not full file replacement"
+                )
+                continue
+
             # Validate
             result = PatchValidator.validate_full_file(file_path, content, project_path)
             if not result.is_valid:
@@ -360,6 +369,16 @@ BUILD LOG:
         for file_info in new_files:
             file_path = file_info.get("path", "")
             content = file_info.get("content", "")
+
+            # PROTECTION: Don't create new docker-compose.yml if one already exists
+            if "docker-compose" in file_path.lower():
+                existing_compose = project_path / "docker-compose.yml"
+                if existing_compose.exists():
+                    logger.warning(
+                        f"[BoltFixer:{project_id}] BLOCKING creation of new docker-compose.yml - "
+                        "original already exists"
+                    )
+                    continue
 
             # Validate
             result = PatchValidator.validate_new_file(file_path, content, project_path)

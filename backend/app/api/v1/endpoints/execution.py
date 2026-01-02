@@ -503,6 +503,16 @@ async def fix_runtime_error(
             if file_path_str and content:
                 # Sanitize path: strip quotes and whitespace (defensive fix for quoted filenames)
                 file_path_str = file_path_str.strip().strip('"').strip("'")
+
+                # PROTECTION: Block full docker-compose.yml replacement
+                # AI has been known to corrupt docker-compose.yml by deleting services
+                if "docker-compose" in file_path_str.lower():
+                    logger.warning(
+                        f"[Execution] BLOCKING docker-compose.yml modification - "
+                        "AI must use patches, not full file replacement"
+                    )
+                    continue
+
                 # Ensure file path is within project
                 full_path = project_path / file_path_str
 
