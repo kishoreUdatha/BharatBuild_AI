@@ -505,11 +505,19 @@ class DockerInfraFixerAgent:
 
     async def _fix_port_conflict(self, error_message: str, sandbox_runner: callable) -> FixResult:
         """Fix port conflict by killing processes and containers."""
-        port_match = re.search(r':(\d+)|port[:\s]+(\d+)', error_message, re.IGNORECASE)
+        # Try multiple patterns to extract port number
+        # Pattern 1: "0.0.0.0:5432" or "127.0.0.1:8080" - IP:PORT format
+        port_match = re.search(r'\d+\.\d+\.\d+\.\d+:(\d+)', error_message)
+        if not port_match:
+            # Pattern 2: "port 5432" or "port: 5432"
+            port_match = re.search(r'port[:\s]+(\d+)', error_message, re.IGNORECASE)
+        if not port_match:
+            # Pattern 3: "Bind for ... :5432 failed"
+            port_match = re.search(r':(\d{2,5})\s+failed', error_message, re.IGNORECASE)
         if not port_match:
             return FixResult(success=False, message="Could not determine conflicting port")
 
-        port = port_match.group(1) or port_match.group(2)
+        port = port_match.group(1)
 
         try:
             # Kill process using port
