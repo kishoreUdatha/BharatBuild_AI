@@ -1587,6 +1587,19 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       } else if (result.error || lastError) {
         // ============= FIX → VERIFY → RE-RUN LOOP (Bolt.new style!) =============
         // This loop continues UNTIL SUCCESS or max attempts reached
+
+        // IMPORTANT: If server is already running, treat as success (error might be from earlier in stream)
+        if (serverStartedRef.current) {
+          console.log('[AutoFix] Server is running - skipping auto-fix despite error in stream')
+          if (fixAttemptsRef.current > 0) {
+            onOutput?.(`\n✨ SUCCESS after ${fixAttemptsRef.current} fix attempt(s)!`)
+            onOutput?.('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+          }
+          resetFixState()
+          onEndSession?.()
+          return
+        }
+
         const errorToFix = result.error || lastError?.stackTrace || 'Unknown error'
         console.log('[AutoFix] Error detected, triggering auto-fix:', errorToFix.slice(0, 100))
 
@@ -1642,7 +1655,17 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         }
 
         // Max attempts reached or autoFix disabled
-        if (fixAttemptsRef.current >= MAX_AUTO_FIX_ATTEMPTS) {
+        // BUT: Check if server is actually running (it might have succeeded after fixes!)
+        if (serverStartedRef.current) {
+          console.log('[AutoFix] Server is running despite hitting max attempts - treating as success')
+          if (fixAttemptsRef.current > 0) {
+            onOutput?.(`\n✨ SUCCESS after ${fixAttemptsRef.current} fix attempt(s)!`)
+            onOutput?.('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+          }
+          resetFixState()
+          isRetryingRef.current = false
+          // Don't change status - it's already 'running'
+        } else if (fixAttemptsRef.current >= MAX_AUTO_FIX_ATTEMPTS) {
           onOutput?.('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
           onOutput?.(`🛑 MAX ATTEMPTS (${MAX_AUTO_FIX_ATTEMPTS}) REACHED`)
           onOutput?.('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
@@ -1653,11 +1676,14 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
           onOutput?.('   3. Click "Retry Fix" to reset and try again')
           onOutput?.('   4. Ask the AI in chat for specific guidance')
           setMaxAttemptsReached(true)
+          isRetryingRef.current = false
+          setStatus('error')
+          onOutput?.('\n❌ Execution failed. See errors above.')
+        } else {
+          isRetryingRef.current = false
+          setStatus('error')
+          onOutput?.('\n❌ Execution failed. See errors above.')
         }
-
-        isRetryingRef.current = false
-        setStatus('error')
-        onOutput?.('\n❌ Execution failed. See errors above.')
       }
 
       onEndSession?.()

@@ -290,8 +290,8 @@ TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
     # ==================== BACKEND FRAMEWORKS ====================
     Technology.JAVA: ContainerConfig(
         image="maven:3.9-eclipse-temurin-17",
-        build_command="mvn clean install -DskipTests",
-        run_command="mvn spring-boot:run",
+        build_command="mvn clean install -DskipTests -Dcheckstyle.skip=true",
+        run_command="mvn spring-boot:run -Dcheckstyle.skip=true",
         port=8080,
         memory_limit="1g",
         cpu_limit=1.0
@@ -1902,15 +1902,18 @@ class ContainerExecutor:
                                 # Extract service name: bharatbuild_xxx_frontend_1 -> frontend
                                 service_name = container_name.replace(f"{project_name}_", "").rsplit("_", 1)[0]
 
-                                if "Up" in line:
+                                if "Up" in line and "Restarting" not in line:
                                     yield f"     ✅ {service_name}: Running\n"
                                 elif "Exit" in line:
                                     yield f"     ❌ {service_name}: Stopped\n"
+                                elif "Restarting" in line:
+                                    yield f"     🔄 {service_name}: Crash-looping (restarting)\n"
                                 else:
                                     yield f"     ⏳ {service_name}: Starting...\n"
 
-                    # Check for exited containers in our project
-                    has_exited = any("Exit" in line for line in project_lines)
+                    # Check for exited or restarting containers in our project
+                    # Restarting means the container is crash-looping!
+                    has_exited = any("Exit" in line or "Restarting" in line for line in project_lines)
 
                     if has_exited:
                         failure_detected = True
@@ -1930,18 +1933,19 @@ class ContainerExecutor:
 
             # Failure detected - trigger auto-fix
             fix_attempt += 1
-            yield f"\n⚠️ Some containers have stopped. Checking logs...\n"
+            yield f"\n⚠️ Container failure detected. Checking logs...\n"
 
             # Get logs from failed containers using docker logs (works with awslogs driver)
-            # First get list of exited containers for this project
+            # Includes both "Exit" (stopped) and "Restarting" (crash-looping) containers
             logs_output = ""
             for line in project_lines:
-                if "Exit" in line:
+                if "Exit" in line or "Restarting" in line:
                     container_name = line.split()[0]
+                    status_type = "CRASH-LOOPING" if "Restarting" in line else "STOPPED"
                     logs_cmd = f"docker logs {container_name} 2>&1 | tail -100"
                     _, container_logs = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
                     if container_logs:
-                        logs_output += f"\n=== {container_name} ===\n{container_logs}\n"
+                        logs_output += f"\n=== {container_name} ({status_type}) ===\n{container_logs}\n"
 
             # Show error logs
             log_lines = logs_output.strip().split('\n')[-50:]

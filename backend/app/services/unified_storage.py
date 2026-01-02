@@ -1577,7 +1577,7 @@ COPY pom.xml .
 RUN mvn dependency:go-offline -B || true
 COPY src ./src
 EXPOSE 8080
-CMD ["mvn", "spring-boot:run", "-Dspring-boot.run.jvmArguments=-Xmx512m"]
+CMD ["mvn", "spring-boot:run", "-Dcheckstyle.skip=true", "-Dspring-boot.run.jvmArguments=-Xmx512m"]
 JAVAEOF
         echo "[DOCKERFILE-FIX-CACHED] Replaced Java Dockerfile: $dockerfile"
     else
@@ -1928,7 +1928,7 @@ COPY pom.xml .
 RUN mvn dependency:go-offline -B || true
 COPY src ./src
 EXPOSE 8080
-CMD ["mvn", "spring-boot:run", "-Dspring-boot.run.jvmArguments=-Xmx512m"]
+CMD ["mvn", "spring-boot:run", "-Dcheckstyle.skip=true", "-Dspring-boot.run.jvmArguments=-Xmx512m"]
 JAVAEOF
         echo "[DOCKERFILE-FIX] Replaced Java Dockerfile: $dockerfile"
     else

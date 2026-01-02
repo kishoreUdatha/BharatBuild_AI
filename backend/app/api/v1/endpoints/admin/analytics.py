@@ -1134,6 +1134,84 @@ async def get_costs_by_model(
     }
 
 
+@router.post("/recalculate-costs")
+async def recalculate_costs(
+    batch_size: int = Query(1000, ge=100, le=10000, description="Number of records to process per batch"),
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    """
+    Recalculate and backfill cost_paise for all TokenUsageLog records where cost_paise = 0.
+
+    This endpoint fixes historical records that were created before cost calculation was implemented.
+    It uses the calculate_cost_paise method to compute the correct cost based on:
+    - input_tokens
+    - output_tokens
+    - model
+
+    Returns:
+    - Total records with zero cost
+    - Number of records updated
+    - Total cost recalculated (in INR and USD)
+    """
+    from sqlalchemy import update
+
+    # First, count total records with zero cost
+    count_query = select(func.count(TokenUsageLog.id)).where(TokenUsageLog.cost_paise == 0)
+    total_zero_cost = await db.scalar(count_query)
+
+    if total_zero_cost == 0:
+        return {
+            "message": "No records with zero cost found. All costs are already calculated.",
+            "records_updated": 0,
+            "total_cost_inr": 0,
+            "total_cost_usd": 0
+        }
+
+    # Get all records with zero cost
+    zero_cost_query = (
+        select(TokenUsageLog)
+        .where(TokenUsageLog.cost_paise == 0)
+        .limit(batch_size)
+    )
+
+    result = await db.execute(zero_cost_query)
+    records = result.scalars().all()
+
+    updated_count = 0
+    total_cost_paise = 0
+
+    for record in records:
+        # Calculate the correct cost
+        calculated_cost = TokenUsageLog.calculate_cost_paise(
+            record.input_tokens or 0,
+            record.output_tokens or 0,
+            record.model or "haiku"
+        )
+
+        if calculated_cost > 0:
+            record.cost_paise = calculated_cost
+            total_cost_paise += calculated_cost
+            updated_count += 1
+
+    # Commit the changes
+    await db.commit()
+
+    # Check remaining records
+    remaining_query = select(func.count(TokenUsageLog.id)).where(TokenUsageLog.cost_paise == 0)
+    remaining_zero_cost = await db.scalar(remaining_query)
+
+    return {
+        "message": f"Successfully recalculated costs for {updated_count} records",
+        "records_found_with_zero_cost": total_zero_cost,
+        "records_updated": updated_count,
+        "remaining_records": remaining_zero_cost,
+        "total_cost_recalculated_inr": round(total_cost_paise / 100, 2),
+        "total_cost_recalculated_usd": round(total_cost_paise / 100 / 83, 4),
+        "note": f"Run this endpoint again if remaining_records > 0 (processed in batches of {batch_size})"
+    }
+
+
 @router.get("/project-costs/alerts")
 async def get_cost_alerts(
     days: int = Query(7, ge=1, le=30),
