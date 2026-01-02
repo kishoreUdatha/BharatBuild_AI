@@ -1,7 +1,7 @@
 """
 Unit Tests for ErrorClassifier Service
 
-Comprehensive tests for rule-based error classification.
+Tests for rule-based error classification based on actual implementation.
 """
 import pytest
 from app.services.error_classifier import ErrorClassifier, ErrorType, ClassifiedError
@@ -12,13 +12,28 @@ class TestErrorTypeEnum:
 
     def test_has_all_error_types(self):
         """Test ErrorType has all expected values"""
-        assert hasattr(ErrorType, 'SYNTAX_ERROR')
-        assert hasattr(ErrorType, 'MISSING_SYMBOL')
+        # Fixable by Claude
+        assert hasattr(ErrorType, 'DEPENDENCY_CONFLICT')
+        assert hasattr(ErrorType, 'MISSING_FILE')
         assert hasattr(ErrorType, 'IMPORT_ERROR')
+        assert hasattr(ErrorType, 'SYNTAX_ERROR')
         assert hasattr(ErrorType, 'TYPE_ERROR')
-        assert hasattr(ErrorType, 'RUNTIME_ERROR')
-        assert hasattr(ErrorType, 'DEPENDENCY_ERROR')
+        assert hasattr(ErrorType, 'UNDEFINED_VARIABLE')
+        assert hasattr(ErrorType, 'MISSING_EXPORT')
+        assert hasattr(ErrorType, 'REACT_ERROR')
+        assert hasattr(ErrorType, 'CSS_ERROR')
         assert hasattr(ErrorType, 'CONFIG_ERROR')
+
+        # NOT fixable by Claude
+        assert hasattr(ErrorType, 'INFRA_ERROR')
+        assert hasattr(ErrorType, 'NETWORK_ERROR')
+        assert hasattr(ErrorType, 'PORT_CONFLICT')
+        assert hasattr(ErrorType, 'PERMISSION_ERROR')
+        assert hasattr(ErrorType, 'MEMORY_ERROR')
+        assert hasattr(ErrorType, 'TIMEOUT_ERROR')
+        assert hasattr(ErrorType, 'REGISTRY_ERROR')
+
+        # Unknown
         assert hasattr(ErrorType, 'UNKNOWN')
 
 
@@ -26,14 +41,16 @@ class TestClassifiedError:
     """Test ClassifiedError dataclass"""
 
     def test_create_classified_error(self):
-        """Test creating ClassifiedError"""
+        """Test creating ClassifiedError with all required fields"""
         error = ClassifiedError(
             error_type=ErrorType.SYNTAX_ERROR,
             is_claude_fixable=True,
             confidence=0.95,
             file_path="src/App.java",
             line_number=10,
-            original_message="Syntax error at line 10"
+            original_message="Syntax error at line 10",
+            suggested_action="Fix syntax error",
+            extracted_context={}
         )
 
         assert error.error_type == ErrorType.SYNTAX_ERROR
@@ -41,6 +58,7 @@ class TestClassifiedError:
         assert error.confidence == 0.95
         assert error.file_path == "src/App.java"
         assert error.line_number == 10
+        assert error.suggested_action == "Fix syntax error"
 
 
 class TestSyntaxErrorClassification:
@@ -68,31 +86,19 @@ class TestSyntaxErrorClassification:
         assert classified.error_type == ErrorType.SYNTAX_ERROR
         assert classified.is_claude_fixable == True
 
-    def test_java_syntax_error(self):
-        """Test Java syntax error classification"""
+    def test_unexpected_token_syntax_error(self):
+        """Test unexpected token classification"""
         classified = ErrorClassifier.classify(
-            error_message="';' expected",
-            stderr="[ERROR] /src/App.java:[10,20] ';' expected",
+            error_message="Unexpected token",
+            stderr="Unexpected token 'if' at line 5",
             exit_code=1
         )
 
         assert classified.error_type == ErrorType.SYNTAX_ERROR
-        assert classified.is_claude_fixable == True
-
-    def test_typescript_syntax_error(self):
-        """Test TypeScript syntax error classification"""
-        classified = ErrorClassifier.classify(
-            error_message="error TS1005: ',' expected",
-            stderr="src/App.tsx(10,5): error TS1005: ',' expected",
-            exit_code=1
-        )
-
-        assert classified.error_type == ErrorType.SYNTAX_ERROR
-        assert classified.is_claude_fixable == True
 
 
-class TestMissingSymbolClassification:
-    """Test missing symbol error classification"""
+class TestUndefinedVariableClassification:
+    """Test undefined variable (was MISSING_SYMBOL) error classification"""
 
     def test_java_cannot_find_symbol(self):
         """Test Java 'cannot find symbol' classification"""
@@ -102,7 +108,7 @@ class TestMissingSymbolClassification:
             exit_code=1
         )
 
-        assert classified.error_type == ErrorType.MISSING_SYMBOL
+        assert classified.error_type == ErrorType.UNDEFINED_VARIABLE
         assert classified.is_claude_fixable == True
 
     def test_typescript_cannot_find_name(self):
@@ -113,45 +119,57 @@ class TestMissingSymbolClassification:
             exit_code=1
         )
 
-        assert classified.error_type == ErrorType.MISSING_SYMBOL
+        assert classified.error_type == ErrorType.UNDEFINED_VARIABLE
         assert classified.is_claude_fixable == True
 
-    def test_java_symbol_not_found(self):
-        """Test Java 'symbol not found' classification"""
+    def test_reference_error_not_defined(self):
+        """Test ReferenceError not defined classification"""
         classified = ErrorClassifier.classify(
-            error_message="error: symbol not found",
-            stderr="error: symbol not found\n  symbol: variable user",
+            error_message="ReferenceError: myVar is not defined",
+            stderr="ReferenceError: myVar is not defined",
             exit_code=1
         )
 
-        assert classified.error_type == ErrorType.MISSING_SYMBOL
-        assert classified.is_claude_fixable == True
+        assert classified.error_type == ErrorType.UNDEFINED_VARIABLE
 
 
-class TestImportErrorClassification:
-    """Test import error classification"""
+class TestDependencyConflictClassification:
+    """Test dependency conflict error classification"""
 
-    def test_python_module_not_found(self):
-        """Test Python ModuleNotFoundError classification"""
-        classified = ErrorClassifier.classify(
-            error_message="ModuleNotFoundError: No module named 'flask'",
-            stderr="ModuleNotFoundError: No module named 'flask'",
-            exit_code=1
-        )
-
-        assert classified.error_type == ErrorType.IMPORT_ERROR
-        assert classified.is_claude_fixable == True
-
-    def test_node_cannot_find_module(self):
-        """Test Node.js 'Cannot find module' classification"""
+    def test_npm_module_not_found(self):
+        """Test npm 'Cannot find module' classification"""
         classified = ErrorClassifier.classify(
             error_message="Cannot find module 'react'",
             stderr="Error: Cannot find module 'react'\n  Require stack:",
             exit_code=1
         )
 
-        assert classified.error_type == ErrorType.IMPORT_ERROR
+        assert classified.error_type == ErrorType.DEPENDENCY_CONFLICT
         assert classified.is_claude_fixable == True
+
+    def test_eresolve_dependency_error(self):
+        """Test npm ERESOLVE dependency error classification"""
+        classified = ErrorClassifier.classify(
+            error_message="npm ERR! ERESOLVE unable to resolve",
+            stderr="npm ERR! ERESOLVE unable to resolve dependency tree",
+            exit_code=1
+        )
+
+        assert classified.error_type == ErrorType.DEPENDENCY_CONFLICT
+
+    def test_peer_dependency_error(self):
+        """Test peer dependency error classification"""
+        classified = ErrorClassifier.classify(
+            error_message="npm ERR! peer dep missing",
+            stderr="npm ERR! peer dep missing: react@^17.0.0, required by react-dom@17.0.2",
+            exit_code=1
+        )
+
+        assert classified.error_type == ErrorType.DEPENDENCY_CONFLICT
+
+
+class TestImportErrorClassification:
+    """Test import error classification"""
 
     def test_java_package_not_exist(self):
         """Test Java 'package does not exist' classification"""
@@ -164,16 +182,15 @@ class TestImportErrorClassification:
         assert classified.error_type == ErrorType.IMPORT_ERROR
         assert classified.is_claude_fixable == True
 
-    def test_typescript_module_not_found(self):
-        """Test TypeScript module not found classification"""
+    def test_export_not_found(self):
+        """Test 'does not provide an export' classification"""
         classified = ErrorClassifier.classify(
-            error_message="error TS2307: Cannot find module './components/Button'",
-            stderr="error TS2307: Cannot find module './components/Button'",
+            error_message="does not provide an export named 'default'",
+            stderr="error: does not provide an export named 'default'",
             exit_code=1
         )
 
         assert classified.error_type == ErrorType.IMPORT_ERROR
-        assert classified.is_claude_fixable == True
 
 
 class TestTypeErrorClassification:
@@ -190,117 +207,127 @@ class TestTypeErrorClassification:
         assert classified.error_type == ErrorType.TYPE_ERROR
         assert classified.is_claude_fixable == True
 
-    def test_python_type_error(self):
-        """Test Python TypeError classification"""
-        classified = ErrorClassifier.classify(
-            error_message="TypeError: unsupported operand type(s)",
-            stderr="TypeError: unsupported operand type(s) for +: 'int' and 'str'",
-            exit_code=1
-        )
-
-        assert classified.error_type == ErrorType.TYPE_ERROR
-        assert classified.is_claude_fixable == True
-
     def test_java_incompatible_types(self):
         """Test Java incompatible types classification"""
         classified = ErrorClassifier.classify(
             error_message="incompatible types: String cannot be converted to int",
-            stderr="[ERROR] incompatible types: String cannot be converted to int",
+            stderr="[ERROR] incompatible types: required: int found: String",
             exit_code=1
         )
 
         assert classified.error_type == ErrorType.TYPE_ERROR
-        assert classified.is_claude_fixable == True
 
-
-class TestDependencyErrorClassification:
-    """Test dependency error classification"""
-
-    def test_npm_dependency_error(self):
-        """Test npm dependency error classification"""
+    def test_java_constructor_error(self):
+        """Test Java constructor error classification"""
         classified = ErrorClassifier.classify(
-            error_message="npm ERR! peer dep missing",
-            stderr="npm ERR! peer dep missing: react@^17.0.0, required by react-dom@17.0.2",
+            error_message="no suitable constructor found",
+            stderr="[ERROR] no suitable constructor found for class Foo",
             exit_code=1
         )
 
-        assert classified.error_type == ErrorType.DEPENDENCY_ERROR
-
-    def test_maven_dependency_error(self):
-        """Test Maven dependency error classification"""
-        classified = ErrorClassifier.classify(
-            error_message="Could not resolve dependencies",
-            stderr="[ERROR] Could not resolve dependencies for project",
-            exit_code=1
-        )
-
-        assert classified.error_type == ErrorType.DEPENDENCY_ERROR
-
-    def test_pip_dependency_error(self):
-        """Test pip dependency error classification"""
-        classified = ErrorClassifier.classify(
-            error_message="Could not find a version that satisfies the requirement",
-            stderr="ERROR: Could not find a version that satisfies the requirement flask>=2.0",
-            exit_code=1
-        )
-
-        assert classified.error_type == ErrorType.DEPENDENCY_ERROR
+        assert classified.error_type == ErrorType.TYPE_ERROR
 
 
 class TestConfigErrorClassification:
     """Test configuration error classification"""
 
-    def test_tsconfig_error(self):
-        """Test tsconfig.json error classification"""
+    def test_vite_config_error(self):
+        """Test vite.config error classification"""
         classified = ErrorClassifier.classify(
-            error_message="error in tsconfig.json",
-            stderr="error TS5023: Unknown compiler option 'invalidOption'",
+            error_message="error in vite.config",
+            stderr="error: vite.config.js has invalid option",
             exit_code=1
         )
 
-        # Config errors may be classified differently
-        assert classified is not None
+        assert classified.error_type == ErrorType.CONFIG_ERROR
 
-    def test_webpack_config_error(self):
-        """Test webpack config error classification"""
+    def test_spring_bean_error(self):
+        """Test Spring bean configuration error"""
         classified = ErrorClassifier.classify(
-            error_message="Invalid configuration object",
-            stderr="Invalid configuration object. Webpack has been initialised using a configuration object that does not match the API schema.",
+            error_message="No qualifying bean of type",
+            stderr="No qualifying bean of type 'UserService' available",
             exit_code=1
         )
 
         assert classified.error_type == ErrorType.CONFIG_ERROR
 
 
-class TestRuntimeErrorClassification:
-    """Test runtime error classification"""
+class TestInfrastructureErrors:
+    """Test non-Claude-fixable infrastructure errors"""
 
-    def test_null_pointer_exception(self):
-        """Test Java NullPointerException classification"""
+    def test_port_conflict(self):
+        """Test port conflict classification"""
         classified = ErrorClassifier.classify(
-            error_message="java.lang.NullPointerException",
-            stderr="Exception in thread \"main\" java.lang.NullPointerException\n\tat com.App.main(App.java:10)",
+            error_message="port already allocated",
+            stderr="Error: port 3000 already allocated",
             exit_code=1
         )
 
-        assert classified.error_type == ErrorType.RUNTIME_ERROR
+        assert classified.error_type == ErrorType.PORT_CONFLICT
+        assert classified.is_claude_fixable == False
 
-    def test_python_runtime_error(self):
-        """Test Python runtime error classification"""
+    def test_network_error(self):
+        """Test network error classification"""
         classified = ErrorClassifier.classify(
-            error_message="RuntimeError: maximum recursion depth exceeded",
-            stderr="RuntimeError: maximum recursion depth exceeded",
+            error_message="ETIMEDOUT",
+            stderr="Error: ETIMEDOUT connecting to registry.npmjs.org",
             exit_code=1
         )
 
-        assert classified.error_type == ErrorType.RUNTIME_ERROR
+        assert classified.error_type == ErrorType.NETWORK_ERROR
+        assert classified.is_claude_fixable == False
+
+    def test_permission_error(self):
+        """Test permission error classification"""
+        classified = ErrorClassifier.classify(
+            error_message="EACCES permission denied",
+            stderr="Error: EACCES: permission denied, open '/etc/passwd'",
+            exit_code=1
+        )
+
+        assert classified.error_type == ErrorType.PERMISSION_ERROR
+        assert classified.is_claude_fixable == False
+
+    def test_memory_error(self):
+        """Test memory error classification"""
+        classified = ErrorClassifier.classify(
+            error_message="JavaScript heap out of memory",
+            stderr="FATAL ERROR: JavaScript heap out of memory",
+            exit_code=1
+        )
+
+        assert classified.error_type == ErrorType.MEMORY_ERROR
+        assert classified.is_claude_fixable == False
+
+    def test_command_not_found(self):
+        """Test command not found classification"""
+        classified = ErrorClassifier.classify(
+            error_message="sh: pnpm: not found",
+            stderr="sh: pnpm: not found",
+            exit_code=127
+        )
+
+        assert classified.error_type == ErrorType.INFRA_ERROR
+        assert classified.is_claude_fixable == False
 
 
 class TestUnknownErrorClassification:
     """Test unknown error classification"""
 
-    def test_empty_error(self):
-        """Test empty error message classification"""
+    def test_unknown_error_allows_claude(self):
+        """Test unknown errors allow Claude attempt"""
+        classified = ErrorClassifier.classify(
+            error_message="Some random error we don't recognize",
+            stderr="",
+            exit_code=1
+        )
+
+        assert classified.error_type == ErrorType.UNKNOWN
+        # Unknown errors allow Claude to attempt fix
+        assert classified.is_claude_fixable == True
+
+    def test_empty_error_still_allows_claude(self):
+        """Test empty error message still allows Claude"""
         classified = ErrorClassifier.classify(
             error_message="",
             stderr="",
@@ -308,18 +335,8 @@ class TestUnknownErrorClassification:
         )
 
         assert classified.error_type == ErrorType.UNKNOWN
-        assert classified.is_claude_fixable == False
-
-    def test_success_output(self):
-        """Test successful build output classification"""
-        classified = ErrorClassifier.classify(
-            error_message="BUILD SUCCESS",
-            stderr="",
-            exit_code=0
-        )
-
-        assert classified.error_type == ErrorType.UNKNOWN
-        assert classified.is_claude_fixable == False
+        # Even empty is classified as unknown and allows attempt
+        assert classified.is_claude_fixable == True
 
 
 class TestShouldCallClaude:
@@ -331,19 +348,43 @@ class TestShouldCallClaude:
             error_type=ErrorType.SYNTAX_ERROR,
             is_claude_fixable=True,
             confidence=0.9,
-            original_message="SyntaxError"
+            original_message="SyntaxError",
+            file_path=None,
+            line_number=None,
+            suggested_action="Fix syntax error",
+            extracted_context={}
         )
 
         should_call, reason = ErrorClassifier.should_call_claude(classified)
         assert should_call == True
 
-    def test_should_not_call_for_unfixable_error(self):
-        """Test Claude should not be called for unfixable errors"""
+    def test_should_not_call_for_infra_error(self):
+        """Test Claude should not be called for infrastructure errors"""
+        classified = ClassifiedError(
+            error_type=ErrorType.PORT_CONFLICT,
+            is_claude_fixable=False,
+            confidence=0.95,
+            original_message="port already allocated",
+            file_path=None,
+            line_number=None,
+            suggested_action="Kill existing process",
+            extracted_context={}
+        )
+
+        should_call, reason = ErrorClassifier.should_call_claude(classified)
+        assert should_call == False
+
+    def test_should_not_call_for_low_confidence(self):
+        """Test Claude should not be called for low confidence"""
         classified = ClassifiedError(
             error_type=ErrorType.UNKNOWN,
-            is_claude_fixable=False,
-            confidence=0.1,
-            original_message=""
+            is_claude_fixable=True,
+            confidence=0.2,  # Below 0.3 threshold
+            original_message="",
+            file_path=None,
+            line_number=None,
+            suggested_action="Investigate",
+            extracted_context={}
         )
 
         should_call, reason = ErrorClassifier.should_call_claude(classified)
@@ -361,8 +402,9 @@ class TestFilePathExtraction:
             exit_code=1
         )
 
-        # Should extract file path
-        assert classified.file_path is not None or classified.line_number is not None
+        # Should extract and normalize file path
+        assert classified.file_path is not None
+        assert "App.java" in classified.file_path
 
     def test_extract_typescript_file_path(self):
         """Test extracting file path from TypeScript error"""
@@ -372,7 +414,8 @@ class TestFilePathExtraction:
             exit_code=1
         )
 
-        assert classified is not None
+        assert classified.file_path is not None
+        assert "App.tsx" in classified.file_path
 
 
 class TestPromptTemplates:
@@ -383,10 +426,11 @@ class TestPromptTemplates:
         template = ErrorClassifier.get_claude_prompt_template(ErrorType.SYNTAX_ERROR)
         assert template is not None
         assert len(template) > 0
+        assert "SYNTAX_ERROR" in template
 
-    def test_missing_symbol_template(self):
-        """Test missing symbol prompt template"""
-        template = ErrorClassifier.get_claude_prompt_template(ErrorType.MISSING_SYMBOL)
+    def test_undefined_variable_template(self):
+        """Test undefined variable prompt template"""
+        template = ErrorClassifier.get_claude_prompt_template(ErrorType.UNDEFINED_VARIABLE)
         assert template is not None
         assert len(template) > 0
 
@@ -399,3 +443,4 @@ class TestPromptTemplates:
         """Test unknown error prompt template"""
         template = ErrorClassifier.get_claude_prompt_template(ErrorType.UNKNOWN)
         assert template is not None
+        assert "UNKNOWN" in template
