@@ -680,22 +680,25 @@ class DockerInfraFixerAgent:
     # ========================================================================
 
     async def _validate_and_fix_dockerfile(self, project_path: str, sandbox_runner: callable) -> List[FixResult]:
-        """Validate and fix Dockerfile issues."""
+        """Validate and fix Dockerfile issues (works with remote sandbox)."""
         fixes = []
 
         # Check multiple possible Dockerfile locations
         dockerfile_paths = [
-            Path(project_path) / "Dockerfile",
-            Path(project_path) / "frontend" / "Dockerfile",
-            Path(project_path) / "backend" / "Dockerfile",
+            f"{project_path}/Dockerfile",
+            f"{project_path}/frontend/Dockerfile",
+            f"{project_path}/backend/Dockerfile",
         ]
 
         for dockerfile_path in dockerfile_paths:
-            if not dockerfile_path.exists():
+            if not self._file_exists_in_sandbox(dockerfile_path, sandbox_runner):
                 continue
 
             try:
-                content = dockerfile_path.read_text()
+                content = self._read_file_from_sandbox(dockerfile_path, sandbox_runner)
+                if not content:
+                    continue
+
                 fixed_content = content
                 changes = []
 
@@ -727,13 +730,14 @@ class DockerInfraFixerAgent:
                     fixed_content += '\n'
 
                 if changes and fixed_content != content:
-                    dockerfile_path.write_text(fixed_content)
-                    fixes.append(FixResult(
-                        success=True,
-                        message=f"Fixed Dockerfile: {dockerfile_path.name}",
-                        file_modified=str(dockerfile_path),
-                        changes_made="; ".join(changes)
-                    ))
+                    if self._write_file_to_sandbox(dockerfile_path, fixed_content, sandbox_runner):
+                        fixes.append(FixResult(
+                            success=True,
+                            message=f"Fixed Dockerfile: {dockerfile_path.split('/')[-1]}",
+                            file_modified=dockerfile_path,
+                            changes_made="; ".join(changes)
+                        ))
+                        logger.info(f"[DockerInfraFixer] Fixed Dockerfile: {changes}")
 
             except Exception as e:
                 logger.warning(f"[DockerInfraFixer] Dockerfile fix failed for {dockerfile_path}: {e}")
@@ -741,20 +745,25 @@ class DockerInfraFixerAgent:
         return fixes
 
     async def _fix_dockerfile_error(self, error_message: str, project_path: str, sandbox_runner: callable) -> FixResult:
-        """Fix Dockerfile syntax error based on error message."""
+        """Fix Dockerfile syntax error based on error message (works with remote sandbox)."""
         if not project_path:
             return FixResult(success=False, message="Project path required")
 
-        dockerfile_path = Path(project_path) / "Dockerfile"
-        if not dockerfile_path.exists():
-            dockerfile_path = Path(project_path) / "frontend" / "Dockerfile"
-        if not dockerfile_path.exists():
-            dockerfile_path = Path(project_path) / "backend" / "Dockerfile"
-        if not dockerfile_path.exists():
+        # Find Dockerfile
+        dockerfile_path = None
+        for path in [f"{project_path}/Dockerfile", f"{project_path}/frontend/Dockerfile", f"{project_path}/backend/Dockerfile"]:
+            if self._file_exists_in_sandbox(path, sandbox_runner):
+                dockerfile_path = path
+                break
+
+        if not dockerfile_path:
             return FixResult(success=False, message="Dockerfile not found")
 
         try:
-            content = dockerfile_path.read_text()
+            content = self._read_file_from_sandbox(dockerfile_path, sandbox_runner)
+            if not content:
+                return FixResult(success=False, message="Could not read Dockerfile")
+
             fixed = content
 
             # Fix "unknown instruction" errors
@@ -774,12 +783,12 @@ class DockerInfraFixerAgent:
                     fixed = fixed.replace(bad_instruction, typo_fixes[bad_instruction])
 
             if fixed != content:
-                dockerfile_path.write_text(fixed)
-                return FixResult(
-                    success=True,
-                    message="Fixed Dockerfile syntax error",
-                    file_modified=str(dockerfile_path)
-                )
+                if self._write_file_to_sandbox(dockerfile_path, fixed, sandbox_runner):
+                    return FixResult(
+                        success=True,
+                        message="Fixed Dockerfile syntax error",
+                        file_modified=dockerfile_path
+                    )
 
             return FixResult(success=False, message="Could not auto-fix Dockerfile syntax")
 
@@ -787,7 +796,7 @@ class DockerInfraFixerAgent:
             return FixResult(success=False, message=f"Dockerfile fix failed: {e}")
 
     async def _fix_dockerfile_base_image(self, error_message: str, project_path: str, sandbox_runner: callable) -> FixResult:
-        """Fix invalid base image in Dockerfile."""
+        """Fix invalid base image in Dockerfile (works with remote sandbox)."""
         if not project_path:
             return FixResult(success=False, message="Project path required")
 
@@ -799,11 +808,12 @@ class DockerInfraFixerAgent:
         bad_image = match.group(1) or match.group(2)
 
         # Find Dockerfile
-        for subdir in ["", "frontend", "backend"]:
-            dockerfile_path = Path(project_path) / subdir / "Dockerfile" if subdir else Path(project_path) / "Dockerfile"
-            if dockerfile_path.exists():
+        for dockerfile_path in [f"{project_path}/Dockerfile", f"{project_path}/frontend/Dockerfile", f"{project_path}/backend/Dockerfile"]:
+            if self._file_exists_in_sandbox(dockerfile_path, sandbox_runner):
                 try:
-                    content = dockerfile_path.read_text()
+                    content = self._read_file_from_sandbox(dockerfile_path, sandbox_runner)
+                    if not content:
+                        continue
 
                     # Check if this Dockerfile has the bad image
                     if bad_image in content:
@@ -818,12 +828,12 @@ class DockerInfraFixerAgent:
 
                         if alt_image:
                             fixed = content.replace(bad_image, alt_image)
-                            dockerfile_path.write_text(fixed)
-                            return FixResult(
-                                success=True,
-                                message=f"Changed base image: {bad_image} -> {alt_image}",
-                                file_modified=str(dockerfile_path)
-                            )
+                            if self._write_file_to_sandbox(dockerfile_path, fixed, sandbox_runner):
+                                return FixResult(
+                                    success=True,
+                                    message=f"Changed base image: {bad_image} -> {alt_image}",
+                                    file_modified=dockerfile_path
+                                )
 
                 except Exception as e:
                     logger.warning(f"[DockerInfraFixer] Base image fix failed: {e}")
@@ -856,16 +866,56 @@ class DockerInfraFixerAgent:
     # DOCKER-COMPOSE FIXES
     # ========================================================================
 
-    async def _validate_and_fix_compose(self, project_path: str, sandbox_runner: callable) -> List[FixResult]:
-        """Validate and fix docker-compose.yml issues."""
-        fixes = []
-        compose_file = Path(project_path) / "docker-compose.yml"
+    def _read_file_from_sandbox(self, file_path: str, sandbox_runner: callable) -> Optional[str]:
+        """Read a file from the sandbox (works for both local and remote)."""
+        try:
+            # Try using sandbox_runner (for remote sandbox)
+            exit_code, output = sandbox_runner(f'cat "{file_path}"', None, 30)
+            if exit_code == 0 and output:
+                return output
+            return None
+        except Exception as e:
+            logger.warning(f"[DockerInfraFixer] Failed to read {file_path}: {e}")
+            return None
 
-        if not compose_file.exists():
+    def _write_file_to_sandbox(self, file_path: str, content: str, sandbox_runner: callable) -> bool:
+        """Write a file to the sandbox (works for both local and remote)."""
+        try:
+            # Escape content for shell - use base64 to avoid escaping issues
+            import base64
+            encoded = base64.b64encode(content.encode()).decode()
+            cmd = f'echo "{encoded}" | base64 -d > "{file_path}"'
+            exit_code, output = sandbox_runner(cmd, None, 30)
+            return exit_code == 0
+        except Exception as e:
+            logger.warning(f"[DockerInfraFixer] Failed to write {file_path}: {e}")
+            return False
+
+    def _file_exists_in_sandbox(self, file_path: str, sandbox_runner: callable) -> bool:
+        """Check if a file exists in the sandbox."""
+        try:
+            exit_code, output = sandbox_runner(f'test -f "{file_path}" && echo "EXISTS"', None, 10)
+            return exit_code == 0 and "EXISTS" in output
+        except Exception:
+            return False
+
+    async def _validate_and_fix_compose(self, project_path: str, sandbox_runner: callable) -> List[FixResult]:
+        """Validate and fix docker-compose.yml issues (works with remote sandbox)."""
+        fixes = []
+        compose_file = f"{project_path}/docker-compose.yml"
+
+        # Check if file exists using sandbox_runner
+        if not self._file_exists_in_sandbox(compose_file, sandbox_runner):
+            logger.info(f"[DockerInfraFixer] docker-compose.yml not found at {compose_file}")
             return fixes
 
         try:
-            content = compose_file.read_text()
+            # Read file from sandbox
+            content = self._read_file_from_sandbox(compose_file, sandbox_runner)
+            if not content:
+                logger.warning(f"[DockerInfraFixer] Could not read docker-compose.yml")
+                return fixes
+
             data = yaml.safe_load(content)
             modified = False
             changes = []
@@ -917,15 +967,18 @@ class DockerInfraFixerAgent:
                             changes.append(f"Removed network reference from {service_name}")
 
             if modified:
-                with open(compose_file, 'w') as f:
-                    yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-
-                fixes.append(FixResult(
-                    success=True,
-                    message="Fixed docker-compose.yml issues",
-                    file_modified=str(compose_file),
-                    changes_made="; ".join(changes)
-                ))
+                # Write fixed content back to sandbox
+                fixed_content = yaml.dump(data, default_flow_style=False, sort_keys=False)
+                if self._write_file_to_sandbox(compose_file, fixed_content, sandbox_runner):
+                    fixes.append(FixResult(
+                        success=True,
+                        message="Fixed docker-compose.yml issues",
+                        file_modified=compose_file,
+                        changes_made="; ".join(changes)
+                    ))
+                    logger.info(f"[DockerInfraFixer] Fixed compose file: {changes}")
+                else:
+                    logger.warning(f"[DockerInfraFixer] Failed to write fixed compose file")
 
         except yaml.YAMLError as e:
             # YAML syntax error - try to fix common issues
@@ -938,16 +991,20 @@ class DockerInfraFixerAgent:
         return fixes
 
     async def _fix_compose_syntax(self, project_path: str, sandbox_runner: callable) -> FixResult:
-        """Fix docker-compose.yml YAML syntax errors."""
+        """Fix docker-compose.yml YAML syntax errors (works with remote sandbox)."""
         if not project_path:
             return FixResult(success=False, message="Project path required")
 
-        compose_file = Path(project_path) / "docker-compose.yml"
-        if not compose_file.exists():
+        compose_file = f"{project_path}/docker-compose.yml"
+
+        if not self._file_exists_in_sandbox(compose_file, sandbox_runner):
             return FixResult(success=False, message="docker-compose.yml not found")
 
         try:
-            content = compose_file.read_text()
+            content = self._read_file_from_sandbox(compose_file, sandbox_runner)
+            if not content:
+                return FixResult(success=False, message="Could not read docker-compose.yml")
+
             fixed = content
 
             # Fix common YAML issues
@@ -977,13 +1034,15 @@ class DockerInfraFixerAgent:
             fixed = re.sub(r':\s*(\d+\.\d+\.\d+\.\d+)\s*$', r': "\1"', fixed, flags=re.MULTILINE)
 
             if fixed != content:
-                compose_file.write_text(fixed)
-                return FixResult(
-                    success=True,
-                    message="Fixed docker-compose.yml syntax",
-                    file_modified=str(compose_file),
-                    changes_made="Fixed tabs, indentation, and quotes"
-                )
+                if self._write_file_to_sandbox(compose_file, fixed, sandbox_runner):
+                    return FixResult(
+                        success=True,
+                        message="Fixed docker-compose.yml syntax",
+                        file_modified=compose_file,
+                        changes_made="Fixed tabs, indentation, and quotes"
+                    )
+                else:
+                    return FixResult(success=False, message="Failed to write fixed file")
 
             return FixResult(success=False, message="Could not auto-fix YAML syntax")
 
@@ -998,16 +1057,20 @@ class DockerInfraFixerAgent:
         return FixResult(success=False, message="No depends_on fixes needed")
 
     async def _fix_compose_ports(self, error_message: str, project_path: str, sandbox_runner: callable) -> FixResult:
-        """Fix port mapping issues in docker-compose.yml."""
+        """Fix port mapping issues in docker-compose.yml (works with remote sandbox)."""
         if not project_path:
             return FixResult(success=False, message="Project path required")
 
-        compose_file = Path(project_path) / "docker-compose.yml"
-        if not compose_file.exists():
+        compose_file = f"{project_path}/docker-compose.yml"
+
+        if not self._file_exists_in_sandbox(compose_file, sandbox_runner):
             return FixResult(success=False, message="docker-compose.yml not found")
 
         try:
-            content = compose_file.read_text()
+            content = self._read_file_from_sandbox(compose_file, sandbox_runner)
+            if not content:
+                return FixResult(success=False, message="Could not read docker-compose.yml")
+
             data = yaml.safe_load(content)
             modified = False
 
@@ -1033,14 +1096,15 @@ class DockerInfraFixerAgent:
                 service['ports'] = fixed_ports
 
             if modified:
-                with open(compose_file, 'w') as f:
-                    yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-
-                return FixResult(
-                    success=True,
-                    message="Fixed port mappings in docker-compose.yml",
-                    file_modified=str(compose_file)
-                )
+                fixed_content = yaml.dump(data, default_flow_style=False, sort_keys=False)
+                if self._write_file_to_sandbox(compose_file, fixed_content, sandbox_runner):
+                    return FixResult(
+                        success=True,
+                        message="Fixed port mappings in docker-compose.yml",
+                        file_modified=compose_file
+                    )
+                else:
+                    return FixResult(success=False, message="Failed to write fixed file")
 
             return FixResult(success=False, message="No port fixes needed")
 
