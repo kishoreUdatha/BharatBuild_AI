@@ -40,6 +40,10 @@ export function useAutoSave(options: AutoSaveOptions = {}) {
   // Get auth token from localStorage
   const getAuthToken = useCallback(() => {
     if (typeof window === 'undefined') return null
+    // Primary: direct access_token (used by main app)
+    const token = localStorage.getItem('access_token')
+    if (token) return token
+    // Fallback: bharatbuild-auth (legacy)
     const authData = localStorage.getItem('bharatbuild-auth')
     if (authData) {
       try {
@@ -54,8 +58,15 @@ export function useAutoSave(options: AutoSaveOptions = {}) {
 
   // Sync a single file to backend
   const syncFile = useCallback(async (path: string, content: string) => {
+    console.log('[AutoSave] syncFile called:', {
+      path,
+      contentLength: content?.length,
+      projectId: currentProject?.id,
+      projectName: currentProject?.name
+    })
+
     if (!currentProject?.id) {
-      console.warn('[AutoSave] No project ID, skipping sync')
+      console.warn('[AutoSave] No project ID, skipping sync. currentProject:', currentProject)
       return false
     }
 
@@ -64,6 +75,8 @@ export function useAutoSave(options: AutoSaveOptions = {}) {
       console.warn('[AutoSave] No auth token, skipping sync')
       return false
     }
+
+    console.log('[AutoSave] Making API call to sync file:', path)
 
     setState(prev => ({ ...prev, isSaving: true, error: null }))
 
@@ -111,7 +124,22 @@ export function useAutoSave(options: AutoSaveOptions = {}) {
 
   // Schedule a debounced save for a file
   const scheduleSync = useCallback((path: string, content: string) => {
-    if (!enabled) return
+    console.log('[AutoSave] scheduleSync called:', {
+      path,
+      contentLength: content?.length,
+      enabled,
+      projectId: currentProject?.id
+    })
+
+    if (!enabled) {
+      console.log('[AutoSave] Auto-save disabled, skipping')
+      return
+    }
+
+    if (!currentProject?.id) {
+      console.warn('[AutoSave] No project ID when scheduling sync')
+      return
+    }
 
     // Mark file as pending
     markFilePendingSave(path)
@@ -133,7 +161,7 @@ export function useAutoSave(options: AutoSaveOptions = {}) {
     }, debounceMs)
 
     timersRef.current.set(path, timer)
-  }, [enabled, debounceMs, markFilePendingSave, syncFile])
+  }, [enabled, debounceMs, markFilePendingSave, syncFile, currentProject?.id])
 
   // Force immediate sync for a file
   const syncNow = useCallback(async (path: string, content: string) => {
