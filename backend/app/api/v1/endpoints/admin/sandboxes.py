@@ -6,6 +6,7 @@ from typing import Optional, List
 from datetime import datetime, timedelta
 from uuid import UUID
 import os
+import re
 import time
 import asyncio
 import socket
@@ -151,11 +152,19 @@ async def list_all_sandboxes(
 ):
     """
     List all active sandboxes/containers across all users.
+    In EC2 mode, queries Docker directly for real-time container info.
 
     Returns:
         List of sandboxes with health status, resource usage, and user info
     """
     try:
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+
+        # If remote EC2 mode, query Docker directly
+        if sandbox_docker_host:
+            return await _list_ec2_sandboxes(page, page_size, status, sort_by, sort_order, db)
+
+        # Local mode - use in-memory tracking
         from app.modules.execution.container_manager import get_container_manager
         from app.modules.execution.health_monitor import get_health_monitor, HealthStatus
 
@@ -273,6 +282,203 @@ async def list_all_sandboxes(
         }
 
 
+async def _list_ec2_sandboxes(
+    page: int,
+    page_size: int,
+    status: Optional[str],
+    sort_by: str,
+    sort_order: str,
+    db: AsyncSession
+):
+    """
+    List sandboxes from EC2 Docker directly.
+    Only shows BharatBuild containers (docker-compose projects).
+    """
+    import docker
+    import re
+
+    sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+
+    try:
+        client = docker.DockerClient(base_url=sandbox_docker_host, timeout=10)
+        all_containers = client.containers.list(all=True)
+    except Exception as e:
+        logger.error(f"Failed to connect to EC2 Docker: {e}")
+        return {
+            "items": [],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": 0,
+            "error": f"Cannot connect to EC2 Docker: {e}"
+        }
+
+    sandboxes = []
+    now = datetime.utcnow()
+
+    # Group containers by project (docker-compose project name)
+    projects = {}
+    for container in all_containers:
+        name = container.name
+        # Match bharatbuild_{project_id}_{service}_1 pattern
+        match = re.match(r'bharatbuild_([a-f0-9-]+)_(.+)_\d+$', name, re.IGNORECASE)
+        if not match:
+            continue
+
+        project_id = match.group(1)
+        service = match.group(2)
+
+        if project_id not in projects:
+            projects[project_id] = {
+                "containers": [],
+                "services": {}
+            }
+
+        projects[project_id]["containers"].append(container)
+        projects[project_id]["services"][service] = {
+            "status": container.status,
+            "id": container.short_id
+        }
+
+    # Build sandbox info for each project
+    for project_id, project_data in projects.items():
+        containers = project_data["containers"]
+        services = project_data["services"]
+
+        # Determine overall status from containers
+        statuses = [c.status for c in containers]
+        if all(s == "running" for s in statuses):
+            overall_status = "running"
+        elif any(s == "running" for s in statuses):
+            overall_status = "partial"
+        elif any(s == "restarting" for s in statuses):
+            overall_status = "error"
+        else:
+            overall_status = "stopped"
+
+        # Filter by status
+        if status:
+            if status == "running" and overall_status not in ["running", "partial"]:
+                continue
+            elif status == "stopped" and overall_status != "stopped":
+                continue
+            elif status == "error" and overall_status != "error":
+                continue
+
+        # Get timestamps from first container
+        first_container = containers[0]
+        attrs = first_container.attrs
+        state = attrs.get("State", {})
+
+        created_at = now
+        last_activity = now
+
+        created_str = attrs.get("Created", "")
+        started_str = state.get("StartedAt", "")
+
+        if created_str:
+            try:
+                created_at = datetime.fromisoformat(created_str.replace("Z", "+00:00").split(".")[0]).replace(tzinfo=None)
+            except:
+                pass
+
+        if started_str and started_str != "0001-01-01T00:00:00Z":
+            try:
+                last_activity = datetime.fromisoformat(started_str.replace("Z", "+00:00").split(".")[0]).replace(tzinfo=None)
+            except:
+                pass
+
+        idle_minutes = int((now - last_activity).total_seconds() / 60)
+
+        # Determine health status
+        if overall_status == "running":
+            health_status = "healthy" if idle_minutes < 30 else "idle"
+        elif overall_status == "error":
+            health_status = "unhealthy"
+        else:
+            health_status = "unknown"
+
+        # Get project info from DB
+        project_name = f"Project {project_id[:8]}"
+        user_email = "Unknown"
+        user_name = None
+        user_id_str = None
+
+        try:
+            project_info = await db.execute(
+                select(Project.name, Project.user_id).where(Project.id == UUID(project_id))
+            )
+            project_row = project_info.first()
+            if project_row:
+                project_name = project_row.name
+                user_id_str = str(project_row.user_id)
+
+                user_info = await db.execute(
+                    select(User.email, User.full_name).where(User.id == project_row.user_id)
+                )
+                user_row = user_info.first()
+                if user_row:
+                    user_email = user_row.email
+                    user_name = user_row.full_name
+        except Exception as e:
+            logger.warning(f"Failed to get project/user info for {project_id}: {e}")
+
+        sandbox_info = {
+            "project_id": project_id,
+            "project_name": project_name,
+            "container_id": first_container.short_id,
+            "user_id": user_id_str,
+            "user_email": user_email,
+            "user_name": user_name,
+            "status": overall_status,
+            "health_status": health_status,
+            "consecutive_failures": 0,
+            "restart_count": 0,
+            "last_health_check": now.isoformat(),
+            "created_at": created_at.isoformat(),
+            "last_activity": last_activity.isoformat(),
+            "idle_time_minutes": idle_minutes,
+            "port_mappings": {},
+            "active_port": None,
+            "services": services,
+            "container_count": len(containers),
+            "resource_usage": {
+                "cpu_percent": 0,
+                "memory_usage_mb": 0,
+                "memory_limit_mb": 512,
+                "memory_percent": 0,
+                "status": overall_status
+            }
+        }
+
+        sandboxes.append(sandbox_info)
+
+    # Sort
+    reverse = sort_order == "desc"
+    if sort_by == "last_activity":
+        sandboxes.sort(key=lambda x: x["last_activity"], reverse=reverse)
+    elif sort_by == "created_at":
+        sandboxes.sort(key=lambda x: x["created_at"], reverse=reverse)
+    elif sort_by == "idle_time_minutes":
+        sandboxes.sort(key=lambda x: x["idle_time_minutes"], reverse=reverse)
+    elif sort_by == "project_name":
+        sandboxes.sort(key=lambda x: x["project_name"].lower(), reverse=reverse)
+
+    # Paginate
+    total = len(sandboxes)
+    start = (page - 1) * page_size
+    end = start + page_size
+    paginated = sandboxes[start:end]
+
+    return {
+        "items": paginated,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size
+    }
+
+
 @router.get("/stats")
 async def get_sandbox_stats(
     db: AsyncSession = Depends(get_db),
@@ -280,8 +486,16 @@ async def get_sandbox_stats(
 ):
     """
     Get aggregate statistics for all sandboxes.
+    In EC2 mode, queries Docker directly.
     """
     try:
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+
+        # If EC2 mode, query Docker directly
+        if sandbox_docker_host:
+            return await _get_ec2_sandbox_stats()
+
+        # Local mode - use in-memory tracking
         from app.modules.execution.container_manager import get_container_manager, get_port_manager
         from app.modules.execution.health_monitor import get_health_monitor, HealthStatus
 
@@ -363,6 +577,106 @@ async def get_sandbox_stats(
             "ports": {"total_allocated": 0, "available": 0},
             "error": str(e)
         }
+
+
+async def _get_ec2_sandbox_stats():
+    """Get sandbox stats by querying EC2 Docker directly."""
+    import docker
+    import re
+
+    sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+
+    try:
+        client = docker.DockerClient(base_url=sandbox_docker_host, timeout=10)
+        all_containers = client.containers.list(all=True)
+    except Exception as e:
+        logger.error(f"Failed to connect to EC2 Docker for stats: {e}")
+        return {
+            "total_sandboxes": 0,
+            "by_status": {"running": 0, "stopped": 0, "error": 0},
+            "by_health": {"healthy": 0, "unhealthy": 0, "unknown": 0},
+            "resource_usage": {"total_cpu_percent": 0, "total_memory_mb": 0, "avg_cpu_percent": 0, "avg_memory_mb": 0},
+            "ports": {"total_allocated": 0, "available": 100},
+            "error": f"Cannot connect to EC2 Docker: {e}"
+        }
+
+    # Group by project and count stats
+    projects = {}
+    now = datetime.utcnow()
+
+    for container in all_containers:
+        name = container.name
+        match = re.match(r'bharatbuild_([a-f0-9-]+)_(.+)_\d+$', name, re.IGNORECASE)
+        if not match:
+            continue
+
+        project_id = match.group(1)
+        if project_id not in projects:
+            projects[project_id] = {"containers": [], "statuses": []}
+
+        projects[project_id]["containers"].append(container)
+        projects[project_id]["statuses"].append(container.status)
+
+    # Calculate stats
+    total_sandboxes = len(projects)
+    running = 0
+    stopped = 0
+    error = 0
+    healthy = 0
+    unhealthy = 0
+
+    for project_id, data in projects.items():
+        statuses = data["statuses"]
+        if all(s == "running" for s in statuses):
+            running += 1
+            # Check idle time for health
+            first_container = data["containers"][0]
+            started_str = first_container.attrs.get("State", {}).get("StartedAt", "")
+            if started_str and started_str != "0001-01-01T00:00:00Z":
+                try:
+                    started_at = datetime.fromisoformat(started_str.replace("Z", "+00:00").split(".")[0]).replace(tzinfo=None)
+                    idle_minutes = (now - started_at).total_seconds() / 60
+                    if idle_minutes < 30:
+                        healthy += 1
+                    else:
+                        unhealthy += 1
+                except:
+                    healthy += 1
+            else:
+                healthy += 1
+        elif any(s == "running" for s in statuses):
+            running += 1
+            unhealthy += 1  # Partial = unhealthy
+        elif any(s == "restarting" for s in statuses):
+            error += 1
+            unhealthy += 1
+        else:
+            stopped += 1
+
+    return {
+        "total_sandboxes": total_sandboxes,
+        "by_status": {
+            "running": running,
+            "stopped": stopped,
+            "error": error
+        },
+        "by_health": {
+            "healthy": healthy,
+            "unhealthy": unhealthy,
+            "unknown": total_sandboxes - healthy - unhealthy
+        },
+        "resource_usage": {
+            "total_cpu_percent": 0,  # Would need docker stats API
+            "total_memory_mb": 0,
+            "avg_cpu_percent": 0,
+            "avg_memory_mb": 0
+        },
+        "ports": {
+            "total_allocated": running * 5,  # Estimate ~5 ports per project
+            "available": 100
+        },
+        "unhealthy_containers": []
+    }
 
 
 @router.get("/{project_id}")
