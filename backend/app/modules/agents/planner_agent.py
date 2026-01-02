@@ -48,7 +48,7 @@ OUTPUT FORMAT (MANDATORY):
   <project_description>A brief 1-2 sentence description of what the project does</project_description>
   <project_type>...</project_type>
   <design_theme>
-    <domain>energy|finance|healthcare|food|ecommerce|education|gaming|travel|realestate|business|agriculture|security|default</domain>
+    <domain>energy|finance|healthcare|food|ecommerce|education|gaming|travel|realestate|business|agriculture|security|aiml|default</domain>
     <primary_color>emerald|blue|cyan|orange|violet|indigo|pink|sky|amber|slate|lime|red|purple</primary_color>
     <secondary_color>teal|indigo|teal|red|purple|blue|fuchsia|blue|yellow|gray|green|rose|pink</secondary_color>
     <background>from-slate-900 to-gray-900</background>
@@ -158,12 +158,25 @@ DOMAIN DETECTION AND COLOR MAPPING:
   <background>from-green-950 to-emerald-950</background>
   <accent>amber</accent>
 
-🔒 SECURITY/TECH (Keywords: security, auth, monitor, devops, admin, system):
+🔒 SECURITY/CYBERSECURITY (Keywords: security, cyber, pentest, vulnerability, scanner,
+   threat, intel, siem, soc, firewall, ids, ips, malware, phishing, ctf, forensics,
+   network analyzer, packet, intrusion, encryption, auth, monitor, devops, admin):
   <domain>security</domain>
   <primary_color>red</primary_color>
   <secondary_color>rose</secondary_color>
   <background>from-gray-950 to-red-950</background>
   <accent>green</accent>
+
+🤖 AI/ML/DATA SCIENCE (Keywords: machine learning, deep learning, neural network, ai, ml,
+   prediction, classification, regression, nlp, natural language, text analysis, sentiment,
+   computer vision, image recognition, object detection, face recognition, llm, gpt, claude,
+   chatbot, langchain, rag, vector, embedding, tensorflow, pytorch, scikit, model, training,
+   inference, dataset, data science, analytics, statistics, recommendation, forecasting):
+  <domain>aiml</domain>
+  <primary_color>cyan</primary_color>
+  <secondary_color>blue</secondary_color>
+  <background>from-slate-950 to-cyan-950</background>
+  <accent>purple</accent>
 
 DEFAULT (If no specific domain matches):
   <domain>default</domain>
@@ -1016,15 +1029,250 @@ M.TECH PROJECT CATEGORIES:
    Tech Stack: Python + OpenCV + PyTorch + YOLO/Detectron2
 
 4. CYBERSECURITY RESEARCH:
-   - Intrusion detection systems (IDS)
+   - Intrusion detection systems (IDS/IPS)
    - Malware analysis and classification
-   - Network traffic analysis
-   - Vulnerability assessment tools
-   - Secure authentication systems
-   - Blockchain security
-   Tech Stack: Python + Scikit-learn + NetworkX + Docker
+   - Network traffic analysis and packet inspection
+   - Vulnerability assessment and scanning tools
+   - Secure authentication systems (MFA, OAuth)
+   - Blockchain security and smart contract auditing
+   - Phishing detection and email security
+   - SIEM/SOC dashboard and log analysis
+   - Threat intelligence platforms
+   - CTF (Capture The Flag) platforms
+   - Penetration testing automation
+   - Security information management
+   Tech Stack: Python + FastAPI + Scikit-learn + Scapy + NetworkX + Docker + Redis + PostgreSQL
 
-5. IOT & EDGE COMPUTING:
+   CYBERSECURITY PROJECT STRUCTURE (React + Python):
+   project-name/
+   ├── frontend/
+   │   ├── src/
+   │   │   ├── components/
+   │   │   │   ├── Dashboard/
+   │   │   │   │   ├── ThreatMap.tsx
+   │   │   │   │   ├── AlertsPanel.tsx
+   │   │   │   │   └── MetricsCards.tsx
+   │   │   │   ├── Scanner/
+   │   │   │   │   ├── ScanForm.tsx
+   │   │   │   │   ├── ScanResults.tsx
+   │   │   │   │   └── VulnerabilityList.tsx
+   │   │   │   └── Reports/
+   │   │   │       ├── ReportGenerator.tsx
+   │   │   │       └── ReportViewer.tsx
+   │   │   ├── pages/
+   │   │   │   ├── Dashboard.tsx
+   │   │   │   ├── Scans.tsx
+   │   │   │   ├── Threats.tsx
+   │   │   │   ├── Reports.tsx
+   │   │   │   └── Settings.tsx
+   │   │   └── services/
+   │   │       └── api.ts
+   │   ├── package.json
+   │   └── Dockerfile
+   ├── backend/
+   │   ├── app/
+   │   │   ├── api/
+   │   │   │   ├── routes/
+   │   │   │   │   ├── scans.py
+   │   │   │   │   ├── threats.py
+   │   │   │   │   ├── reports.py
+   │   │   │   │   └── auth.py
+   │   │   ├── services/
+   │   │   │   ├── scanner_service.py
+   │   │   │   ├── threat_analyzer.py
+   │   │   │   ├── network_monitor.py
+   │   │   │   └── report_generator.py
+   │   │   ├── models/
+   │   │   │   ├── scan.py
+   │   │   │   ├── threat.py
+   │   │   │   └── user.py
+   │   │   ├── core/
+   │   │   │   ├── config.py
+   │   │   │   ├── security.py
+   │   │   │   └── database.py
+   │   │   └── main.py
+   │   ├── requirements.txt
+   │   └── Dockerfile
+   └── docker-compose.yml
+
+5. AI/ML PROJECTS (Comprehensive):
+   - Machine Learning APIs and Services
+   - Deep Learning Model Training Pipelines
+   - Natural Language Processing (NLP)
+   - Computer Vision and Image Processing
+   - Large Language Models (LLM) and GenAI
+   - Recommendation Systems
+   - Time Series Forecasting
+   - Anomaly Detection
+   - AI-powered Automation
+   Tech Stack: Python + PyTorch/TensorFlow + FastAPI/Streamlit + Docker + MLflow
+
+   AI/ML PROJECT CATEGORIES:
+
+   A) MACHINE LEARNING API (General ML):
+      Keywords: predict, classify, regression, train, model, inference
+      project-name/
+      ├── frontend/
+      │   ├── src/
+      │   │   ├── components/
+      │   │   │   ├── ModelInput.tsx
+      │   │   │   ├── PredictionResult.tsx
+      │   │   │   └── HistoryTable.tsx
+      │   │   ├── pages/
+      │   │   │   ├── Dashboard.tsx
+      │   │   │   ├── Predict.tsx
+      │   │   │   └── History.tsx
+      │   │   └── services/
+      │   │       └── api.ts
+      │   ├── package.json
+      │   └── Dockerfile
+      ├── backend/
+      │   ├── app/
+      │   │   ├── api/
+      │   │   │   ├── routes/
+      │   │   │   │   ├── predict.py
+      │   │   │   │   └── models.py
+      │   │   ├── services/
+      │   │   │   ├── ml_service.py
+      │   │   │   └── preprocessing.py
+      │   │   ├── models/
+      │   │   │   ├── trained_model.pkl
+      │   │   │   └── model_loader.py
+      │   │   ├── core/
+      │   │   │   └── config.py
+      │   │   └── main.py
+      │   ├── training/
+      │   │   ├── train.py
+      │   │   └── evaluate.py
+      │   ├── requirements.txt
+      │   └── Dockerfile
+      └── docker-compose.yml
+      Tech Stack: Python + scikit-learn + FastAPI + React + Docker
+
+   B) NATURAL LANGUAGE PROCESSING (NLP):
+      Keywords: text, nlp, sentiment, chatbot, translation, summarize, embedding
+      project-name/
+      ├── frontend/
+      │   ├── src/
+      │   │   ├── components/
+      │   │   │   ├── TextInput.tsx
+      │   │   │   ├── AnalysisResult.tsx
+      │   │   │   ├── SentimentChart.tsx
+      │   │   │   └── EntityHighlighter.tsx
+      │   │   ├── pages/
+      │   │   │   ├── TextAnalysis.tsx
+      │   │   │   ├── Sentiment.tsx
+      │   │   │   ├── Summarizer.tsx
+      │   │   │   └── ChatBot.tsx
+      │   │   └── services/
+      │   │       └── api.ts
+      │   ├── package.json
+      │   └── Dockerfile
+      ├── backend/
+      │   ├── app/
+      │   │   ├── api/
+      │   │   │   ├── routes/
+      │   │   │   │   ├── sentiment.py
+      │   │   │   │   ├── ner.py
+      │   │   │   │   ├── summarize.py
+      │   │   │   │   └── chat.py
+      │   │   ├── services/
+      │   │   │   ├── nlp_service.py
+      │   │   │   ├── sentiment_analyzer.py
+      │   │   │   ├── text_processor.py
+      │   │   │   └── embeddings.py
+      │   │   ├── models/
+      │   │   │   └── model_manager.py
+      │   │   ├── core/
+      │   │   │   └── config.py
+      │   │   └── main.py
+      │   ├── requirements.txt
+      │   └── Dockerfile
+      └── docker-compose.yml
+      Tech Stack: Python + Transformers + spaCy + FastAPI + React + Docker
+
+   C) COMPUTER VISION (CV):
+      Keywords: image, vision, detect, recognize, face, opencv, camera, video
+      project-name/
+      ├── frontend/
+      │   ├── src/
+      │   │   ├── components/
+      │   │   │   ├── ImageUploader.tsx
+      │   │   │   ├── WebcamCapture.tsx
+      │   │   │   ├── DetectionOverlay.tsx
+      │   │   │   └── ResultsPanel.tsx
+      │   │   ├── pages/
+      │   │   │   ├── ImageDetection.tsx
+      │   │   │   ├── LiveCamera.tsx
+      │   │   │   └── Gallery.tsx
+      │   │   └── services/
+      │   │       └── api.ts
+      │   ├── package.json
+      │   └── Dockerfile
+      ├── backend/
+      │   ├── app/
+      │   │   ├── api/
+      │   │   │   ├── routes/
+      │   │   │   │   ├── detect.py
+      │   │   │   │   ├── classify.py
+      │   │   │   │   └── segment.py
+      │   │   ├── services/
+      │   │   │   ├── vision_service.py
+      │   │   │   ├── object_detector.py
+      │   │   │   ├── image_classifier.py
+      │   │   │   └── image_processor.py
+      │   │   ├── models/
+      │   │   │   ├── yolo_model.py
+      │   │   │   └── model_loader.py
+      │   │   ├── core/
+      │   │   │   └── config.py
+      │   │   └── main.py
+      │   ├── requirements.txt
+      │   └── Dockerfile
+      └── docker-compose.yml
+      Tech Stack: Python + OpenCV + PyTorch/TensorFlow + YOLO + FastAPI + React + Docker
+
+   D) LLM/GENAI APPLICATIONS:
+      Keywords: llm, gpt, claude, openai, langchain, chatbot, rag, vector, ai assistant
+      project-name/
+      ├── frontend/
+      │   ├── src/
+      │   │   ├── components/
+      │   │   │   ├── ChatInterface.tsx
+      │   │   │   ├── MessageList.tsx
+      │   │   │   ├── PromptInput.tsx
+      │   │   │   ├── DocumentUploader.tsx
+      │   │   │   └── SettingsPanel.tsx
+      │   │   ├── pages/
+      │   │   │   ├── Chat.tsx
+      │   │   │   ├── Documents.tsx
+      │   │   │   └── Settings.tsx
+      │   │   └── services/
+      │   │       └── api.ts
+      │   ├── package.json
+      │   └── Dockerfile
+      ├── backend/
+      │   ├── app/
+      │   │   ├── api/
+      │   │   │   ├── routes/
+      │   │   │   │   ├── chat.py
+      │   │   │   │   ├── documents.py
+      │   │   │   │   └── embeddings.py
+      │   │   ├── services/
+      │   │   │   ├── llm_service.py
+      │   │   │   ├── rag_pipeline.py
+      │   │   │   ├── document_processor.py
+      │   │   │   ├── vector_store.py
+      │   │   │   └── prompt_manager.py
+      │   │   ├── core/
+      │   │   │   └── config.py
+      │   │   └── main.py
+      │   ├── requirements.txt
+      │   └── Dockerfile
+      └── docker-compose.yml
+      Tech Stack: Python + LangChain + OpenAI/Anthropic + ChromaDB/Pinecone + FastAPI + React + Docker
+
+6. IOT & EDGE COMPUTING:
    - Smart city applications
    - Healthcare monitoring systems
    - Industrial IoT (IIoT)
@@ -1049,13 +1297,127 @@ M.TECH PROJECT CATEGORIES:
    - Cost optimization
    Tech Stack: Python + Kubernetes + Terraform + AWS/GCP SDK
 
-8. BLOCKCHAIN APPLICATIONS:
-   - Smart contract development
-   - DeFi applications
+8. BLOCKCHAIN APPLICATIONS (Comprehensive):
+   - Smart contract development (Solidity, Rust)
+   - DeFi applications (DEX, Lending, Staking)
+   - NFT marketplaces and platforms
    - Supply chain tracking
-   - Identity management
-   - Consensus algorithm research
-   Tech Stack: Solidity + Hardhat + Web3.js + React
+   - Identity management (DID, SSI)
+   - Token creation (ERC20, ERC721, SPL)
+   - DAO governance systems
+   Tech Stack: Solidity + Hardhat + Web3.js/ethers.js + React + The Graph
+
+   BLOCKCHAIN PROJECT CATEGORIES:
+
+   A) ETHEREUM/EVM DAPP (Solidity + React):
+      Keywords: ethereum, solidity, hardhat, truffle, smart contract, dapp, web3
+      project-name/
+      ├── contracts/
+      │   ├── contracts/
+      │   │   └── MyContract.sol
+      │   ├── scripts/
+      │   │   └── deploy.js
+      │   ├── test/
+      │   │   └── MyContract.test.js
+      │   ├── hardhat.config.js
+      │   ├── package.json
+      │   └── Dockerfile
+      ├── frontend/
+      │   ├── src/
+      │   │   ├── components/
+      │   │   │   ├── ConnectWallet.tsx
+      │   │   │   ├── ContractInteraction.tsx
+      │   │   │   └── TransactionStatus.tsx
+      │   │   ├── hooks/
+      │   │   │   ├── useContract.ts
+      │   │   │   └── useWallet.ts
+      │   │   ├── lib/
+      │   │   │   ├── web3.ts
+      │   │   │   └── contract.ts
+      │   │   ├── pages/
+      │   │   │   ├── Dashboard.tsx
+      │   │   │   └── Transactions.tsx
+      │   │   └── App.tsx
+      │   ├── package.json
+      │   └── Dockerfile
+      ├── backend/
+      │   ├── app/
+      │   │   ├── api/
+      │   │   │   ├── routes/
+      │   │   │   │   ├── transactions.py
+      │   │   │   │   └── contracts.py
+      │   │   ├── services/
+      │   │   │   ├── blockchain_service.py
+      │   │   │   └── event_listener.py
+      │   │   └── main.py
+      │   ├── requirements.txt
+      │   └── Dockerfile
+      └── docker-compose.yml
+      Tech Stack: Solidity + Hardhat + ethers.js + React + FastAPI + Docker
+
+   B) NFT MARKETPLACE:
+      Keywords: nft, marketplace, erc721, erc1155, opensea, ipfs, metadata
+      project-name/
+      ├── contracts/
+      │   ├── contracts/
+      │   │   ├── NFTCollection.sol
+      │   │   └── NFTMarketplace.sol
+      │   ├── scripts/
+      │   │   └── deploy.js
+      │   ├── hardhat.config.js
+      │   └── Dockerfile
+      ├── frontend/
+      │   ├── src/
+      │   │   ├── components/
+      │   │   │   ├── NFTCard.tsx
+      │   │   │   ├── MintForm.tsx
+      │   │   │   ├── ListingModal.tsx
+      │   │   │   └── WalletConnect.tsx
+      │   │   ├── pages/
+      │   │   │   ├── Explore.tsx
+      │   │   │   ├── Create.tsx
+      │   │   │   ├── Profile.tsx
+      │   │   │   └── NFTDetail.tsx
+      │   │   └── services/
+      │   │       ├── ipfs.ts
+      │   │       └── marketplace.ts
+      │   └── Dockerfile
+      ├── backend/
+      │   ├── app/
+      │   │   ├── services/
+      │   │   │   ├── ipfs_service.py
+      │   │   │   ├── metadata_service.py
+      │   │   │   └── indexer.py
+      │   │   └── main.py
+      │   └── Dockerfile
+      └── docker-compose.yml
+      Tech Stack: Solidity + Hardhat + ethers.js + React + IPFS + FastAPI
+
+   C) DEFI APPLICATION:
+      Keywords: defi, swap, liquidity, staking, yield, amm, lending, borrowing
+      project-name/
+      ├── contracts/
+      │   ├── contracts/
+      │   │   ├── Token.sol
+      │   │   ├── LiquidityPool.sol
+      │   │   ├── Staking.sol
+      │   │   └── Governance.sol
+      │   └── Dockerfile
+      ├── frontend/
+      │   ├── src/
+      │   │   ├── components/
+      │   │   │   ├── SwapForm.tsx
+      │   │   │   ├── LiquidityPanel.tsx
+      │   │   │   ├── StakingDashboard.tsx
+      │   │   │   └── TokenBalance.tsx
+      │   │   └── pages/
+      │   │       ├── Swap.tsx
+      │   │       ├── Pool.tsx
+      │   │       ├── Stake.tsx
+      │   │       └── Governance.tsx
+      │   └── Dockerfile
+      └── docker-compose.yml
+      Tech Stack: Solidity + Hardhat + ethers.js + React + The Graph
 
 M.TECH PROJECT STRUCTURE (Research-Oriented):
 ```

@@ -1548,6 +1548,25 @@ class ContainerExecutor:
                                         service['build'] = {'context': './backend', 'dockerfile': 'Dockerfile'}
                                         modified = True
                                         yield f"     ✅ Fixed {service_name}: context -> ./backend\n"
+                                    elif 'nginx' in service_name.lower():
+                                        # Nginx should use pre-built image, not build from Dockerfile
+                                        # This fixes corrupted docker-compose where AI changed 'image:' to 'build:'
+                                        del service['build']
+                                        service['image'] = 'nginx:alpine'
+                                        # Ensure nginx.conf volume mount exists
+                                        if 'volumes' not in service:
+                                            service['volumes'] = []
+                                        nginx_conf_mounts = [
+                                            './nginx.conf:/etc/nginx/nginx.conf:ro',
+                                            './nginx/nginx.conf:/etc/nginx/nginx.conf:ro'
+                                        ]
+                                        has_nginx_conf = any(
+                                            'nginx.conf' in str(v) for v in service.get('volumes', [])
+                                        )
+                                        if not has_nginx_conf:
+                                            service['volumes'].append('./nginx.conf:/etc/nginx/nginx.conf:ro')
+                                        modified = True
+                                        yield f"     ✅ Fixed {service_name}: using image nginx:alpine (removed invalid build)\n"
 
                                 # Handle dict format: build: { context: . }
                                 elif isinstance(build_config, dict):
@@ -1561,6 +1580,19 @@ class ContainerExecutor:
                                             build_config['context'] = './backend'
                                             modified = True
                                             yield f"     ✅ Fixed {service_name}: context -> ./backend\n"
+                                        elif 'nginx' in service_name.lower():
+                                            # Nginx should use pre-built image
+                                            del service['build']
+                                            service['image'] = 'nginx:alpine'
+                                            if 'volumes' not in service:
+                                                service['volumes'] = []
+                                            has_nginx_conf = any(
+                                                'nginx.conf' in str(v) for v in service.get('volumes', [])
+                                            )
+                                            if not has_nginx_conf:
+                                                service['volumes'].append('./nginx.conf:/etc/nginx/nginx.conf:ro')
+                                            modified = True
+                                            yield f"     ✅ Fixed {service_name}: using image nginx:alpine (removed invalid build)\n"
 
                         # Write fixed compose file
                         if modified:
@@ -2864,6 +2896,24 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
 
             applied_any = False
 
+            # PROTECTION: Block full file replacement for docker-compose.yml
+            # The AI fixer has corrupted docker-compose.yml by replacing it entirely.
+            # Only allow patches (targeted changes) for docker-compose.yml
+            docker_compose_in_fixed = any(
+                "docker-compose" in f.get("path", "").lower()
+                for f in fixed_files
+            )
+            if docker_compose_in_fixed and original_compose_content:
+                logger.warning(
+                    "[ContainerExecutor] BLOCKING full docker-compose.yml replacement - "
+                    "AI must use patches for docker-compose.yml, not full file replacement"
+                )
+                # Remove docker-compose.yml from fixed_files
+                fixed_files = [
+                    f for f in fixed_files
+                    if "docker-compose" not in f.get("path", "").lower()
+                ]
+
             # Apply full file replacements with VALIDATION for docker-compose.yml
             for file_info in fixed_files:
                 file_path = file_info.get("path", "")
@@ -2878,7 +2928,12 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
                 else:
                     abs_path = Path(project_path) / file_path
 
-                # SAFETY VALIDATION for docker-compose.yml
+                # SAFETY VALIDATION for docker-compose.yml - STRICT PROTECTION
+                # The AI fixer has been known to CORRUPT docker-compose.yml by:
+                # - Deleting services (frontend, backend, db, redis)
+                # - Changing 'image:' to 'build: .' incorrectly
+                # - Removing networks, volumes, healthchecks
+                # We MUST be extremely strict here.
                 if "docker-compose" in file_path.lower():
                     try:
                         new_data = yaml.safe_load(content)
@@ -2891,22 +2946,52 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
 
                         new_services = set(new_data.get('services', {}).keys())
 
-                        # Check for drastic service reduction (corruption indicator)
-                        if original_compose_services and len(new_services) < len(original_compose_services) * 0.5:
+                        # STRICT CHECK 1: No service removal allowed
+                        # AI must preserve ALL original services
+                        if original_compose_services:
+                            missing_services = original_compose_services - new_services
+                            if missing_services:
+                                logger.warning(
+                                    f"[ContainerExecutor] AI DELETED services: {missing_services} - REJECTING"
+                                    f" (Original: {original_compose_services}, New: {new_services})"
+                                )
+                                continue
+
+                        # STRICT CHECK 2: No drastic service reduction (catches edge cases)
+                        if original_compose_services and len(new_services) < len(original_compose_services):
                             logger.warning(
                                 f"[ContainerExecutor] AI reduced services from {len(original_compose_services)} to {len(new_services)} - REJECTING"
-                                f" (Original: {original_compose_services}, New: {new_services})"
                             )
                             continue
 
-                        # Check for suspiciously small file (likely corrupted)
-                        if len(content) < 100 and original_compose_content and len(original_compose_content) > 500:
-                            logger.warning(
-                                f"[ContainerExecutor] AI docker-compose.yml too small ({len(content)} bytes vs original {len(original_compose_content)}) - REJECTING"
-                            )
-                            continue
+                        # STRICT CHECK 3: Don't allow 'build: .' if original used 'image:'
+                        # This catches the nginx corruption where 'image: nginx:alpine' became 'build: .'
+                        for service_name, service_config in new_data.get('services', {}).items():
+                            if isinstance(service_config, dict) and 'build' in service_config:
+                                build_val = service_config.get('build')
+                                # Check if original service used 'image:' instead of 'build:'
+                                if original_compose_content:
+                                    try:
+                                        orig_data = yaml.safe_load(original_compose_content)
+                                        orig_service = orig_data.get('services', {}).get(service_name, {})
+                                        if 'image' in orig_service and 'build' not in orig_service:
+                                            logger.warning(
+                                                f"[ContainerExecutor] AI changed {service_name} from 'image:' to 'build:' - REJECTING"
+                                            )
+                                            continue
+                                    except:
+                                        pass
 
-                        logger.info(f"[ContainerExecutor] AI docker-compose.yml passed validation (services: {new_services})")
+                        # STRICT CHECK 4: File size sanity check (more aggressive)
+                        if original_compose_content:
+                            size_ratio = len(content) / len(original_compose_content)
+                            if size_ratio < 0.5:  # New file is less than 50% of original
+                                logger.warning(
+                                    f"[ContainerExecutor] AI docker-compose.yml too small ({len(content)} vs {len(original_compose_content)} bytes, ratio {size_ratio:.2f}) - REJECTING"
+                                )
+                                continue
+
+                        logger.info(f"[ContainerExecutor] AI docker-compose.yml passed STRICT validation (services: {new_services})")
 
                     except yaml.YAMLError as yaml_err:
                         logger.warning(f"[ContainerExecutor] AI returned invalid YAML for docker-compose.yml - REJECTING: {yaml_err}")

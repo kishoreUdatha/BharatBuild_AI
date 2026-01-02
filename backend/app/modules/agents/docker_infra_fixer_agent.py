@@ -61,6 +61,7 @@ class InfraErrorType(Enum):
     DOCKERFILE_BASE_IMAGE = "dockerfile_base_image"
     DOCKERFILE_COPY_ERROR = "dockerfile_copy_error"
     DOCKERFILE_WORKDIR = "dockerfile_workdir"
+    DOCKERFILE_MISSING = "dockerfile_missing"  # Cannot locate specified Dockerfile
     # Docker Compose
     COMPOSE_SYNTAX = "compose_syntax"
     COMPOSE_DEPENDS_ON = "compose_depends_on"
@@ -179,6 +180,12 @@ ERROR_PATTERNS: List[Tuple[str, InfraErrorType, str, Optional[str]]] = [
      "COPY command failed - file not found",
      None),
 
+    # Dockerfile not found error (e.g., nginx with 'build: .' but no Dockerfile in root)
+    (r"Cannot locate specified Dockerfile|Dockerfile not found|unable to evaluate symlinks in Dockerfile path|failed to solve.*dockerfile parse error.*not found",
+     InfraErrorType.DOCKERFILE_MISSING,
+     "Dockerfile not found - service may need 'image:' instead of 'build:'",
+     None),
+
     # Docker Compose errors
     (r"yaml:|YAML|error validating|mapping values are not allowed|could not find expected",
      InfraErrorType.COMPOSE_SYNTAX,
@@ -290,6 +297,7 @@ class DockerInfraFixerAgent:
             InfraErrorType.COMPOSE_PORT_MAPPING,
             InfraErrorType.VOLUME_PERMISSION,
             InfraErrorType.COMPOSE_VOLUME,  # Volume mount errors (file/directory mismatch)
+            InfraErrorType.DOCKERFILE_MISSING,  # Missing Dockerfile (e.g., nginx with build: .)
         }
         return error_type in fixable_types
 
@@ -390,6 +398,7 @@ class DockerInfraFixerAgent:
             InfraErrorType.COMPOSE_PORT_MAPPING: lambda sr: self._fix_compose_ports(error_message, project_path, sr),
             InfraErrorType.VOLUME_PERMISSION: lambda sr: self._fix_volume_permissions(error_message, project_path, sr),
             InfraErrorType.COMPOSE_VOLUME: lambda sr: self._fix_volume_mount(error_message, project_path, sr),
+            InfraErrorType.DOCKERFILE_MISSING: lambda sr: self._fix_missing_dockerfile(error_message, project_path, sr),
         }
 
         handler = fix_handlers.get(error.error_type)
@@ -802,6 +811,112 @@ http {
         except Exception as e:
             logger.error(f"[DockerInfraFixer] Volume mount fix failed: {e}")
             return FixResult(success=False, message=f"Volume mount fix failed: {e}")
+
+    async def _fix_missing_dockerfile(self, error_message: str, project_path: str, sandbox_runner: callable) -> FixResult:
+        """
+        Fix "Cannot locate specified Dockerfile" error.
+
+        Common case: nginx service with 'build: .' but no Dockerfile in root.
+        Fix: Change 'build: .' to 'image: nginx:alpine' in docker-compose.yml.
+
+        This is a SAFE fix that only changes the build strategy, not the service config.
+        """
+        try:
+            compose_file = f"{project_path}/docker-compose.yml"
+
+            # Read docker-compose.yml
+            content = self._read_file_from_sandbox(compose_file, sandbox_runner)
+            if not content:
+                return FixResult(
+                    success=False,
+                    message="Could not read docker-compose.yml"
+                )
+
+            compose_data = yaml.safe_load(content)
+            if not compose_data or 'services' not in compose_data:
+                return FixResult(
+                    success=False,
+                    message="Invalid docker-compose.yml structure"
+                )
+
+            modified = False
+            fixed_services = []
+
+            for service_name, service in compose_data.get('services', {}).items():
+                if not isinstance(service, dict):
+                    continue
+
+                # Check if service has 'build: .' pointing to a non-existent Dockerfile
+                if 'build' in service:
+                    build_config = service.get('build')
+                    build_context = '.'
+
+                    if isinstance(build_config, str):
+                        build_context = build_config
+                    elif isinstance(build_config, dict):
+                        build_context = build_config.get('context', '.')
+
+                    # Check if Dockerfile exists for this context
+                    if build_context in ['.', './']:
+                        dockerfile_path = f"{project_path}/Dockerfile"
+                    else:
+                        dockerfile_path = f"{project_path}/{build_context}/Dockerfile"
+
+                    exit_code, _ = sandbox_runner(f'test -f "{dockerfile_path}" && echo "exists"', None, 5)
+
+                    if exit_code != 0:  # Dockerfile doesn't exist
+                        # For nginx, use pre-built image
+                        if 'nginx' in service_name.lower():
+                            del service['build']
+                            service['image'] = 'nginx:alpine'
+
+                            # Ensure nginx.conf volume mount
+                            if 'volumes' not in service:
+                                service['volumes'] = []
+
+                            has_nginx_conf = any('nginx.conf' in str(v) for v in service.get('volumes', []))
+                            if not has_nginx_conf:
+                                service['volumes'].append('./nginx.conf:/etc/nginx/nginx.conf:ro')
+
+                            modified = True
+                            fixed_services.append(service_name)
+                            logger.info(f"[DockerInfraFixer] Fixed {service_name}: changed 'build:' to 'image: nginx:alpine'")
+
+                        # For other common services, use appropriate images
+                        elif 'redis' in service_name.lower():
+                            del service['build']
+                            service['image'] = 'redis:alpine'
+                            modified = True
+                            fixed_services.append(service_name)
+
+                        elif 'postgres' in service_name.lower() or 'db' in service_name.lower():
+                            del service['build']
+                            service['image'] = 'postgres:15-alpine'
+                            modified = True
+                            fixed_services.append(service_name)
+
+            if modified:
+                # Write updated docker-compose.yml
+                import base64
+                fixed_yaml = yaml.dump(compose_data, default_flow_style=False, sort_keys=False)
+                encoded = base64.b64encode(fixed_yaml.encode()).decode()
+                sandbox_runner(f'echo "{encoded}" | base64 -d > "{compose_file}"', None, 10)
+
+                return FixResult(
+                    success=True,
+                    message=f"Fixed missing Dockerfile for: {', '.join(fixed_services)}",
+                    file_modified=compose_file,
+                    changes_made=f"Changed 'build:' to 'image:' for services without Dockerfile"
+                )
+            else:
+                return FixResult(
+                    success=False,
+                    message="Could not auto-fix missing Dockerfile - may need manual Dockerfile creation"
+                )
+
+        except Exception as e:
+            logger.error(f"[DockerInfraFixer] Missing Dockerfile fix failed: {e}")
+            return FixResult(success=False, message=f"Missing Dockerfile fix failed: {e}")
 
     async def _validate_volume_mounts(self, project_path: str, sandbox_runner: callable) -> List[FixResult]:
         """
