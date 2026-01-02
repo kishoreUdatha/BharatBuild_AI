@@ -383,8 +383,8 @@ class DockerInfraFixerAgent:
 
         # Route to appropriate fix handler
         fix_handlers = {
-            InfraErrorType.NETWORK_POOL_OVERLAP: self._fix_network_overlap,
-            InfraErrorType.STALE_NETWORK: self._fix_network_overlap,
+            InfraErrorType.NETWORK_POOL_OVERLAP: lambda sr: self._fix_network_overlap(project_path, sr),
+            InfraErrorType.STALE_NETWORK: lambda sr: self._fix_network_overlap(project_path, sr),
             InfraErrorType.PORT_CONFLICT: lambda sr: self._fix_port_conflict(error_message, sr),
             InfraErrorType.STALE_CONTAINER: lambda sr: self._fix_stale_container(error_message, sr),
             InfraErrorType.DISK_SPACE: self._fix_disk_space,
@@ -495,18 +495,58 @@ class DockerInfraFixerAgent:
             logger.warning(f"[DockerInfraFixer] Disk check failed: {e}")
             return None
 
-    async def _fix_network_overlap(self, sandbox_runner: callable) -> FixResult:
-        """Fix network pool overlap."""
+    async def _fix_network_overlap(self, project_path: str, sandbox_runner: callable) -> FixResult:
+        """Fix network pool overlap by removing hardcoded subnets and pruning networks."""
         try:
-            # First try normal prune
+            changes_made = []
+
+            # Step 1: Remove hardcoded subnets from docker-compose.yml
+            # This is the ROOT CAUSE of the "Pool overlaps" error
+            compose_file = f"{project_path}/docker-compose.yml"
+            content = self._read_file_from_sandbox(compose_file, sandbox_runner)
+
+            if content:
+                try:
+                    compose_data = yaml.safe_load(content)
+                    modified = False
+
+                    if compose_data and 'networks' in compose_data:
+                        for network_name, network_config in compose_data.get('networks', {}).items():
+                            if isinstance(network_config, dict) and 'ipam' in network_config:
+                                # Remove the hardcoded IPAM configuration
+                                del network_config['ipam']
+                                modified = True
+                                logger.info(f"[DockerInfraFixer] Removed hardcoded IPAM/subnet from network '{network_name}'")
+                                changes_made.append(f"Removed hardcoded subnet from '{network_name}'")
+
+                    if modified:
+                        fixed_content = yaml.dump(
+                            compose_data,
+                            default_flow_style=False,
+                            sort_keys=False,
+                            allow_unicode=True,
+                            width=1000
+                        )
+                        if self._write_file_to_sandbox(compose_file, fixed_content, sandbox_runner):
+                            logger.info(f"[DockerInfraFixer] Fixed docker-compose.yml - removed hardcoded subnets")
+
+                except Exception as e:
+                    logger.warning(f"[DockerInfraFixer] Could not fix docker-compose.yml: {e}")
+
+            # Step 2: Prune unused networks (original fix)
             exit_code, output = sandbox_runner("docker network prune -f", None, 30)
 
-            if exit_code == 0:
+            if exit_code == 0 or changes_made:
+                message = "Pruned unused networks"
+                if changes_made:
+                    message = "; ".join(changes_made) + "; " + message
                 return FixResult(
                     success=True,
-                    message="Pruned unused networks to free IP address space",
+                    message=message,
                     command_executed="docker network prune -f",
-                    output=output
+                    output=output,
+                    file_modified=compose_file if changes_made else None,
+                    changes_made="; ".join(changes_made) if changes_made else None
                 )
 
             # More aggressive: remove all custom bridge networks
@@ -516,7 +556,7 @@ class DockerInfraFixerAgent:
             )
             return FixResult(
                 success=True,
-                message="Removed custom Docker networks",
+                message="Removed custom Docker networks" + (f"; {'; '.join(changes_made)}" if changes_made else ""),
                 command_executed="docker network rm (all custom)",
                 output=output
             )
