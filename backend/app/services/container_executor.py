@@ -37,6 +37,9 @@ from app.services.execution_context import (
     get_execution_context,
     remove_execution_context,
 )
+from app.modules.agents.docker_infra_fixer_agent import docker_infra_fixer, DockerInfraFixerAgent
+from app.modules.agents.production_fixer_agent import production_fixer_agent
+from app.modules.agents.base_agent import AgentContext
 
 # =============================================================================
 # PREVIEW URL - Use centralized function from app.core.preview_url
@@ -1456,28 +1459,96 @@ class ContainerExecutor:
         except Exception as e:
             logger.warning(f"[ContainerExecutor] Cleanup failed: {e}")
 
+        # Run Docker Infrastructure Fixer pre-flight checks
+        # This prevents "Pool overlaps", port conflicts, and other infra issues
+        # Also validates and fixes Dockerfile and docker-compose.yml
+        yield f"  🔧 Running infrastructure pre-flight checks...\n"
+        try:
+            preflight_fixes = await docker_infra_fixer.preflight_check(
+                project_id=project_id,
+                sandbox_runner=lambda cmd, wd, timeout: self._run_shell_on_sandbox(cmd, working_dir=project_path, timeout=timeout),
+                project_name=project_name,
+                project_path=str(project_path)
+            )
+            for fix in preflight_fixes:
+                if fix.success:
+                    yield f"  ✅ {fix.message}\n"
+                else:
+                    yield f"  ⚠️ {fix.message}\n"
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Pre-flight check failed: {e}")
+            yield f"  ⚠️ Pre-flight check skipped: {e}\n"
+
         # Run docker-compose up
         yield f"  $ docker-compose up -d\n"
 
-        try:
-            # Use legacy build mode (buildx 0.17+ not available on EC2)
-            cmd = f"COMPOSE_DOCKER_CLI_BUILD=0 DOCKER_BUILDKIT=0 docker-compose -p {project_name} -f {compose_file} up -d --build"
-            exit_code, output = self._run_shell_on_sandbox(cmd, working_dir=project_path, timeout=300)
+        max_compose_attempts = 2  # Allow one retry after infra fix
+        compose_attempt = 0
 
-            # Stream output lines
-            for line in output.split('\n'):
-                if line.strip():
-                    yield f"  {line}\n"
+        while compose_attempt < max_compose_attempts:
+            compose_attempt += 1
+            try:
+                # Use legacy build mode (buildx 0.17+ not available on EC2)
+                cmd = f"COMPOSE_DOCKER_CLI_BUILD=0 DOCKER_BUILDKIT=0 docker-compose -p {project_name} -f {compose_file} up -d --build"
+                exit_code, output = self._run_shell_on_sandbox(cmd, working_dir=project_path, timeout=300)
 
-            if exit_code != 0:
-                yield f"\n❌ Docker Compose failed with exit code {exit_code}\n"
+                # Stream output lines
+                for line in output.split('\n'):
+                    if line.strip():
+                        yield f"  {line}\n"
+
+                if exit_code != 0:
+                    # Try to fix errors automatically using chained agents
+                    if compose_attempt < max_compose_attempts:
+                        yield f"\n⚠️ Docker Compose failed, attempting auto-fix...\n"
+
+                        # Step 1: Try DockerInfraFixer (fast, deterministic)
+                        yield f"  🔧 Step 1: Trying infrastructure fixes...\n"
+                        fix_result = await docker_infra_fixer.fix_error(
+                            error_message=output,
+                            project_id=project_id,
+                            sandbox_runner=lambda cmd, wd, timeout: self._run_shell_on_sandbox(cmd, working_dir=project_path, timeout=timeout),
+                            project_name=project_name,
+                            project_path=str(project_path)
+                        )
+
+                        if fix_result.success:
+                            yield f"  ✅ Infrastructure fix applied: {fix_result.message}\n"
+                            yield f"  🔄 Retrying docker-compose...\n"
+                            continue  # Retry
+                        else:
+                            yield f"  ⚠️ Infrastructure fix not applicable: {fix_result.message}\n"
+
+                            # Step 2: Try ProductionFixer (AI-powered) for code/config issues
+                            yield f"  🤖 Step 2: Trying AI-powered fixes...\n"
+                            try:
+                                ai_fix_applied = await self._apply_ai_fix_for_compose(
+                                    project_id=project_id,
+                                    project_path=str(project_path),
+                                    error_message=output
+                                )
+                                if ai_fix_applied:
+                                    yield f"  ✅ AI fix applied to docker-compose.yml\n"
+                                    yield f"  🔄 Retrying docker-compose...\n"
+                                    continue  # Retry
+                                else:
+                                    yield f"  ❌ AI could not fix the issue\n"
+                            except Exception as ai_err:
+                                logger.warning(f"[ContainerExecutor] AI fixer error: {ai_err}")
+                                yield f"  ❌ AI fixer error: {ai_err}\n"
+
+                    yield f"\n❌ Docker Compose failed with exit code {exit_code}\n"
+                    return
+
+                yield f"\n  ✅ Docker Compose started successfully\n"
+                break  # Success, exit loop
+
+            except Exception as e:
+                if compose_attempt < max_compose_attempts:
+                    yield f"\n⚠️ Error: {str(e)}, attempting recovery...\n"
+                    continue
+                yield f"\n❌ Error: {str(e)}\n"
                 return
-
-            yield f"\n  ✅ Docker Compose started successfully\n"
-
-        except Exception as e:
-            yield f"\n❌ Error: {str(e)}\n"
-            return
 
         # Wait for services to be ready and verify they stay running
         yield f"\n  ⏳ Waiting for services to be ready...\n"
@@ -2319,6 +2390,132 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
         except Exception as e:
             logger.error(f"[ContainerExecutor] Failed to run command: {e}")
             return 1, str(e)
+
+    async def _apply_ai_fix_for_compose(
+        self,
+        project_id: str,
+        project_path: str,
+        error_message: str
+    ) -> bool:
+        """
+        Use AI (ProductionFixerAgent) to fix docker-compose.yml or Dockerfile issues.
+
+        This is called when DockerInfraFixer cannot fix the issue (code/config problem).
+
+        Args:
+            project_id: Project identifier
+            project_path: Path to project directory
+            error_message: Docker Compose error output
+
+        Returns:
+            True if fix was applied, False otherwise
+        """
+        from pathlib import Path
+
+        try:
+            logger.info(f"[ContainerExecutor] Attempting AI fix for compose error")
+
+            # Read docker-compose.yml and Dockerfile(s)
+            compose_file = Path(project_path) / "docker-compose.yml"
+            dockerfile_paths = [
+                Path(project_path) / "Dockerfile",
+                Path(project_path) / "frontend" / "Dockerfile",
+                Path(project_path) / "backend" / "Dockerfile",
+            ]
+
+            file_contents = {}
+
+            # Read docker-compose.yml
+            if compose_file.exists():
+                try:
+                    file_contents["docker-compose.yml"] = compose_file.read_text()
+                except Exception as e:
+                    logger.warning(f"[ContainerExecutor] Could not read compose file: {e}")
+
+            # Read Dockerfiles
+            for df_path in dockerfile_paths:
+                if df_path.exists():
+                    try:
+                        relative_path = str(df_path.relative_to(project_path))
+                        file_contents[relative_path] = df_path.read_text()
+                    except Exception as e:
+                        logger.warning(f"[ContainerExecutor] Could not read {df_path}: {e}")
+
+            if not file_contents:
+                logger.warning("[ContainerExecutor] No docker files found to fix")
+                return False
+
+            # Create context for ProductionFixerAgent
+            context = AgentContext(
+                project_id=project_id,
+                user_prompt=f"Fix the docker-compose or Dockerfile error:\n\n{error_message}",
+                metadata={
+                    "error_message": error_message,
+                    "error_type": "docker_compose_error",
+                    "stack_trace": error_message,
+                    "file_contents": file_contents,
+                    "affected_files": list(file_contents.keys()),
+                    "project_files": file_contents,
+                }
+            )
+
+            # Call ProductionFixerAgent
+            logger.info(f"[ContainerExecutor] Calling ProductionFixerAgent for docker files")
+            result = await production_fixer_agent.process(context)
+
+            if not result or not result.get("success"):
+                logger.warning(f"[ContainerExecutor] AI fixer returned no success: {result}")
+                return False
+
+            # Apply fixes
+            fixed_files = result.get("fixed_files", [])
+            patches = result.get("patches", [])
+
+            if not fixed_files and not patches:
+                logger.warning("[ContainerExecutor] AI fixer returned no fixes")
+                return False
+
+            applied_any = False
+
+            # Apply full file replacements
+            for file_info in fixed_files:
+                file_path = file_info.get("path", "")
+                content = file_info.get("content", "")
+
+                if not file_path or not content:
+                    continue
+
+                # Determine absolute path
+                if file_path.startswith("/"):
+                    abs_path = Path(file_path)
+                else:
+                    abs_path = Path(project_path) / file_path
+
+                try:
+                    abs_path.parent.mkdir(parents=True, exist_ok=True)
+                    abs_path.write_text(content)
+                    logger.info(f"[ContainerExecutor] AI fix applied to: {file_path}")
+                    applied_any = True
+                except Exception as e:
+                    logger.error(f"[ContainerExecutor] Failed to write AI fix to {file_path}: {e}")
+
+            # Apply patches (if any)
+            for patch_info in patches:
+                file_path = patch_info.get("path", "")
+                patch_content = patch_info.get("patch", "")
+
+                if not file_path or not patch_content:
+                    continue
+
+                # For simplicity, we'll skip patch application and rely on full file fixes
+                # Patches require unified diff parsing which is complex
+                logger.info(f"[ContainerExecutor] Skipping patch for {file_path} (use full file fix)")
+
+            return applied_any
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] AI fix error: {e}", exc_info=True)
+            return False
 
     def _file_exists_on_sandbox(self, file_path: str) -> bool:
         """
