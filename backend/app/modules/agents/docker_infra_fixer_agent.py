@@ -337,8 +337,11 @@ class DockerInfraFixerAgent:
         if fix:
             fixes.append(fix)
 
-        # NOTE: We do NOT modify any files (Dockerfile, docker-compose.yml) in preflight
-        # File modifications caused corruption issues. Fixes are only applied on-error.
+        # 5. Validate volume mounts exist (SAFE: only creates missing files, never modifies)
+        # This prevents "mount a directory onto a file" errors
+        if project_path:
+            volume_fixes = await self._validate_volume_mounts(project_path, sandbox_runner)
+            fixes.extend(volume_fixes)
 
         self.fix_history[project_id] = self.fix_history.get(project_id, []) + fixes
         return fixes
@@ -799,6 +802,173 @@ http {
         except Exception as e:
             logger.error(f"[DockerInfraFixer] Volume mount fix failed: {e}")
             return FixResult(success=False, message=f"Volume mount fix failed: {e}")
+
+    async def _validate_volume_mounts(self, project_path: str, sandbox_runner: callable) -> List[FixResult]:
+        """
+        Validate and create missing volume mount files BEFORE docker-compose up.
+
+        This is a SAFE preflight operation:
+        - Only creates files that don't exist
+        - Never modifies existing files
+        - Prevents "mount a directory onto a file" errors
+
+        Dynamically detects file types and creates appropriate defaults.
+        """
+        fixes = []
+        compose_file = f"{project_path}/docker-compose.yml"
+
+        if not self._file_exists_in_sandbox(compose_file, sandbox_runner):
+            return fixes
+
+        try:
+            content = self._read_file_from_sandbox(compose_file, sandbox_runner)
+            if not content:
+                return fixes
+
+            import yaml
+            compose_data = yaml.safe_load(content)
+
+            if not compose_data or 'services' not in compose_data:
+                return fixes
+
+            for service_name, service in compose_data.get('services', {}).items():
+                if not isinstance(service, dict):
+                    continue
+
+                volumes = service.get('volumes', [])
+                for volume in volumes:
+                    if isinstance(volume, str) and ':' in volume:
+                        # Parse volume mount: ./nginx/nginx.conf:/etc/nginx/nginx.conf
+                        parts = volume.split(':')
+                        source = parts[0].strip()
+
+                        # Only handle relative paths (starting with . or simple relative)
+                        if not source.startswith('./') and not source.startswith('.\\'):
+                            if source.startswith('/') or source.startswith('$'):
+                                continue  # Skip absolute paths and variables
+
+                        # Normalize path
+                        if source.startswith('./'):
+                            source_path = f"{project_path}/{source[2:]}"
+                        else:
+                            source_path = f"{project_path}/{source}"
+
+                        # Check if file/dir already exists
+                        exit_code, _ = sandbox_runner(f'test -e "{source_path}" && echo "exists"', None, 5)
+                        if exit_code == 0:
+                            continue  # Already exists, skip
+
+                        # Determine if it's a file (has extension) or directory
+                        filename = source_path.split('/')[-1]
+                        is_file = '.' in filename and not filename.startswith('.')
+
+                        if is_file:
+                            # Create parent directory
+                            parent_dir = '/'.join(source_path.split('/')[:-1])
+                            sandbox_runner(f'mkdir -p "{parent_dir}"', None, 5)
+
+                            # Create file with appropriate default content
+                            file_created = self._create_default_file(source_path, filename, sandbox_runner)
+                            if file_created:
+                                fixes.append(FixResult(
+                                    success=True,
+                                    message=f"Created {source} for {service_name} volume mount",
+                                    file_modified=source_path
+                                ))
+                                logger.info(f"[DockerInfraFixer] Preflight: Created {source_path}")
+                        else:
+                            # Create directory
+                            sandbox_runner(f'mkdir -p "{source_path}"', None, 5)
+                            fixes.append(FixResult(
+                                success=True,
+                                message=f"Created directory {source} for {service_name} volume mount"
+                            ))
+                            logger.info(f"[DockerInfraFixer] Preflight: Created directory {source_path}")
+
+        except yaml.YAMLError as e:
+            logger.warning(f"[DockerInfraFixer] Could not parse docker-compose.yml: {e}")
+        except Exception as e:
+            logger.warning(f"[DockerInfraFixer] Error validating volume mounts: {e}")
+
+        return fixes
+
+    def _create_default_file(self, file_path: str, filename: str, sandbox_runner: callable) -> bool:
+        """
+        Create a default file based on its type.
+
+        Returns True if file was created, False otherwise.
+        """
+        import base64
+
+        filename_lower = filename.lower()
+
+        # Default content templates for common files
+        DEFAULT_CONTENTS = {
+            'nginx.conf': '''events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    upstream frontend {
+        server frontend:3000;
+    }
+
+    upstream backend {
+        server backend:8080;
+    }
+
+    server {
+        listen 80;
+        server_name localhost;
+
+        location / {
+            proxy_pass http://frontend;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection 'upgrade';
+            proxy_set_header Host $host;
+            proxy_cache_bypass $http_upgrade;
+        }
+
+        location /api {
+            proxy_pass http://backend;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+    }
+}
+''',
+            '.env': '# Environment variables\n',
+            '.gitignore': 'node_modules/\n.env\n*.log\n',
+            'init.sql': '-- Database initialization\n',
+            'schema.sql': '-- Database schema\n',
+            'seed.sql': '-- Seed data\n',
+        }
+
+        # Find matching template
+        content = None
+        for key, template in DEFAULT_CONTENTS.items():
+            if key in filename_lower:
+                content = template
+                break
+
+        if content is None:
+            # Default: create empty file
+            content = f'# Auto-generated {filename}\n'
+
+        try:
+            # Write using base64 to handle special characters
+            encoded = base64.b64encode(content.encode()).decode()
+            exit_code, _ = sandbox_runner(f'echo "{encoded}" | base64 -d > "{file_path}"', None, 10)
+            return exit_code == 0
+        except Exception as e:
+            logger.warning(f"[DockerInfraFixer] Could not create {file_path}: {e}")
+            return False
 
     # ========================================================================
     # DOCKERFILE FIXES
