@@ -514,7 +514,12 @@ class TestCriticalImportPaths:
 
     def test_app_models_project_import(self):
         """Test app.models.project import"""
-        from app.models.project import ProjectFile
+        from app.models.project import Project
+        assert Project is not None
+
+    def test_app_models_project_file_import(self):
+        """Test app.models.project_file import (was app.models.project - FIXED)"""
+        from app.models.project_file import ProjectFile
         assert ProjectFile is not None
 
     def test_app_services_bolt_fixer_full_import(self):
