@@ -13,7 +13,7 @@ This replaces SimpleFixer with the proper Bolt.new pattern:
 Claude is a tool, not a controller.
 """
 
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Callable
 from dataclasses import dataclass
 from pathlib import Path
 import json
@@ -100,12 +100,43 @@ No explanations. Only the <file> block."""
 
     def __init__(self):
         self._claude_client = None
+        self._sandbox_file_writer = None  # Set by fix_from_backend if provided
+
+    def _write_file(self, file_path: Path, content: str, project_id: str) -> bool:
+        """
+        Write a file using sandbox writer if available, otherwise local.
+
+        In ECS/remote mode, files must be written via sandbox helper container,
+        not directly via Python, because the sandbox filesystem is on a different host.
+        """
+        try:
+            if self._sandbox_file_writer:
+                # Use sandbox file writer (handles remote mode)
+                # Use str(file_path) directly - path is already absolute from project_path / relative_path
+                # Don't use resolve() as the directory may not exist on backend container
+                abs_path = str(file_path)
+                success = self._sandbox_file_writer(abs_path, content)
+                if success:
+                    logger.info(f"[BoltFixer:{project_id}] Wrote file via sandbox: {abs_path}")
+                else:
+                    logger.error(f"[BoltFixer:{project_id}] Sandbox write failed: {abs_path}")
+                return success
+            else:
+                # Local mode - direct file write
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                file_path.write_text(content, encoding='utf-8')
+                logger.info(f"[BoltFixer:{project_id}] Wrote file locally: {file_path}")
+                return True
+        except Exception as e:
+            logger.error(f"[BoltFixer:{project_id}] Error writing file {file_path}: {e}")
+            return False
 
     async def fix_from_backend(
         self,
         project_id: str,
         project_path: Path,
-        payload: Dict[str, Any]
+        payload: Dict[str, Any],
+        sandbox_file_writer: Optional[Callable[[str, str], bool]] = None
     ) -> BoltFixResult:
         """
         BOLT.NEW STYLE: Fix errors from backend execution.
@@ -116,10 +147,15 @@ No explanations. Only the <file> block."""
             project_id: Project ID
             project_path: Path to project files
             payload: Error payload from ExecutionContext
+            sandbox_file_writer: Optional callback to write files directly to sandbox.
+                                 Signature: (file_path: str, content: str) -> bool
+                                 If None, uses local Path.write_text() (only works in local mode)
 
         Returns:
             BoltFixResult with success status and modified files
         """
+        # Store the sandbox writer for use in file operations
+        self._sandbox_file_writer = sandbox_file_writer
         # Extract payload
         stderr = payload.get("stderr", "")
         stdout = payload.get("stdout", "")
@@ -320,12 +356,9 @@ BUILD LOG:
                     apply_result = DiffParser.apply(original, parsed)
 
                     if apply_result.success:
-                        # Write atomically
-                        temp_path = target_path.with_suffix(target_path.suffix + '.tmp')
-                        temp_path.write_text(apply_result.new_content, encoding='utf-8')
-                        temp_path.replace(target_path)
-                        files_modified.append(actual_file)
-                        logger.info(f"[BoltFixer:{project_id}] Applied patch to {actual_file}")
+                        # Use sandbox-aware file writer
+                        if self._write_file(target_path, apply_result.new_content, project_id):
+                            files_modified.append(actual_file)
                 except Exception as e:
                     logger.error(f"[BoltFixer:{project_id}] Error applying patch: {e}")
 
@@ -355,15 +388,9 @@ BUILD LOG:
             if not target_path.exists():
                 target_path = project_path / "backend" / file_path
 
-            try:
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                temp_path = target_path.with_suffix(target_path.suffix + '.tmp')
-                temp_path.write_text(content, encoding='utf-8')
-                temp_path.replace(target_path)
+            # Use sandbox-aware file writer
+            if self._write_file(target_path, content, project_id):
                 files_modified.append(file_path)
-                logger.info(f"[BoltFixer:{project_id}] Wrote file {file_path}")
-            except Exception as e:
-                logger.error(f"[BoltFixer:{project_id}] Error writing file: {e}")
 
         # Create new files
         for file_info in new_files:
@@ -387,19 +414,15 @@ BUILD LOG:
                 continue
 
             target_path = project_path / file_path
-            try:
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                target_path.write_text(content, encoding='utf-8')
+            # Use sandbox-aware file writer
+            if self._write_file(target_path, content, project_id):
                 files_modified.append(file_path)
-                logger.info(f"[BoltFixer:{project_id}] Created {file_path}")
-            except Exception as e:
-                logger.error(f"[BoltFixer:{project_id}] Error creating file: {e}")
 
         # =================================================================
-        # STEP 8: SYNC TO S3 (persist fixes)
+        # STEP 8: DO NOT SYNC TO S3 HERE
+        # S3 sync happens in ContainerExecutor AFTER build succeeds
+        # This ensures we only persist fixes that actually work
         # =================================================================
-        if files_modified:
-            await self._sync_to_s3(project_id, project_path, files_modified)
 
         # =================================================================
         # STEP 9: RECORD ATTEMPT AND RETURN

@@ -1850,6 +1850,7 @@ class ContainerExecutor:
         max_fix_attempts = 3
         fix_attempt = 0
         containers_healthy = False
+        all_files_modified = []  # Track files modified by auto-fix for S3 sync
 
         # Check schedule depends on project type
         # Java/Maven projects need longer waits due to slow compilation (60-120 seconds)
@@ -2076,13 +2077,17 @@ class ContainerExecutor:
                     fix_result = await bolt_fixer.fix_from_backend(
                         project_id=project_id,
                         project_path=Path(project_path),
-                        payload=payload
+                        payload=payload,
+                        sandbox_file_writer=self._write_file_to_sandbox  # Write directly to sandbox
                     )
 
                     if fix_result.success and fix_result.files_modified:
                         yield f"✅ Fixed {len(fix_result.files_modified)} file(s):\n"
                         for f in fix_result.files_modified:
                             yield f"   📝 {f}\n"
+
+                        # Track files for S3 sync after build succeeds
+                        all_files_modified.extend(fix_result.files_modified)
 
                         # Rebuild and restart docker-compose
                         yield f"\n🔄 Rebuilding containers with fixes...\n"
@@ -2118,6 +2123,36 @@ class ContainerExecutor:
         if not containers_healthy:
             yield f"\n❌ Failed to start containers after {max_fix_attempts} attempts.\n"
             return
+
+        # Sync fixed files to S3 AFTER build succeeds
+        # This ensures we only persist fixes that actually work
+        if all_files_modified:
+            yield f"\n📤 Syncing {len(all_files_modified)} fixed file(s) to storage...\n"
+            try:
+                from app.services.storage_service import storage_service
+                from app.core.database import AsyncSessionLocal
+
+                async with AsyncSessionLocal() as db:
+                    synced_count = 0
+                    for file_path in all_files_modified:
+                        full_path = f"{project_path}/{file_path}"
+                        # Read file content from sandbox (handles remote mode)
+                        cat_cmd = f"cat '{full_path}'"
+                        exit_code, content = self._run_shell_on_sandbox(cat_cmd, working_dir=project_path, timeout=10)
+                        if exit_code == 0 and content:
+                            await storage_service.save_file(
+                                project_id=project_id,
+                                file_path=file_path,
+                                content=content,
+                                db=db
+                            )
+                            synced_count += 1
+                    await db.commit()
+                yield f"  ✅ {synced_count} file(s) synced to storage\n"
+                logger.info(f"[ContainerExecutor] Synced {synced_count} fixed files to S3")
+            except Exception as sync_err:
+                logger.error(f"[ContainerExecutor] S3 sync error: {sync_err}")
+                yield f"  ⚠️ Storage sync failed: {sync_err}\n"
 
         # Generate preview URL
         preview_url = _get_preview_url(frontend_port, project_id)
@@ -4958,7 +4993,8 @@ echo "Done"
                 fix_result = await bolt_fixer.fix_from_backend(
                     project_id=project_id,
                     project_path=Path(project_path),
-                    payload=payload
+                    payload=payload,
+                    sandbox_file_writer=self._write_file_to_sandbox  # Write directly to sandbox
                 )
             except Exception as fix_err:
                 logger.error(f"[ContainerExecutor] Fix error: {fix_err}")
