@@ -502,7 +502,7 @@ BUILD LOG:
         """
         from uuid import UUID
         from sqlalchemy import select
-        from app.database import AsyncSessionLocal
+        from app.core.database import AsyncSessionLocal
         from app.models.project import ProjectFile
 
         for file_path in files_modified:
