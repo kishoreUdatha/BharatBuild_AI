@@ -57,11 +57,14 @@ OUTPUT FORMAT (MANDATORY):
   <tech_stack>...</tech_stack>
   <project_structure>...</project_structure>
   <files>
-    <file path="path/to/file.tsx" priority="1">
+    <file path="path/to/file.tsx" priority="1" depends_on="">
       <description>Description of what this file does</description>
+      <exports>ComponentName, functionName</exports>
     </file>
-    <file path="path/to/another.ts" priority="2">
+    <file path="path/to/another.ts" priority="2" depends_on="path/to/file.tsx">
       <description>Description of what this file does</description>
+      <imports>ComponentName from path/to/file.tsx</imports>
+      <exports>AnotherComponent</exports>
     </file>
     ...
   </files>
@@ -200,6 +203,100 @@ CRITICAL: The <files> section is MANDATORY AND MUST BE COMPLETE!
 - Count your files: The number of <file> tags MUST EQUAL the number of files in <project_structure>
 - DO NOT skip page files, component files, or any source files
 - For React apps: App.tsx MUST import pages/components that MUST be in the <files> list
+
+═══════════════════════════════════════════════════════════════════════════════
+                    🔗 DEPENDENCY GRAPH (CRITICAL FOR BUILD SUCCESS!)
+═══════════════════════════════════════════════════════════════════════════════
+
+⚠️ FILES MUST BE ORDERED BY DEPENDENCIES TO AVOID BUILD ERRORS!
+
+For EACH file, you MUST specify:
+1. depends_on: List of file paths this file imports from (comma-separated, empty if none)
+2. <exports>: Classes, functions, components, types this file provides to others
+3. <imports>: What this file needs from other files (for documentation)
+
+DEPENDENCY RULES:
+- Files with NO dependencies (leaf files) get priority 1-10
+- Files that ONLY depend on leaf files get priority 11-20
+- Files that depend on those get priority 21-30, and so on
+- Entry points (App.tsx, main.py, Main.java) get HIGHEST priority (last)
+
+TECHNOLOGY-SPECIFIC PATTERNS:
+
+📦 JAVA/SPRING BOOT:
+- DTOs/Entities (priority 1-5): No dependencies, export data classes
+  <file path="src/main/java/com/app/dto/UserDto.java" priority="1" depends_on="">
+    <exports>UserDto</exports>
+  </file>
+- Repositories (priority 6-10): Depend on entities
+  <file path="src/main/java/com/app/repository/UserRepository.java" priority="6" depends_on="src/main/java/com/app/entity/User.java">
+    <imports>User from entity</imports>
+    <exports>UserRepository</exports>
+  </file>
+- Services (priority 11-15): Depend on repositories, DTOs
+  <file path="src/main/java/com/app/service/UserService.java" priority="11" depends_on="src/main/java/com/app/repository/UserRepository.java,src/main/java/com/app/dto/UserDto.java">
+    <imports>UserRepository, UserDto</imports>
+    <exports>UserService</exports>
+  </file>
+- Controllers (priority 16-20): Depend on services
+  <file path="src/main/java/com/app/controller/UserController.java" priority="16" depends_on="src/main/java/com/app/service/UserService.java">
+    <imports>UserService, UserDto</imports>
+    <exports>REST endpoints</exports>
+  </file>
+
+⚛️ REACT/TYPESCRIPT:
+- Types/Interfaces (priority 1-5): No dependencies
+  <file path="src/types/user.ts" priority="1" depends_on="">
+    <exports>User, UserRole, AuthState</exports>
+  </file>
+- Utilities/Helpers (priority 6-10): May depend on types
+  <file path="src/lib/api.ts" priority="6" depends_on="src/types/user.ts">
+    <imports>User from types</imports>
+    <exports>apiClient, fetchUser, createUser</exports>
+  </file>
+- UI Components (priority 11-20): Depend on types, utils
+  <file path="src/components/ui/Button.tsx" priority="11" depends_on="">
+    <exports>Button</exports>
+  </file>
+- Feature Components (priority 21-30): Depend on UI, types
+  <file path="src/components/UserCard.tsx" priority="21" depends_on="src/types/user.ts,src/components/ui/Button.tsx">
+    <imports>User from types, Button from ui</imports>
+    <exports>UserCard</exports>
+  </file>
+- Pages (priority 31-40): Depend on components
+  <file path="src/pages/Dashboard.tsx" priority="31" depends_on="src/components/UserCard.tsx,src/lib/api.ts">
+    <imports>UserCard, fetchUser</imports>
+    <exports>Dashboard</exports>
+  </file>
+- App Entry (priority 50): Depends on pages, routing
+  <file path="src/App.tsx" priority="50" depends_on="src/pages/Dashboard.tsx,src/pages/Login.tsx">
+    <imports>Dashboard, Login</imports>
+    <exports>App</exports>
+  </file>
+
+🐍 PYTHON/FASTAPI:
+- Models/Schemas (priority 1-5): No dependencies
+  <file path="app/schemas/user.py" priority="1" depends_on="">
+    <exports>UserCreate, UserResponse, UserUpdate</exports>
+  </file>
+- Database Models (priority 6-10): Depend on base
+  <file path="app/models/user.py" priority="6" depends_on="app/core/database.py">
+    <imports>Base from database</imports>
+    <exports>User</exports>
+  </file>
+- Services (priority 11-15): Depend on models, schemas
+  <file path="app/services/user_service.py" priority="11" depends_on="app/models/user.py,app/schemas/user.py">
+    <imports>User, UserCreate, UserResponse</imports>
+    <exports>UserService, get_user, create_user</exports>
+  </file>
+- Routers (priority 16-20): Depend on services
+  <file path="app/api/routes/users.py" priority="16" depends_on="app/services/user_service.py">
+    <imports>UserService, UserResponse</imports>
+    <exports>router</exports>
+  </file>
+
+🔑 KEY PRINCIPLE: Writer Agent generates files in PRIORITY ORDER (1 first, highest last).
+If File B imports from File A, then File A MUST have LOWER priority number than File B.
 
 RULES:
 - NEVER output <file>.
