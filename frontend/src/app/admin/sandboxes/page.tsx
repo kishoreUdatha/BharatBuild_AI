@@ -370,7 +370,7 @@ export default function AdminSandboxesPage() {
                 <div>
                   <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Latency</div>
                   <div className={`text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
-                    {connectionHealth.latency_ms ? `${connectionHealth.latency_ms}ms` : '-'}
+                    {connectionHealth.latency_ms ? `${connectionHealth.latency_ms.toFixed(1)}ms` : '-'}
                   </div>
                 </div>
               </div>
@@ -395,7 +395,35 @@ export default function AdminSandboxesPage() {
                   <div>
                     <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Resources</div>
                     <div className={`text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
-                      {connectionHealth.docker_info.cpus} CPU / {connectionHealth.docker_info.memory_total_gb}GB
+                      {connectionHealth.docker_info.cpus} CPU / {connectionHealth.docker_info.memory_total_gb.toFixed(1)}GB
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Container Stats */}
+              {connectionHealth.docker_info && (
+                <div className="flex items-center gap-2">
+                  <Server className="w-5 h-5 text-indigo-400" />
+                  <div>
+                    <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Containers</div>
+                    <div className={`text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                      <span className="text-green-400">{connectionHealth.docker_info.running}</span>
+                      <span className="text-gray-500">/</span>
+                      {connectionHealth.docker_info.containers}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Images */}
+              {connectionHealth.docker_info && (
+                <div className="flex items-center gap-2">
+                  <HardDrive className="w-5 h-5 text-pink-400" />
+                  <div>
+                    <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Images</div>
+                    <div className={`text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                      {connectionHealth.docker_info.images}
                     </div>
                   </div>
                 </div>
@@ -418,10 +446,20 @@ export default function AdminSandboxesPage() {
           {/* Host Info */}
           {connectionHealth && (
             <div className={`mt-3 pt-3 border-t text-xs ${isDark ? 'border-[#333] text-gray-500' : 'border-gray-200 text-gray-400'}`}>
-              <span className="font-mono">Host: {connectionHealth.sandbox_docker_host}</span>
-              {connectionHealth.sandbox_public_url && (
-                <span className="ml-4 font-mono">Public URL: {connectionHealth.sandbox_public_url}</span>
-              )}
+              <div className="flex flex-wrap gap-x-6 gap-y-1">
+                <span className="font-mono">Host: {connectionHealth.sandbox_docker_host}</span>
+                {connectionHealth.sandbox_public_url && (
+                  <span className="font-mono">Public URL: {connectionHealth.sandbox_public_url}</span>
+                )}
+                {connectionHealth.docker_info?.os && (
+                  <span className="font-mono">OS: {connectionHealth.docker_info.os}</span>
+                )}
+                {connectionHealth.last_checked && (
+                  <span className="font-mono">
+                    Last Check: {new Date(connectionHealth.last_checked).toLocaleTimeString()}
+                  </span>
+                )}
+              </div>
             </div>
           )}
         </div>

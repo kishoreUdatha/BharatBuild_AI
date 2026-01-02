@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List
 
 from app.core.database import get_db
-from app.models import User, Project, UsageLog, Transaction
+from app.models import User, Project, Transaction
 from app.models.usage import TokenUsageLog
 from app.modules.auth.dependencies import get_current_admin
 from app.schemas.admin import (
@@ -85,26 +85,27 @@ async def get_token_usage(
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    """Get token usage analytics"""
+    """Get token usage analytics from TokenUsageLog (actual Claude API usage)"""
     now = datetime.utcnow()
     start_date = now - timedelta(days=days)
 
-    # Total tokens used
+    # Total tokens used (from TokenUsageLog - actual project generation)
     total_tokens = await db.scalar(
-        select(func.coalesce(func.sum(UsageLog.tokens_used), 0))
+        select(func.coalesce(func.sum(TokenUsageLog.total_tokens), 0))
     )
 
-    # Tokens by model
+    # Tokens by model (from TokenUsageLog)
     tokens_by_model = {}
     for model in ["haiku", "sonnet", "opus"]:
+        # Match model names that contain the model type
         model_tokens = await db.scalar(
-            select(func.coalesce(func.sum(UsageLog.tokens_used), 0)).where(
-                UsageLog.model_used == model
+            select(func.coalesce(func.sum(TokenUsageLog.total_tokens), 0)).where(
+                TokenUsageLog.model.ilike(f"%{model}%")
             )
         )
         tokens_by_model[model] = model_tokens or 0
 
-    # Daily usage
+    # Daily usage (from TokenUsageLog)
     daily_usage = []
     for i in range(days):
         day = now - timedelta(days=i)
@@ -112,10 +113,10 @@ async def get_token_usage(
         day_end = day_start + timedelta(days=1)
 
         day_tokens = await db.scalar(
-            select(func.coalesce(func.sum(UsageLog.tokens_used), 0)).where(
+            select(func.coalesce(func.sum(TokenUsageLog.total_tokens), 0)).where(
                 and_(
-                    UsageLog.created_at >= day_start,
-                    UsageLog.created_at < day_end
+                    TokenUsageLog.created_at >= day_start,
+                    TokenUsageLog.created_at < day_end
                 )
             )
         )
@@ -127,13 +128,13 @@ async def get_token_usage(
 
     daily_usage.reverse()
 
-    # Top users by token usage
+    # Top users by token usage (from TokenUsageLog)
     top_users_query = (
-        select(User.email, User.full_name, func.sum(UsageLog.tokens_used).label("total_tokens"))
-        .join(UsageLog, User.id == UsageLog.user_id)
-        .where(UsageLog.created_at >= start_date)
+        select(User.email, User.full_name, func.sum(TokenUsageLog.total_tokens).label("total_tokens"))
+        .join(TokenUsageLog, User.id == TokenUsageLog.user_id)
+        .where(TokenUsageLog.created_at >= start_date)
         .group_by(User.id)
-        .order_by(func.sum(UsageLog.tokens_used).desc())
+        .order_by(func.sum(TokenUsageLog.total_tokens).desc())
         .limit(10)
     )
     result = await db.execute(top_users_query)
@@ -156,28 +157,31 @@ async def get_api_calls(
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    """Get API call analytics"""
+    """Get API call analytics from TokenUsageLog (actual Claude API calls)"""
     now = datetime.utcnow()
     start_date = now - timedelta(days=days)
 
-    # Total API calls
-    total_calls = await db.scalar(select(func.count(UsageLog.id)))
+    # Total API calls (from TokenUsageLog)
+    total_calls = await db.scalar(select(func.count(TokenUsageLog.id)))
 
-    # Average response time
-    avg_response_time = await db.scalar(
-        select(func.avg(UsageLog.response_time))
+    # Average tokens per call (no response time in TokenUsageLog, use tokens instead)
+    avg_tokens_per_call = await db.scalar(
+        select(func.avg(TokenUsageLog.total_tokens))
     )
 
-    # Calls by endpoint (top 10)
-    endpoint_query = (
-        select(UsageLog.endpoint, func.count(UsageLog.id).label("count"))
-        .where(UsageLog.created_at >= start_date)
-        .group_by(UsageLog.endpoint)
-        .order_by(func.count(UsageLog.id).desc())
+    # Calls by agent type (equivalent to endpoint for AI calls)
+    agent_query = (
+        select(TokenUsageLog.agent_type, func.count(TokenUsageLog.id).label("count"))
+        .where(TokenUsageLog.created_at >= start_date)
+        .group_by(TokenUsageLog.agent_type)
+        .order_by(func.count(TokenUsageLog.id).desc())
         .limit(10)
     )
-    result = await db.execute(endpoint_query)
-    calls_by_endpoint = {row.endpoint or "unknown": row.count for row in result}
+    result = await db.execute(agent_query)
+    calls_by_endpoint = {
+        (row.agent_type.value if row.agent_type else "unknown"): row.count
+        for row in result
+    }
 
     # Daily calls
     daily_calls = []
@@ -187,10 +191,10 @@ async def get_api_calls(
         day_end = day_start + timedelta(days=1)
 
         day_count = await db.scalar(
-            select(func.count(UsageLog.id)).where(
+            select(func.count(TokenUsageLog.id)).where(
                 and_(
-                    UsageLog.created_at >= day_start,
-                    UsageLog.created_at < day_end
+                    TokenUsageLog.created_at >= day_start,
+                    TokenUsageLog.created_at < day_end
                 )
             )
         )
@@ -206,7 +210,7 @@ async def get_api_calls(
         total_calls=total_calls or 0,
         calls_by_endpoint=calls_by_endpoint,
         daily_calls=daily_calls,
-        average_response_time=float(avg_response_time or 0)
+        average_response_time=float(avg_tokens_per_call or 0)  # Use avg tokens as proxy
     )
 
 
@@ -216,7 +220,7 @@ async def get_model_usage(
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    """Get Claude model usage breakdown"""
+    """Get Claude model usage breakdown from TokenUsageLog (actual API calls)"""
     now = datetime.utcnow()
     start_date = now - timedelta(days=days)
 
@@ -224,29 +228,41 @@ async def get_model_usage(
     usage = {}
 
     for model in models:
-        # Call count
+        # Call count (model name contains the model type, e.g. "claude-3-haiku-20240307")
         call_count = await db.scalar(
-            select(func.count(UsageLog.id)).where(
+            select(func.count(TokenUsageLog.id)).where(
                 and_(
-                    UsageLog.model_used == model,
-                    UsageLog.created_at >= start_date
+                    TokenUsageLog.model.ilike(f"%{model}%"),
+                    TokenUsageLog.created_at >= start_date
                 )
             )
         )
 
         # Token count
         token_count = await db.scalar(
-            select(func.coalesce(func.sum(UsageLog.tokens_used), 0)).where(
+            select(func.coalesce(func.sum(TokenUsageLog.total_tokens), 0)).where(
                 and_(
-                    UsageLog.model_used == model,
-                    UsageLog.created_at >= start_date
+                    TokenUsageLog.model.ilike(f"%{model}%"),
+                    TokenUsageLog.created_at >= start_date
+                )
+            )
+        )
+
+        # Cost in paise
+        cost_paise = await db.scalar(
+            select(func.coalesce(func.sum(TokenUsageLog.cost_paise), 0)).where(
+                and_(
+                    TokenUsageLog.model.ilike(f"%{model}%"),
+                    TokenUsageLog.created_at >= start_date
                 )
             )
         )
 
         usage[model] = {
             "calls": call_count or 0,
-            "tokens": token_count or 0
+            "tokens": token_count or 0,
+            "cost_inr": round((cost_paise or 0) / 100, 2),
+            "cost_usd": round((cost_paise or 0) / 100 / 83, 4)
         }
 
     return {
@@ -262,7 +278,7 @@ async def get_analytics_overview(
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    """Get a quick analytics overview"""
+    """Get a quick analytics overview using TokenUsageLog for AI metrics"""
     now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=7)
@@ -285,13 +301,18 @@ async def get_analytics_overview(
         )
     )
 
-    # API metrics
+    # API metrics (from TokenUsageLog - actual Claude API calls)
     api_calls_today = await db.scalar(
-        select(func.count(UsageLog.id)).where(UsageLog.created_at >= today_start)
+        select(func.count(TokenUsageLog.id)).where(TokenUsageLog.created_at >= today_start)
     )
     tokens_today = await db.scalar(
-        select(func.coalesce(func.sum(UsageLog.tokens_used), 0)).where(
-            UsageLog.created_at >= today_start
+        select(func.coalesce(func.sum(TokenUsageLog.total_tokens), 0)).where(
+            TokenUsageLog.created_at >= today_start
+        )
+    )
+    cost_today_paise = await db.scalar(
+        select(func.coalesce(func.sum(TokenUsageLog.cost_paise), 0)).where(
+            TokenUsageLog.created_at >= today_start
         )
     )
 
@@ -325,7 +346,9 @@ async def get_analytics_overview(
         },
         "api": {
             "calls_today": api_calls_today or 0,
-            "tokens_today": tokens_today or 0
+            "tokens_today": tokens_today or 0,
+            "cost_today_inr": round((cost_today_paise or 0) / 100, 2),
+            "cost_today_usd": round((cost_today_paise or 0) / 100 / 83, 4)
         },
         "revenue": {
             "today": float(revenue_today or 0) / 100,
