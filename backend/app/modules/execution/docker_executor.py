@@ -157,6 +157,9 @@ class FrameworkType(Enum):
     PYTHON_DJANGO = "python-django"
     PYTHON_STREAMLIT = "python-streamlit"
     PYTHON_ML = "python-ml"  # AI/ML projects (TensorFlow, PyTorch, etc.)
+    PYTHON_NLP = "python-nlp"  # NLP projects (Transformers, spaCy, NLTK)
+    PYTHON_CV = "python-cv"  # Computer Vision (OpenCV, YOLO, Detectron2)
+    PYTHON_LLM = "python-llm"  # LLM/GenAI projects (LangChain, OpenAI, Llama)
 
     # ===== JAVA =====
     SPRING_BOOT = "spring-boot"
@@ -188,6 +191,14 @@ class FrameworkType(Enum):
     FULLSTACK_REACT_SPRING = "fullstack-react-spring"  # React + Spring Boot monorepo
     FULLSTACK_REACT_EXPRESS = "fullstack-react-express"  # React + Express monorepo
     FULLSTACK_REACT_FASTAPI = "fullstack-react-fastapi"  # React + FastAPI monorepo
+
+    # ===== CYBERSECURITY =====
+    SECURITY_DASHBOARD = "security-dashboard"  # SOC/SIEM monitoring dashboard
+    VULNERABILITY_SCANNER = "vulnerability-scanner"  # Web app security scanner
+    NETWORK_ANALYZER = "network-analyzer"  # Network traffic analysis tool
+    THREAT_INTEL = "threat-intel"  # Threat intelligence platform
+    CTF_PLATFORM = "ctf-platform"  # Capture The Flag platform
+    SECURITY_API = "security-api"  # Security tools API backend
 
     # ===== OTHER =====
     UNKNOWN = "unknown"
@@ -410,6 +421,190 @@ EXPOSE 8501
 CMD ["streamlit", "run", "app.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
 ''',
 
+    # ===== AI/ML TEMPLATES =====
+    FrameworkType.PYTHON_ML: '''FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies for ML libraries
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    build-essential \\
+    libgomp1 \\
+    libglib2.0-0 \\
+    libsm6 \\
+    libxext6 \\
+    libxrender-dev \\
+    libgl1-mesa-glx \\
+    git \\
+    curl \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \\
+    pip install --no-cache-dir -r requirements.txt
+
+# Install common ML packages if not in requirements
+RUN pip install --no-cache-dir \\
+    jupyter \\
+    notebook \\
+    numpy \\
+    pandas \\
+    scikit-learn \\
+    matplotlib \\
+    seaborn \\
+    || true
+
+# Copy source files
+COPY . .
+
+# Expose ports (8888 for Jupyter, 8000 for API)
+EXPOSE 8888 8000
+
+# Default: Start Jupyter Notebook
+CMD ["jupyter", "notebook", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", "--NotebookApp.token=''"]
+''',
+
+    FrameworkType.PYTHON_NLP: '''FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies for NLP
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    build-essential \\
+    git \\
+    curl \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \\
+    pip install --no-cache-dir -r requirements.txt
+
+# Install common NLP packages
+RUN pip install --no-cache-dir \\
+    transformers \\
+    torch \\
+    spacy \\
+    nltk \\
+    sentencepiece \\
+    tokenizers \\
+    datasets \\
+    fastapi \\
+    uvicorn \\
+    || true
+
+# Download spaCy English model
+RUN python -m spacy download en_core_web_sm || true
+
+# Copy source files
+COPY . .
+
+# Expose port
+EXPOSE 8000
+
+# Start FastAPI server for NLP API
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+''',
+
+    FrameworkType.PYTHON_CV: '''FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies for OpenCV and image processing
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    build-essential \\
+    libglib2.0-0 \\
+    libsm6 \\
+    libxext6 \\
+    libxrender-dev \\
+    libgl1-mesa-glx \\
+    libglib2.0-0 \\
+    ffmpeg \\
+    libavcodec-extra \\
+    git \\
+    curl \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \\
+    pip install --no-cache-dir -r requirements.txt
+
+# Install common CV packages
+RUN pip install --no-cache-dir \\
+    opencv-python-headless \\
+    opencv-contrib-python-headless \\
+    torch \\
+    torchvision \\
+    pillow \\
+    numpy \\
+    ultralytics \\
+    fastapi \\
+    uvicorn \\
+    python-multipart \\
+    || true
+
+# Copy source files
+COPY . .
+
+# Expose port
+EXPOSE 8000
+
+# Start FastAPI server for CV API
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+''',
+
+    FrameworkType.PYTHON_LLM: '''FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    build-essential \\
+    git \\
+    curl \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \\
+    pip install --no-cache-dir -r requirements.txt
+
+# Install common LLM/GenAI packages
+RUN pip install --no-cache-dir \\
+    langchain \\
+    langchain-community \\
+    openai \\
+    anthropic \\
+    chromadb \\
+    faiss-cpu \\
+    tiktoken \\
+    python-dotenv \\
+    fastapi \\
+    uvicorn \\
+    streamlit \\
+    gradio \\
+    || true
+
+# Copy source files
+COPY . .
+
+# Expose ports (8000 for API, 8501 for Streamlit, 7860 for Gradio)
+EXPOSE 8000 8501 7860
+
+# Start FastAPI server
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+''',
+
     FrameworkType.SPRING_BOOT: '''FROM maven:3.9-eclipse-temurin-17 AS build
 
 WORKDIR /app
@@ -497,7 +692,239 @@ EXPOSE 3000
 
 # Try to run
 CMD ["npm", "start"]
-'''
+''',
+
+    # ===== CYBERSECURITY TEMPLATES =====
+    FrameworkType.SECURITY_DASHBOARD: '''FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies for security tools
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    nmap \\
+    net-tools \\
+    iputils-ping \\
+    curl \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source files
+COPY . .
+
+# Expose port
+EXPOSE 8000
+
+# Start FastAPI server for security dashboard
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+''',
+
+    FrameworkType.VULNERABILITY_SCANNER: '''FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install security scanning tools
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    nmap \\
+    nikto \\
+    curl \\
+    dnsutils \\
+    whois \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies (requests, beautifulsoup4, etc.)
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source files
+COPY . .
+
+# Expose port
+EXPOSE 8000
+
+# Start scanner API
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+''',
+
+    FrameworkType.NETWORK_ANALYZER: '''FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install network analysis tools
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    tcpdump \\
+    nmap \\
+    net-tools \\
+    iputils-ping \\
+    traceroute \\
+    dnsutils \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies (scapy, pyshark, etc.)
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source files
+COPY . .
+
+# Expose port
+EXPOSE 8000
+
+# Start network analyzer API
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+''',
+
+    FrameworkType.THREAT_INTEL: '''FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies for threat intelligence
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    curl \\
+    whois \\
+    dnsutils \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source files
+COPY . .
+
+# Expose port
+EXPOSE 8000
+
+# Start threat intel API
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+''',
+
+    FrameworkType.CTF_PLATFORM: '''FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install CTF-related tools
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    netcat-openbsd \\
+    curl \\
+    binutils \\
+    file \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source files
+COPY . .
+
+# Expose port
+EXPOSE 8000
+
+# Start CTF platform
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+''',
+
+    FrameworkType.SECURITY_API: '''FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install security utilities
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    nmap \\
+    curl \\
+    openssl \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source files
+COPY . .
+
+# Expose port
+EXPOSE 8000
+
+# Start security API
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+''',
+
+    # ===== BLOCKCHAIN =====
+    FrameworkType.SOLIDITY: '''FROM node:18-alpine
+
+WORKDIR /app
+
+# Install Hardhat and Ethereum development tools
+RUN npm install -g hardhat @nomicfoundation/hardhat-toolbox
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy source files
+COPY . .
+
+# Compile contracts
+RUN npx hardhat compile || true
+
+# Expose Hardhat node port
+EXPOSE 8545
+
+# Start Hardhat local node
+CMD ["npx", "hardhat", "node", "--hostname", "0.0.0.0"]
+''',
+
+    FrameworkType.RUST_SOLANA: '''FROM rust:1.70-slim
+
+WORKDIR /app
+
+# Install Solana CLI and Anchor
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    curl \\
+    build-essential \\
+    pkg-config \\
+    libssl-dev \\
+    libudev-dev \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Solana CLI
+RUN sh -c "$(curl -sSfL https://release.solana.com/v1.17.0/install)"
+ENV PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
+
+# Install Anchor
+RUN cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+RUN avm install latest
+RUN avm use latest
+
+# Copy source files
+COPY . .
+
+# Build the program
+RUN anchor build || cargo build --release || true
+
+# Expose Solana validator port
+EXPOSE 8899
+
+# Start Solana test validator
+CMD ["solana-test-validator"]
+''',
 }
 
 
@@ -521,6 +948,9 @@ DEFAULT_PORTS: Dict[FrameworkType, int] = {
     FrameworkType.PYTHON_DJANGO: 8000,
     FrameworkType.PYTHON_STREAMLIT: 8501,
     FrameworkType.PYTHON_ML: 8888,  # Jupyter notebook default
+    FrameworkType.PYTHON_NLP: 8000,  # FastAPI for NLP
+    FrameworkType.PYTHON_CV: 8000,  # FastAPI for Computer Vision
+    FrameworkType.PYTHON_LLM: 8000,  # FastAPI for LLM
 
     # Java
     FrameworkType.SPRING_BOOT: 8080,
@@ -543,6 +973,14 @@ DEFAULT_PORTS: Dict[FrameworkType, int] = {
     FrameworkType.FULLSTACK_REACT_SPRING: 3000,
     FrameworkType.FULLSTACK_REACT_EXPRESS: 3000,
     FrameworkType.FULLSTACK_REACT_FASTAPI: 3000,
+
+    # Cybersecurity
+    FrameworkType.SECURITY_DASHBOARD: 8000,
+    FrameworkType.VULNERABILITY_SCANNER: 8000,
+    FrameworkType.NETWORK_ANALYZER: 8000,
+    FrameworkType.THREAT_INTEL: 8000,
+    FrameworkType.CTF_PLATFORM: 8000,
+    FrameworkType.SECURITY_API: 8000,
 
     # Other
     FrameworkType.UNKNOWN: 3000,
@@ -1454,12 +1892,34 @@ class DockerExecutor:
             elif "flask" in python_deps:
                 return FrameworkType.PYTHON_FLASK
 
-            # AI/ML frameworks (check AFTER web frameworks)
+            # AI/ML frameworks (check AFTER web frameworks, most specific first)
+
+            # LLM/GenAI projects (LangChain, OpenAI, etc.)
+            llm_indicators = ['langchain', 'openai', 'anthropic', 'llama', 'llama-index',
+                             'chromadb', 'pinecone', 'weaviate', 'qdrant', 'faiss',
+                             'huggingface_hub', 'gradio', 'chainlit']
+            if any(lib in python_deps for lib in llm_indicators):
+                return FrameworkType.PYTHON_LLM
+
+            # Computer Vision projects (OpenCV, YOLO, etc.)
+            cv_indicators = ['opencv', 'cv2', 'opencv-python', 'torchvision', 'detectron2',
+                            'ultralytics', 'yolo', 'mmcv', 'mmdet', 'albumentations',
+                            'imgaug', 'mediapipe', 'dlib']
+            if any(lib in python_deps for lib in cv_indicators):
+                return FrameworkType.PYTHON_CV
+
+            # NLP projects (Transformers, spaCy, NLTK)
+            nlp_indicators = ['transformers', 'spacy', 'nltk', 'gensim', 'sentence-transformers',
+                             'tokenizers', 'datasets', 'huggingface', 'flair', 'stanza',
+                             'textblob', 'allennlp']
+            if any(lib in python_deps for lib in nlp_indicators):
+                return FrameworkType.PYTHON_NLP
+
+            # General ML projects (TensorFlow, PyTorch, Scikit-learn)
             ml_indicators = ['tensorflow', 'torch', 'pytorch', 'keras', 'scikit-learn',
-                            'sklearn', 'transformers', 'huggingface', 'opencv', 'cv2',
-                            'numpy', 'pandas', 'matplotlib', 'seaborn', 'jupyter',
-                            'notebook', 'xgboost', 'lightgbm', 'catboost', 'spacy',
-                            'nltk', 'gensim', 'openai', 'langchain', 'llama']
+                            'sklearn', 'xgboost', 'lightgbm', 'catboost', 'jupyter',
+                            'notebook', 'numpy', 'pandas', 'matplotlib', 'seaborn',
+                            'scipy', 'statsmodels', 'prophet', 'optuna']
             if any(lib in python_deps for lib in ml_indicators):
                 return FrameworkType.PYTHON_ML
 
@@ -2152,6 +2612,59 @@ class DockerExecutor:
                 commands = [
                     "pip install -r requirements.txt",
                     f"jupyter notebook --ip=0.0.0.0 --port={port} --no-browser --allow-root"
+                ]
+
+        elif framework == FrameworkType.PYTHON_NLP:
+            # NLP Python project: FastAPI or main script
+            has_main = (project_path / "main.py").exists() or (project_path / "app.py").exists()
+            main_file = "main.py" if (project_path / "main.py").exists() else "app.py"
+
+            commands = [
+                "pip install -r requirements.txt",
+                f"uvicorn {main_file.replace('.py', '')}:app --host 0.0.0.0 --port {port} --reload"
+            ]
+
+        elif framework == FrameworkType.PYTHON_CV:
+            # Computer Vision Python project: FastAPI or main script
+            has_main = (project_path / "main.py").exists() or (project_path / "app.py").exists()
+            main_file = "main.py" if (project_path / "main.py").exists() else "app.py"
+
+            commands = [
+                "pip install -r requirements.txt",
+                f"uvicorn {main_file.replace('.py', '')}:app --host 0.0.0.0 --port {port} --reload"
+            ]
+
+        elif framework == FrameworkType.PYTHON_LLM:
+            # LLM/GenAI Python project: FastAPI, Streamlit, or Gradio
+            has_main = (project_path / "main.py").exists()
+            has_app = (project_path / "app.py").exists()
+            has_streamlit = (project_path / "streamlit_app.py").exists()
+            has_gradio = (project_path / "gradio_app.py").exists()
+
+            if has_streamlit:
+                commands = [
+                    "pip install -r requirements.txt",
+                    f"streamlit run streamlit_app.py --server.port {port} --server.address 0.0.0.0"
+                ]
+            elif has_gradio:
+                commands = [
+                    "pip install -r requirements.txt",
+                    f"python gradio_app.py"
+                ]
+            elif has_main:
+                commands = [
+                    "pip install -r requirements.txt",
+                    f"uvicorn main:app --host 0.0.0.0 --port {port} --reload"
+                ]
+            elif has_app:
+                commands = [
+                    "pip install -r requirements.txt",
+                    f"uvicorn app:app --host 0.0.0.0 --port {port} --reload"
+                ]
+            else:
+                commands = [
+                    "pip install -r requirements.txt",
+                    f"uvicorn main:app --host 0.0.0.0 --port {port} --reload"
                 ]
 
         elif framework == FrameworkType.RUST:
@@ -4040,6 +4553,731 @@ networks:
 
 volumes:
   mongo_data:
+''',
+
+    # ============== CYBERSECURITY TEMPLATES ==============
+    "security_dashboard": '''version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/security_db
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=change-this-in-production
+    depends_on:
+      - db
+      - redis
+    networks:
+      - security_network
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:${BACKEND_PORT}
+    depends_on:
+      - backend
+    networks:
+      - security_network
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=security_db
+    volumes:
+      - security_db_data:/var/lib/postgresql/data
+    networks:
+      - security_network
+
+  redis:
+    image: redis:alpine
+    volumes:
+      - security_redis_data:/data
+    networks:
+      - security_network
+
+networks:
+  security_network:
+    driver: bridge
+
+volumes:
+  security_db_data:
+  security_redis_data:
+''',
+
+    "vulnerability_scanner": '''version: '3.8'
+
+services:
+  scanner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/scanner_db
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - db
+      - redis
+    networks:
+      - scanner_network
+    restart: unless-stopped
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=scanner_db
+    volumes:
+      - scanner_db_data:/var/lib/postgresql/data
+    networks:
+      - scanner_network
+
+  redis:
+    image: redis:alpine
+    networks:
+      - scanner_network
+
+networks:
+  scanner_network:
+    driver: bridge
+
+volumes:
+  scanner_db_data:
+''',
+
+    "network_analyzer": '''version: '3.8'
+
+services:
+  analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/network_db
+    depends_on:
+      - db
+    networks:
+      - analyzer_network
+    restart: unless-stopped
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    network_mode: host
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=network_db
+    volumes:
+      - analyzer_db_data:/var/lib/postgresql/data
+    networks:
+      - analyzer_network
+
+networks:
+  analyzer_network:
+    driver: bridge
+
+volumes:
+  analyzer_db_data:
+''',
+
+    "threat_intel": '''version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/threat_db
+      - REDIS_URL=redis://redis:6379
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+    depends_on:
+      - db
+      - redis
+      - elasticsearch
+    networks:
+      - threat_network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:${BACKEND_PORT}
+    depends_on:
+      - backend
+    networks:
+      - threat_network
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=threat_db
+    volumes:
+      - threat_db_data:/var/lib/postgresql/data
+    networks:
+      - threat_network
+
+  redis:
+    image: redis:alpine
+    networks:
+      - threat_network
+
+  elasticsearch:
+    image: elasticsearch:8.11.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - threat_es_data:/usr/share/elasticsearch/data
+    networks:
+      - threat_network
+
+networks:
+  threat_network:
+    driver: bridge
+
+volumes:
+  threat_db_data:
+  threat_es_data:
+''',
+
+    "ctf_platform": '''version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/ctf_db
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=change-this-in-production
+    depends_on:
+      - db
+      - redis
+    networks:
+      - ctf_network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:${BACKEND_PORT}
+    depends_on:
+      - backend
+    networks:
+      - ctf_network
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=ctf_db
+    volumes:
+      - ctf_db_data:/var/lib/postgresql/data
+    networks:
+      - ctf_network
+
+  redis:
+    image: redis:alpine
+    networks:
+      - ctf_network
+
+networks:
+  ctf_network:
+    driver: bridge
+
+volumes:
+  ctf_db_data:
+''',
+
+    "security_api": '''version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/security_api_db
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - db
+      - redis
+    networks:
+      - security_api_network
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=security_api_db
+    volumes:
+      - security_api_db_data:/var/lib/postgresql/data
+    networks:
+      - security_api_network
+
+  redis:
+    image: redis:alpine
+    networks:
+      - security_api_network
+
+networks:
+  security_api_network:
+    driver: bridge
+
+volumes:
+  security_api_db_data:
+''',
+
+    # ============== AI/ML TEMPLATES ==============
+    "ml_jupyter": '''version: '3.8'
+
+services:
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8888"
+    environment:
+      - JUPYTER_TOKEN=
+    volumes:
+      - .:/app
+      - ml_data:/app/data
+      - ml_models:/app/models
+    networks:
+      - ml_network
+    restart: unless-stopped
+
+networks:
+  ml_network:
+    driver: bridge
+
+volumes:
+  ml_data:
+  ml_models:
+''',
+
+    "ml_api": '''version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8000"
+    environment:
+      - MODEL_PATH=/app/models
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./models:/app/models
+    depends_on:
+      - redis
+    networks:
+      - ml_network
+    restart: unless-stopped
+
+  redis:
+    image: redis:alpine
+    networks:
+      - ml_network
+
+networks:
+  ml_network:
+    driver: bridge
+''',
+
+    "ml_fullstack": '''version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/ml_db
+      - REDIS_URL=redis://redis:6379
+      - MODEL_PATH=/app/models
+    volumes:
+      - ./backend/models:/app/models
+    depends_on:
+      - db
+      - redis
+    networks:
+      - ml_network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:${BACKEND_PORT}
+    depends_on:
+      - backend
+    networks:
+      - ml_network
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=ml_db
+    volumes:
+      - ml_db_data:/var/lib/postgresql/data
+    networks:
+      - ml_network
+
+  redis:
+    image: redis:alpine
+    networks:
+      - ml_network
+
+networks:
+  ml_network:
+    driver: bridge
+
+volumes:
+  ml_db_data:
+''',
+
+    "llm_chatbot": '''version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+    depends_on:
+      - redis
+      - chromadb
+    networks:
+      - llm_network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:${BACKEND_PORT}
+    depends_on:
+      - backend
+    networks:
+      - llm_network
+    restart: unless-stopped
+
+  redis:
+    image: redis:alpine
+    networks:
+      - llm_network
+
+  chromadb:
+    image: chromadb/chroma:latest
+    volumes:
+      - chroma_data:/chroma/chroma
+    networks:
+      - llm_network
+
+networks:
+  llm_network:
+    driver: bridge
+
+volumes:
+  chroma_data:
+''',
+
+    "cv_detection": '''version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8000"
+    environment:
+      - MODEL_PATH=/app/models
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./models:/app/models
+      - ./uploads:/app/uploads
+    depends_on:
+      - redis
+    networks:
+      - cv_network
+    restart: unless-stopped
+
+  redis:
+    image: redis:alpine
+    networks:
+      - cv_network
+
+networks:
+  cv_network:
+    driver: bridge
+''',
+
+    "nlp_api": '''version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8000"
+    environment:
+      - MODEL_PATH=/app/models
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./models:/app/models
+    depends_on:
+      - redis
+    networks:
+      - nlp_network
+    restart: unless-stopped
+
+  redis:
+    image: redis:alpine
+    networks:
+      - nlp_network
+
+networks:
+  nlp_network:
+    driver: bridge
+''',
+
+    # ============== BLOCKCHAIN TEMPLATES ==============
+    "hardhat_dapp": '''version: '3.8'
+
+services:
+  hardhat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8545"
+    volumes:
+      - .:/app
+      - hardhat_cache:/app/cache
+      - hardhat_artifacts:/app/artifacts
+    networks:
+      - blockchain_network
+    restart: unless-stopped
+    command: npx hardhat node --hostname 0.0.0.0
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    environment:
+      - NEXT_PUBLIC_RPC_URL=http://localhost:${BACKEND_PORT}
+      - NEXT_PUBLIC_CHAIN_ID=31337
+    depends_on:
+      - hardhat
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - blockchain_network
+    restart: unless-stopped
+
+networks:
+  blockchain_network:
+    driver: bridge
+
+volumes:
+  hardhat_cache:
+  hardhat_artifacts:
+''',
+
+    "solidity_fullstack": '''version: '3.8'
+
+services:
+  hardhat:
+    build:
+      context: ./contracts
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8545"
+    volumes:
+      - ./contracts:/app
+      - contracts_cache:/app/cache
+      - contracts_artifacts:/app/artifacts
+    networks:
+      - dapp_network
+    restart: unless-stopped
+    command: npx hardhat node --hostname 0.0.0.0
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    environment:
+      - RPC_URL=http://hardhat:8545
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/dapp_db
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - hardhat
+      - db
+      - redis
+    networks:
+      - dapp_network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    environment:
+      - NEXT_PUBLIC_RPC_URL=http://localhost:${BACKEND_PORT}
+      - NEXT_PUBLIC_API_URL=http://localhost:4000
+      - NEXT_PUBLIC_CHAIN_ID=31337
+    depends_on:
+      - backend
+    networks:
+      - dapp_network
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=dapp_db
+    volumes:
+      - dapp_db_data:/var/lib/postgresql/data
+    networks:
+      - dapp_network
+
+  redis:
+    image: redis:alpine
+    networks:
+      - dapp_network
+
+networks:
+  dapp_network:
+    driver: bridge
+
+volumes:
+  contracts_cache:
+  contracts_artifacts:
+  dapp_db_data:
+''',
+
+    "solana_dapp": '''version: '3.8'
+
+services:
+  solana:
+    build:
+      context: ./programs
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT}:8899"
+      - "8900:8900"
+    volumes:
+      - ./programs:/app
+      - solana_ledger:/app/.ledger
+    networks:
+      - solana_network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    environment:
+      - NEXT_PUBLIC_RPC_URL=http://localhost:${BACKEND_PORT}
+      - NEXT_PUBLIC_NETWORK=localnet
+    depends_on:
+      - solana
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - solana_network
+    restart: unless-stopped
+
+networks:
+  solana_network:
+    driver: bridge
+
+volumes:
+  solana_ledger:
 ''',
 }
 
