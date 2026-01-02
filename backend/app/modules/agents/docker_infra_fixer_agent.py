@@ -199,6 +199,12 @@ ERROR_PATTERNS: List[Tuple[str, InfraErrorType, str, Optional[str]]] = [
      InfraErrorType.COMPOSE_SERVICE,
      "Invalid service reference",
      None),
+
+    # Volume mount errors (file vs directory mismatch)
+    (r"error mounting.*not a directory|mount.*not a directory|Are you trying to mount a directory onto a file",
+     InfraErrorType.COMPOSE_VOLUME,
+     "Volume mount error - file/directory mismatch",
+     None),
 ]
 
 # Common Dockerfile fixes
@@ -283,6 +289,7 @@ class DockerInfraFixerAgent:
             InfraErrorType.COMPOSE_DEPENDS_ON,
             InfraErrorType.COMPOSE_PORT_MAPPING,
             InfraErrorType.VOLUME_PERMISSION,
+            InfraErrorType.COMPOSE_VOLUME,  # Volume mount errors (file/directory mismatch)
         }
         return error_type in fixable_types
 
@@ -379,6 +386,7 @@ class DockerInfraFixerAgent:
             InfraErrorType.COMPOSE_DEPENDS_ON: lambda sr: self._fix_compose_depends_on(project_path, sr),
             InfraErrorType.COMPOSE_PORT_MAPPING: lambda sr: self._fix_compose_ports(error_message, project_path, sr),
             InfraErrorType.VOLUME_PERMISSION: lambda sr: self._fix_volume_permissions(error_message, project_path, sr),
+            InfraErrorType.COMPOSE_VOLUME: lambda sr: self._fix_volume_mount(error_message, project_path, sr),
         }
 
         handler = fix_handlers.get(error.error_type)
@@ -679,6 +687,118 @@ class DockerInfraFixerAgent:
             )
         except Exception as e:
             return FixResult(success=False, message=f"Permission fix failed: {e}")
+
+    async def _fix_volume_mount(self, error_message: str, project_path: str, sandbox_runner: callable) -> FixResult:
+        """
+        Fix volume mount errors where file/directory type mismatches.
+
+        Common case: docker-compose mounts ./nginx/nginx.conf:/etc/nginx/nginx.conf
+        but ./nginx/nginx.conf is a directory or doesn't exist.
+        """
+        try:
+            # Extract the source path from error message
+            # Pattern: "mounting "/path/to/file" to rootfs"
+            path_match = re.search(r'mounting\s+"([^"]+)"', error_message)
+            if not path_match:
+                # Try another pattern: "mount src=/path/to/file"
+                path_match = re.search(r'mount src=([^,]+)', error_message)
+
+            if not path_match:
+                return FixResult(
+                    success=False,
+                    message="Could not extract file path from volume mount error"
+                )
+
+            source_path = path_match.group(1)
+            logger.info(f"[DockerInfraFixer] Volume mount issue with: {source_path}")
+
+            # Check if it's supposed to be a file (ends with a filename, not a directory)
+            is_supposed_to_be_file = '.' in source_path.split('/')[-1]  # Has extension
+
+            if is_supposed_to_be_file:
+                # Check if path exists as a directory (the problem)
+                exit_code, output = sandbox_runner(f'test -d "{source_path}" && echo "is_dir"', None, 10)
+                if exit_code == 0 and 'is_dir' in output:
+                    # It's a directory but should be a file - remove directory
+                    sandbox_runner(f'rm -rf "{source_path}"', None, 10)
+                    logger.info(f"[DockerInfraFixer] Removed directory that should be file: {source_path}")
+
+                # Create parent directory
+                parent_dir = '/'.join(source_path.split('/')[:-1])
+                sandbox_runner(f'mkdir -p "{parent_dir}"', None, 10)
+
+                # Create the file with appropriate default content
+                filename = source_path.split('/')[-1].lower()
+
+                if 'nginx.conf' in filename:
+                    # Create default nginx.conf for reverse proxy
+                    nginx_config = '''events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    upstream frontend {
+        server frontend:3000;
+    }
+
+    upstream backend {
+        server backend:8080;
+    }
+
+    server {
+        listen 80;
+        server_name localhost;
+
+        location / {
+            proxy_pass http://frontend;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection 'upgrade';
+            proxy_set_header Host $host;
+            proxy_cache_bypass $http_upgrade;
+        }
+
+        location /api {
+            proxy_pass http://backend;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+    }
+}
+'''
+                    # Write using base64 to handle special chars
+                    import base64
+                    encoded = base64.b64encode(nginx_config.encode()).decode()
+                    sandbox_runner(f'echo "{encoded}" | base64 -d > "{source_path}"', None, 10)
+                    return FixResult(
+                        success=True,
+                        message=f"Created nginx.conf at {source_path}",
+                        file_modified=source_path
+                    )
+                else:
+                    # Create empty file for other types
+                    sandbox_runner(f'touch "{source_path}"', None, 10)
+                    return FixResult(
+                        success=True,
+                        message=f"Created empty file at {source_path}",
+                        file_modified=source_path
+                    )
+            else:
+                # It's supposed to be a directory
+                sandbox_runner(f'mkdir -p "{source_path}"', None, 10)
+                return FixResult(
+                    success=True,
+                    message=f"Created directory at {source_path}"
+                )
+
+        except Exception as e:
+            logger.error(f"[DockerInfraFixer] Volume mount fix failed: {e}")
+            return FixResult(success=False, message=f"Volume mount fix failed: {e}")
 
     # ========================================================================
     # DOCKERFILE FIXES

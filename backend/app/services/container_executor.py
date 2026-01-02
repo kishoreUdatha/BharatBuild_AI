@@ -2774,6 +2774,9 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
 
         This is called when DockerInfraFixer cannot fix the issue (code/config problem).
 
+        PROTECTION: Backs up docker-compose.yml before AI fix and validates after.
+        If AI corrupts the file, backup is restored.
+
         Args:
             project_id: Project identifier
             project_path: Path to project directory
@@ -2783,6 +2786,7 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
             True if fix was applied, False otherwise
         """
         from pathlib import Path
+        import yaml
 
         try:
             logger.info(f"[ContainerExecutor] Attempting AI fix for compose error")
@@ -2796,11 +2800,22 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
             ]
 
             file_contents = {}
+            original_compose_content = None
+            original_compose_services = set()
 
-            # Read docker-compose.yml
+            # Read docker-compose.yml and create backup
             if compose_file.exists():
                 try:
-                    file_contents["docker-compose.yml"] = compose_file.read_text()
+                    original_compose_content = compose_file.read_text()
+                    file_contents["docker-compose.yml"] = original_compose_content
+                    # Parse to get original service names for validation
+                    try:
+                        original_data = yaml.safe_load(original_compose_content)
+                        if original_data and 'services' in original_data:
+                            original_compose_services = set(original_data['services'].keys())
+                            logger.info(f"[ContainerExecutor] Original compose has {len(original_compose_services)} services: {original_compose_services}")
+                    except yaml.YAMLError:
+                        pass
                 except Exception as e:
                     logger.warning(f"[ContainerExecutor] Could not read compose file: {e}")
 
@@ -2849,7 +2864,7 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
 
             applied_any = False
 
-            # Apply full file replacements
+            # Apply full file replacements with VALIDATION for docker-compose.yml
             for file_info in fixed_files:
                 file_path = file_info.get("path", "")
                 content = file_info.get("content", "")
@@ -2862,6 +2877,40 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
                     abs_path = Path(file_path)
                 else:
                     abs_path = Path(project_path) / file_path
+
+                # SAFETY VALIDATION for docker-compose.yml
+                if "docker-compose" in file_path.lower():
+                    try:
+                        new_data = yaml.safe_load(content)
+                        if not new_data:
+                            logger.warning(f"[ContainerExecutor] AI returned empty docker-compose.yml - REJECTING")
+                            continue
+                        if 'services' not in new_data:
+                            logger.warning(f"[ContainerExecutor] AI docker-compose.yml missing 'services' key - REJECTING")
+                            continue
+
+                        new_services = set(new_data.get('services', {}).keys())
+
+                        # Check for drastic service reduction (corruption indicator)
+                        if original_compose_services and len(new_services) < len(original_compose_services) * 0.5:
+                            logger.warning(
+                                f"[ContainerExecutor] AI reduced services from {len(original_compose_services)} to {len(new_services)} - REJECTING"
+                                f" (Original: {original_compose_services}, New: {new_services})"
+                            )
+                            continue
+
+                        # Check for suspiciously small file (likely corrupted)
+                        if len(content) < 100 and original_compose_content and len(original_compose_content) > 500:
+                            logger.warning(
+                                f"[ContainerExecutor] AI docker-compose.yml too small ({len(content)} bytes vs original {len(original_compose_content)}) - REJECTING"
+                            )
+                            continue
+
+                        logger.info(f"[ContainerExecutor] AI docker-compose.yml passed validation (services: {new_services})")
+
+                    except yaml.YAMLError as yaml_err:
+                        logger.warning(f"[ContainerExecutor] AI returned invalid YAML for docker-compose.yml - REJECTING: {yaml_err}")
+                        continue
 
                 try:
                     abs_path.parent.mkdir(parents=True, exist_ok=True)
