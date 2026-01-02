@@ -5375,6 +5375,15 @@ Stream code in chunks for real-time display.
                 )
 
                 if file_path and file_content and not already_patched:
+                    # PROTECTION: Block full docker-compose.yml replacement
+                    # AI has been known to corrupt docker-compose.yml by deleting services
+                    if "docker-compose" in file_path.lower():
+                        logger.warning(
+                            f"[Orchestrator] BLOCKING docker-compose.yml modification - "
+                            "AI must use patches, not full file replacement"
+                        )
+                        continue
+
                     # Update file (full replacement)
                     await file_manager.update_file(
                         project_id=context.project_id,
