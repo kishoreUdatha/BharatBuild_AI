@@ -978,7 +978,7 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
         # - npm install phase: 10 minutes (large projects need time)
         # - dev server phase: 3 minutes (should start quickly after install)
         MAX_INSTALL_DURATION_SECONDS = 600  # 10 minutes for npm install
-        MAX_DEV_SERVER_DURATION_SECONDS = 180  # 3 minutes for dev server
+        MAX_DEV_SERVER_DURATION_SECONDS = 600  # 10 minutes for dev server (increased for Java --no-cache rebuild)
         stream_start_time = asyncio.get_event_loop().time()
         install_complete = False  # Track when install finishes
 
