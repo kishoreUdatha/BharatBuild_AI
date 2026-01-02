@@ -298,41 +298,40 @@ class DockerInfraFixerAgent:
         project_path: str = None
     ) -> List[FixResult]:
         """
-        Run comprehensive pre-flight checks before docker-compose up.
+        Run SAFE pre-flight checks before docker-compose up.
+
+        IMPORTANT: We only do non-destructive cleanup operations here.
+        NO file modifications - those caused too many issues.
         """
         fixes: List[FixResult] = []
 
         if not project_name:
             project_name = f"bharatbuild_{project_id[:8]}"
 
-        logger.info(f"[DockerInfraFixer] Running pre-flight checks for {project_id}")
+        logger.info(f"[DockerInfraFixer] Running safe pre-flight checks for {project_id}")
 
-        # 1. Prune unused networks
+        # 1. Prune unused networks (safe - only removes unused)
         fix = await self._prune_networks(sandbox_runner)
         if fix and fix.success:
             fixes.append(fix)
 
-        # 2. Remove stale containers
+        # 2. Remove stale containers for THIS project only
         fix = await self._cleanup_stale_containers(project_name, sandbox_runner)
         if fix:
             fixes.append(fix)
 
-        # 3. Check Docker daemon
+        # 3. Check Docker daemon is running
         fix = await self._check_docker_daemon(sandbox_runner)
         if fix and not fix.success:
             fixes.append(fix)
 
-        # 4. Check disk space and prune if needed
+        # 4. Check disk space and prune if critically low (>90%)
         fix = await self._check_disk_space(sandbox_runner)
         if fix:
             fixes.append(fix)
 
-        # 5. Validate docker-compose.yml (fix depends_on and network issues)
-        # NOTE: We do NOT auto-fix Dockerfiles in preflight as it can corrupt them
-        # Dockerfile fixes are only applied on-error when we know what's wrong
-        if project_path:
-            compose_fixes = await self._validate_and_fix_compose(project_path, sandbox_runner)
-            fixes.extend(compose_fixes)
+        # NOTE: We do NOT modify any files (Dockerfile, docker-compose.yml) in preflight
+        # File modifications caused corruption issues. Fixes are only applied on-error.
 
         self.fix_history[project_id] = self.fix_history.get(project_id, []) + fixes
         return fixes
@@ -463,7 +462,7 @@ class DockerInfraFixerAgent:
             exit_code, output = sandbox_runner("df -h / | tail -1 | awk '{print $5}' | tr -d '%'", None, 10)
             if exit_code == 0 and output.strip().isdigit():
                 usage = int(output.strip())
-                if usage > 85:
+                if usage > 90:  # Only prune at critical level (90%+)
                     prune_code, prune_output = sandbox_runner("docker system prune -f", None, 60)
                     return FixResult(
                         success=prune_code == 0,
