@@ -1460,30 +1460,31 @@ class ContainerExecutor:
             logger.warning(f"[ContainerExecutor] Cleanup failed: {e}")
 
         # =================================================================
-        # GLOBAL CLEANUP - Remove ALL old containers (30 min lifetime)
+        # GLOBAL CLEANUP - Remove containers IDLE for 30+ minutes
         # =================================================================
-        # This ensures containers from other projects don't accumulate
+        # Only removes STOPPED/EXITED containers that have been idle for 30+ min
+        # Running containers are NOT touched (they may be in active use)
         try:
-            # Remove all bharatbuild containers older than 30 minutes
-            # Using docker's built-in filter for created time
             global_cleanup_cmd = (
-                "docker ps -a --format '{{.ID}} {{.Names}} {{.CreatedAt}}' | "
-                "grep -E 'bharatbuild_|ecs-agent' | "
-                "while read id name created; do "
-                "  created_ts=$(date -d \"$created\" +%s 2>/dev/null || echo 0); "
-                "  now_ts=$(date +%s); "
-                "  age_min=$(( (now_ts - created_ts) / 60 )); "
-                "  if [ $age_min -gt 30 ]; then "
-                "    docker rm -f $id 2>/dev/null || true; "
-                "    echo \"Removed $name (age: ${age_min}min)\"; "
+                "for container in $(docker ps -a --filter 'status=exited' --format '{{.ID}}' 2>/dev/null); do "
+                "  name=$(docker inspect --format '{{.Name}}' $container 2>/dev/null | sed 's/^\\///'); "
+                "  if echo \"$name\" | grep -qE 'bharatbuild_'; then "
+                "    finished=$(docker inspect --format '{{.State.FinishedAt}}' $container 2>/dev/null); "
+                "    finished_ts=$(date -d \"$finished\" +%s 2>/dev/null || echo 0); "
+                "    now_ts=$(date +%s); "
+                "    idle_min=$(( (now_ts - finished_ts) / 60 )); "
+                "    if [ $idle_min -gt 30 ]; then "
+                "      docker rm -f $container 2>/dev/null || true; "
+                "      echo \"Removed $name (idle: ${idle_min}min)\"; "
+                "    fi; "
                 "  fi; "
                 "done"
             )
             exit_code, cleanup_output = self._run_shell_on_sandbox(global_cleanup_cmd, working_dir=project_path, timeout=60)
             if cleanup_output and "Removed" in cleanup_output:
                 removed_count = cleanup_output.count("Removed")
-                yield f"  🗑️ Cleaned up {removed_count} old container(s)\n"
-                logger.info(f"[ContainerExecutor] Global cleanup removed old containers: {cleanup_output}")
+                yield f"  🗑️ Cleaned up {removed_count} idle container(s)\n"
+                logger.info(f"[ContainerExecutor] Removed idle containers: {cleanup_output}")
         except Exception as e:
             logger.warning(f"[ContainerExecutor] Global cleanup failed: {e}")
 
