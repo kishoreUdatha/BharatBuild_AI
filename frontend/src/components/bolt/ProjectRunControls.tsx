@@ -1666,6 +1666,15 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
           isRetryingRef.current = false
           // Don't change status - it's already 'running'
         } else if (fixAttemptsRef.current >= MAX_AUTO_FIX_ATTEMPTS) {
+          // CRITICAL: Final check - if server actually started (preview URL set), don't show error
+          // This catches cases where server started but errors were detected earlier in stream
+          if (previewUrl || serverStartedRef.current) {
+            console.log('[AutoFix] Server is running (previewUrl or ref set) - suppressing MAX ATTEMPTS message')
+            resetFixState()
+            isRetryingRef.current = false
+            // Don't change status - it's already 'running'
+            return
+          }
           onOutput?.('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
           onOutput?.(`🛑 MAX ATTEMPTS (${MAX_AUTO_FIX_ATTEMPTS}) REACHED`)
           onOutput?.('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
