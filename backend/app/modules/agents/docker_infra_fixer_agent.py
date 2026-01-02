@@ -327,12 +327,10 @@ class DockerInfraFixerAgent:
         if fix:
             fixes.append(fix)
 
-        # 5. Validate and fix Dockerfile (if project_path provided)
+        # 5. Validate docker-compose.yml (fix depends_on and network issues)
+        # NOTE: We do NOT auto-fix Dockerfiles in preflight as it can corrupt them
+        # Dockerfile fixes are only applied on-error when we know what's wrong
         if project_path:
-            dockerfile_fixes = await self._validate_and_fix_dockerfile(project_path, sandbox_runner)
-            fixes.extend(dockerfile_fixes)
-
-            # 6. Validate and fix docker-compose.yml
             compose_fixes = await self._validate_and_fix_compose(project_path, sandbox_runner)
             fixes.extend(compose_fixes)
 
@@ -913,7 +911,10 @@ class DockerInfraFixerAgent:
             return None
 
     def _write_file_to_sandbox(self, file_path: str, content: str, sandbox_runner: callable) -> bool:
-        """Write a file to the sandbox (works for both local and remote)."""
+        """Write a file to the sandbox (works for both local and remote).
+
+        Uses a chunked write approach with heredoc for reliability.
+        """
         try:
             import base64
 
@@ -921,22 +922,27 @@ class DockerInfraFixerAgent:
             backup_path = f"{file_path}.bak"
             sandbox_runner(f'cp "{file_path}" "{backup_path}" 2>/dev/null || true', None, 10)
 
-            # Write using base64 encoding to avoid shell escaping issues
+            # Encode content to base64
             encoded = base64.b64encode(content.encode()).decode()
 
-            # Use printf instead of echo for more reliable handling
-            # Write encoded content to temp file first, then decode
+            # Write base64 in chunks to avoid command line length limits
             temp_file = f"{file_path}.b64tmp"
+            chunk_size = 50000  # Safe chunk size for shell commands
 
-            # Write base64 to temp file (safer for long content)
-            write_cmd = f"printf '%s' '{encoded}' > '{temp_file}'"
-            exit_code, output = sandbox_runner(write_cmd, None, 30)
+            # Clear/create temp file
+            sandbox_runner(f'> "{temp_file}"', None, 10)
 
-            if exit_code != 0:
-                logger.warning(f"[DockerInfraFixer] Failed to write temp file: {output}")
-                # Restore backup
-                sandbox_runner(f'mv "{backup_path}" "{file_path}" 2>/dev/null || true', None, 10)
-                return False
+            # Write in chunks
+            for i in range(0, len(encoded), chunk_size):
+                chunk = encoded[i:i + chunk_size]
+                # Use echo with double quotes - base64 only has A-Za-z0-9+/= which are shell-safe
+                write_cmd = f'echo -n "{chunk}" >> "{temp_file}"'
+                exit_code, output = sandbox_runner(write_cmd, None, 30)
+                if exit_code != 0:
+                    logger.warning(f"[DockerInfraFixer] Failed to write chunk {i//chunk_size}: {output}")
+                    sandbox_runner(f'mv "{backup_path}" "{file_path}" 2>/dev/null || true', None, 10)
+                    sandbox_runner(f'rm -f "{temp_file}"', None, 10)
+                    return False
 
             # Decode temp file to final file
             decode_cmd = f'base64 -d "{temp_file}" > "{file_path}" && rm -f "{temp_file}"'
@@ -944,7 +950,6 @@ class DockerInfraFixerAgent:
 
             if exit_code != 0:
                 logger.warning(f"[DockerInfraFixer] Failed to decode file: {output}")
-                # Restore backup
                 sandbox_runner(f'mv "{backup_path}" "{file_path}" 2>/dev/null || true', None, 10)
                 return False
 
@@ -952,11 +957,10 @@ class DockerInfraFixerAgent:
             verify_code, verify_output = sandbox_runner(f'test -s "{file_path}" && head -1 "{file_path}"', None, 10)
             if verify_code != 0:
                 logger.warning(f"[DockerInfraFixer] File verification failed: {file_path}")
-                # Restore backup
                 sandbox_runner(f'mv "{backup_path}" "{file_path}" 2>/dev/null || true', None, 10)
                 return False
 
-            # Clean up backup
+            # Clean up backup on success
             sandbox_runner(f'rm -f "{backup_path}"', None, 10)
 
             logger.info(f"[DockerInfraFixer] Successfully wrote {file_path}")
@@ -964,6 +968,8 @@ class DockerInfraFixerAgent:
 
         except Exception as e:
             logger.warning(f"[DockerInfraFixer] Failed to write {file_path}: {e}")
+            # Try to restore backup
+            sandbox_runner(f'mv "{backup_path}" "{file_path}" 2>/dev/null || true', None, 10)
             return False
 
     def _file_exists_in_sandbox(self, file_path: str, sandbox_runner: callable) -> bool:
