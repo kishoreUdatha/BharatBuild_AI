@@ -2091,8 +2091,8 @@ class ContainerExecutor:
                         down_cmd = f"docker-compose -p {project_name} -f {compose_file} down --remove-orphans"
                         self._run_shell_on_sandbox(down_cmd, working_dir=project_path, timeout=30)
 
-                        # Rebuild and start (use legacy build mode)
-                        up_cmd = f"COMPOSE_DOCKER_CLI_BUILD=0 DOCKER_BUILDKIT=0 docker-compose -p {project_name} -f {compose_file} up -d --build"
+                        # Rebuild and start (use legacy build mode, force no-cache to pick up new files)
+                        up_cmd = f"COMPOSE_DOCKER_CLI_BUILD=0 DOCKER_BUILDKIT=0 docker-compose -p {project_name} -f {compose_file} build --no-cache && COMPOSE_DOCKER_CLI_BUILD=0 DOCKER_BUILDKIT=0 docker-compose -p {project_name} -f {compose_file} up -d"
                         exit_code, output = self._run_shell_on_sandbox(up_cmd, working_dir=project_path, timeout=300)
 
                         if exit_code == 0:
