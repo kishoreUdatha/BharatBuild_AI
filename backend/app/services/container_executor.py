@@ -1640,10 +1640,54 @@ class ContainerExecutor:
             logger.warning(f"[ContainerExecutor] Dynamic port allocation failed: {e}")
             yield f"  ⚠️ Dynamic port allocation skipped: {e}\n"
 
+        # =================================================================
+        # PREFLIGHT PORT CLEANUP - Free common ports before docker-compose
+        # =================================================================
+        # This prevents port conflicts by proactively killing old processes
+        yield f"  🔌 Cleaning up potentially blocked ports...\n"
+        try:
+            # Get ports from docker-compose.yml that will be used
+            ports_to_check = set()
+            # Re-read compose content to ensure we have the latest (after any normalization)
+            preflight_compose = self._read_file_from_sandbox(compose_file) if compose_file else None
+            if preflight_compose:
+                import yaml
+                compose_data = yaml.safe_load(preflight_compose)
+                if compose_data and 'services' in compose_data:
+                    for service_name, service_config in compose_data.get('services', {}).items():
+                        if isinstance(service_config, dict) and 'ports' in service_config:
+                            for port_mapping in service_config.get('ports', []):
+                                # Extract host port from "host:container" or just "port"
+                                port_str = str(port_mapping).split(':')[0]
+                                if port_str.isdigit():
+                                    ports_to_check.add(port_str)
+
+            # Add common ports that are frequently blocked
+            common_ports = {'3000', '3001', '5173', '5174', '8080', '8081', '5432', '6379'}
+            ports_to_check.update(common_ports)
+
+            freed_any = False
+            for port in ports_to_check:
+                # Check if port is in use and kill if needed
+                check_code, check_output = self._run_shell_on_sandbox(
+                    f"fuser {port}/tcp 2>/dev/null && echo 'IN_USE' || true",
+                    working_dir=project_path, timeout=5
+                )
+                if 'IN_USE' in check_output:
+                    self._run_shell_on_sandbox(f"fuser -k {port}/tcp 2>/dev/null || true", working_dir=project_path, timeout=10)
+                    self._run_shell_on_sandbox(f"docker ps --filter 'publish={port}' -q | xargs -r docker rm -f 2>/dev/null || true", working_dir=project_path, timeout=10)
+                    logger.info(f"[ContainerExecutor] Preflight: Freed port {port}")
+                    freed_any = True
+
+            if freed_any:
+                yield f"  ✅ Freed blocked ports\n"
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Preflight port cleanup failed: {e}")
+
         # Run docker-compose up
         yield f"  $ docker-compose up -d\n"
 
-        max_compose_attempts = 2  # Allow one retry after infra fix
+        max_compose_attempts = 4  # Allow multiple retries for cascading fixes (port conflicts, etc.)
         compose_attempt = 0
 
         while compose_attempt < max_compose_attempts:

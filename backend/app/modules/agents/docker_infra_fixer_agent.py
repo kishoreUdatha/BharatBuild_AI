@@ -573,32 +573,46 @@ class DockerInfraFixerAgent:
             return FixResult(success=False, message=f"Network fix failed: {e}")
 
     async def _fix_port_conflict(self, error_message: str, sandbox_runner: callable) -> FixResult:
-        """Fix port conflict by killing processes and containers."""
-        # Try multiple patterns to extract port number
+        """Fix port conflict by killing processes and containers.
+
+        This method finds ALL conflicting ports in the error message and frees them all.
+        """
+        # Find ALL ports mentioned in the error - not just the first one
+        ports_found = set()
+
         # Pattern 1: "0.0.0.0:5432" or "127.0.0.1:8080" - IP:PORT format
-        port_match = re.search(r'\d+\.\d+\.\d+\.\d+:(\d+)', error_message)
-        if not port_match:
-            # Pattern 2: "port 5432" or "port: 5432"
-            port_match = re.search(r'port[:\s]+(\d+)', error_message, re.IGNORECASE)
-        if not port_match:
-            # Pattern 3: "Bind for ... :5432 failed"
-            port_match = re.search(r':(\d{2,5})\s+failed', error_message, re.IGNORECASE)
-        if not port_match:
+        for match in re.finditer(r'\d+\.\d+\.\d+\.\d+:(\d+)', error_message):
+            ports_found.add(match.group(1))
+
+        # Pattern 2: "port 5432" or "port: 5432"
+        for match in re.finditer(r'port[:\s]+(\d+)', error_message, re.IGNORECASE):
+            ports_found.add(match.group(1))
+
+        # Pattern 3: Common service ports that might be blocked
+        common_ports = ['3000', '3001', '5173', '5174', '8080', '8081', '5432', '5433', '6379', '27017', '3306']
+        for port in common_ports:
+            if port in error_message:
+                ports_found.add(port)
+
+        if not ports_found:
             return FixResult(success=False, message="Could not determine conflicting port")
 
-        port = port_match.group(1)
-
+        freed_ports = []
         try:
-            # Kill process using port
-            sandbox_runner(f"fuser -k {port}/tcp 2>/dev/null || true", None, 10)
+            for port in ports_found:
+                # Kill process using port
+                sandbox_runner(f"fuser -k {port}/tcp 2>/dev/null || true", None, 10)
 
-            # Remove containers using port
-            sandbox_runner(f"docker ps --filter 'publish={port}' -q | xargs -r docker rm -f", None, 30)
+                # Remove containers using port
+                sandbox_runner(f"docker ps --filter 'publish={port}' -q | xargs -r docker rm -f", None, 30)
+
+                freed_ports.append(port)
+                logger.info(f"[DockerInfraFixer] Freed port {port}")
 
             return FixResult(
                 success=True,
-                message=f"Freed port {port}",
-                command_executed=f"kill processes and containers on port {port}"
+                message=f"Freed port(s): {', '.join(freed_ports)}",
+                command_executed=f"kill processes and containers on ports: {', '.join(freed_ports)}"
             )
         except Exception as e:
             return FixResult(success=False, message=f"Port fix failed: {e}")
