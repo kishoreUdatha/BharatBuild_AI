@@ -1540,7 +1540,8 @@ class ContainerExecutor:
                     yield f"\n❌ Docker Compose failed with exit code {exit_code}\n"
                     return
 
-                yield f"\n  ✅ Docker Compose started successfully\n"
+                # Build/up command succeeded, but we need to verify containers are actually running
+                yield f"\n  📦 Docker Compose build completed, verifying services...\n"
                 break  # Success, exit loop
 
             except Exception as e:
@@ -1551,7 +1552,64 @@ class ContainerExecutor:
                 return
 
         # Wait for services to be ready and verify they stay running
-        yield f"\n  ⏳ Waiting for services to be ready...\n"
+        yield f"\n  ⏳ Verifying services are healthy...\n"
+
+        # Simple command - just list all containers, filter in Python
+        check_cmd = "docker ps -a --format 'table {{.Names}}\t{{.Status}}'"
+
+        # Quick initial check (5s) to catch immediate startup failures
+        yield f"  ⏳ Initial startup check (5s)...\n"
+        await asyncio.sleep(5)
+
+        exit_code, ps_output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
+        project_lines = [line for line in (ps_output.strip().split('\n') if ps_output else [])
+                        if project_name.lower() in line.lower()]
+
+        if not project_lines:
+            yield f"  ⚠️ No containers started for project {project_name}\n"
+            yield f"  ⚠️ Checking docker-compose logs...\n"
+            # Get docker-compose logs for debugging
+            logs_cmd = f"docker-compose -p {project_name} -f {compose_file} logs --tail=50"
+            _, compose_logs = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
+            if compose_logs:
+                for line in compose_logs.split('\n')[-20:]:
+                    if line.strip():
+                        yield f"     {line}\n"
+            yield f"\n❌ Docker Compose failed - no containers running\n"
+            return
+        else:
+            # Show initial status
+            yield f"  📦 Initial container status:\n"
+            running_count = 0
+            exited_count = 0
+            for line in project_lines:
+                parts = line.split()
+                if parts:
+                    container_name = parts[0]
+                    service_name = container_name.replace(f"{project_name}_", "").rsplit("_", 1)[0]
+                    if "Up" in line:
+                        yield f"     ✅ {service_name}: Running\n"
+                        running_count += 1
+                    elif "Exit" in line:
+                        yield f"     ❌ {service_name}: Exited\n"
+                        exited_count += 1
+                    else:
+                        yield f"     ⏳ {service_name}: Starting...\n"
+
+            # If all containers already exited, fail fast
+            if exited_count > 0 and running_count == 0:
+                yield f"\n  ❌ All containers exited immediately after start\n"
+                # Get logs from exited containers
+                for line in project_lines:
+                    if "Exit" in line:
+                        container_name = line.split()[0]
+                        logs_cmd = f"docker logs {container_name} 2>&1 | tail -30"
+                        _, container_logs = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
+                        if container_logs:
+                            yield f"\n  📋 Logs from {container_name}:\n"
+                            for log_line in container_logs.split('\n')[-15:]:
+                                if log_line.strip():
+                                    yield f"     {log_line}\n"
 
         # Health check with auto-fix
         # Java/Maven projects need time to compile - check multiple times over 60s
@@ -1559,17 +1617,15 @@ class ContainerExecutor:
         fix_attempt = 0
         containers_healthy = False
 
-        # Check schedule: 20s, 40s, 60s (3 checks before declaring healthy)
-        check_intervals = [20, 20, 20]  # Total: 60 seconds of monitoring
-        # Simple command - just list all containers, filter in Python
-        check_cmd = "docker ps -a --format 'table {{.Names}}\t{{.Status}}'"
+        # Check schedule: 15s, 15s, 15s (3 checks over 45 seconds)
+        check_intervals = [15, 15, 15]  # Total: 45 seconds of stability monitoring
 
         while fix_attempt < max_fix_attempts and not containers_healthy:
             # Do multiple stability checks before declaring healthy
             failure_detected = False
 
             for check_num, wait_time in enumerate(check_intervals, 1):
-                yield f"\n  ⏳ Health check {check_num}/3: waiting {wait_time}s...\n"
+                yield f"\n  ⏳ Stability check {check_num}/3: waiting {wait_time}s...\n"
                 await asyncio.sleep(wait_time)
 
                 # Check container status after each wait
@@ -1635,7 +1691,7 @@ class ContainerExecutor:
             # If all 3 checks passed without failure
             if not failure_detected:
                 containers_healthy = True
-                yield f"\n  ✅ All containers stable after 60s monitoring\n"
+                yield f"\n  ✅ All services running and healthy!\n"
                 break
 
             # Failure detected - trigger auto-fix
