@@ -625,3 +625,284 @@ async def cleanup_expired_sandboxes(
     except Exception as e:
         logger.error(f"Failed to cleanup sandboxes: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ec2-containers")
+async def list_ec2_sandbox_containers(
+    admin: User = Depends(get_current_admin)
+):
+    """
+    List all containers running on EC2 sandbox with health and idle status.
+    This queries the remote EC2 Docker directly for real-time container info.
+    """
+    try:
+        from app.services.container_executor import container_executor
+        from datetime import datetime
+
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+        if not sandbox_docker_host:
+            return {
+                "mode": "local",
+                "message": "No EC2 sandbox configured (SANDBOX_DOCKER_HOST not set)",
+                "containers": []
+            }
+
+        # Use container_executor's docker client (connected to EC2)
+        if not container_executor.docker_client:
+            await container_executor.initialize()
+
+        if not container_executor.docker_client:
+            raise HTTPException(status_code=503, detail="Cannot connect to EC2 Docker")
+
+        # Get all containers from EC2
+        all_containers = container_executor.docker_client.containers.list(all=True)
+
+        containers_list = []
+        now = datetime.utcnow()
+        idle_timeout_minutes = 30
+
+        for container in all_containers:
+            try:
+                # Get container details
+                attrs = container.attrs
+                state = attrs.get("State", {})
+                labels = attrs.get("Config", {}).get("Labels", {})
+
+                # Parse timestamps
+                created_str = attrs.get("Created", "")
+                started_str = state.get("StartedAt", "")
+                finished_str = state.get("FinishedAt", "")
+
+                created_at = None
+                started_at = None
+                finished_at = None
+                idle_minutes = 0
+
+                if created_str:
+                    try:
+                        created_at = datetime.fromisoformat(created_str.replace("Z", "+00:00").split(".")[0])
+                        created_at = created_at.replace(tzinfo=None)
+                    except:
+                        pass
+
+                if started_str and started_str != "0001-01-01T00:00:00Z":
+                    try:
+                        started_at = datetime.fromisoformat(started_str.replace("Z", "+00:00").split(".")[0])
+                        started_at = started_at.replace(tzinfo=None)
+                    except:
+                        pass
+
+                if finished_str and finished_str != "0001-01-01T00:00:00Z":
+                    try:
+                        finished_at = datetime.fromisoformat(finished_str.replace("Z", "+00:00").split(".")[0])
+                        finished_at = finished_at.replace(tzinfo=None)
+                    except:
+                        pass
+
+                # Calculate idle time
+                project_id = labels.get("project_id", "unknown")
+                is_bharatbuild = "bharatbuild" in container.name.lower()
+
+                if container.status == "running":
+                    # Check if tracked in memory
+                    if project_id in container_executor.active_containers:
+                        last_activity = container_executor.active_containers[project_id].get("last_activity")
+                        if last_activity:
+                            idle_minutes = (now - last_activity).total_seconds() / 60
+                    elif started_at:
+                        idle_minutes = (now - started_at).total_seconds() / 60
+                elif finished_at:
+                    idle_minutes = (now - finished_at).total_seconds() / 60
+
+                # Determine health status
+                health_status = "unknown"
+                if container.status == "running":
+                    if idle_minutes > idle_timeout_minutes:
+                        health_status = "idle"
+                    else:
+                        health_status = "active"
+                elif container.status == "exited":
+                    exit_code = state.get("ExitCode", -1)
+                    if exit_code == 0:
+                        health_status = "stopped"
+                    else:
+                        health_status = "crashed"
+                elif container.status == "restarting":
+                    health_status = "restarting"
+
+                # Get ports
+                ports = []
+                for port_config in attrs.get("NetworkSettings", {}).get("Ports", {}).values():
+                    if port_config:
+                        for p in port_config:
+                            if p.get("HostPort"):
+                                ports.append(int(p["HostPort"]))
+
+                containers_list.append({
+                    "id": container.short_id,
+                    "name": container.name,
+                    "status": container.status,
+                    "health_status": health_status,
+                    "project_id": project_id,
+                    "is_bharatbuild": is_bharatbuild,
+                    "image": container.image.tags[0] if container.image.tags else str(container.image.id)[:12],
+                    "created_at": created_at.isoformat() if created_at else None,
+                    "started_at": started_at.isoformat() if started_at else None,
+                    "finished_at": finished_at.isoformat() if finished_at else None,
+                    "idle_minutes": round(idle_minutes, 1),
+                    "will_cleanup": idle_minutes > idle_timeout_minutes,
+                    "ports": ports,
+                    "exit_code": state.get("ExitCode") if container.status == "exited" else None,
+                })
+
+            except Exception as e:
+                logger.warning(f"Error getting container info for {container.name}: {e}")
+                continue
+
+        # Sort by idle time (most idle first)
+        containers_list.sort(key=lambda x: x["idle_minutes"], reverse=True)
+
+        # Summary stats
+        summary = {
+            "total": len(containers_list),
+            "running": len([c for c in containers_list if c["status"] == "running"]),
+            "stopped": len([c for c in containers_list if c["status"] == "exited"]),
+            "restarting": len([c for c in containers_list if c["status"] == "restarting"]),
+            "bharatbuild": len([c for c in containers_list if c["is_bharatbuild"]]),
+            "idle_30min": len([c for c in containers_list if c["will_cleanup"]]),
+            "active": len([c for c in containers_list if c["health_status"] == "active"]),
+        }
+
+        return {
+            "mode": "ec2",
+            "sandbox_host": sandbox_docker_host,
+            "checked_at": now.isoformat(),
+            "idle_timeout_minutes": idle_timeout_minutes,
+            "summary": summary,
+            "containers": containers_list
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list EC2 containers: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ec2-containers/{container_id}/stop")
+async def stop_ec2_container(
+    container_id: str,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Stop a specific container on EC2 sandbox."""
+    try:
+        from app.services.container_executor import container_executor
+
+        if not container_executor.docker_client:
+            await container_executor.initialize()
+
+        container = container_executor.docker_client.containers.get(container_id)
+        container_name = container.name
+
+        if container.status == "running":
+            container.stop(timeout=10)
+
+        # Log audit
+        from app.models.audit_log import AuditLog
+        audit_log = AuditLog(
+            admin_id=admin.id,
+            action="ec2_container_stop",
+            target_type="container",
+            target_id=container_id,
+            details={"container_name": container_name}
+        )
+        db.add(audit_log)
+        await db.commit()
+
+        return {"success": True, "container_id": container_id, "action": "stopped"}
+
+    except Exception as e:
+        logger.error(f"Failed to stop EC2 container {container_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ec2-containers/{container_id}/remove")
+async def remove_ec2_container(
+    container_id: str,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Remove a specific container from EC2 sandbox."""
+    try:
+        from app.services.container_executor import container_executor
+
+        if not container_executor.docker_client:
+            await container_executor.initialize()
+
+        container = container_executor.docker_client.containers.get(container_id)
+        container_name = container.name
+        project_id = container.labels.get("project_id", "unknown")
+
+        # Stop if running
+        if container.status == "running":
+            container.stop(timeout=5)
+
+        # Remove
+        container.remove(force=True)
+
+        # Remove from active containers if tracked
+        if project_id in container_executor.active_containers:
+            del container_executor.active_containers[project_id]
+
+        # Log audit
+        from app.models.audit_log import AuditLog
+        audit_log = AuditLog(
+            admin_id=admin.id,
+            action="ec2_container_remove",
+            target_type="container",
+            target_id=container_id,
+            details={"container_name": container_name, "project_id": project_id}
+        )
+        db.add(audit_log)
+        await db.commit()
+
+        return {"success": True, "container_id": container_id, "action": "removed"}
+
+    except Exception as e:
+        logger.error(f"Failed to remove EC2 container {container_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ec2-containers/cleanup-idle")
+async def cleanup_idle_ec2_containers(
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Manually trigger cleanup of idle containers (>30 min) on EC2 sandbox."""
+    try:
+        from app.services.container_executor import container_executor
+
+        if not container_executor.docker_client:
+            await container_executor.initialize()
+
+        # Trigger the cleanup
+        await container_executor._cleanup_orphaned_containers()
+
+        # Log audit
+        from app.models.audit_log import AuditLog
+        audit_log = AuditLog(
+            admin_id=admin.id,
+            action="ec2_containers_cleanup",
+            target_type="container",
+            target_id=None,
+            details={"triggered_by": "admin_manual"}
+        )
+        db.add(audit_log)
+        await db.commit()
+
+        return {"success": True, "message": "Idle container cleanup triggered"}
+
+    except Exception as e:
+        logger.error(f"Failed to cleanup EC2 containers: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
