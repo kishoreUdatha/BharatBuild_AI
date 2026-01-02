@@ -1459,6 +1459,34 @@ class ContainerExecutor:
         except Exception as e:
             logger.warning(f"[ContainerExecutor] Cleanup failed: {e}")
 
+        # =================================================================
+        # GLOBAL CLEANUP - Remove ALL old containers (30 min lifetime)
+        # =================================================================
+        # This ensures containers from other projects don't accumulate
+        try:
+            # Remove all bharatbuild containers older than 30 minutes
+            # Using docker's built-in filter for created time
+            global_cleanup_cmd = (
+                "docker ps -a --format '{{.ID}} {{.Names}} {{.CreatedAt}}' | "
+                "grep -E 'bharatbuild_|ecs-agent' | "
+                "while read id name created; do "
+                "  created_ts=$(date -d \"$created\" +%s 2>/dev/null || echo 0); "
+                "  now_ts=$(date +%s); "
+                "  age_min=$(( (now_ts - created_ts) / 60 )); "
+                "  if [ $age_min -gt 30 ]; then "
+                "    docker rm -f $id 2>/dev/null || true; "
+                "    echo \"Removed $name (age: ${age_min}min)\"; "
+                "  fi; "
+                "done"
+            )
+            exit_code, cleanup_output = self._run_shell_on_sandbox(global_cleanup_cmd, working_dir=project_path, timeout=60)
+            if cleanup_output and "Removed" in cleanup_output:
+                removed_count = cleanup_output.count("Removed")
+                yield f"  🗑️ Cleaned up {removed_count} old container(s)\n"
+                logger.info(f"[ContainerExecutor] Global cleanup removed old containers: {cleanup_output}")
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Global cleanup failed: {e}")
+
         # Run Docker Infrastructure Fixer pre-flight checks
         # This prevents "Pool overlaps", port conflicts, and other infra issues
         # Also validates and fixes Dockerfile and docker-compose.yml
