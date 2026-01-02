@@ -1479,6 +1479,17 @@ class ContainerExecutor:
             logger.warning(f"[ContainerExecutor] Pre-flight check failed: {e}")
             yield f"  ⚠️ Pre-flight check skipped: {e}\n"
 
+        # Verify Dockerfiles exist before running docker-compose
+        yield f"  🔍 Verifying build files...\n"
+        dockerfile_paths = ["Dockerfile", "frontend/Dockerfile", "backend/Dockerfile"]
+        for df_path in dockerfile_paths:
+            check_cmd = f'test -f "{df_path}" && head -1 "{df_path}"'
+            exit_code, output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=10)
+            if exit_code == 0:
+                yield f"     ✅ {df_path}: exists\n"
+            else:
+                yield f"     ⚠️ {df_path}: not found\n"
+
         # Run docker-compose up
         yield f"  $ docker-compose up -d\n"
 
