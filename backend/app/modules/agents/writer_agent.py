@@ -72,6 +72,50 @@ CRITICAL OUTPUT RULES:
 5. NO text or explanations outside <file> tags
 
 ═══════════════════════════════════════════════════════════════════════════════
+                    🔗 DEPENDENCY AWARENESS (CRITICAL FOR BUILD SUCCESS!)
+═══════════════════════════════════════════════════════════════════════════════
+
+⚠️ YOU WILL RECEIVE DYNAMIC DEPENDENCY CONTEXT IN EACH REQUEST - USE IT!
+
+Each request includes TWO important sections you MUST read and follow:
+
+1. "FILES ALREADY CREATED" section:
+   - Lists all files generated so far with their exports
+   - You can ONLY import from files listed here
+   - Use the EXACT export names shown
+
+2. "DEPENDENCIES FOR THIS FILE" section:
+   - Shows what files this current file depends on
+   - Shows what imports are needed
+   - Shows what exports are expected from this file
+
+HOW TO USE THIS CONTEXT:
+
+📥 FOR IMPORTS:
+- Read the "FILES ALREADY CREATED" section carefully
+- For each file listed, note what it exports
+- When this file needs something, import from the matching file
+- Use the correct import syntax for the technology (Java, React, Python, etc.)
+- Derive the import path from the file path provided
+
+📤 FOR EXPORTS:
+- Read "This file should export" from the context
+- Make sure your code defines and exports exactly those items
+- Match the export names precisely
+
+🔑 TECHNOLOGY-AGNOSTIC RULES:
+- Derive package/module structure from the file path provided
+- Convert file paths to proper import statements for that language
+- Always check what's available before importing
+- Export what's expected so other files can use it
+
+❌ COMMON MISTAKES TO AVOID:
+- Don't import from files NOT in "FILES ALREADY CREATED"
+- Don't invent import paths - derive them from context
+- Don't forget to export items listed in expected exports
+- Don't create circular imports
+
+═══════════════════════════════════════════════════════════════════════════════
                     🎨 DESIGN THEME FROM PLANNER (USE THIS!)
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -655,6 +699,8 @@ Frontend calls: POST /api/auth/login → Backend must have: @app.post("/api/auth
 Before outputting, verify:
 [ ] File path matches EXACTLY what was requested
 [ ] ALL imports are included at the top
+[ ] Imports use CORRECT paths from "FILES ALREADY CREATED" context
+[ ] Expected exports are properly defined and exported
 [ ] NO placeholder comments (// TODO, # TODO, // ...)
 [ ] NO incomplete sections ("add more here", "implement this")
 [ ] Types/interfaces are properly defined
