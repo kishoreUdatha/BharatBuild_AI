@@ -393,7 +393,7 @@ class DockerInfraFixerAgent:
         fix_handlers = {
             InfraErrorType.NETWORK_POOL_OVERLAP: lambda sr: self._fix_network_overlap(project_path, sr),
             InfraErrorType.STALE_NETWORK: lambda sr: self._fix_network_overlap(project_path, sr),
-            InfraErrorType.PORT_CONFLICT: lambda sr: self._fix_port_conflict(error_message, sr),
+            InfraErrorType.PORT_CONFLICT: lambda sr: self._fix_port_conflict(error_message, sr, project_path),
             InfraErrorType.STALE_CONTAINER: lambda sr: self._fix_stale_container(error_message, sr),
             InfraErrorType.DISK_SPACE: self._fix_disk_space,
             InfraErrorType.IMAGE_NOT_FOUND: lambda sr: self._fix_missing_image(error_message, sr),
@@ -572,10 +572,20 @@ class DockerInfraFixerAgent:
         except Exception as e:
             return FixResult(success=False, message=f"Network fix failed: {e}")
 
-    async def _fix_port_conflict(self, error_message: str, sandbox_runner: callable) -> FixResult:
-        """Fix port conflict by killing processes and containers.
+    async def _fix_port_conflict(
+        self,
+        error_message: str,
+        sandbox_runner: callable,
+        project_path: str = None
+    ) -> FixResult:
+        """Fix port conflict by killing processes OR dynamically remapping ports.
 
-        This method finds ALL conflicting ports in the error message and frees them all.
+        Strategy:
+        1. First try to kill processes using the conflicting ports
+        2. Wait briefly and check if ports are still in use
+        3. If ports persist (system services that auto-restart), remap ports in docker-compose.yml
+
+        This handles system-level services like nginx/apache that restart via systemd.
         """
         # Find ALL ports mentioned in the error - not just the first one
         ports_found = set()
@@ -589,7 +599,7 @@ class DockerInfraFixerAgent:
             ports_found.add(match.group(1))
 
         # Pattern 3: Common service ports that might be blocked
-        common_ports = ['3000', '3001', '5173', '5174', '8080', '8081', '5432', '5433', '6379', '27017', '3306']
+        common_ports = ['3000', '3001', '5173', '5174', '8080', '8081', '5432', '5433', '6379', '27017', '3306', '80', '443']
         for port in common_ports:
             if port in error_message:
                 ports_found.add(port)
@@ -598,7 +608,10 @@ class DockerInfraFixerAgent:
             return FixResult(success=False, message="Could not determine conflicting port")
 
         freed_ports = []
+        persistent_ports = []
+
         try:
+            # Step 1: Try to kill processes on each port
             for port in ports_found:
                 # Kill process using port
                 sandbox_runner(f"fuser -k {port}/tcp 2>/dev/null || true", None, 10)
@@ -606,16 +619,194 @@ class DockerInfraFixerAgent:
                 # Remove containers using port
                 sandbox_runner(f"docker ps --filter 'publish={port}' -q | xargs -r docker rm -f", None, 30)
 
-                freed_ports.append(port)
-                logger.info(f"[DockerInfraFixer] Freed port {port}")
+                logger.info(f"[DockerInfraFixer] Attempted to free port {port}")
 
-            return FixResult(
-                success=True,
-                message=f"Freed port(s): {', '.join(freed_ports)}",
-                command_executed=f"kill processes and containers on ports: {', '.join(freed_ports)}"
-            )
+            # Step 2: Wait for systemd services to potentially restart
+            await asyncio.sleep(2)
+
+            # Step 3: Check which ports are still in use
+            for port in ports_found:
+                exit_code, output = sandbox_runner(
+                    f"lsof -i :{port} -t 2>/dev/null || ss -tlnp 2>/dev/null | grep ':{port} '",
+                    None, 5
+                )
+                if exit_code == 0 and output and output.strip():
+                    # Port is still in use - likely a system service that auto-restarted
+                    persistent_ports.append(port)
+                    logger.warning(f"[DockerInfraFixer] Port {port} still in use after kill - system service detected")
+                else:
+                    freed_ports.append(port)
+
+            # Step 4: If there are persistent ports, try dynamic port remapping
+            if persistent_ports and project_path:
+                remap_result = await self._remap_ports_in_compose(
+                    persistent_ports, project_path, sandbox_runner
+                )
+                if remap_result.success:
+                    message_parts = []
+                    if freed_ports:
+                        message_parts.append(f"Freed port(s): {', '.join(freed_ports)}")
+                    message_parts.append(remap_result.message)
+                    return FixResult(
+                        success=True,
+                        message="; ".join(message_parts),
+                        file_modified=remap_result.file_modified,
+                        changes_made=remap_result.changes_made
+                    )
+                else:
+                    # Remapping failed, return partial success if some ports were freed
+                    if freed_ports:
+                        return FixResult(
+                            success=True,
+                            message=f"Freed port(s): {', '.join(freed_ports)}; Could not remap: {', '.join(persistent_ports)}",
+                            command_executed=f"kill processes on ports: {', '.join(freed_ports)}"
+                        )
+                    return FixResult(
+                        success=False,
+                        message=f"Ports {', '.join(persistent_ports)} blocked by system services - manual intervention required"
+                    )
+
+            # All ports were freed successfully
+            if freed_ports:
+                return FixResult(
+                    success=True,
+                    message=f"Freed port(s): {', '.join(freed_ports)}",
+                    command_executed=f"kill processes and containers on ports: {', '.join(freed_ports)}"
+                )
+
+            return FixResult(success=False, message="No ports could be freed")
+
         except Exception as e:
             return FixResult(success=False, message=f"Port fix failed: {e}")
+
+    async def _remap_ports_in_compose(
+        self,
+        blocked_ports: List[str],
+        project_path: str,
+        sandbox_runner: callable
+    ) -> FixResult:
+        """Dynamically remap blocked ports to alternative ports in docker-compose.yml.
+
+        Port remapping strategy:
+        - 80 -> 8880 (nginx/web server)
+        - 443 -> 8443 (HTTPS)
+        - 8080 -> 8180 (backend/API)
+        - 3000 -> 3100 (frontend dev server)
+        - 5173 -> 5273 (Vite dev server)
+        - Other ports -> port + 100
+        """
+        PORT_ALTERNATIVES = {
+            '80': '8880',
+            '443': '8443',
+            '8080': '8180',
+            '3000': '3100',
+            '3001': '3101',
+            '5173': '5273',
+            '5174': '5274',
+        }
+
+        compose_file = f"{project_path}/docker-compose.yml"
+
+        if not self._file_exists_in_sandbox(compose_file, sandbox_runner):
+            return FixResult(success=False, message="docker-compose.yml not found for port remapping")
+
+        try:
+            content = self._read_file_from_sandbox(compose_file, sandbox_runner)
+            if not content:
+                return FixResult(success=False, message="Could not read docker-compose.yml")
+
+            compose_data = yaml.safe_load(content)
+            if not compose_data or 'services' not in compose_data:
+                return FixResult(success=False, message="Invalid docker-compose.yml structure")
+
+            remapped = []
+            modified = False
+
+            for service_name, service in compose_data.get('services', {}).items():
+                if not isinstance(service, dict) or 'ports' not in service:
+                    continue
+
+                new_ports = []
+                for port_mapping in service['ports']:
+                    port_str = str(port_mapping)
+                    changed = False
+
+                    for blocked_port in blocked_ports:
+                        # Handle various port mapping formats:
+                        # "80:80" -> "8880:80"
+                        # "8080:8080" -> "8180:8080"
+                        # "0.0.0.0:80:80" -> "0.0.0.0:8880:80"
+
+                        # Pattern: host_port:container_port (we only change host_port)
+                        pattern = rf'^({blocked_port}):(\d+)$'
+                        match = re.match(pattern, port_str)
+                        if match:
+                            container_port = match.group(2)
+                            alt_port = PORT_ALTERNATIVES.get(blocked_port, str(int(blocked_port) + 100))
+
+                            # Verify the alternative port is available
+                            exit_code, _ = sandbox_runner(
+                                f"lsof -i :{alt_port} -t 2>/dev/null || ss -tlnp 2>/dev/null | grep ':{alt_port} '",
+                                None, 5
+                            )
+                            if exit_code == 0:
+                                # Alt port also in use, try +200
+                                alt_port = str(int(alt_port) + 100)
+
+                            port_str = f"{alt_port}:{container_port}"
+                            remapped.append(f"{service_name}: {blocked_port} -> {alt_port}")
+                            changed = True
+                            modified = True
+                            logger.info(f"[DockerInfraFixer] Remapped {service_name} port {blocked_port} -> {alt_port}")
+                            break
+
+                        # Pattern with IP: 0.0.0.0:host_port:container_port
+                        pattern_ip = rf'^(\d+\.\d+\.\d+\.\d+):({blocked_port}):(\d+)$'
+                        match_ip = re.match(pattern_ip, port_str)
+                        if match_ip:
+                            ip = match_ip.group(1)
+                            container_port = match_ip.group(3)
+                            alt_port = PORT_ALTERNATIVES.get(blocked_port, str(int(blocked_port) + 100))
+
+                            port_str = f"{ip}:{alt_port}:{container_port}"
+                            remapped.append(f"{service_name}: {blocked_port} -> {alt_port}")
+                            changed = True
+                            modified = True
+                            logger.info(f"[DockerInfraFixer] Remapped {service_name} port {blocked_port} -> {alt_port}")
+                            break
+
+                    new_ports.append(port_str)
+
+                service['ports'] = new_ports
+
+            if modified:
+                fixed_yaml = yaml.dump(
+                    compose_data,
+                    default_flow_style=False,
+                    sort_keys=False,
+                    allow_unicode=True,
+                    width=1000
+                )
+
+                if self._write_file_to_sandbox(compose_file, fixed_yaml, sandbox_runner):
+                    changes_summary = "; ".join(remapped)
+                    return FixResult(
+                        success=True,
+                        message=f"Remapped ports to avoid system services: {changes_summary}",
+                        file_modified=compose_file,
+                        changes_made=changes_summary
+                    )
+                else:
+                    return FixResult(success=False, message="Failed to write port remapping to docker-compose.yml")
+
+            return FixResult(
+                success=False,
+                message=f"Could not find port mappings to remap for ports: {', '.join(blocked_ports)}"
+            )
+
+        except Exception as e:
+            logger.error(f"[DockerInfraFixer] Port remapping failed: {e}")
+            return FixResult(success=False, message=f"Port remapping failed: {e}")
 
     async def _fix_stale_container(self, error_message: str, sandbox_runner: callable) -> FixResult:
         """Fix stale container by removing it."""
