@@ -405,7 +405,10 @@ BUILD LOG:
         # STEP 9: RECORD ATTEMPT AND RETURN
         # =================================================================
         success = len(files_modified) > 0
-        retry_limiter.record_attempt(project_id, error_hash, tokens_used=tokens_used, fixed=success)
+        # Never mark as "fixed" - we can't know if fix is complete from here
+        # MAX_RETRIES_PER_ERROR (3) prevents infinite loops
+        # Container health check determines if truly fixed (container starts successfully)
+        retry_limiter.record_attempt(project_id, error_hash, tokens_used=tokens_used, fixed=False)
 
         return BoltFixResult(
             success=success,
