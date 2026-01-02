@@ -475,6 +475,33 @@ ALL PROJECTS MUST RUN IN DOCKER:
 - Use Alpine images for smaller size
 - Include health checks
 
+DOCKER-COMPOSE NETWORK RULES (CRITICAL!):
+- NEVER use hardcoded subnets or IPAM configuration
+- Let Docker automatically assign IP ranges
+- Use simple bridge networks only
+
+❌ WRONG - Hardcoded subnet (causes "Pool overlaps" errors):
+```yaml
+networks:
+  app-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+```
+
+✅ CORRECT - Let Docker manage IPs:
+```yaml
+networks:
+  app-network:
+    driver: bridge
+```
+
+Or even simpler (Docker creates default network):
+```yaml
+# No networks section needed - Docker handles it automatically
+```
+
 ═══════════════════════════════════════════════════════════════════════════════
                     🔗 FULLSTACK INTEGRATION (CRITICAL!)
 ═══════════════════════════════════════════════════════════════════════════════
