@@ -1579,6 +1579,35 @@ class ContainerExecutor:
                 logger.warning(f"[ContainerExecutor] Failed to auto-fix compose: {e}")
                 yield f"     ⚠️ Auto-fix skipped: {e}\n"
 
+        # =================================================================
+        # DYNAMIC PORT ALLOCATION - Prevents port conflicts automatically
+        # =================================================================
+        yield f"  🔌 Allocating dynamic ports...\n"
+        try:
+            port_mapping, dynamic_frontend_port, dynamic_backend_port = self._allocate_dynamic_ports(
+                compose_file=compose_file,
+                project_path=project_path
+            )
+
+            if port_mapping:
+                yield f"  ✅ Dynamic port allocation:\n"
+                for original, new in port_mapping.items():
+                    yield f"     {original} → {new}\n"
+
+                # Update frontend/backend ports with dynamically allocated ones
+                if dynamic_frontend_port:
+                    frontend_port = dynamic_frontend_port
+                    yield f"  📱 Frontend will be available on port {frontend_port}\n"
+                if dynamic_backend_port:
+                    backend_port = dynamic_backend_port
+                    yield f"  🖥️ Backend will be available on port {backend_port}\n"
+            else:
+                yield f"  ℹ️ No port remapping needed\n"
+
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Dynamic port allocation failed: {e}")
+            yield f"  ⚠️ Dynamic port allocation skipped: {e}\n"
+
         # Run docker-compose up
         yield f"  $ docker-compose up -d\n"
 
@@ -2414,6 +2443,193 @@ class ContainerExecutor:
                 return False
 
         return False
+
+    # =============================================================================
+    # DYNAMIC PORT ALLOCATION
+    # =============================================================================
+    # Prevents port conflicts by automatically assigning available ports at runtime
+    # Works with any docker-compose.yml regardless of what ports are specified
+
+    def _find_available_ports_on_sandbox(self, count: int = 5, start_port: int = 35000, end_port: int = 39999) -> List[int]:
+        """
+        Find available ports on the sandbox that are not in use.
+
+        Uses `ss -tlnp` to check which ports are currently in use, then returns
+        a list of available ports in the specified range.
+
+        Args:
+            count: Number of available ports to find
+            start_port: Start of port range to search
+            end_port: End of port range to search
+
+        Returns:
+            List of available port numbers
+        """
+        try:
+            # Get list of ports currently in use
+            cmd = "ss -tlnp 2>/dev/null | grep LISTEN | awk '{print $4}' | grep -oE '[0-9]+$' | sort -u"
+            exit_code, output = self._run_shell_on_sandbox(cmd, timeout=10)
+
+            used_ports = set()
+            if exit_code == 0 and output:
+                for line in output.strip().split('\n'):
+                    try:
+                        port = int(line.strip())
+                        used_ports.add(port)
+                    except ValueError:
+                        pass
+
+            # Also check Docker containers for exposed ports
+            docker_cmd = "docker ps --format '{{.Ports}}' 2>/dev/null | grep -oE ':[0-9]+' | tr -d ':' | sort -u"
+            exit_code, docker_output = self._run_shell_on_sandbox(docker_cmd, timeout=10)
+            if exit_code == 0 and docker_output:
+                for line in docker_output.strip().split('\n'):
+                    try:
+                        port = int(line.strip())
+                        used_ports.add(port)
+                    except ValueError:
+                        pass
+
+            logger.info(f"[ContainerExecutor] Found {len(used_ports)} ports in use on sandbox")
+
+            # Find available ports
+            available = []
+            for port in range(start_port, end_port + 1):
+                if port not in used_ports:
+                    available.append(port)
+                    if len(available) >= count:
+                        break
+
+            logger.info(f"[ContainerExecutor] Found {len(available)} available ports: {available}")
+            return available
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Error finding available ports: {e}")
+            # Fallback: return sequential ports and hope for the best
+            return list(range(start_port, start_port + count))
+
+    def _allocate_dynamic_ports(
+        self,
+        compose_file: str,
+        project_path: str
+    ) -> Tuple[Dict[int, int], Optional[int], Optional[int]]:
+        """
+        Allocate dynamic ports for all services in docker-compose.yml.
+
+        Reads the compose file, finds all port mappings, allocates available ports,
+        and rewrites the compose file with the new port mappings.
+
+        Args:
+            compose_file: Path to docker-compose.yml
+            project_path: Project directory path
+
+        Returns:
+            Tuple of (port_mapping, frontend_port, backend_port)
+            - port_mapping: Dict mapping original host ports to new dynamic ports
+            - frontend_port: The dynamic port allocated for frontend (or None)
+            - backend_port: The dynamic port allocated for backend (or None)
+        """
+        import yaml
+        import base64
+
+        port_mapping = {}  # original_port -> new_port
+        frontend_port = None
+        backend_port = None
+
+        try:
+            # Read compose file
+            compose_content = self._read_file_from_sandbox(compose_file)
+            if not compose_content:
+                logger.warning("[ContainerExecutor] Could not read compose file for port allocation")
+                return port_mapping, frontend_port, backend_port
+
+            compose_data = yaml.safe_load(compose_content)
+            if not compose_data or 'services' not in compose_data:
+                return port_mapping, frontend_port, backend_port
+
+            # Collect all port mappings that need dynamic allocation
+            ports_needed = []  # List of (service_name, port_index, original_host_port, container_port)
+
+            for service_name, service in compose_data.get('services', {}).items():
+                if not isinstance(service, dict):
+                    continue
+
+                ports = service.get('ports', [])
+                for idx, port_mapping_str in enumerate(ports):
+                    if isinstance(port_mapping_str, str) and ':' in port_mapping_str:
+                        parts = port_mapping_str.split(':')
+                        if len(parts) >= 2:
+                            try:
+                                # Handle formats: "80:80", "3000:3000", "0.0.0.0:80:80"
+                                if len(parts) == 3:
+                                    # Format: "0.0.0.0:80:80"
+                                    host_port = int(parts[1])
+                                    container_port = parts[2]
+                                else:
+                                    # Format: "80:80"
+                                    host_port = int(parts[0])
+                                    container_port = parts[1]
+
+                                ports_needed.append((service_name, idx, host_port, container_port))
+                            except ValueError:
+                                pass
+                    elif isinstance(port_mapping_str, int):
+                        # Single port number (same for host and container)
+                        ports_needed.append((service_name, idx, port_mapping_str, str(port_mapping_str)))
+
+            if not ports_needed:
+                logger.info("[ContainerExecutor] No port mappings found in compose file")
+                return port_mapping, frontend_port, backend_port
+
+            # Find available ports
+            available_ports = self._find_available_ports_on_sandbox(count=len(ports_needed))
+
+            if len(available_ports) < len(ports_needed):
+                logger.warning(f"[ContainerExecutor] Not enough available ports: need {len(ports_needed)}, found {len(available_ports)}")
+                # Use what we have
+
+            # Allocate ports and update compose data
+            modified = False
+            for i, (service_name, port_idx, original_port, container_port) in enumerate(ports_needed):
+                if i < len(available_ports):
+                    new_port = available_ports[i]
+                    port_mapping[original_port] = new_port
+
+                    # Update compose data
+                    service = compose_data['services'][service_name]
+                    # Remove /tcp or /udp suffix if present for container port
+                    container_port_clean = container_port.split('/')[0]
+                    service['ports'][port_idx] = f"{new_port}:{container_port}"
+                    modified = True
+
+                    logger.info(f"[ContainerExecutor] {service_name}: {original_port}:{container_port} -> {new_port}:{container_port}")
+
+                    # Track frontend/backend ports
+                    if any(name in service_name.lower() for name in ['frontend', 'web', 'ui', 'nginx', 'app']):
+                        if frontend_port is None:  # First match
+                            frontend_port = new_port
+                    elif any(name in service_name.lower() for name in ['backend', 'api', 'server']):
+                        if backend_port is None:  # First match
+                            backend_port = new_port
+
+            # Write updated compose file
+            if modified:
+                updated_yaml = yaml.dump(compose_data, default_flow_style=False, sort_keys=False)
+                encoded = base64.b64encode(updated_yaml.encode()).decode()
+                write_cmd = f'echo "{encoded}" | base64 -d > "{compose_file}"'
+                exit_code, _ = self._run_shell_on_sandbox(write_cmd, working_dir=project_path, timeout=10)
+
+                if exit_code == 0:
+                    logger.info(f"[ContainerExecutor] Updated compose file with dynamic ports: {port_mapping}")
+                else:
+                    logger.error("[ContainerExecutor] Failed to write updated compose file")
+                    return {}, None, None
+
+            return port_mapping, frontend_port, backend_port
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Error allocating dynamic ports: {e}")
+            return {}, None, None
 
     def _write_file_to_sandbox(self, file_path: str, content: str) -> bool:
         """
