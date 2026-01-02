@@ -1863,99 +1863,161 @@ class ContainerExecutor:
         except Exception as e:
             logger.warning(f"[ContainerExecutor] Error detecting Java project: {e}")
 
-        # Java: 4 checks × 25s = 100 seconds total (Maven needs time to compile)
-        # Other: 3 checks × 15s = 45 seconds total
-        check_intervals = [25, 25, 25, 25] if is_java_project else [15, 15, 15]
+        # Service health check configuration
+        # Order: infrastructure → backend → frontend → proxy
+        SERVICE_CONFIG = {
+            'db': {'timeout': 20, 'order': 1, 'success': ['ready to accept connections', 'database system is ready'], 'errors': []},
+            'postgres': {'timeout': 20, 'order': 1, 'success': ['ready to accept connections', 'database system is ready'], 'errors': []},
+            'mysql': {'timeout': 20, 'order': 1, 'success': ['ready for connections', 'mysqld: ready'], 'errors': []},
+            'mongodb': {'timeout': 20, 'order': 1, 'success': ['Waiting for connections', 'listening on'], 'errors': []},
+            'redis': {'timeout': 15, 'order': 1, 'success': ['Ready to accept connections', 'ready to accept connections'], 'errors': []},
+            'backend': {'timeout': 120 if is_java_project else 60, 'order': 2,
+                       'success': ['Started', 'Tomcat started', 'Application startup complete', 'Uvicorn running', 'Listening on port', 'Server is running'],
+                       'errors': ['BUILD FAILURE', 'COMPILATION ERROR', 'Error:', 'Exception:', 'FATAL']},
+            'frontend': {'timeout': 45, 'order': 3,
+                        'success': ['VITE', 'ready in', 'compiled successfully', 'Local:', 'Compiled', 'webpack compiled'],
+                        'errors': ['npm ERR!', 'Error:', 'ELIFECYCLE', 'Cannot find module']},
+            'nginx': {'timeout': 15, 'order': 4, 'success': ['start worker process'], 'errors': ['emerg', 'error']},
+        }
+        DEFAULT_CONFIG = {'timeout': 30, 'order': 5, 'success': [], 'errors': ['Error:', 'error:', 'FATAL']}
 
         while fix_attempt < max_fix_attempts and not containers_healthy:
-            # Do multiple stability checks before declaring healthy
             failure_detected = False
+            failed_service = None
+            project_lines = []
 
-            for check_num, wait_time in enumerate(check_intervals, 1):
-                yield f"\n  ⏳ Stability check {check_num}/3: waiting {wait_time}s...\n"
-                await asyncio.sleep(wait_time)
+            # Initial wait for containers to initialize
+            yield f"\n  ⏳ Initializing containers...\n"
+            await asyncio.sleep(5)
 
-                # Check container status after each wait
-                try:
-                    exit_code, ps_output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
-                    logger.info(f"[ContainerExecutor] Check {check_num} - exit_code={exit_code}, output_len={len(ps_output) if ps_output else 0}")
-                    logger.info(f"[ContainerExecutor] Check {check_num} - Status:\n{ps_output}")
+            # Get all containers for this project
+            exit_code, ps_output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
+            if exit_code != 0 or not ps_output:
+                yield f"  ⚠️ Failed to get container status\n"
+                failure_detected = True
+            else:
+                output_lines = ps_output.strip().split('\n') if ps_output else []
+                project_lines = [line for line in output_lines if project_name.lower() in line.lower()]
 
-                    # Check for command failure
-                    if exit_code != 0 or not ps_output:
-                        yield f"  ⚠️ Failed to get container status (exit_code={exit_code})\n"
-                        if ps_output:
-                            yield f"     Error: {ps_output[:200]}\n"
-                        failure_detected = True
-                        break
+            if not project_lines and not failure_detected:
+                yield f"  ⚠️ No containers found for {project_name}\n"
+                failure_detected = True
 
-                    # Display per-service status
-                    yield f"  📦 Service Status:\n"
-                    output_lines = ps_output.strip().split('\n') if ps_output else []
+            if not failure_detected:
+                # Build service list with configs
+                services = []
+                for line in project_lines:
+                    parts = line.strip().split()
+                    if not parts:
+                        continue
+                    container_name = parts[0]
+                    service_name = container_name.replace(f"{project_name}_", "").rsplit("_", 1)[0]
 
-                    # Filter lines for our project only (case-insensitive to be safe)
-                    project_lines = [line for line in output_lines if project_name.lower() in line.lower()]
+                    # Find matching config
+                    config = DEFAULT_CONFIG.copy()
+                    for key, cfg in SERVICE_CONFIG.items():
+                        if key in service_name.lower():
+                            config = cfg.copy()
+                            break
 
-                    logger.info(f"[ContainerExecutor] Raw output: {ps_output[:500] if ps_output else 'EMPTY'}")
-                    logger.info(f"[ContainerExecutor] Looking for: {project_name}")
-                    logger.info(f"[ContainerExecutor] Project lines: {project_lines}")
+                    services.append({
+                        'container': container_name,
+                        'service': service_name,
+                        'config': config,
+                        'line': line
+                    })
 
-                    if not project_lines:
-                        yield f"     ⚠️ No containers found for {project_name}\n"
-                        # If no containers at all, consider it a failure
-                        failure_detected = True
-                        yield f"\n  ⚠️ No containers running - possible startup failure\n"
-                        break
-                    else:
-                        for line in project_lines:
-                            line = line.strip()
-                            parts = line.split()
-                            if parts:
-                                container_name = parts[0]
-                                # Extract service name: bharatbuild_xxx_frontend_1 -> frontend
-                                service_name = container_name.replace(f"{project_name}_", "").rsplit("_", 1)[0]
+                # Sort by order (infrastructure first, then backend, then frontend, then nginx)
+                services.sort(key=lambda x: x['config']['order'])
 
-                                if "Up" in line and "Restarting" not in line:
-                                    yield f"     ✅ {service_name}: Running\n"
-                                elif "Exit" in line:
-                                    yield f"     ❌ {service_name}: Stopped\n"
-                                elif "Restarting" in line:
-                                    yield f"     🔄 {service_name}: Crash-looping (restarting)\n"
-                                else:
-                                    yield f"     ⏳ {service_name}: Starting...\n"
+                yield f"\n  📦 Checking {len(services)} services in dependency order:\n"
 
-                    # Check for exited or restarting containers in our project
-                    # Restarting means the container is crash-looping!
-                    has_exited = any("Exit" in line or "Restarting" in line for line in project_lines)
+                # Check each service
+                for svc in services:
+                    container_name = svc['container']
+                    service_name = svc['service']
+                    config = svc['config']
+                    max_wait = config['timeout']
+                    success_indicators = config['success']
+                    error_indicators = config['errors']
 
-                    # JAVA FIX: Also check backend logs for Maven build errors even if container is "Up"
-                    # Maven can still be compiling and show "Up" but have build errors
-                    has_build_error = False
-                    backend_containers = [line.split()[0] for line in project_lines if 'backend' in line.lower()]
-                    for backend_container in backend_containers:
-                        if "Up" in [line for line in project_lines if backend_container in line][0]:
-                            # Container is "Up" but check logs for Maven errors
-                            logs_cmd = f"docker logs {backend_container} 2>&1 | tail -50"
-                            _, backend_logs = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=10)
-                            if backend_logs:
-                                # Check for Maven build failure indicators
-                                if "[ERROR]" in backend_logs and "BUILD FAILURE" in backend_logs:
-                                    has_build_error = True
-                                    logger.warning(f"[ContainerExecutor] Maven BUILD FAILURE detected in {backend_container} logs")
-                                    yield f"     ⚠️ {backend_container.split('_')[-2]}: Build error detected in logs\n"
+                    yield f"\n     ⏳ {service_name}: Checking (timeout: {max_wait}s)...\n"
+
+                    service_healthy = False
+                    service_error = None
+                    elapsed = 0
+                    poll_interval = 5
+
+                    while elapsed < max_wait:
+                        # Get container status
+                        status_cmd = f"docker ps -a --filter 'name=^{container_name}$' --format '{{{{.Status}}}}'"
+                        _, status = self._run_shell_on_sandbox(status_cmd, working_dir=project_path, timeout=10)
+                        status = (status or "").strip()
+
+                        # Get container logs
+                        logs_cmd = f"docker logs {container_name} 2>&1 | tail -50"
+                        _, logs = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=10)
+                        logs = logs or ""
+
+                        # FAIL FAST: Check for failure states
+                        if "Exit" in status:
+                            service_error = "Container exited"
+                            break
+                        if "Restarting" in status:
+                            service_error = "Container crash-looping"
+                            break
+
+                        # FAIL FAST: Check logs for error indicators
+                        for err in error_indicators:
+                            if err in logs:
+                                service_error = f"Error in logs: {err}"
+                                logger.warning(f"[HealthCheck] {service_name}: Found error '{err}' in logs")
+                                break
+                        if service_error:
+                            break
+
+                        # SUCCESS: Check if container is up and healthy
+                        if "Up" in status:
+                            # If no success indicators defined, just being "Up" is enough
+                            if not success_indicators:
+                                service_healthy = True
+                                break
+                            # Check for success indicators in logs
+                            for indicator in success_indicators:
+                                if indicator.lower() in logs.lower():
+                                    service_healthy = True
+                                    logger.info(f"[HealthCheck] {service_name}: Found success indicator '{indicator}'")
                                     break
+                            if service_healthy:
+                                break
 
-                    if has_exited or has_build_error:
+                        # Wait and retry
+                        await asyncio.sleep(poll_interval)
+                        elapsed += poll_interval
+                        if elapsed < max_wait:
+                            yield f"        ... waiting ({elapsed}s/{max_wait}s)\n"
+
+                    # Evaluate final status
+                    if service_error:
+                        yield f"     ❌ {service_name}: FAILED - {service_error}\n"
                         failure_detected = True
-                        yield f"\n  ⚠️ Container failure detected at check {check_num}/3\n"
-                        break  # Exit the check loop, trigger auto-fix
+                        failed_service = svc
+                        break
+                    elif service_healthy:
+                        yield f"     ✅ {service_name}: Healthy\n"
+                    else:
+                        # Timeout - do final check
+                        status_cmd = f"docker ps -a --filter 'name=^{container_name}$' --format '{{{{.Status}}}}'"
+                        _, final_status = self._run_shell_on_sandbox(status_cmd, working_dir=project_path, timeout=10)
+                        if final_status and "Up" in final_status and "Restarting" not in final_status:
+                            yield f"     ⚠️ {service_name}: Running (unconfirmed)\n"
+                        else:
+                            yield f"     ❌ {service_name}: Timeout - failed to start\n"
+                            failure_detected = True
+                            failed_service = svc
+                            break
 
-                except Exception as e:
-                    logger.warning(f"[ContainerExecutor] Health check {check_num} failed: {e}")
-                    failure_detected = True
-                    break
-
-            # If all 3 checks passed without failure
+            # All services healthy
             if not failure_detected:
                 containers_healthy = True
                 yield f"\n  ✅ All services running and healthy!\n"
@@ -1963,36 +2025,29 @@ class ContainerExecutor:
 
             # Failure detected - trigger auto-fix
             fix_attempt += 1
-            yield f"\n⚠️ Container failure detected. Checking logs...\n"
+            yield f"\n⚠️ Service failure detected. Collecting error logs...\n"
 
-            # Get logs from failed containers using docker logs (works with awslogs driver)
-            # Includes: Exit (stopped), Restarting (crash-looping), or backend with build errors
+            # Get logs from failed service (we know exactly which one failed)
             logs_output = ""
-            for line in project_lines:
-                container_name = line.split()[0] if line.split() else ""
-                if not container_name:
-                    continue
-
-                # Get logs from containers that exited, are restarting, or are backend with possible build errors
-                should_get_logs = False
-                status_type = "UNKNOWN"
-
-                if "Exit" in line:
-                    should_get_logs = True
-                    status_type = "STOPPED"
-                elif "Restarting" in line:
-                    should_get_logs = True
-                    status_type = "CRASH-LOOPING"
-                elif "backend" in container_name.lower() and "Up" in line:
-                    # Also check backend logs even if "Up" - might have Maven errors
-                    should_get_logs = True
-                    status_type = "BUILD-ERROR"
-
-                if should_get_logs:
-                    logs_cmd = f"docker logs {container_name} 2>&1 | tail -100"
-                    _, container_logs = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
-                    if container_logs:
-                        logs_output += f"\n=== {container_name} ({status_type}) ===\n{container_logs}\n"
+            if failed_service:
+                container_name = failed_service['container']
+                service_name = failed_service['service']
+                logs_cmd = f"docker logs {container_name} 2>&1 | tail -150"
+                _, container_logs = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
+                if container_logs:
+                    logs_output = f"\n=== {service_name} ({container_name}) LOGS ===\n{container_logs}\n"
+            else:
+                # Fallback: get logs from any failed containers
+                for line in project_lines:
+                    parts = line.split()
+                    if not parts:
+                        continue
+                    container_name = parts[0]
+                    if "Exit" in line or "Restarting" in line:
+                        logs_cmd = f"docker logs {container_name} 2>&1 | tail -100"
+                        _, container_logs = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=30)
+                        if container_logs:
+                            logs_output += f"\n=== {container_name} ===\n{container_logs}\n"
 
             # Show error logs
             log_lines = logs_output.strip().split('\n')[-50:]
