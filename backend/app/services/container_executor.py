@@ -2016,7 +2016,8 @@ class ContainerExecutor:
         # Generate preview URL
         preview_url = _get_preview_url(frontend_port, project_id)
 
-        # Store container info
+        # Store container info with activity tracking
+        now = datetime.utcnow()
         self.active_containers[project_id] = {
             "compose_project": project_name,
             "compose_file": compose_file,
@@ -2025,7 +2026,8 @@ class ContainerExecutor:
             "backend_port": backend_port,
             "technology": Technology.FULLSTACK,
             "fullstack_config": fullstack_config,
-            "started_at": datetime.utcnow(),
+            "started_at": now,
+            "last_activity": now,  # Track last user activity for idle detection
             "preview_url": preview_url,
             "docker_compose": True  # Flag for compose-based deployment
         }
@@ -4573,21 +4575,35 @@ echo "Done"
         except Exception as e:
             logger.warning(f"[ContainerExecutor] Error removing container '{container_name}': {e}")
 
+    def update_activity(self, project_id: str):
+        """Update last_activity timestamp for a project (call on user interaction)"""
+        if project_id in self.active_containers:
+            self.active_containers[project_id]["last_activity"] = datetime.utcnow()
+            logger.debug(f"[ContainerExecutor] Updated activity for project {project_id}")
+
     async def _cleanup_loop(self):
-        """Background task to cleanup expired containers"""
+        """Background task to cleanup idle containers (30 min idle timeout)"""
+        from app.core.config import settings
+        idle_timeout_seconds = settings.CONTAINER_IDLE_TIMEOUT_SECONDS  # 1800 = 30 min
+
         while True:
             try:
                 await asyncio.sleep(60)  # Check every minute
 
-                # 1. Clean up in-memory tracked containers
+                # 1. Clean up in-memory tracked containers that are IDLE for 30+ min
                 now = datetime.utcnow()
-                expired = [
-                    project_id for project_id, info in self.active_containers.items()
-                    if info["expires_at"] < now
-                ]
+                idle_projects = []
 
-                for project_id in expired:
-                    logger.info(f"[ContainerExecutor] Auto-cleanup expired container: {project_id}")
+                for project_id, info in self.active_containers.items():
+                    last_activity = info.get("last_activity") or info.get("started_at")
+                    if last_activity:
+                        idle_seconds = (now - last_activity).total_seconds()
+                        if idle_seconds > idle_timeout_seconds:
+                            idle_projects.append(project_id)
+                            logger.info(f"[ContainerExecutor] Project {project_id} idle for {idle_seconds/60:.1f} min")
+
+                for project_id in idle_projects:
+                    logger.info(f"[ContainerExecutor] Auto-cleanup idle container: {project_id}")
                     await self.stop_container(project_id)
 
                 # 2. Clean up orphaned containers directly from Docker
@@ -4602,8 +4618,9 @@ echo "Done"
 
     async def _cleanup_orphaned_containers(self):
         """
-        Clean up bharatbuild containers that are older than the idle timeout.
-        This queries Docker directly, handling containers that survived backend restarts.
+        Clean up bharatbuild containers that have been IDLE for 30+ minutes.
+        - Running containers: Check if tracked and idle (no activity for 30 min)
+        - Stopped containers: Remove if stopped for 30+ min
         Uses centralized CONTAINER_IDLE_TIMEOUT_SECONDS from settings.
         """
         if not self.docker_client:
@@ -4619,31 +4636,54 @@ echo "Done"
             )
 
             now = datetime.utcnow()
-            # Use centralized timeout setting
-            max_age_minutes = settings.CONTAINER_IDLE_TIMEOUT_SECONDS / 60
+            idle_timeout_minutes = settings.CONTAINER_IDLE_TIMEOUT_SECONDS / 60  # 30 min
 
             for container in containers:
                 try:
-                    # Get container creation time
-                    created_str = container.attrs.get("Created", "")
-                    if created_str:
-                        # Parse Docker timestamp (e.g., "2025-12-22T09:00:00.000000000Z")
-                        created_at = datetime.fromisoformat(created_str.replace("Z", "+00:00").split(".")[0])
-                        created_at = created_at.replace(tzinfo=None)  # Make naive for comparison
-                        age_minutes = (now - created_at).total_seconds() / 60
+                    project_id = container.labels.get("project_id", "unknown")
+                    should_remove = False
+                    idle_minutes = 0
 
-                        if age_minutes > max_age_minutes:
-                            project_id = container.labels.get("project_id", "unknown")
-                            logger.info(f"[ContainerExecutor] Removing orphaned container {container.name} "
-                                       f"(project: {project_id}, age: {age_minutes:.1f} min)")
+                    if container.status == "running":
+                        # For running containers, check if we're tracking activity
+                        if project_id in self.active_containers:
+                            # Use tracked last_activity
+                            last_activity = self.active_containers[project_id].get("last_activity")
+                            if last_activity:
+                                idle_minutes = (now - last_activity).total_seconds() / 60
+                                if idle_minutes > idle_timeout_minutes:
+                                    should_remove = True
+                        else:
+                            # Not tracked - check creation time as fallback
+                            created_str = container.attrs.get("Created", "")
+                            if created_str:
+                                created_at = datetime.fromisoformat(created_str.replace("Z", "+00:00").split(".")[0])
+                                created_at = created_at.replace(tzinfo=None)
+                                idle_minutes = (now - created_at).total_seconds() / 60
+                                if idle_minutes > idle_timeout_minutes:
+                                    should_remove = True
+                    else:
+                        # Stopped/exited containers - check FinishedAt time
+                        state = container.attrs.get("State", {})
+                        finished_str = state.get("FinishedAt", "")
+                        if finished_str and finished_str != "0001-01-01T00:00:00Z":
+                            finished_at = datetime.fromisoformat(finished_str.replace("Z", "+00:00").split(".")[0])
+                            finished_at = finished_at.replace(tzinfo=None)
+                            idle_minutes = (now - finished_at).total_seconds() / 60
+                            if idle_minutes > idle_timeout_minutes:
+                                should_remove = True
 
-                            if container.status == "running":
-                                container.stop(timeout=5)
-                            container.remove(force=True)
+                    if should_remove:
+                        logger.info(f"[ContainerExecutor] Removing idle container {container.name} "
+                                   f"(project: {project_id}, idle: {idle_minutes:.1f} min)")
 
-                            # Also remove from active_containers if tracked
-                            if project_id in self.active_containers:
-                                del self.active_containers[project_id]
+                        if container.status == "running":
+                            container.stop(timeout=5)
+                        container.remove(force=True)
+
+                        # Also remove from active_containers if tracked
+                        if project_id in self.active_containers:
+                            del self.active_containers[project_id]
 
                 except Exception as e:
                     logger.warning(f"[ContainerExecutor] Failed to cleanup container {container.name}: {e}")

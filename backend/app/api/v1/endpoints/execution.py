@@ -34,6 +34,7 @@ from app.modules.execution.docker_executor import docker_executor, docker_compos
 from app.services.unified_storage import unified_storage
 from app.services.sandbox_cleanup import touch_project
 from app.services.log_bus import get_log_bus
+from app.services.container_executor import container_executor
 
 # Store running processes by project_id for stop functionality
 _running_processes: dict[str, asyncio.subprocess.Process] = {}
@@ -1612,6 +1613,26 @@ async def get_project_status(
     except Exception as e:
         logger.error(f"Error getting project status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/heartbeat/{project_id}")
+async def project_heartbeat(
+    project_id: str,
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Heartbeat endpoint to keep container alive.
+    Call this periodically (e.g., every 5 min) while user is viewing the preview.
+    This updates last_activity to prevent 30-min idle cleanup.
+    """
+    # Update activity timestamp
+    container_executor.update_activity(project_id)
+
+    # Also touch the project in sandbox cleanup tracker
+    touch_project(project_id)
+
+    return {"status": "ok", "project_id": project_id, "message": "Activity updated"}
 
 
 @router.get("/export/{project_id}")
