@@ -939,6 +939,17 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                         yield emit("output", "  ⚠️ S3 restore failed, but sandbox has files - using existing files")
                         yield emit("output", f"  📁 Path: {project_path}")
                         logger.info(f"[Execution] Fallback: Using existing sandbox files at {project_path}")
+
+                        # SYNC: Upload sandbox files to S3 in background for future restores
+                        yield emit("output", "  ☁️ Syncing sandbox files to S3...")
+                        try:
+                            synced_count = await unified_storage.sync_sandbox_to_s3(project_id, effective_user_id)
+                            if synced_count > 0:
+                                yield emit("output", f"  ✅ Synced {synced_count} files to S3")
+                                logger.info(f"[Execution] Synced {synced_count} files from sandbox to S3")
+                        except Exception as sync_err:
+                            logger.warning(f"[Execution] Sandbox to S3 sync failed: {sync_err}")
+                            yield emit("output", f"  ⚠️ S3 sync skipped: {sync_err}")
                     else:
                         yield emit("error", "No files found in database. Please regenerate the project.")
                         yield emit("output", "  ERROR: No files to restore")
