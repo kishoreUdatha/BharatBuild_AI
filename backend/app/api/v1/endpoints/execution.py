@@ -931,9 +931,18 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                     logger.info(f"[Execution] DEBUG: project_path after restore = {project_path}, effective_user_id = {effective_user_id}")
                     yield emit("output", f"  📁 Path: {project_path}")
                 else:
-                    yield emit("error", "No files found in database. Please regenerate the project.")
-                    yield emit("output", "  ERROR: No files to restore")
-                    return
+                    # FALLBACK: Check if files already exist on sandbox (may not be in S3)
+                    project_path = unified_storage.get_sandbox_path(project_id, effective_user_id)
+                    sandbox_has_files = await unified_storage.sandbox_exists(project_id, effective_user_id)
+
+                    if sandbox_has_files:
+                        yield emit("output", "  ⚠️ S3 restore failed, but sandbox has files - using existing files")
+                        yield emit("output", f"  📁 Path: {project_path}")
+                        logger.info(f"[Execution] Fallback: Using existing sandbox files at {project_path}")
+                    else:
+                        yield emit("error", "No files found in database. Please regenerate the project.")
+                        yield emit("output", "  ERROR: No files to restore")
+                        return
 
             except asyncio.TimeoutError:
                 yield emit("error", "Project restore timed out. Please try again.")
