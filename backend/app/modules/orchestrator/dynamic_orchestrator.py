@@ -4216,6 +4216,28 @@ Ensure every import in every file has a corresponding file in the plan.
             logger.info(f"[Writer] ✓ File-by-file generation complete: {len(context.files_created)} files created")
 
             # ============================================================
+            # FINAL S3 SYNC: Ensure all sandbox files are uploaded to S3
+            # This catches any files that failed to upload during generation
+            # ============================================================
+            try:
+                user_id = context.user_id
+                if user_id:
+                    yield OrchestratorEvent(
+                        type=EventType.STATUS,
+                        data={"message": "Syncing files to cloud storage...", "phase": "s3_final_sync"}
+                    )
+
+                    synced_count = await self._unified_storage.sync_sandbox_to_s3(context.project_id, user_id)
+                    if synced_count > 0:
+                        logger.info(f"[Writer] ✓ Final S3 sync: {synced_count} files uploaded")
+                        yield OrchestratorEvent(
+                            type=EventType.STATUS,
+                            data={"message": f"Synced {synced_count} files to cloud", "phase": "s3_sync_complete"}
+                        )
+            except Exception as sync_err:
+                logger.warning(f"[Writer] Final S3 sync failed (non-critical): {sync_err}")
+
+            # ============================================================
             # IMPORT VALIDATION: Detect and generate missing imported files
             # This fixes the "AI generation gap" where App.tsx imports
             # pages/components that were not in the original plan.
