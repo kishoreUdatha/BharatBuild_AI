@@ -1617,8 +1617,69 @@ class UnifiedStorageService:
                 # Use & for parallel execution, limit to 10 concurrent
                 download_commands.append(f"aws s3 cp s3://{s3_bucket}/{f.s3_key} {fp}")
 
-            logger.info(f"[RemoteRestore] Restoring {len(files_with_s3)} files to {workspace_path} (parallel)")
+            logger.info(f"[RemoteRestore] Restoring {len(files_with_s3)} files to {workspace_path}")
             logger.debug(f"[RemoteRestore] Sample S3 keys: {[f.s3_key for f in files_with_s3[:3]]}")
+
+            # =============================================================
+            # SIMPLER APPROACH: Use aws s3 sync (EC2 instance role for credentials)
+            # This avoids the complex credential passing that was failing
+            # =============================================================
+            s3_project_path = f"s3://{s3_bucket}/projects/{project_id}/"
+            sync_script = f"""
+                echo "[SYNC] Creating workspace directory..."
+                mkdir -p {workspace_path}
+                echo "[SYNC] Syncing from {s3_project_path} to {workspace_path}"
+                aws s3 sync {s3_project_path} {workspace_path}/ --region {aws_region} 2>&1
+                SYNC_EXIT=$?
+                echo "[SYNC] Sync completed with exit code: $SYNC_EXIT"
+                echo "[SYNC] Total files after sync:"
+                find {workspace_path} -type f 2>/dev/null | wc -l
+            """
+
+            # Try the simpler sync approach first (uses EC2 instance role)
+            try:
+                logger.info(f"[RemoteRestore] Trying aws s3 sync (uses EC2 instance role)...")
+                sync_output = docker_client.containers.run(
+                    "amazon/aws-cli:latest",
+                    ["-c", sync_script],
+                    entrypoint="/bin/sh",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    # NO credentials passed - uses EC2 instance role
+                    environment={"AWS_REGION": aws_region, "AWS_DEFAULT_REGION": aws_region},
+                    remove=True,
+                    detach=False,
+                    network_mode="host",
+                    stdout=True,
+                    stderr=True
+                )
+                if sync_output:
+                    sync_result = sync_output.decode()
+                    logger.info(f"[RemoteRestore] S3 sync output:\n{sync_result[:2000]}")
+
+                    # Check if sync was successful by counting files
+                    if "SYNC_EXIT=0" in sync_result or "Sync completed with exit code: 0" in sync_result:
+                        # Verify files exist
+                        verify_result = docker_client.containers.run(
+                            "alpine:latest",
+                            ["-c", f"find {workspace_path} -type f 2>/dev/null | wc -l"],
+                            entrypoint="/bin/sh",
+                            volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                            remove=True,
+                            detach=False
+                        )
+                        file_count = int(verify_result.decode().strip() or "0")
+                        if file_count >= len(files_with_s3) * 0.8:  # At least 80% of expected files
+                            logger.info(f"[RemoteRestore] S3 sync SUCCESS! {file_count} files restored (expected {len(files_with_s3)})")
+                            return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in files_with_s3]
+                        else:
+                            logger.warning(f"[RemoteRestore] S3 sync partial: only {file_count} files, expected {len(files_with_s3)}. Falling back to individual downloads.")
+            except Exception as sync_err:
+                logger.warning(f"[RemoteRestore] S3 sync failed, falling back to individual downloads: {sync_err}")
+
+            # =============================================================
+            # FALLBACK: Individual file downloads (original approach)
+            # =============================================================
+            logger.info(f"[RemoteRestore] Using fallback: individual file downloads ({len(files_with_s3)} files)")
 
             # Create dirs first (sequential), then download in parallel batches
             mkdir_script = ' && '.join(mkdir_commands)
