@@ -378,6 +378,44 @@ AI/ML (TensorFlow, PyTorch, Scikit-learn):
 - Include model saving/loading
 
 ═══════════════════════════════════════════════════════════════════════════════
+                    ☕ JAVA/SPRING BOOT BEST PRACTICES (CRITICAL!)
+═══════════════════════════════════════════════════════════════════════════════
+
+⚠️ CRITICAL JAVA RULES TO PREVENT BUILD ERRORS:
+
+1. ENUMS MUST BE SEPARATE FILES:
+   ❌ NEVER: public class Order { public enum OrderStatus { PENDING, ... } }
+   ✅ ALWAYS: Create separate file OrderStatus.java with: public enum OrderStatus { PENDING, ... }
+   - Put enums in model/ or enums/ package
+   - Import the enum in entity classes: import com.app.model.OrderStatus;
+
+2. ENTITY CLASSES MUST HAVE ALL FIELDS AND METHODS:
+   If OrderService calls order.getPaymentStatus(), Order.java MUST have:
+   - private PaymentStatus paymentStatus;
+   - public PaymentStatus getPaymentStatus() { return paymentStatus; }
+   - public void setPaymentStatus(PaymentStatus status) { this.paymentStatus = status; }
+
+3. REPOSITORY CUSTOM METHODS:
+   If OrderService calls orderRepository.findByUserIdOrderByOrderDateDesc(userId):
+   OrderRepository MUST define: List<Order> findByUserIdOrderByOrderDateDesc(Long userId);
+
+4. SECURITY CLASSES (ALL REQUIRED):
+   - JwtUtil.java - Token generation/validation
+   - JwtAuthenticationFilter.java - Extends OncePerRequestFilter
+   - JwtAuthenticationEntryPoint.java - Implements AuthenticationEntryPoint
+   - SecurityConfig.java - @Configuration @EnableWebSecurity (imports above classes)
+
+5. LOMBOK ANNOTATIONS:
+   Use @Data, @Builder, @NoArgsConstructor, @AllArgsConstructor to auto-generate getters/setters
+   Or manually write ALL getters/setters that services will call
+
+6. IMPORT STATEMENTS:
+   Always include complete imports at top of file:
+   import com.app.model.OrderStatus;
+   import com.app.model.PaymentStatus;
+   import com.app.repository.OrderRepository;
+
+═══════════════════════════════════════════════════════════════════════════════
                     ⚛️ JAVASCRIPT/TYPESCRIPT BEST PRACTICES
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -545,6 +583,48 @@ Or even simpler (Docker creates default network):
 ```yaml
 # No networks section needed - Docker handles it automatically
 ```
+
+PORT ALLOCATION RULES (CRITICAL - AVOID CONFLICTS!):
+System services and common apps already use certain ports. NEVER use these host ports:
+- ❌ 80, 443 - Reserved for system web servers (nginx, apache)
+- ❌ 8080 - Common web server port (often used by nginx/apache/jenkins)
+- ❌ 3000 - Often used by development tools
+- ❌ 5432 - PostgreSQL default (may conflict with host PostgreSQL)
+- ❌ 6379 - Redis default (may conflict with host Redis)
+- ❌ 3306 - MySQL default (may conflict with host MySQL)
+- ❌ 27017 - MongoDB default (may conflict with host MongoDB)
+
+USE HIGHER PORT NUMBERS for host mappings:
+✅ CORRECT - Use ports 8081-8099 for web apps:
+```yaml
+services:
+  backend:
+    ports:
+      - "8082:8080"  # Host 8082 → Container 8080
+  frontend:
+    ports:
+      - "3001:3000"  # Host 3001 → Container 3000
+  db:
+    ports:
+      - "5433:5432"  # Host 5433 → Container 5432
+  redis:
+    ports:
+      - "6380:6379"  # Host 6380 → Container 6379
+```
+
+❌ WRONG - Using system ports directly:
+```yaml
+services:
+  backend:
+    ports:
+      - "8080:8080"  # Will conflict with nginx!
+  frontend:
+    ports:
+      - "3000:3000"  # May conflict!
+```
+
+IMPORTANT: The container port (right side) can be standard (8080, 3000, etc.)
+Only the HOST port (left side) needs to avoid conflicts!
 
 ═══════════════════════════════════════════════════════════════════════════════
                     🔗 FULLSTACK INTEGRATION (CRITICAL!)

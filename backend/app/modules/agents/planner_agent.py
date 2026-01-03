@@ -224,23 +224,56 @@ DEPENDENCY RULES:
 TECHNOLOGY-SPECIFIC PATTERNS:
 
 📦 JAVA/SPRING BOOT:
-- DTOs/Entities (priority 1-5): No dependencies, export data classes
-  <file path="src/main/java/com/app/dto/UserDto.java" priority="1" depends_on="">
-    <exports>UserDto</exports>
+
+⚠️ CRITICAL JAVA RULES:
+1. ENUMS MUST BE SEPARATE FILES - NEVER use inner enums in entity classes!
+   ❌ WRONG: public class Order { public enum OrderStatus { ... } }
+   ✅ CORRECT: Create separate OrderStatus.java file
+2. ALL fields/methods used by Services MUST be defined in Entity/DTO classes
+3. Repository custom methods MUST match what Services call
+
+JAVA FILE ORDER (by priority):
+- Enums (priority 1-2): No dependencies, standalone enum files
+  <file path="src/main/java/com/app/model/OrderStatus.java" priority="1" depends_on="">
+    <exports>OrderStatus</exports>
+  </file>
+  <file path="src/main/java/com/app/model/PaymentStatus.java" priority="1" depends_on="">
+    <exports>PaymentStatus</exports>
+  </file>
+- DTOs/Entities (priority 3-5): Depend on enums, export data classes
+  <file path="src/main/java/com/app/model/Order.java" priority="3" depends_on="src/main/java/com/app/model/OrderStatus.java,src/main/java/com/app/model/PaymentStatus.java">
+    <imports>OrderStatus, PaymentStatus</imports>
+    <exports>Order (with ALL fields: id, status, paymentStatus, items, totalAmount, etc.)</exports>
   </file>
 - Repositories (priority 6-10): Depend on entities
-  <file path="src/main/java/com/app/repository/UserRepository.java" priority="6" depends_on="src/main/java/com/app/entity/User.java">
-    <imports>User from entity</imports>
-    <exports>UserRepository</exports>
+  <file path="src/main/java/com/app/repository/OrderRepository.java" priority="6" depends_on="src/main/java/com/app/model/Order.java">
+    <imports>Order from model</imports>
+    <exports>OrderRepository (with ALL custom methods that services will call)</exports>
   </file>
-- Services (priority 11-15): Depend on repositories, DTOs
-  <file path="src/main/java/com/app/service/UserService.java" priority="11" depends_on="src/main/java/com/app/repository/UserRepository.java,src/main/java/com/app/dto/UserDto.java">
-    <imports>UserRepository, UserDto</imports>
-    <exports>UserService</exports>
+- Services (priority 11-15): Depend on repositories, DTOs, enums
+  <file path="src/main/java/com/app/service/OrderService.java" priority="11" depends_on="src/main/java/com/app/repository/OrderRepository.java,src/main/java/com/app/model/Order.java,src/main/java/com/app/model/OrderStatus.java">
+    <imports>OrderRepository, Order, OrderStatus</imports>
+    <exports>OrderService</exports>
+  </file>
+- Security (priority 12-14): JWT filters, utils, entry points
+  <file path="src/main/java/com/app/security/JwtUtil.java" priority="12" depends_on="">
+    <exports>JwtUtil</exports>
+  </file>
+  <file path="src/main/java/com/app/security/JwtAuthenticationFilter.java" priority="13" depends_on="src/main/java/com/app/security/JwtUtil.java">
+    <imports>JwtUtil</imports>
+    <exports>JwtAuthenticationFilter</exports>
+  </file>
+  <file path="src/main/java/com/app/security/JwtAuthenticationEntryPoint.java" priority="13" depends_on="">
+    <exports>JwtAuthenticationEntryPoint</exports>
+  </file>
+- Config (priority 15): Depend on security classes
+  <file path="src/main/java/com/app/config/SecurityConfig.java" priority="15" depends_on="src/main/java/com/app/security/JwtAuthenticationFilter.java,src/main/java/com/app/security/JwtAuthenticationEntryPoint.java">
+    <imports>JwtAuthenticationFilter, JwtAuthenticationEntryPoint</imports>
+    <exports>SecurityConfig</exports>
   </file>
 - Controllers (priority 16-20): Depend on services
-  <file path="src/main/java/com/app/controller/UserController.java" priority="16" depends_on="src/main/java/com/app/service/UserService.java">
-    <imports>UserService, UserDto</imports>
+  <file path="src/main/java/com/app/controller/OrderController.java" priority="16" depends_on="src/main/java/com/app/service/OrderService.java">
+    <imports>OrderService, Order</imports>
     <exports>REST endpoints</exports>
   </file>
 
@@ -1019,6 +1052,22 @@ IMPORTANT STRUCTURAL RULES:
 8. Use versioned API paths (/api/v1/) for backends
 9. Group related components in feature folders
 10. Keep reusable code in lib/, utils/, or pkg/
+
+DOCKER PORT ALLOCATION (CRITICAL - AVOID CONFLICTS!):
+System services use certain ports. NEVER plan docker-compose with these HOST ports:
+- 80, 443 - Reserved for system web servers
+- 8080 - Reserved for nginx/apache/jenkins
+- 3000 - Often used by dev tools
+- 5432 - PostgreSQL system service
+- 6379 - Redis system service
+- 3306 - MySQL system service
+
+USE HIGHER PORT NUMBERS in docker-compose.yml:
+- Backend: 8082:8080 (Host 8082, Container 8080)
+- Frontend: 3001:3000 (Host 3001, Container 3000)
+- PostgreSQL: 5433:5432 (Host 5433, Container 5432)
+- Redis: 6380:6379 (Host 6380, Container 6379)
+- MySQL: 3307:3306 (Host 3307, Container 3306)
 
 ═══════════════════════════════════════════════════════════════════════════════
 

@@ -95,9 +95,10 @@ interface ProjectRunControlsProps {
   autoFix?: boolean // Enable automatic error fixing
   onStartSession?: () => void  // Called when run starts to keep terminal open
   onEndSession?: () => void    // Called when run ends (terminal stays open)
+  onClearLogs?: () => void     // Called to clear terminal logs for fresh run
 }
 
-export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutput, autoFix = true, onStartSession, onEndSession }: ProjectRunControlsProps) {
+export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutput, autoFix = true, onStartSession, onEndSession, onClearLogs }: ProjectRunControlsProps) {
   const { currentProject, loadFromBackend } = useProjectStore()
   const [status, setStatus] = useState<RunStatus>('idle')
 
@@ -1535,6 +1536,9 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
     abortControllerRef.current?.abort()
     abortControllerRef.current = new AbortController()
+
+    // Clear terminal logs for fresh run - new terminal for each run
+    onClearLogs?.()
 
     setStatus('creating')
     setPreviewUrl(null)

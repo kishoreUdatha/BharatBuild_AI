@@ -1487,205 +1487,30 @@ class UnifiedStorageService:
             # Quick check if project already exists on EC2 (skip restore if cached)
             docker_client = docker.DockerClient(base_url=sandbox_docker_host)
             try:
+                # FIXED: Use recursive file count (excluding node_modules) instead of top-level ls
+                # Old: ls | wc -l only counted top-level items (4-5 for typical project)
+                # New: find -type f counts all actual files recursively
                 check_output = docker_client.containers.run(
                     "alpine:latest",
-                    ["-c", f"test -d {workspace_path} && ls {workspace_path} | wc -l"],
+                    ["-c", f"find {workspace_path} -type f ! -path '*/node_modules/*' 2>/dev/null | wc -l"],
                     entrypoint="/bin/sh",
                     volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
                     remove=True,
                     detach=False
                 )
                 file_count = int(check_output.decode().strip() or "0")
-                if file_count > 5:  # Project has files, skip restore
-                    logger.info(f"[RemoteRestore] Project cached on EC2 ({file_count} files), running JSON sanitization")
-                    # Still run JSON sanitization even when cached to fix any corrupted files
-                    try:
-                        sanitize_script = f'''
-echo "[SANITIZE-CACHED] Starting cleanup in {workspace_path}"
-# Clear corrupted node_modules to allow fresh install
-if [ -d "{workspace_path}/node_modules" ]; then
-    echo "[SANITIZE-CACHED] Removing corrupted node_modules..."
-    rm -rf {workspace_path}/node_modules 2>/dev/null || true
-fi
-echo "[SANITIZE-CACHED] Sanitizing JSON files..."
-for json_file in $(find {workspace_path} -name "*.json" -type f ! -path "*/node_modules/*" 2>/dev/null | head -20); do
-    python3 -c "
-import json
-try:
-    with open('$json_file', 'r') as f:
-        data = json.load(f)
-    with open('$json_file', 'w') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.write('\\n')
-    print('[SANITIZE-CACHED] Fixed: $json_file')
-except Exception as e:
-    print(f'[SANITIZE-CACHED] Skip: {{e}}')
-" 2>&1 || true
-done
-echo "[SANITIZE-CACHED] Done"
-'''
-                        docker_client.containers.run(
-                            "python:3.11-slim",
-                            ["-c", sanitize_script],
-                            entrypoint="/bin/sh",
-                            volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
-                            remove=True,
-                            detach=False
-                        )
-                        logger.info(f"[RemoteRestore] JSON sanitization completed for cached project")
-                    except Exception as sanitize_err:
-                        logger.warning(f"[RemoteRestore] JSON sanitization for cached project failed: {sanitize_err}")
+                if file_count > 3:  # Project has files, skip S3 restore (preserves auto-fixer changes!)
+                    logger.info(f"[RemoteRestore] Project cached on EC2 ({file_count} files), SKIPPING S3 restore")
+                    # =============================================================
+                    # CACHED PROJECT - Use existing EC2 files WITHOUT modifications
+                    # =============================================================
+                    # WHY: Preserve auto-fixer changes between runs
+                    # - JSON sanitization, Dockerfile fixes, Vite fixes were removed
+                    # - These fixes only run during FIRST S3 restore (see below)
+                    # - If issues exist, auto-fixer will handle them during build
+                    # =============================================================
 
-                    # Fix Dockerfiles: Replace production multi-stage builds with development Dockerfiles
-                    try:
-                        dockerfile_fix_script = f'''
-echo "[DOCKERFILE-FIX-CACHED] Checking Dockerfiles..."
-for dockerfile in $(find {workspace_path} -name "Dockerfile*" -type f 2>/dev/null); do
-    # Check if it's a multi-stage Node.js production build (has npm run build AND COPY --from)
-    if grep -q "npm run build" "$dockerfile" 2>/dev/null && grep -q "COPY --from" "$dockerfile" 2>/dev/null; then
-        echo "[DOCKERFILE-FIX-CACHED] Replacing multi-stage build with dev Dockerfile: $dockerfile"
-        # Detect if it's Vite (port 5173) or Next.js/React (port 3000)
-        if grep -q "5173" "$dockerfile" 2>/dev/null || grep -qi "vite" "$dockerfile" 2>/dev/null; then
-            cat > "$dockerfile" << 'DEVEOF'
-FROM node:20-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm install
-COPY . .
-EXPOSE 5173
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
-DEVEOF
-        else
-            cat > "$dockerfile" << 'DEVEOF'
-FROM node:20-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm install
-COPY . .
-EXPOSE 3000
-CMD ["npm", "run", "dev"]
-DEVEOF
-        fi
-        echo "[DOCKERFILE-FIX-CACHED] Replaced: $dockerfile"
-    # Check if it's a Java/Spring Boot Dockerfile - replace with dev Dockerfile
-    elif grep -q "mvnw\|mvn.*package\|spring-boot" "$dockerfile" 2>/dev/null; then
-        echo "[DOCKERFILE-FIX-CACHED] Replacing Java Dockerfile with dev version: $dockerfile"
-        cat > "$dockerfile" << 'JAVAEOF'
-FROM maven:3.9-eclipse-temurin-17
-WORKDIR /app
-COPY pom.xml .
-RUN mvn dependency:go-offline -B || true
-COPY src ./src
-EXPOSE 8080
-CMD ["mvn", "spring-boot:run", "-Dcheckstyle.skip=true", "-Dspring-boot.run.jvmArguments=-Xmx512m"]
-JAVAEOF
-        echo "[DOCKERFILE-FIX-CACHED] Replaced Java Dockerfile: $dockerfile"
-    else
-        # Simple fix for non-multi-stage Dockerfiles
-        FIXED=""
-        if grep -q "npm ci" "$dockerfile" 2>/dev/null; then
-            sed -i 's/npm ci/npm install/g' "$dockerfile"
-            FIXED="$FIXED npm_ci"
-        fi
-        # Fix --only=production (skips devDependencies like vite)
-        if grep -q "\-\-only=production\|\-\-omit=dev" "$dockerfile" 2>/dev/null; then
-            sed -i 's/npm install --only=production/npm install/g' "$dockerfile"
-            sed -i 's/npm install --omit=dev/npm install/g' "$dockerfile"
-            sed -i 's/--production//g' "$dockerfile"
-            FIXED="$FIXED prod_deps"
-        fi
-        if grep -q "RUN npm run build" "$dockerfile" 2>/dev/null; then
-            sed -i '/RUN npm run build/d' "$dockerfile"
-            FIXED="$FIXED npm_build"
-        fi
-        # Fix npm start -> npm run dev for Vite projects
-        if grep -q 'npm.*start' "$dockerfile" 2>/dev/null; then
-            # Check if this is a Vite project (port 5173 or vite in Dockerfile or nearby package.json)
-            dockerfile_dir=$(dirname "$dockerfile")
-            if grep -q "5173" "$dockerfile" 2>/dev/null || grep -qi "vite" "$dockerfile" 2>/dev/null || ([ -f "$dockerfile_dir/package.json" ] && grep -q '"vite"' "$dockerfile_dir/package.json" 2>/dev/null); then
-                sed -i 's/CMD \["npm", "start"\]/CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]/g' "$dockerfile"
-                sed -i 's/CMD \["npm", "start", "--", "--host", "0.0.0.0"\]/CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]/g' "$dockerfile"
-                sed -i 's/npm start/npm run dev -- --host 0.0.0.0/g' "$dockerfile"
-                FIXED="$FIXED vite_cmd"
-            fi
-        fi
-        if [ -n "$FIXED" ]; then
-            echo "[DOCKERFILE-FIX-CACHED] Fixed:$FIXED in $dockerfile"
-        fi
-    fi
-done
-'''
-                        docker_client.containers.run(
-                            "alpine:latest",
-                            ["-c", dockerfile_fix_script],
-                            entrypoint="/bin/sh",
-                            volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
-                            remove=True,
-                            detach=False
-                        )
-                    except Exception as fix_err:
-                        logger.warning(f"[RemoteRestore] Dockerfile fix for cached project failed: {fix_err}")
-
-                    # Fix missing Vite config files (tsconfig.node.json, etc.)
-                    try:
-                        vite_fix_script = f'''
-echo "[VITE-FIX-CACHED] Checking for Vite projects..."
-for pkg_json in $(find {workspace_path} -name "package.json" -type f 2>/dev/null); do
-    pkg_dir=$(dirname "$pkg_json")
-    # Check if this is a Vite project
-    if grep -q '"vite"' "$pkg_json" 2>/dev/null; then
-        echo "[VITE-FIX-CACHED] Found Vite project: $pkg_dir"
-
-        # Create tsconfig.node.json if missing
-        if [ ! -f "$pkg_dir/tsconfig.node.json" ]; then
-            echo "[VITE-FIX-CACHED] Creating tsconfig.node.json"
-            cat > "$pkg_dir/tsconfig.node.json" << 'TSEOF'
-{{
-  "compilerOptions": {{
-    "composite": true,
-    "skipLibCheck": true,
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "allowSyntheticDefaultImports": true,
-    "strict": true
-  }},
-  "include": ["vite.config.ts", "vite.config.js"]
-}}
-TSEOF
-        fi
-
-        # Create vite.config.ts if missing and no vite.config.js exists
-        if [ ! -f "$pkg_dir/vite.config.ts" ] && [ ! -f "$pkg_dir/vite.config.js" ]; then
-            echo "[VITE-FIX-CACHED] Creating vite.config.ts"
-            cat > "$pkg_dir/vite.config.ts" << 'VITEEOF'
-import {{ defineConfig }} from "vite"
-import react from "@vitejs/plugin-react"
-
-export default defineConfig({{
-  plugins: [react()],
-  server: {{
-    host: "0.0.0.0",
-    port: 5173,
-  }},
-}})
-VITEEOF
-        fi
-    fi
-done
-echo "[VITE-FIX-CACHED] Done"
-'''
-                        docker_client.containers.run(
-                            "alpine:latest",
-                            ["-c", vite_fix_script],
-                            entrypoint="/bin/sh",
-                            volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
-                            remove=True,
-                            detach=False
-                        )
-                    except Exception as vite_err:
-                        logger.warning(f"[RemoteRestore] Vite fix for cached project failed: {vite_err}")
-
-                    # Return file info from DB without re-downloading
+                    # Return file info from DB without re-downloading or modifying
                     async with AsyncSessionLocal() as session:
                         result = await session.execute(
                             select(ProjectFile).where(cast(ProjectFile.project_id, SQLString(36)) == str(UUID(project_id))).where(ProjectFile.is_folder == False)
