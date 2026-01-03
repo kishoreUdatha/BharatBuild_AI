@@ -1863,6 +1863,28 @@ class ContainerExecutor:
                                         yield f"  ✅ BoltFixer created/modified {len(fix_result.files_modified)} files:\n"
                                         for f in fix_result.files_modified:
                                             yield f"     📝 {f}\n"
+
+                                        # Sync fixed files to S3 immediately
+                                        yield f"  ☁️ Syncing fixes to S3...\n"
+                                        try:
+                                            synced_count = 0
+                                            for file_path in fix_result.files_modified:
+                                                full_path = f"{project_path}/{file_path}"
+                                                cat_cmd = f"cat '{full_path}'"
+                                                exit_code_cat, content = self._run_shell_on_sandbox(cat_cmd, working_dir=project_path, timeout=10)
+                                                if exit_code_cat == 0 and content:
+                                                    content_bytes = content.encode('utf-8') if isinstance(content, str) else content
+                                                    await storage_service.upload_file(
+                                                        project_id=project_id,
+                                                        file_path=file_path,
+                                                        content=content_bytes
+                                                    )
+                                                    synced_count += 1
+                                            yield f"  ✅ {synced_count} file(s) synced to S3\n"
+                                        except Exception as sync_err:
+                                            logger.warning(f"[ContainerExecutor] Build fix S3 sync error: {sync_err}")
+                                            yield f"  ⚠️ S3 sync warning: {sync_err}\n"
+
                                         yield f"  🔄 Retrying docker-compose build...\n"
                                         continue  # Retry the build
                                     else:
