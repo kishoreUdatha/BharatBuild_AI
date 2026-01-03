@@ -113,6 +113,8 @@ No explanations. Only the <file> block."""
     def __init__(self):
         self._claude_client = None
         self._sandbox_file_writer = None  # Set by fix_from_backend if provided
+        self._sandbox_file_reader = None  # Set by fix_from_backend if provided
+        self._sandbox_file_lister = None  # Set by fix_from_backend if provided
 
     def _write_file(self, file_path: Path, content: str, project_id: str) -> bool:
         """
