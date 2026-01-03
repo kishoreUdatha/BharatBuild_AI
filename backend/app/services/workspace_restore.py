@@ -524,20 +524,57 @@ class WorkspaceRestoreService:
         """
         # =====================================================================
         # CRITICAL: Remote Docker mode handling
-        # When SANDBOX_DOCKER_HOST is set, files must be restored to remote EC2
-        # not the local ECS filesystem. Delegate to unified_storage's remote restore.
+        # When SANDBOX_DOCKER_HOST is set, files exist on remote EC2 sandbox
+        # SKIP restore if files already exist - use existing sandbox files
+        # This preserves auto-fixer changes between runs!
         # =====================================================================
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
         if sandbox_docker_host:
-            logger.info(f"[WorkspaceRestore] Remote Docker mode detected, delegating to unified_storage")
+            logger.info(f"[WorkspaceRestore] Remote Docker mode detected, checking EC2 sandbox")
             try:
-                from app.services.unified_storage import unified_storage
+                import docker
+
                 # Get user_id from project if not provided
                 project = await self._get_project(project_id, db)
                 if not user_id and project:
                     user_id = str(project.user_id)
 
-                # Use unified_storage's remote restore which handles EC2 sandbox
+                workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}" if user_id else f"/tmp/sandbox/workspace/{project_id}"
+
+                # =====================================================================
+                # FIRST: Check if files already exist on EC2 sandbox
+                # If they do, DON'T restore from S3 - use existing files
+                # This preserves auto-fixer changes!
+                # =====================================================================
+                docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+                try:
+                    # Count files on EC2 sandbox (exclude node_modules)
+                    check_cmd = f"find {workspace_path} -type f ! -path '*/node_modules/*' 2>/dev/null | wc -l"
+                    check_output = docker_client.containers.run(
+                        "alpine:latest",
+                        ["-c", check_cmd],
+                        entrypoint="/bin/sh",
+                        volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                        remove=True,
+                        detach=False
+                    )
+                    file_count = int(check_output.decode().strip() or "0")
+
+                    if file_count > 3:  # Project has files, skip restore
+                        logger.info(f"[WorkspaceRestore] EC2 sandbox has {file_count} files, SKIPPING S3 restore")
+                        return {
+                            "success": True,
+                            "method": "already_exists",
+                            "restored_files": file_count,
+                            "message": f"Using existing {file_count} files on EC2 sandbox (no S3 restore)"
+                        }
+                    else:
+                        logger.info(f"[WorkspaceRestore] EC2 sandbox has only {file_count} files, will restore from S3")
+                except Exception as check_err:
+                    logger.warning(f"[WorkspaceRestore] Could not check EC2 sandbox: {check_err}, will try restore")
+
+                # Only restore from S3 if files don't exist on EC2
+                from app.services.unified_storage import unified_storage
                 restored_files = await unified_storage._restore_to_remote_sandbox(project_id, user_id)
                 if restored_files:
                     return {

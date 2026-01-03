@@ -2089,6 +2089,37 @@ class ContainerExecutor:
                         # Track files for S3 sync after build succeeds
                         all_files_modified.extend(fix_result.files_modified)
 
+                        # =================================================================
+                        # IMMEDIATE S3 SYNC - Sync fixed files to S3 right away
+                        # This ensures fixes are persisted even if build fails
+                        # =================================================================
+                        yield f"📤 Syncing fixed files to S3...\n"
+                        try:
+                            from app.services.storage_service import storage_service
+                            from app.core.database import AsyncSessionLocal
+
+                            async with AsyncSessionLocal() as db:
+                                synced_count = 0
+                                for file_path in fix_result.files_modified:
+                                    full_path = f"{project_path}/{file_path}"
+                                    # Read file content from sandbox
+                                    cat_cmd = f"cat '{full_path}'"
+                                    exit_code, content = self._run_shell_on_sandbox(cat_cmd, working_dir=project_path, timeout=10)
+                                    if exit_code == 0 and content:
+                                        await storage_service.save_file(
+                                            project_id=project_id,
+                                            file_path=file_path,
+                                            content=content,
+                                            db=db
+                                        )
+                                        synced_count += 1
+                                        logger.info(f"[ContainerExecutor] Synced to S3: {file_path}")
+                                await db.commit()
+                            yield f"  ✅ {synced_count} file(s) synced to S3\n"
+                        except Exception as sync_err:
+                            logger.error(f"[ContainerExecutor] Immediate S3 sync error: {sync_err}")
+                            yield f"  ⚠️ S3 sync failed: {sync_err}\n"
+
                         # Rebuild and restart docker-compose
                         yield f"\n🔄 Rebuilding containers with fixes...\n"
 
@@ -2786,14 +2817,19 @@ class ContainerExecutor:
 
         try:
             # Read compose file
+            logger.info(f"[ContainerExecutor] Reading compose file for port allocation: {compose_file}")
             compose_content = self._read_file_from_sandbox(compose_file)
             if not compose_content:
-                logger.warning("[ContainerExecutor] Could not read compose file for port allocation")
+                logger.warning(f"[ContainerExecutor] Could not read compose file for port allocation: {compose_file}")
                 return port_mapping, frontend_port, backend_port
 
+            logger.info(f"[ContainerExecutor] Compose file read successfully, {len(compose_content)} bytes")
             compose_data = yaml.safe_load(compose_content)
             if not compose_data or 'services' not in compose_data:
+                logger.warning(f"[ContainerExecutor] Invalid compose data or no services found")
                 return port_mapping, frontend_port, backend_port
+
+            logger.info(f"[ContainerExecutor] Found {len(compose_data.get('services', {}))} services in compose file")
 
             # Collect all port mappings that need dynamic allocation
             ports_needed = []  # List of (service_name, port_index, original_host_port, container_port)
@@ -2811,19 +2847,36 @@ class ContainerExecutor:
                                 # Handle formats: "80:80", "3000:3000", "0.0.0.0:80:80"
                                 if len(parts) == 3:
                                     # Format: "0.0.0.0:80:80"
-                                    host_port = int(parts[1])
+                                    host_port_str = parts[1]
                                     container_port = parts[2]
                                 else:
-                                    # Format: "80:80"
-                                    host_port = int(parts[0])
+                                    # Format: "80:80" or "${PORT:-8080}:8080"
+                                    host_port_str = parts[0]
                                     container_port = parts[1]
 
+                                # Handle environment variable syntax: ${VAR:-default}
+                                # Extract the default value after :-
+                                if ':-' in host_port_str:
+                                    # ${PORT:-8080} -> extract 8080
+                                    default_match = host_port_str.split(':-')[-1].rstrip('}')
+                                    host_port = int(default_match)
+                                    logger.info(f"[ContainerExecutor] Parsed env var port: {host_port_str} -> {host_port}")
+                                elif host_port_str.startswith('${'):
+                                    # ${PORT} without default - use container port as fallback
+                                    container_port_clean = container_port.split('/')[0]
+                                    host_port = int(container_port_clean)
+                                    logger.info(f"[ContainerExecutor] Env var without default, using container port: {host_port}")
+                                else:
+                                    host_port = int(host_port_str)
+
                                 ports_needed.append((service_name, idx, host_port, container_port))
-                            except ValueError:
-                                pass
+                                logger.info(f"[ContainerExecutor] Found port mapping: {service_name} -> {host_port}:{container_port}")
+                            except ValueError as e:
+                                logger.warning(f"[ContainerExecutor] Could not parse port: {port_mapping_str} - {e}")
                     elif isinstance(port_mapping_str, int):
                         # Single port number (same for host and container)
                         ports_needed.append((service_name, idx, port_mapping_str, str(port_mapping_str)))
+                        logger.info(f"[ContainerExecutor] Found single port: {service_name} -> {port_mapping_str}")
 
             if not ports_needed:
                 logger.info("[ContainerExecutor] No port mappings found in compose file")

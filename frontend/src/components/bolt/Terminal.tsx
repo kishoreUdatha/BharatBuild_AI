@@ -541,9 +541,6 @@ export function Terminal({
             <Trash2 className="w-3.5 h-3.5" />
           </Button>
 
-          {/* Divider */}
-          <div className="w-px h-4 bg-gray-700 mx-1" />
-
           {/* Minimize */}
           <Button
             variant="ghost"

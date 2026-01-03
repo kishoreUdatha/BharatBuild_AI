@@ -187,7 +187,7 @@ export function BoltLayout({
   const { openTab } = useProject()
 
   // Import terminal hooks
-  const { isVisible: showTerminal, height: terminalHeight, toggleTerminal, openTerminal, setHeight: setTerminalHeight, logs: terminalLogs, addLog, startSession, endSession } = useTerminal()
+  const { isVisible: showTerminal, height: terminalHeight, toggleTerminal, openTerminal, setHeight: setTerminalHeight, logs: terminalLogs, addLog, clearLogs, startSession, endSession } = useTerminal()
 
   // Memoized terminal command handler to prevent XTerminal re-renders
   const handleTerminalCommand = useCallback((cmd: string) => {
@@ -891,6 +891,10 @@ export function BoltLayout({
             onEndSession={() => {
               // End session but keep terminal open for user to review output
               endSession()
+            }}
+            onClearLogs={() => {
+              // Clear terminal logs for fresh run - new terminal for each run
+              clearLogs()
             }}
           />
 
