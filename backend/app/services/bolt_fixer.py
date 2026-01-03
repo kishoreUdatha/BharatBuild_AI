@@ -256,17 +256,32 @@ No explanations. Only the <file> block."""
         target_file = classified.file_path or error_file
 
         if target_file and project_path:
-            file_path = project_path / target_file
-            if not file_path.exists():
-                file_path = project_path / "frontend" / target_file
-            if not file_path.exists():
-                file_path = project_path / "backend" / target_file
-            if file_path.exists():
+            # Try different paths to find the file
+            possible_paths = [
+                project_path / target_file,
+                project_path / "frontend" / target_file,
+                project_path / "backend" / target_file,
+            ]
+
+            for file_path in possible_paths:
                 try:
-                    file_content = file_path.read_text(encoding='utf-8')
-                    logger.info(f"[BoltFixer:{project_id}] Read file: {target_file} ({len(file_content)} chars)")
+                    # Use sandbox_file_reader for remote mode, local read for local mode
+                    if self._sandbox_file_reader:
+                        content = self._sandbox_file_reader(str(file_path))
+                        if content:
+                            file_content = content
+                            logger.info(f"[BoltFixer:{project_id}] Read file via sandbox: {file_path} ({len(file_content)} chars)")
+                            break
+                    elif file_path.exists():
+                        file_content = file_path.read_text(encoding='utf-8')
+                        logger.info(f"[BoltFixer:{project_id}] Read file locally: {file_path} ({len(file_content)} chars)")
+                        break
                 except Exception as e:
-                    logger.warning(f"[BoltFixer:{project_id}] Could not read {target_file}: {e}")
+                    logger.debug(f"[BoltFixer:{project_id}] Could not read {file_path}: {e}")
+                    continue
+
+            if not file_content:
+                logger.warning(f"[BoltFixer:{project_id}] Could not read target file from any path: {target_file}")
 
         # For Java errors, also read related class files mentioned in the error
         if target_file and target_file.endswith('.java'):
@@ -376,23 +391,46 @@ BUILD LOG:
             # Find target file
             parsed = DiffParser.parse(patch_content)
             actual_file = parsed.new_file or parsed.old_file or file_path
-            target_path = project_path / actual_file
-            if not target_path.exists():
-                target_path = project_path / "frontend" / actual_file
-            if not target_path.exists():
-                target_path = project_path / "backend" / actual_file
 
-            if target_path.exists():
+            # Try different paths to find the file
+            possible_paths = [
+                (project_path / actual_file, actual_file),
+                (project_path / "frontend" / actual_file, f"frontend/{actual_file}"),
+                (project_path / "backend" / actual_file, f"backend/{actual_file}"),
+            ]
+
+            original = None
+            target_path = None
+            final_file = actual_file
+
+            for path, rel_path in possible_paths:
                 try:
-                    original = target_path.read_text(encoding='utf-8')
+                    if self._sandbox_file_reader:
+                        content = self._sandbox_file_reader(str(path))
+                        if content:
+                            original = content
+                            target_path = path
+                            final_file = rel_path
+                            break
+                    elif path.exists():
+                        original = path.read_text(encoding='utf-8')
+                        target_path = path
+                        final_file = rel_path
+                        break
+                except Exception:
+                    continue
+
+            if original and target_path:
+                try:
                     apply_result = DiffParser.apply(original, parsed)
 
                     if apply_result.success:
                         # Use sandbox-aware file writer
                         if self._write_file(target_path, apply_result.new_content, project_id):
-                            files_modified.append(actual_file)
+                            files_modified.append(final_file)
+                            logger.info(f"[BoltFixer:{project_id}] Applied patch to {final_file}")
                 except Exception as e:
-                    logger.error(f"[BoltFixer:{project_id}] Error applying patch: {e}")
+                    logger.error(f"[BoltFixer:{project_id}] Error applying patch to {final_file}: {e}")
 
         # Apply full file replacements
         for file_info in full_files:
@@ -414,15 +452,18 @@ BUILD LOG:
                 logger.warning(f"[BoltFixer:{project_id}] Invalid file: {result.errors}")
                 continue
 
-            target_path = project_path / file_path
-            if not target_path.exists():
-                target_path = project_path / "frontend" / file_path
-            if not target_path.exists():
+            # Determine best target path based on file type
+            if file_path.endswith('.java'):
                 target_path = project_path / "backend" / file_path
+            elif file_path.endswith(('.ts', '.tsx', '.js', '.jsx', '.css', '.html')):
+                target_path = project_path / "frontend" / file_path
+            else:
+                target_path = project_path / file_path
 
             # Use sandbox-aware file writer
             if self._write_file(target_path, content, project_id):
                 files_modified.append(file_path)
+                logger.info(f"[BoltFixer:{project_id}] Wrote full file: {file_path}")
 
         # Create new files
         for file_info in new_files:
@@ -432,7 +473,14 @@ BUILD LOG:
             # PROTECTION: Don't create new docker-compose.yml if one already exists
             if "docker-compose" in file_path.lower():
                 existing_compose = project_path / "docker-compose.yml"
-                if existing_compose.exists():
+                # Check existence using sandbox reader or local check
+                exists = False
+                if self._sandbox_file_reader:
+                    exists = self._sandbox_file_reader(str(existing_compose)) is not None
+                else:
+                    exists = existing_compose.exists()
+
+                if exists:
                     logger.warning(
                         f"[BoltFixer:{project_id}] BLOCKING creation of new docker-compose.yml - "
                         "original already exists"
@@ -445,10 +493,18 @@ BUILD LOG:
                 logger.warning(f"[BoltFixer:{project_id}] Invalid new file: {result.errors}")
                 continue
 
-            target_path = project_path / file_path
+            # Determine best target path based on file type
+            if file_path.endswith('.java'):
+                target_path = project_path / "backend" / file_path
+            elif file_path.endswith(('.ts', '.tsx', '.js', '.jsx', '.css', '.html')):
+                target_path = project_path / "frontend" / file_path
+            else:
+                target_path = project_path / file_path
+
             # Use sandbox-aware file writer
             if self._write_file(target_path, content, project_id):
                 files_modified.append(file_path)
+                logger.info(f"[BoltFixer:{project_id}] Created new file: {file_path}")
 
         # =================================================================
         # STEP 8: DO NOT SYNC TO S3 HERE
