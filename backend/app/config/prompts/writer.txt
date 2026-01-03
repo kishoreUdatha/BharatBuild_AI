@@ -708,6 +708,291 @@ public class GlobalExceptionHandler {
 ```
 
 ═══════════════════════════════════════════════════════════════════════════════
+                    ☕ JAVA CONSISTENCY RULES (CRITICAL)
+═══════════════════════════════════════════════════════════════════════════════
+
+⚠️ MANDATORY: All Java files in a project MUST be consistent with each other.
+Inconsistency causes build failures that are VERY difficult to fix.
+
+1. DTO STRUCTURE - USE FLAT CLASSES, NOT NESTED:
+❌ WRONG (causes mismatch errors):
+```java
+public class UserDto {
+    public static class Response { ... }  // Nested class
+    public static class Request { ... }   // Another nested class
+}
+// Controller tries: UserDto dto = new UserDto(); dto.getId(); // ERROR!
+```
+
+✅ CORRECT (flat, predictable):
+```java
+public class UserDto {
+    private Long id;
+    private String email;
+    private String username;
+    // All getters and setters directly on the class
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+}
+// Separate DTOs for different purposes:
+public class UserCreateDto { ... }
+public class UserUpdateDto { ... }
+```
+
+2. FIELD NAMING - MUST MATCH ACROSS MODEL, DTO, SERVICE:
+❌ WRONG (name mismatch):
+```java
+// Model
+private String phoneNumber;
+public String getPhoneNumber() { ... }
+
+// DTO - DIFFERENT NAME!
+private String phone;
+public String getPhone() { ... }  // ERROR: Service calls getPhone() but Model has getPhoneNumber()
+```
+
+✅ CORRECT (exact same names):
+```java
+// Model
+private String phoneNumber;
+public String getPhoneNumber() { return phoneNumber; }
+
+// DTO - SAME NAME
+private String phoneNumber;
+public String getPhoneNumber() { return phoneNumber; }
+
+// Service - uses SAME getter
+dto.setPhoneNumber(model.getPhoneNumber());  // ✓ Works!
+```
+
+3. BOOLEAN FIELD NAMING - USE "enabled" NOT "active":
+❌ WRONG:
+```java
+private boolean active;
+public boolean isActive() { ... }
+public void setActive(boolean active) { ... }
+```
+
+✅ CORRECT (Spring Security standard):
+```java
+private boolean enabled;
+public boolean isEnabled() { return enabled; }
+public void setEnabled(boolean enabled) { this.enabled = enabled; }
+```
+
+4. SERVICE INTERFACE - MUST MATCH IMPLEMENTATION:
+❌ WRONG (signature mismatch):
+```java
+// Interface
+Page<UserDto> getAllUsers(Pageable pageable);
+
+// Controller calls with extra params:
+userService.getAllUsers(pageable, search, role);  // ERROR!
+```
+
+✅ CORRECT (matching signatures):
+```java
+// Interface - include ALL needed overloads
+Page<UserDto> getAllUsers(Pageable pageable);
+Page<UserDto> getAllUsers(Pageable pageable, String search, UserRole role);
+
+// Controller - uses matching method
+userService.getAllUsers(pageable, search, role);  // ✓ Works!
+```
+
+5. OPTIONAL HANDLING - ALWAYS USE orElseThrow():
+❌ WRONG (type mismatch):
+```java
+// Service returns Optional
+Optional<UserDto> getUserByEmail(String email);
+
+// Controller expects direct value:
+UserDto user = userService.getUserByEmail(email);  // ERROR!
+```
+
+✅ CORRECT (proper unwrapping):
+```java
+// Service returns Optional
+Optional<UserDto> getUserByEmail(String email);
+
+// Controller handles Optional:
+UserDto user = userService.getUserByEmail(email)
+    .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+```
+
+6. REPOSITORY METHODS - STANDARD NAMING:
+✅ Use Spring Data JPA conventions:
+```java
+// Boolean checks
+boolean existsByEmail(String email);
+boolean existsByPhoneNumber(String phoneNumber);  // NOT existsByPhone
+
+// Count queries
+long countByEnabledTrue();  // NOT countByActiveTrue
+
+// Find queries
+Optional<User> findByEmail(String email);
+List<User> findByEnabledTrue();  // NOT findByActiveTrue
+```
+
+7. COMPLETE JAVA ENTITY TEMPLATE:
+```java
+@Entity
+@Table(name = "users")
+public class User implements UserDetails {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, unique = true)
+    private String username;
+
+    @Column(nullable = false, unique = true)
+    private String email;
+
+    @Column(nullable = false)
+    private String password;
+
+    @Column(name = "first_name")
+    private String firstName;
+
+    @Column(name = "last_name")
+    private String lastName;
+
+    @Column(name = "phone_number")
+    private String phoneNumber;  // NOT "phone"
+
+    @Column(nullable = false)
+    private boolean enabled = true;  // NOT "active"
+
+    @Enumerated(EnumType.STRING)
+    private Role role = Role.USER;
+
+    @Column(name = "created_at", updatable = false)
+    private LocalDateTime createdAt;
+
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+
+    @PrePersist
+    protected void onCreate() {
+        createdAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now();
+    }
+
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
+    }
+
+    // ALL getters and setters - COMPLETE, not partial
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+
+    public String getUsername() { return username; }
+    public void setUsername(String username) { this.username = username; }
+
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
+
+    public String getPassword() { return password; }
+    public void setPassword(String password) { this.password = password; }
+
+    public String getFirstName() { return firstName; }
+    public void setFirstName(String firstName) { this.firstName = firstName; }
+
+    public String getLastName() { return lastName; }
+    public void setLastName(String lastName) { this.lastName = lastName; }
+
+    public String getPhoneNumber() { return phoneNumber; }
+    public void setPhoneNumber(String phoneNumber) { this.phoneNumber = phoneNumber; }
+
+    public boolean isEnabled() { return enabled; }
+    public void setEnabled(boolean enabled) { this.enabled = enabled; }
+
+    public Role getRole() { return role; }
+    public void setRole(Role role) { this.role = role; }
+
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+
+    // UserDetails implementation
+    @Override
+    public Collection<? extends GrantedAuthority> getAuthorities() {
+        return List.of(new SimpleGrantedAuthority(role.name()));
+    }
+
+    @Override
+    public boolean isAccountNonExpired() { return true; }
+
+    @Override
+    public boolean isAccountNonLocked() { return true; }
+
+    @Override
+    public boolean isCredentialsNonExpired() { return true; }
+
+    public String getFullName() {
+        return firstName + " " + lastName;
+    }
+}
+```
+
+8. MATCHING DTO TEMPLATE:
+```java
+public class UserDto {
+    private Long id;
+    private String username;
+    private String email;
+    private String firstName;
+    private String lastName;
+    private String phoneNumber;  // SAME as entity
+    private boolean enabled;     // SAME as entity
+    private String role;
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+
+    // Default constructor
+    public UserDto() {}
+
+    // ALL getters - MUST match entity field names
+    public Long getId() { return id; }
+    public String getUsername() { return username; }
+    public String getEmail() { return email; }
+    public String getFirstName() { return firstName; }
+    public String getLastName() { return lastName; }
+    public String getPhoneNumber() { return phoneNumber; }  // NOT getPhone()
+    public boolean isEnabled() { return enabled; }          // NOT isActive()
+    public String getRole() { return role; }
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+
+    // ALL setters
+    public void setId(Long id) { this.id = id; }
+    public void setUsername(String username) { this.username = username; }
+    public void setEmail(String email) { this.email = email; }
+    public void setFirstName(String firstName) { this.firstName = firstName; }
+    public void setLastName(String lastName) { this.lastName = lastName; }
+    public void setPhoneNumber(String phoneNumber) { this.phoneNumber = phoneNumber; }
+    public void setEnabled(boolean enabled) { this.enabled = enabled; }
+    public void setRole(String role) { this.role = role; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+
+    public String getFullName() {
+        return firstName + " " + lastName;
+    }
+}
+```
+
+⚠️ BEFORE GENERATING JAVA FILES, VERIFY:
+[ ] All DTO fields have EXACT same names as Model fields
+[ ] All getters/setters use consistent naming (phoneNumber, not phone)
+[ ] Boolean fields use "enabled" not "active"
+[ ] Service interface methods match what Controller calls
+[ ] Optional returns are properly handled with orElseThrow()
+[ ] No nested static classes in DTOs (use separate DTO files)
+
+═══════════════════════════════════════════════════════════════════════════════
                          🔷 GO GUIDELINES
 ═══════════════════════════════════════════════════════════════════════════════
 

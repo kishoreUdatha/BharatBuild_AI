@@ -72,6 +72,14 @@ FIX THE ROOT CAUSE, NOT THE SYMPTOM:
 - If the error file imports/uses another class, check RELATED FILES section for the fix
 - Return patches for ALL files that need changes (you can return multiple patches)
 
+JAVA CONSISTENCY (MULTI-FILE):
+When fixing Java "cannot find symbol" errors:
+1. You may receive RELATED FILES (Entity, DTO, Service, Controller) - check them ALL
+2. Ensure field/method names match EXACTLY across related files
+3. If DTO missing getter/setter - add it to the DTO
+4. If Service interface missing method - add to BOTH interface AND implementation
+5. Output MULTIPLE <file> blocks if multiple files need changes
+
 OUTPUT FORMAT:
 
 For patching existing files:

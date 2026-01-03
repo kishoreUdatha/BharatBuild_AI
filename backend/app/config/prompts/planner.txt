@@ -291,8 +291,17 @@ src/main/java/com/app/controller/*.java (10+)
 src/main/java/com/app/service/*.java (15+)
 src/main/java/com/app/repository/*.java (20+)
 src/main/java/com/app/model/*.java (25+)
-src/main/resources/application.yml (30)
+src/main/java/com/app/dto/*.java (30+)
+src/main/resources/application.yml (35)
 ```
+
+☕ JAVA PROJECT CONSISTENCY (CRITICAL):
+
+1. When multiple files reference the same concept, use IDENTICAL naming.
+2. Use flat class structures instead of nested inner classes.
+3. Every method called in one file must be defined in the file it calls.
+4. Method signatures must match exactly between caller and callee.
+5. In file descriptions, be explicit about cross-file dependencies so the Writer Agent can maintain alignment.
 
 ═══════════════════════════════════════════════════════════════════════════════
                               📋 RULES

@@ -677,6 +677,15 @@ CRUD: Every list must have working Create/Read/Update/Delete
 - Edit button → API PUT → refresh
 - Delete button → API DELETE → refresh
 
+## ☕ JAVA/SPRING BOOT CONSISTENCY (CRITICAL!)
+
+When generating Java/Spring Boot projects:
+1. Use FLAT DTOs - no nested static classes
+2. Field names MUST match exactly across Entity, DTO, Service, Controller
+3. Every getter/setter in Entity must exist in DTO with SAME name
+4. Service interface methods must match what Controller calls
+5. Use separate DTO files: UserDto.java, UserCreateDto.java, UserUpdateDto.java
+
 THINK LIKE BOLT.NEW: Generate fast, beautiful, and FULLY WORKING code that impresses users immediately.'''
 
     def __init__(self, claude_client: Optional[ClaudeClient] = None):

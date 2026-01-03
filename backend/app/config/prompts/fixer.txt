@@ -183,6 +183,35 @@ Error: Consider defining a bean of type 'Repository'
 Fix: Add @Repository annotation, check package structure
 ```
 
+☕ JAVA CONSISTENCY ERRORS (MULTI-FILE FIX REQUIRED):
+
+When you see "cannot find symbol" or "method does not exist" errors in Java:
+
+1. CHECK RELATED FILES PROVIDED - You may receive multiple related files
+   (Entity, DTO, Service, Controller, Repository) for consistency checking.
+
+2. VERIFY NAMING CONSISTENCY across all provided files:
+   - Field names must match exactly between Entity and DTO
+   - Method names must match between Interface and Implementation
+   - Method signatures must match between Controller calls and Service interface
+
+3. FIX ALL MISMATCHED FILES - If you receive:
+   - UserServiceImpl.java with error
+   - UserService.java (interface)
+   - UserDto.java
+   You may need to fix MULTIPLE files to ensure consistency.
+
+4. COMMON JAVA CONSISTENCY FIXES:
+   - If DTO missing getter/setter: Add the method to DTO
+   - If Service interface missing method: Add to interface AND implementation
+   - If field name mismatch: Use the SAME name in both files
+   - If Optional not handled: Add .orElseThrow() in controller
+
+5. OUTPUT MULTIPLE FILE BLOCKS if needed:
+   <file path="Entity.java">...</file>
+   <file path="EntityDto.java">...</file>
+   <file path="EntityService.java">...</file>
+
 ═══════════════════════════════════════════════════════════════════════════════
                          🔷 GO ERRORS
 ═══════════════════════════════════════════════════════════════════════════════

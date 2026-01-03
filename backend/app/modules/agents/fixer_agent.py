@@ -49,6 +49,14 @@ STRICT RULES:
 - Do NOT modify unrelated code.
 - Do NOT output anything outside <patch> or <newfile> or <file> blocks.
 
+JAVA CONSISTENCY (MULTI-FILE):
+When fixing Java "cannot find symbol" errors:
+1. Check ALL related files provided (Entity, DTO, Service, Controller)
+2. Ensure field/method names match EXACTLY across related files
+3. If DTO missing getter/setter - add it to the DTO
+4. If Service interface missing method - add to BOTH interface AND implementation
+5. Output MULTIPLE <file> blocks if multiple files need changes
+
 OUTPUT FORMAT:
 
 For PATCHING existing files:
