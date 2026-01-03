@@ -67,9 +67,9 @@ const parsePreviewReady = (output: string): string | null => {
   return null
 }
 
-// COST OPTIMIZATION: Reduced from 10 to 3 (with 3 inner iterations = max 9 API calls)
-// If 3 outer retries don't fix it, stop and ask user - prevents runaway costs
-const MAX_AUTO_FIX_ATTEMPTS = 3
+// COST OPTIMIZATION: Increased to 6 for Java/Spring Boot projects with complex multi-file dependencies
+// Java projects often need more attempts due to Entity/DTO/Service/Controller consistency requirements
+const MAX_AUTO_FIX_ATTEMPTS = 6
 const DEFAULT_RETRY_DELAY = 1500  // Base delay between retries (ms)
 const MAX_RETRY_DELAY = 10000     // Max delay with exponential backoff (ms)
 const MAX_ERROR_BUFFER_SIZE = 50  // Max lines in error buffer to prevent memory leaks
