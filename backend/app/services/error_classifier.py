@@ -288,7 +288,34 @@ class ErrorClassifier:
 
     @classmethod
     def _extract_file_location(cls, text: str) -> Tuple[Optional[str], Optional[int]]:
-        """Extract file path and line number from error text"""
+        """
+        Extract file path and line number from error text.
+
+        IMPORTANT: For Java compilation errors, we must find the ACTUAL error file,
+        not just the first file mentioned. The error format is:
+        [ERROR] /app/src/main/java/com/example/File.java:[42,9] error message
+
+        The fix must target THIS file, not other files mentioned in the output.
+        """
+        # =====================================================================
+        # STEP 1: For Java errors, specifically look for [ERROR] lines first
+        # These are the ACTUAL compilation errors, not just mentions
+        # =====================================================================
+        java_error_pattern = r'\[ERROR\]\s*(/[a-zA-Z0-9_\-./\\]+\.java):\[(\d+),\s*\d+\]'
+        java_errors = re.findall(java_error_pattern, text)
+
+        if java_errors:
+            # Return the FIRST actual error (not the first mention)
+            file_path, line_str = java_errors[0]
+            line_number = int(line_str) if line_str else None
+            file_path = file_path.replace('\\', '/')
+            file_path = cls._normalize_container_path(file_path)
+            logger.info(f"[ErrorClassifier] Extracted Java error file: {file_path}:{line_number}")
+            return file_path, line_number
+
+        # =====================================================================
+        # STEP 2: Fallback to general patterns for non-Java errors
+        # =====================================================================
         for pattern in cls.FILE_PATTERNS:
             match = re.search(pattern, text)
             if match:
@@ -300,6 +327,43 @@ class ErrorClassifier:
                 file_path = cls._normalize_container_path(file_path)
                 return file_path, line_number
         return None, None
+
+    @classmethod
+    def extract_all_error_files(cls, text: str) -> List[Tuple[str, int]]:
+        """
+        Extract ALL files with errors, useful for batch fixing.
+
+        Returns:
+            List of (file_path, line_number) tuples for all files with errors
+        """
+        error_files = []
+        seen_files = set()
+
+        # For Java, extract all [ERROR] lines
+        java_error_pattern = r'\[ERROR\]\s*(/[a-zA-Z0-9_\-./\\]+\.java):\[(\d+),\s*\d+\]'
+        for match in re.finditer(java_error_pattern, text):
+            file_path = match.group(1)
+            line_number = int(match.group(2)) if match.group(2) else 0
+            file_path = file_path.replace('\\', '/')
+            file_path = cls._normalize_container_path(file_path)
+
+            if file_path not in seen_files:
+                error_files.append((file_path, line_number))
+                seen_files.add(file_path)
+
+        # Also check general patterns for non-Java files
+        for pattern in cls.FILE_PATTERNS:
+            for match in re.finditer(pattern, text):
+                file_path = match.group(1)
+                line_number = int(match.group(2)) if match.lastindex >= 2 else 0
+                file_path = file_path.replace('\\', '/')
+                file_path = cls._normalize_container_path(file_path)
+
+                if file_path not in seen_files:
+                    error_files.append((file_path, line_number))
+                    seen_files.add(file_path)
+
+        return error_files
 
     @classmethod
     def _normalize_container_path(cls, file_path: str) -> str:

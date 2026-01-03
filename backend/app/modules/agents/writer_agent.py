@@ -354,104 +354,1110 @@ EXAMPLES BY DOMAIN:
 ICONS: Use Lucide React - import { IconName } from 'lucide-react'
 
 ═══════════════════════════════════════════════════════════════════════════════
-                    🐍 PYTHON BEST PRACTICES
+         🐍 PYTHON/FASTAPI/DJANGO - STEP-BY-STEP VERIFICATION (MANDATORY!)
 ═══════════════════════════════════════════════════════════════════════════════
 
-FASTAPI (Production-Ready):
-- Use Pydantic v2 models with Field validation
-- Implement proper exception handlers
-- Add CORS middleware for frontend
-- Use async/await for all I/O operations
-- Include OpenAPI documentation
-- Add proper type hints everywhere
+🚨 FOR EVERY PYTHON FILE, COMPLETE ALL VERIFICATION STEPS BEFORE OUTPUTTING CODE:
 
-DJANGO:
-- Use class-based views
-- Implement proper serializers
-- Add pagination for list views
-- Use select_related/prefetch_related for optimization
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1: DERIVE MODULE PATH FROM FILE LOCATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Look at the file path (e.g., app/services/user_service.py)
+- Convert path to module: app.services.user_service
+- Verify __init__.py exists in each directory
+- Use relative imports within same package: from .models import User
 
-AI/ML (TensorFlow, PyTorch, Scikit-learn):
-- Include model architecture in docstring
-- Add training/inference functions
-- Implement data preprocessing
-- Include model saving/loading
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2: COLLECT ALL IMPORTS FROM CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Read "FILES ALREADY CREATED" section
+- For each class/function you need:
+  - Find its file in context
+  - Derive the import statement
+- Add standard library imports (typing, datetime, os, etc.)
+- Add framework imports (fastapi, pydantic, sqlalchemy, django)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3: VERIFY TYPES MATCH ACROSS FILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each type:
+- If User model defined in models/user.py → use SAME in schemas, services
+- Pydantic schemas must match SQLAlchemy models
+- Return types must match function signatures
+- List[User] vs User must be correct
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4: VERIFY ALL CLASSES/FUNCTIONS EXIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each import:
+- If importing UserService → UserService MUST exist in FILES ALREADY CREATED
+- If importing User model → User MUST be defined in models
+- If importing UserCreate schema → UserCreate MUST exist in schemas
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5: VERIFY FUNCTION SIGNATURES MATCH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each function call:
+- Parameter types must match exactly
+- Return type must match what caller expects
+- Optional[T] vs T must be handled (use if x is not None)
+- async functions must be awaited
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 6: VERIFY PYDANTIC MODELS (FastAPI)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Inherit from BaseModel (Pydantic v2)
+- Use Field() for validation
+- ConfigDict for model configuration (not class Config)
+- model_validate() not parse_obj() (Pydantic v2)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 7: VERIFY SQLALCHEMY MODELS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Inherit from Base (declarative base)
+- __tablename__ defined
+- Primary key: id = Column(Integer, primary_key=True)
+- Relationships use relationship() with back_populates
+- Foreign keys match referenced table types
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 8: VERIFY FASTAPI ENDPOINTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Decorators: @router.get(), @router.post(), etc.
+- Path parameters: @router.get("/{user_id}")
+- Request body: def create(user: UserCreate)
+- Response model: response_model=UserResponse
+- Dependencies: Depends(get_db), Depends(get_current_user)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 9: VERIFY DJANGO MODELS/VIEWS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Models:
+- Inherit from models.Model
+- Field types: CharField, IntegerField, ForeignKey, etc.
+- Meta class for table name, ordering
+
+Views:
+- Class-based views inherit from APIView or generic views
+- Serializers match model fields
+- permission_classes and authentication_classes
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 10: VERIFY ASYNC/AWAIT USAGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- async def for async functions
+- await for all async calls (db queries, HTTP requests)
+- AsyncSession for SQLAlchemy async
+- Don't mix sync/async database sessions
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 11: VERIFY ERROR HANDLING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- HTTPException for FastAPI errors
+- try/except for database operations
+- Custom exception classes if needed
+- Proper status codes (404 for not found, 400 for bad request)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 12: FINAL CHECK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Re-read your complete code and verify:
+[ ] All imports are present and paths are correct
+[ ] Type hints on all functions
+[ ] Pydantic/Django models have all required fields
+[ ] SQLAlchemy relationships properly defined
+[ ] Async/await correctly used
+[ ] Error handling present
+[ ] No syntax errors (colons, indentation)
 
 ═══════════════════════════════════════════════════════════════════════════════
-                    ☕ JAVA/SPRING BOOT BEST PRACTICES (CRITICAL!)
+          ☕ JAVA/SPRING BOOT - STEP-BY-STEP VERIFICATION (MANDATORY!)
 ═══════════════════════════════════════════════════════════════════════════════
 
-⚠️ CRITICAL JAVA RULES TO PREVENT BUILD ERRORS:
+🚨 FOR EVERY JAVA FILE, COMPLETE ALL VERIFICATION STEPS BEFORE OUTPUTTING CODE:
 
-1. ENUMS MUST BE SEPARATE FILES:
-   ❌ NEVER: public class Order { public enum OrderStatus { PENDING, ... } }
-   ✅ ALWAYS: Create separate file OrderStatus.java with: public enum OrderStatus { PENDING, ... }
-   - Put enums in model/ or enums/ package
-   - Import the enum in entity classes: import com.app.model.OrderStatus;
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1: DERIVE PACKAGE FROM FILE PATH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Look at the file path in the request
+- Remove "src/main/java/" prefix
+- Replace "/" with "."
+- Remove filename
+- Result is your package declaration
 
-2. ENTITY CLASSES MUST HAVE ALL FIELDS AND METHODS:
-   If OrderService calls order.getPaymentStatus(), Order.java MUST have:
-   - private PaymentStatus paymentStatus;
-   - public PaymentStatus getPaymentStatus() { return paymentStatus; }
-   - public void setPaymentStatus(PaymentStatus status) { this.paymentStatus = status; }
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2: COLLECT ALL IMPORTS FROM CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Read "FILES ALREADY CREATED" section
+- For each class you need to use:
+  - Find its file path in context
+  - Convert path to import statement (same as Step 1)
+- Add standard Java imports (java.util.*, java.math.*, java.time.*)
+- Add Spring imports (org.springframework.*)
+- Add JPA imports (jakarta.persistence.*)
 
-3. REPOSITORY CUSTOM METHODS:
-   If OrderService calls orderRepository.findByUserIdOrderByOrderDateDesc(userId):
-   OrderRepository MUST define: List<Order> findByUserIdOrderByOrderDateDesc(Long userId);
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3: VERIFY TYPES MATCH ACROSS FILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each field/variable:
+- Check what type is used in Entity → use SAME in DTO, Service, Repository
+- Money fields: must be BigDecimal everywhere
+- ID fields: must be same type (Long or UUID) everywhere
+- Date fields: must be same type (LocalDateTime or Instant) everywhere
+- Enum fields: must reference the separate enum file type
 
-4. SECURITY CLASSES (ALL REQUIRED):
-   - JwtUtil.java - Token generation/validation
-   - JwtAuthenticationFilter.java - Extends OncePerRequestFilter
-   - JwtAuthenticationEntryPoint.java - Implements AuthenticationEntryPoint
-   - SecurityConfig.java - @Configuration @EnableWebSecurity (imports above classes)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4: VERIFY ALL METHODS EXIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each method call in your code:
+- If calling entity.getXxx() → entity class MUST have getXxx() method
+- If calling entity.setXxx(val) → entity class MUST have setXxx() method
+- If calling repository.findByXxx() → repository MUST declare this method
+- If using custom exception → exception class MUST exist
 
-5. LOMBOK ANNOTATIONS:
-   Use @Data, @Builder, @NoArgsConstructor, @AllArgsConstructor to auto-generate getters/setters
-   Or manually write ALL getters/setters that services will call
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5: VERIFY METHOD SIGNATURES MATCH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each method:
+- Parameter types must match exactly (Long not Integer, BigDecimal not Double)
+- Return type must match exactly
+- Repository methods: Optional<T> for single, List<T> for multiple
+- Method name spelling must be exact
 
-6. IMPORT STATEMENTS:
-   Always include complete imports at top of file:
-   import com.app.model.OrderStatus;
-   import com.app.model.PaymentStatus;
-   import com.app.repository.OrderRepository;
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 6: VERIFY ENTITY REQUIREMENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For Entity classes:
+- Has @Entity annotation
+- Has @Table(name = "...") annotation
+- Has @Id and @GeneratedValue on id field
+- Has public no-args constructor
+- Has getter AND setter for EVERY field
+- Collections initialized: List<X> items = new ArrayList<>()
+- Enums use @Enumerated(EnumType.STRING)
+- Relationships have proper @ManyToOne/@OneToMany annotations
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 7: VERIFY REPOSITORY REQUIREMENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For Repository interfaces:
+- Extends JpaRepository<EntityType, IdType>
+- IdType matches entity's @Id field type
+- ALL custom query methods that Service calls are declared
+- Method names follow Spring Data JPA naming convention
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 8: VERIFY SERVICE REQUIREMENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For Service classes:
+- Has @Service annotation
+- Uses constructor injection (not field @Autowired)
+- Handles Optional with .orElseThrow() never .get()
+- Write operations have @Transactional
+- All dependencies are injected through constructor
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 9: VERIFY ENUM IS SEPARATE FILE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- NEVER create enum inside another class
+- Each enum must be in its own .java file
+- Enum file goes in model/ or enums/ package
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 10: VERIFY EXCEPTION HANDLING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Custom exceptions extend RuntimeException
+- Use .orElseThrow() for Optional handling
+- Never ignore exceptions silently
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 11: VERIFY SYNTAX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- All braces {} are balanced
+- All statements end with semicolon
+- All strings are properly quoted
+- No missing closing brackets
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 12: FINAL CHECK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Re-read your complete code and verify:
+[ ] Package declaration is correct
+[ ] All imports are present and derived from context
+[ ] All types are consistent
+[ ] All called methods exist with correct signatures
+[ ] No inner enums - all enums in separate files
+[ ] Entity has all required annotations and methods
+[ ] Repository has all custom methods
+[ ] No syntax errors (balanced braces, semicolons)
 
 ═══════════════════════════════════════════════════════════════════════════════
-                    ⚛️ JAVASCRIPT/TYPESCRIPT BEST PRACTICES
+      ⚛️ JAVASCRIPT/TYPESCRIPT/REACT - STEP-BY-STEP VERIFICATION (MANDATORY!)
 ═══════════════════════════════════════════════════════════════════════════════
 
-REACT + TYPESCRIPT:
-- Use functional components with hooks
-- Implement proper TypeScript interfaces
-- Add loading and error states
-- Use React.memo for performance
-- Implement proper event handlers
+🚨 FOR EVERY JS/TS FILE, COMPLETE ALL VERIFICATION STEPS BEFORE OUTPUTTING CODE:
 
-NEXT.JS (App Router):
-- Use server components by default
-- Implement proper metadata
-- Add loading.tsx and error.tsx
-- Use Next.js Image component
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1: DERIVE IMPORT PATHS FROM FILE LOCATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Look at the file path you're creating (e.g., src/components/UserCard.tsx)
+- Calculate relative path to other files from context
+- src/components/Button.tsx from src/pages/Home.tsx = '../components/Button'
+- Use @ alias if configured (e.g., @/components/Button)
 
-STATE MANAGEMENT:
-- Zustand for simple state
-- React Query for server state
-- Context for theme/auth
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2: COLLECT ALL IMPORTS FROM CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Read "FILES ALREADY CREATED" section
+- For each component/function/type you need:
+  - Find its file in context
+  - Note what it exports (default vs named)
+  - Derive the correct import path
+- Add library imports (react, lucide-react, axios, etc.)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3: VERIFY TYPES/INTERFACES MATCH ACROSS FILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each type/interface:
+- If User type defined in types/user.ts → use SAME structure everywhere
+- If API returns { data: User[] } → component expects { data: User[] }
+- Props types must match what parent passes
+- State types must match what useState initializes
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4: VERIFY ALL COMPONENTS/FUNCTIONS EXIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each import in your code:
+- If importing Button → Button component MUST exist in FILES ALREADY CREATED
+- If importing useAuth hook → useAuth MUST be exported from context
+- If importing UserApi → UserApi service MUST exist
+- If importing User type → User MUST be defined in types file
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5: VERIFY EXPORT MATCHES IMPORT STYLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each export/import:
+- default export → import Button from './Button'
+- named export → import { Button } from './Button'
+- Check context to see which style the file uses
+- NEVER mix: import { Button } when it's default export
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 6: VERIFY PROPS INTERFACE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For React components:
+- Define props interface: interface ButtonProps { label: string; onClick: () => void }
+- Component signature matches: const Button: React.FC<ButtonProps> = ({ label, onClick })
+- All required props are passed when using the component
+- Optional props have default values or are marked with ?
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 7: VERIFY HOOKS USAGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- useState: const [value, setValue] = useState<Type>(initialValue)
+- useEffect: Correct dependency array, cleanup function if needed
+- useContext: Context must be imported and Provider must exist
+- useMemo/useCallback: Correct dependencies
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 8: VERIFY API CALLS MATCH BACKEND
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Endpoint URLs match backend routes exactly
+- HTTP methods match (GET, POST, PUT, DELETE)
+- Request body structure matches backend DTO
+- Response structure matches what backend returns
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 9: VERIFY ROUTER/NAVIGATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- React Router: Routes are defined in App.tsx or router config
+- Next.js: Page exists in app/ or pages/ directory
+- Link hrefs match actual routes
+- useNavigate/router.push use valid paths
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 10: VERIFY ERROR HANDLING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- try/catch blocks for async operations
+- Error state in components (const [error, setError] = useState<string | null>(null))
+- Display error messages to user
+- Handle loading states
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 11: VERIFY SYNTAX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- All braces {}, brackets [], parentheses () are balanced
+- JSX tags are properly closed (<div></div> or <div />)
+- Arrow functions have correct syntax
+- Template literals use backticks
+- No missing semicolons or commas in objects/arrays
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 12: FINAL CHECK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Re-read your complete code and verify:
+[ ] All imports are present and paths are correct
+[ ] Import style (default/named) matches export style
+[ ] TypeScript types are consistent across files
+[ ] All used components/functions exist in context
+[ ] Props interface defined and matches usage
+[ ] Hooks follow rules of hooks
+[ ] API calls match backend endpoints
+[ ] No syntax errors (balanced brackets, valid JSX)
 
 ═══════════════════════════════════════════════════════════════════════════════
-                    📱 MOBILE DEVELOPMENT
+                    📱 FLUTTER - STEP-BY-STEP VERIFICATION (MANDATORY!)
 ═══════════════════════════════════════════════════════════════════════════════
 
-FLUTTER:
-- Use StatelessWidget when possible
-- Implement BLoC/Provider pattern
-- Add proper null safety
-- Use const constructors
+🚨 FOR EVERY DART FILE, COMPLETE ALL VERIFICATION STEPS BEFORE OUTPUTTING CODE:
 
-REACT NATIVE:
-- Use TypeScript
-- Implement proper navigation
-- Add platform-specific code when needed
-- Use StyleSheet.create
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1: DERIVE PACKAGE IMPORTS FROM FILE LOCATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Look at the file path you're creating (e.g., lib/screens/home_screen.dart)
+- Use package imports: import 'package:app_name/widgets/button.dart';
+- Check pubspec.yaml for app name
+- Relative imports only within same feature folder
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2: COLLECT ALL IMPORTS FROM CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Read "FILES ALREADY CREATED" section
+- For each widget/class you need:
+  - Find its file in context
+  - Derive the package import path
+- Add Flutter imports (package:flutter/material.dart)
+- Add package imports (provider, http, etc.)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3: VERIFY TYPES MATCH ACROSS FILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each model/class:
+- If User class defined in models/user.dart → use SAME fields everywhere
+- API response parsing must match model constructor
+- Provider state types must be consistent
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4: VERIFY ALL WIDGETS/CLASSES EXIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each import in your code:
+- If importing CustomButton → CustomButton widget MUST exist in FILES ALREADY CREATED
+- If importing UserProvider → UserProvider MUST be defined
+- If importing User model → User class MUST exist
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5: VERIFY WIDGET CONSTRUCTOR PARAMETERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each widget:
+- Required parameters: required this.title
+- Optional parameters have default: this.color = Colors.blue
+- const constructor if all fields are final: const MyWidget({Key? key})
+- super.key in constructor
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 6: VERIFY STATE MANAGEMENT PATTERN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Provider:
+- ChangeNotifierProvider wraps app or feature
+- context.watch<T>() for rebuilds, context.read<T>() for actions
+- notifyListeners() called after state changes
+
+BLoC:
+- BlocProvider wraps feature
+- BlocBuilder/BlocListener for UI updates
+- Events and States properly defined
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 7: VERIFY NULL SAFETY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Nullable types have ? suffix: String? name
+- Non-null access uses ! only when certain: name!
+- Use ?? for default values: name ?? 'Unknown'
+- Late initialization only when guaranteed: late final String name
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 8: VERIFY ASYNC OPERATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- async functions return Future<T>
+- await used for Future results
+- FutureBuilder/StreamBuilder for UI
+- Error handling with try/catch
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 9: VERIFY NAVIGATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Routes defined in MaterialApp or GoRouter
+- Navigator.push uses existing screen classes
+- Named routes match route definitions
+- Arguments passed correctly
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 10: VERIFY BUILD METHOD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Widget build(BuildContext context) returns Widget
+- Use const where possible for performance
+- Avoid heavy computations in build
+- Use const constructors for static widgets
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 11: VERIFY SYNTAX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- All braces {}, brackets [], parentheses () are balanced
+- Semicolons at end of statements
+- Commas in widget trees (trailing comma recommended)
+- String interpolation: '$variable' or '${expression}'
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 12: FINAL CHECK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Re-read your complete code and verify:
+[ ] Package imports use correct app name
+[ ] All imported widgets/classes exist in context
+[ ] Constructor parameters match widget definition
+[ ] Null safety correctly applied
+[ ] State management pattern consistent
+[ ] Navigation uses defined routes
+[ ] No syntax errors (balanced brackets, semicolons)
+
+═══════════════════════════════════════════════════════════════════════════════
+                 📱 REACT NATIVE - STEP-BY-STEP VERIFICATION (MANDATORY!)
+═══════════════════════════════════════════════════════════════════════════════
+
+🚨 FOR EVERY RN FILE, COMPLETE ALL VERIFICATION STEPS BEFORE OUTPUTTING CODE:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1: DERIVE IMPORT PATHS FROM FILE LOCATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Look at the file path (e.g., src/screens/HomeScreen.tsx)
+- Calculate relative path or use configured alias (@/)
+- React Native specific: 'react-native' not 'react-dom'
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2: COLLECT ALL IMPORTS FROM CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Read "FILES ALREADY CREATED" section
+- Import from 'react-native': View, Text, StyleSheet, TouchableOpacity, etc.
+- Import from context files: components, hooks, types
+- Add navigation imports: @react-navigation/native, stack, etc.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3: VERIFY RN-SPECIFIC COMPONENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Use View not div
+- Use Text for all text (not raw strings in JSX)
+- Use TouchableOpacity/Pressable not button
+- Use ScrollView or FlatList for scrollable content
+- Use Image from react-native, not HTML img
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4: VERIFY ALL COMPONENTS/FUNCTIONS EXIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each import:
+- Custom components MUST exist in FILES ALREADY CREATED
+- Hooks MUST be defined and exported
+- Navigation screens MUST be registered
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5: VERIFY STYLESHEET USAGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Use StyleSheet.create() for styles
+- Style properties are camelCase: backgroundColor not background-color
+- Dimensions are numbers not strings: width: 100 not width: '100px'
+- Flex properties: flex: 1, flexDirection: 'row'
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 6: VERIFY NAVIGATION SETUP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- NavigationContainer wraps app
+- Stack.Navigator/Tab.Navigator properly configured
+- Screen names match navigation.navigate('ScreenName')
+- Route params typed: RootStackParamList
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 7: VERIFY TYPESCRIPT TYPES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Props interface defined for components
+- Navigation prop typed: NativeStackScreenProps<RootStackParamList, 'Home'>
+- State types match useState generic
+- API response types defined
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 8: VERIFY PLATFORM-SPECIFIC CODE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Platform.OS for platform checks
+- Platform.select() for platform-specific values
+- SafeAreaView for iOS notch handling
+- StatusBar configuration
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 9: VERIFY HOOKS USAGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- useState, useEffect from 'react'
+- useNavigation, useRoute from '@react-navigation/native'
+- Custom hooks follow rules of hooks
+- Cleanup in useEffect return
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 10: VERIFY ERROR HANDLING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- try/catch for async operations
+- Error state displayed to user
+- Loading indicators during fetches
+- Alert.alert() for error messages
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 11: VERIFY SYNTAX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- All braces {}, brackets [], parentheses () balanced
+- JSX properly closed
+- StyleSheet.create at bottom of file
+- Export statement present
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 12: FINAL CHECK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Re-read your complete code and verify:
+[ ] Using react-native components (View, Text) not HTML
+[ ] StyleSheet.create() used for styles
+[ ] All imported components exist in context
+[ ] Navigation properly configured
+[ ] TypeScript types correct
+[ ] Platform-specific code where needed
+[ ] No syntax errors
+
+═══════════════════════════════════════════════════════════════════════════════
+              ▲ NEXT.JS (APP ROUTER) - STEP-BY-STEP VERIFICATION (MANDATORY!)
+═══════════════════════════════════════════════════════════════════════════════
+
+🚨 FOR EVERY NEXT.JS FILE, COMPLETE ALL VERIFICATION STEPS BEFORE OUTPUTTING CODE:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1: DETERMINE SERVER VS CLIENT COMPONENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Default is Server Component (no directive needed)
+- Add 'use client' at top ONLY if using hooks, event handlers, browser APIs
+- page.tsx, layout.tsx, loading.tsx are Server Components by default
+- Components with useState, useEffect, onClick need 'use client'
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2: VERIFY FILE LOCATION IN APP DIRECTORY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- app/page.tsx → / route
+- app/about/page.tsx → /about route
+- app/users/[id]/page.tsx → /users/:id route
+- app/api/users/route.ts → /api/users API route
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3: COLLECT ALL IMPORTS FROM CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Read "FILES ALREADY CREATED" section
+- Use Next.js imports: next/navigation, next/image, next/link
+- Use @/ alias for absolute imports
+- Import server actions from separate files
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4: VERIFY PAGE/LAYOUT EXPORTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- page.tsx: export default function Page()
+- layout.tsx: export default function Layout({ children })
+- loading.tsx: export default function Loading()
+- error.tsx: 'use client' + export default function Error()
+- route.ts: export async function GET/POST/PUT/DELETE(request)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5: VERIFY METADATA EXPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Static: export const metadata: Metadata = { title: '...' }
+- Dynamic: export async function generateMetadata({ params })
+- Metadata in layout.tsx applies to all nested pages
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 6: VERIFY DATA FETCHING PATTERN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Server Components:
+- Direct async/await in component body
+- No useEffect for data fetching
+- fetch() with caching options
+
+Client Components:
+- Use SWR or React Query
+- useEffect for client-side fetching
+- Server Actions for mutations
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 7: VERIFY API ROUTES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- File: app/api/[resource]/route.ts
+- Export named functions: GET, POST, PUT, DELETE
+- Use NextRequest and NextResponse
+- Return NextResponse.json() for JSON responses
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 8: VERIFY SERVER ACTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- 'use server' directive at top of file or function
+- async function with FormData or typed params
+- Can be called from Client Components
+- Return serializable data
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 9: VERIFY NEXT.JS SPECIFIC COMPONENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Image: import Image from 'next/image' (not <img>)
+- Link: import Link from 'next/link' (not <a> for navigation)
+- useRouter: from 'next/navigation' (not 'next/router')
+- usePathname, useSearchParams from 'next/navigation'
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 10: VERIFY DYNAMIC ROUTES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- [id] for single param: { params: { id: string } }
+- [...slug] for catch-all: { params: { slug: string[] } }
+- generateStaticParams for static generation
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 11: VERIFY SYNTAX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- 'use client' or 'use server' at very top (before imports)
+- Async components: export default async function Page()
+- Proper TypeScript types for params/searchParams
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 12: FINAL CHECK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Re-read your complete code and verify:
+[ ] Server/Client component choice is correct
+[ ] File in correct app directory location
+[ ] Proper exports for page/layout/route
+[ ] Using Next.js components (Image, Link)
+[ ] Data fetching pattern matches component type
+[ ] TypeScript types for route params
+[ ] No syntax errors
+
+═══════════════════════════════════════════════════════════════════════════════
+               🟢 NODE.JS/EXPRESS - STEP-BY-STEP VERIFICATION (MANDATORY!)
+═══════════════════════════════════════════════════════════════════════════════
+
+🚨 FOR EVERY NODE.JS FILE, COMPLETE ALL VERIFICATION STEPS BEFORE OUTPUTTING CODE:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1: DERIVE MODULE PATH FROM FILE LOCATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Look at file path (e.g., src/routes/users.ts)
+- Calculate relative path: ../controllers/userController
+- Or use path alias from tsconfig.json: @/controllers/userController
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2: COLLECT ALL IMPORTS FROM CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Read "FILES ALREADY CREATED" section
+- Import Express types: Request, Response, NextFunction
+- Import from context: controllers, services, models
+- Import packages: express, cors, helmet, etc.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3: VERIFY TYPES MATCH ACROSS FILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Interface User defined in types/user.ts → use everywhere
+- Request body types match controller expectations
+- Response types match what frontend expects
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4: VERIFY ALL MODULES/CLASSES EXIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each import:
+- Controller MUST exist in FILES ALREADY CREATED
+- Service MUST be defined
+- Model/Schema MUST exist
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5: VERIFY ROUTE STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Router: const router = express.Router()
+- Route handlers: router.get('/', controller.getAll)
+- Middleware order: validation → auth → handler
+- Export router at end
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 6: VERIFY CONTROLLER PATTERN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- async (req: Request, res: Response, next: NextFunction)
+- try/catch with next(error) for error handling
+- res.status(200).json({ data })
+- Proper HTTP status codes
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 7: VERIFY MIDDLEWARE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Authentication: verify JWT token
+- Validation: validate request body
+- Error handler: (err, req, res, next) signature
+- Call next() to continue chain
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 8: VERIFY PRISMA/MONGOOSE MODELS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Prisma:
+- import { PrismaClient } from '@prisma/client'
+- prisma.user.findMany(), prisma.user.create()
+
+Mongoose:
+- import mongoose, { Schema, model }
+- Model methods match schema definition
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 9: VERIFY ASYNC/AWAIT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- async function for all DB operations
+- await for promises
+- try/catch for error handling
+- Don't forget to await in middleware
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 10: VERIFY ERROR HANDLING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Custom error classes extending Error
+- next(error) to pass to error handler
+- Global error handler middleware
+- Proper status codes and messages
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 11: VERIFY SYNTAX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- All braces balanced
+- Semicolons at end of statements
+- export default router or named exports
+- TypeScript types properly applied
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 12: FINAL CHECK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Re-read your complete code and verify:
+[ ] All imports present and paths correct
+[ ] TypeScript types on all functions
+[ ] Controllers follow async/await pattern
+[ ] Routes properly exported
+[ ] Error handling in place
+[ ] No syntax errors
+
+═══════════════════════════════════════════════════════════════════════════════
+                  💚 VUE.JS - STEP-BY-STEP VERIFICATION (MANDATORY!)
+═══════════════════════════════════════════════════════════════════════════════
+
+🚨 FOR EVERY VUE FILE, COMPLETE ALL VERIFICATION STEPS BEFORE OUTPUTTING CODE:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1: DETERMINE COMPOSITION VS OPTIONS API
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Prefer Composition API: <script setup lang="ts">
+- Options API: export default { data(), methods: {} }
+- script setup is recommended for Vue 3
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2: COLLECT ALL IMPORTS FROM CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Read "FILES ALREADY CREATED" section
+- Import from 'vue': ref, reactive, computed, onMounted
+- Import components: import MyComponent from '@/components/MyComponent.vue'
+- Import composables: import { useAuth } from '@/composables/useAuth'
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3: VERIFY TYPES MATCH ACROSS FILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Interface User in types/user.ts → use everywhere
+- Props types match what parent passes
+- Emits types match parent handlers
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4: VERIFY ALL COMPONENTS EXIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each import:
+- Component MUST exist in FILES ALREADY CREATED
+- Composable MUST be defined and exported
+- Store MUST be created (Pinia)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5: VERIFY PROPS AND EMITS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Script setup:
+- defineProps<{ title: string }>()
+- defineEmits<{ (e: 'update', value: string): void }>()
+- withDefaults for default values
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 6: VERIFY REACTIVITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- ref() for primitives: const count = ref(0)
+- reactive() for objects: const state = reactive({ name: '' })
+- computed() for derived: const double = computed(() => count.value * 2)
+- Access ref.value in script, auto-unwrapped in template
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 7: VERIFY PINIA STORE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- defineStore('name', { state, getters, actions })
+- Use storeToRefs for reactive state access
+- Actions are async when needed
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 8: VERIFY VUE ROUTER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- useRouter() for navigation
+- useRoute() for route params
+- RouterLink for declarative navigation
+- Route guards in router config
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 9: VERIFY LIFECYCLE HOOKS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- onMounted(() => {}) for DOM ready
+- onUnmounted(() => {}) for cleanup
+- watch() for reactive watching
+- watchEffect() for auto-tracking
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 10: VERIFY TEMPLATE SYNTAX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- v-if/v-else-if/v-else for conditionals
+- v-for="item in items" :key="item.id"
+- @click="handler" for events
+- :prop="value" for binding
+- v-model for two-way binding
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 11: VERIFY SFC STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- <script setup lang="ts"> at top
+- <template> for HTML
+- <style scoped> for component styles
+- All sections properly closed
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 12: FINAL CHECK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Re-read your complete code and verify:
+[ ] All imports present and correct
+[ ] Props and emits properly typed
+[ ] Reactivity correctly used
+[ ] Template syntax valid
+[ ] Components exist in context
+[ ] No syntax errors
+
+═══════════════════════════════════════════════════════════════════════════════
+                  🅰️ ANGULAR - STEP-BY-STEP VERIFICATION (MANDATORY!)
+═══════════════════════════════════════════════════════════════════════════════
+
+🚨 FOR EVERY ANGULAR FILE, COMPLETE ALL VERIFICATION STEPS BEFORE OUTPUTTING CODE:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1: DERIVE IMPORT PATHS FROM FILE LOCATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Look at file path (e.g., src/app/components/user-card/user-card.component.ts)
+- Use relative paths or tsconfig paths
+- Import from @angular/core, @angular/common, etc.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2: COLLECT ALL IMPORTS FROM CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Read "FILES ALREADY CREATED" section
+- Import Angular modules: CommonModule, FormsModule, HttpClientModule
+- Import components: import { UserCardComponent } from './user-card.component'
+- Import services: import { UserService } from '@/services/user.service'
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3: VERIFY TYPES MATCH ACROSS FILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Interface User in models/user.model.ts → use everywhere
+- Service return types match component expectations
+- Input/Output types match parent usage
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4: VERIFY ALL MODULES/COMPONENTS EXIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each import:
+- Component MUST exist in FILES ALREADY CREATED
+- Service MUST be defined with @Injectable
+- Module MUST be declared
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5: VERIFY COMPONENT DECORATOR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- @Component({ selector, templateUrl/template, styleUrls/styles })
+- selector: 'app-user-card' (kebab-case with app prefix)
+- standalone: true for standalone components
+- imports: [CommonModule, ...] for standalone
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 6: VERIFY INPUT/OUTPUT DECORATORS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- @Input() user!: User;
+- @Output() delete = new EventEmitter<string>();
+- Required inputs use !: non-null assertion
+- Optional inputs have default values
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 7: VERIFY DEPENDENCY INJECTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- constructor(private userService: UserService)
+- inject() function for standalone: userService = inject(UserService)
+- @Injectable({ providedIn: 'root' }) for services
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 8: VERIFY RXJS USAGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- HttpClient returns Observable<T>
+- Subscribe in component or use async pipe
+- Unsubscribe on destroy: takeUntilDestroyed()
+- Subject/BehaviorSubject for state
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 9: VERIFY LIFECYCLE HOOKS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- implements OnInit, OnDestroy
+- ngOnInit() for initialization
+- ngOnDestroy() for cleanup
+- ngOnChanges(changes) for input changes
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 10: VERIFY TEMPLATE SYNTAX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- *ngIf, *ngFor for structural directives
+- @if, @for for new control flow (v17+)
+- [property]="value" for property binding
+- (event)="handler($event)" for event binding
+- [(ngModel)]="value" for two-way binding
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 11: VERIFY ROUTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Routes: { path: 'users', component: UsersComponent }
+- RouterLink for navigation
+- ActivatedRoute for params
+- Router for programmatic navigation
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 12: FINAL CHECK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Re-read your complete code and verify:
+[ ] All imports present and correct
+[ ] Decorators properly applied
+[ ] Dependency injection correct
+[ ] Template syntax valid
+[ ] RxJS subscriptions managed
+[ ] No syntax errors
+
+═══════════════════════════════════════════════════════════════════════════════
+                  🐹 GO/GOLANG - STEP-BY-STEP VERIFICATION (MANDATORY!)
+═══════════════════════════════════════════════════════════════════════════════
+
+🚨 FOR EVERY GO FILE, COMPLETE ALL VERIFICATION STEPS BEFORE OUTPUTTING CODE:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1: DETERMINE PACKAGE FROM FILE LOCATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- File in cmd/api/main.go → package main
+- File in internal/handlers/user.go → package handlers
+- File in pkg/utils/helpers.go → package utils
+- Package name matches directory name
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2: COLLECT ALL IMPORTS FROM CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Read "FILES ALREADY CREATED" section
+- Standard library: "fmt", "net/http", "encoding/json"
+- Project imports: "project/internal/models"
+- Third-party: "github.com/gin-gonic/gin"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3: VERIFY TYPES MATCH ACROSS FILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- struct User in models → use everywhere
+- Function signatures match interface definitions
+- JSON tags match API expectations
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4: VERIFY ALL PACKAGES/TYPES EXIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each import:
+- Package MUST exist in FILES ALREADY CREATED
+- Type MUST be exported (capitalized)
+- Function MUST be exported if used externally
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5: VERIFY STRUCT DEFINITIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- type User struct { ... }
+- JSON tags: `json:"name"`
+- DB tags for GORM: `gorm:"primaryKey"`
+- Exported fields capitalized
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 6: VERIFY INTERFACE IMPLEMENTATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- type UserRepository interface { ... }
+- All interface methods implemented
+- Method receivers: func (r *repo) GetUser(id int)
+- Pointer vs value receivers consistent
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 7: VERIFY ERROR HANDLING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Return (result, error) pattern
+- if err != nil { return nil, err }
+- errors.New() or fmt.Errorf() for errors
+- Don't ignore returned errors
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 8: VERIFY HTTP HANDLERS (Gin/Echo/Chi)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Gin:
+- func GetUser(c *gin.Context)
+- c.JSON(http.StatusOK, user)
+- c.Param("id"), c.Query("name")
+
+Standard library:
+- func GetUser(w http.ResponseWriter, r *http.Request)
+- json.NewEncoder(w).Encode(user)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 9: VERIFY DATABASE OPERATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GORM:
+- db.First(&user, id)
+- db.Create(&user)
+- db.Where("name = ?", name).Find(&users)
+
+sql package:
+- db.Query(), db.Exec()
+- rows.Scan() for reading results
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 10: VERIFY GOROUTINES AND CHANNELS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- go func() { ... }() for goroutines
+- make(chan Type) for channels
+- select for multiple channel operations
+- defer close(ch) for cleanup
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 11: VERIFY SYNTAX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Opening brace on same line as statement
+- No semicolons needed
+- Short variable declaration: name := "value"
+- No unused imports or variables (compilation error)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 12: FINAL CHECK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Re-read your complete code and verify:
+[ ] Package declaration correct
+[ ] All imports present and used
+[ ] Exported types/functions capitalized
+[ ] Error handling present
+[ ] Interface implementations complete
+[ ] No unused variables/imports
+[ ] No syntax errors
 
 ═══════════════════════════════════════════════════════════════════════════════
                     🗄️ DATABASE & SEED DATA (CRITICAL!)

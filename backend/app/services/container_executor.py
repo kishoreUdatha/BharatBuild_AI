@@ -2078,7 +2078,9 @@ class ContainerExecutor:
                         project_id=project_id,
                         project_path=Path(project_path),
                         payload=payload,
-                        sandbox_file_writer=self._write_file_to_sandbox  # Write directly to sandbox
+                        sandbox_file_writer=self._write_file_to_sandbox,  # Write directly to sandbox
+                        sandbox_file_reader=self._read_file_from_sandbox,  # Read from sandbox
+                        sandbox_file_lister=self._list_files_from_sandbox  # List files from sandbox
                     )
 
                     if fix_result.success and fix_result.files_modified:
@@ -3413,6 +3415,45 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
         except Exception as e:
             logger.warning(f"[ContainerExecutor] Failed to read file {file_path}: {e}")
             return None
+
+    def _list_files_from_sandbox(self, directory: str, pattern: str) -> List[str]:
+        """
+        List files matching a pattern from the sandbox filesystem.
+
+        Uses 'find' command for remote sandbox, local glob for local mode.
+
+        Args:
+            directory: Directory to search in
+            pattern: File pattern (e.g., "*.java")
+
+        Returns:
+            List of absolute file paths matching the pattern
+        """
+        try:
+            if not self._is_remote_sandbox():
+                # Local mode - use glob
+                import glob
+                files = glob.glob(f"{directory}/**/{pattern}", recursive=True)
+                return files
+
+            # Remote mode - use find command
+            # Convert glob pattern to find -name pattern
+            exit_code, output = self._run_shell_on_sandbox(
+                f'find "{directory}" -type f -name "{pattern}" 2>/dev/null',
+                timeout=30
+            )
+
+            if exit_code != 0 or not output.strip():
+                logger.warning(f"[ContainerExecutor] File listing failed for {directory}/{pattern}")
+                return []
+
+            files = [f.strip() for f in output.strip().split('\n') if f.strip()]
+            logger.info(f"[ContainerExecutor] Found {len(files)} files matching {pattern}")
+            return files
+
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Failed to list files {directory}/{pattern}: {e}")
+            return []
 
     def _get_available_port(self, preferred_port: int) -> int:
         """
@@ -5043,7 +5084,9 @@ echo "Done"
                     project_id=project_id,
                     project_path=Path(project_path),
                     payload=payload,
-                    sandbox_file_writer=self._write_file_to_sandbox  # Write directly to sandbox
+                    sandbox_file_writer=self._write_file_to_sandbox,  # Write directly to sandbox
+                    sandbox_file_reader=self._read_file_from_sandbox,  # Read from sandbox
+                    sandbox_file_lister=self._list_files_from_sandbox  # List files from sandbox
                 )
             except Exception as fix_err:
                 logger.error(f"[ContainerExecutor] Fix error: {fix_err}")
