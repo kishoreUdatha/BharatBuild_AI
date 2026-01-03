@@ -979,7 +979,13 @@ class DockerInfraFixerAgent:
             logger.info(f"[DockerInfraFixer] Volume mount issue with: {source_path}")
 
             # Check if it's supposed to be a file (ends with a filename, not a directory)
-            is_supposed_to_be_file = '.' in source_path.split('/')[-1]  # Has extension
+            filename = source_path.split('/')[-1]
+            # Common directory patterns that contain dots:
+            # - .d suffix (conf.d, sites.d, modules.d) - Linux config directories
+            is_dot_d_directory = filename.endswith('.d')
+            is_common_directory = filename.lower() in {'data', 'logs', 'cache', 'tmp', 'config', 'ssl', 'certs'}
+            has_file_extension = '.' in filename and not filename.startswith('.') and not is_dot_d_directory
+            is_supposed_to_be_file = has_file_extension and not is_common_directory
 
             if is_supposed_to_be_file:
                 # Check if path exists as a directory (the problem)
@@ -1292,7 +1298,13 @@ http {
 
                         # Determine if it's a file (has extension) or directory
                         filename = source_path.split('/')[-1]
-                        is_file = '.' in filename and not filename.startswith('.')
+                        # Common directory patterns that contain dots:
+                        # - .d suffix (conf.d, sites.d, modules.d) - Linux config directories
+                        # - data directories, etc.
+                        is_dot_d_directory = filename.endswith('.d')
+                        is_common_directory = filename.lower() in {'data', 'logs', 'cache', 'tmp', 'config', 'ssl', 'certs'}
+                        has_file_extension = '.' in filename and not filename.startswith('.') and not is_dot_d_directory
+                        is_file = has_file_extension and not is_common_directory
 
                         if is_file:
                             # Create parent directory
