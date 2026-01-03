@@ -60,6 +60,18 @@ STRICT RULES:
 - Do NOT invent files
 - Do NOT modify unrelated code
 
+IMPORTANT - DEPENDENCY ERRORS:
+When you see errors like:
+- "cannot find symbol: method X()" - Add the missing method to the CLASS that should have it
+- "no suitable constructor found for X(...)" - Fix the constructor in X.java, not the calling file
+- "incompatible types" - Fix the SOURCE class that has wrong return type
+- "cannot find symbol: class X" - The class file may be missing or has wrong package
+
+FIX THE ROOT CAUSE, NOT THE SYMPTOM:
+- If OrderService.java fails because Product.java is missing getPrice(), fix Product.java
+- If the error file imports/uses another class, check RELATED FILES section for the fix
+- Return patches for ALL files that need changes (you can return multiple patches)
+
 OUTPUT FORMAT:
 
 For patching existing files:
@@ -136,7 +148,9 @@ No explanations. Only the <file> block."""
         project_id: str,
         project_path: Path,
         payload: Dict[str, Any],
-        sandbox_file_writer: Optional[Callable[[str, str], bool]] = None
+        sandbox_file_writer: Optional[Callable[[str, str], bool]] = None,
+        sandbox_file_reader: Optional[Callable[[str], Optional[str]]] = None,
+        sandbox_file_lister: Optional[Callable[[str, str], List[str]]] = None
     ) -> BoltFixResult:
         """
         BOLT.NEW STYLE: Fix errors from backend execution.
@@ -150,12 +164,20 @@ No explanations. Only the <file> block."""
             sandbox_file_writer: Optional callback to write files directly to sandbox.
                                  Signature: (file_path: str, content: str) -> bool
                                  If None, uses local Path.write_text() (only works in local mode)
+            sandbox_file_reader: Optional callback to read files from sandbox.
+                                 Signature: (file_path: str) -> Optional[str]
+                                 If None, uses local Path.read_text() (only works in local mode)
+            sandbox_file_lister: Optional callback to list files matching a pattern from sandbox.
+                                 Signature: (directory: str, pattern: str) -> List[str]
+                                 If None, uses local glob (only works in local mode)
 
         Returns:
             BoltFixResult with success status and modified files
         """
-        # Store the sandbox writer for use in file operations
+        # Store the sandbox callbacks for use in file operations
         self._sandbox_file_writer = sandbox_file_writer
+        self._sandbox_file_reader = sandbox_file_reader
+        self._sandbox_file_lister = sandbox_file_lister
         # Extract payload
         stderr = payload.get("stderr", "")
         stdout = payload.get("stdout", "")
@@ -601,8 +623,11 @@ BUILD LOG:
         """
         Extract and read Java class files mentioned in compilation errors.
 
-        For errors like "no suitable constructor found for Todo(...)",
-        this finds and reads Todo.java so Claude can fix it.
+        IMPORTANT: This method identifies ROOT CAUSE files, not just mentioned files.
+        For errors like "cannot find symbol: method getPrice() in class Product",
+        we need to read Product.java because THAT is where the fix should be applied.
+
+        Works with both local and remote sandbox by using the sandbox callbacks.
 
         Args:
             project_path: Root path of the project
@@ -610,58 +635,134 @@ BUILD LOG:
             current_file: The file already being read (to avoid duplicates)
 
         Returns:
-            Formatted string with related file contents
+            Formatted string with related file contents, marking ROOT CAUSE files
         """
         import re
         import glob
-
-        # Simple approach: Find all Java files in project, check if class name appears in error
-        # Let the AI fixer decide which files are relevant
 
         # Get current file's class name to exclude
         current_class = None
         if current_file:
             current_class = Path(current_file).stem
 
-        # Find all Java files in the project
         project_str = str(project_path)
-        all_java_files = glob.glob(f"{project_str}/**/*.java", recursive=True)
 
-        # Check which class names appear in the error output
+        # =====================================================================
+        # STEP 1: Extract ROOT CAUSE classes from error patterns
+        # These are classes that likely need to be FIXED (not just referenced)
+        # =====================================================================
+        root_cause_classes = set()
+
+        # Pattern: "cannot find symbol...in class X" or "cannot find symbol: class X"
+        for match in re.finditer(r'cannot find symbol.*?(?:class|interface)\s+(\w+)', error_output, re.IGNORECASE):
+            root_cause_classes.add(match.group(1))
+
+        # Pattern: "no suitable constructor found for X(...)"
+        for match in re.finditer(r'no suitable (?:constructor|method).*?for\s+(\w+)', error_output, re.IGNORECASE):
+            root_cause_classes.add(match.group(1))
+
+        # Pattern: "incompatible types...cannot be converted to X" or "found: X"
+        for match in re.finditer(r'(?:cannot be converted to|found:\s*)(\w+)', error_output, re.IGNORECASE):
+            cls = match.group(1)
+            if cls[0].isupper():  # Only class names (capitalized)
+                root_cause_classes.add(cls)
+
+        # Pattern: "method X() in class Y" - Y is the root cause
+        for match in re.finditer(r'method\s+\w+\([^)]*\)\s+in\s+(?:class|interface)\s+(\w+)', error_output, re.IGNORECASE):
+            root_cause_classes.add(match.group(1))
+
+        logger.info(f"[BoltFixer] Identified root cause classes: {root_cause_classes}")
+
+        # =====================================================================
+        # STEP 2: Find Java files - use sandbox_file_lister if available
+        # =====================================================================
+        all_java_files = []
+
+        if self._sandbox_file_lister:
+            try:
+                all_java_files = self._sandbox_file_lister(project_str, "*.java")
+                logger.info(f"[BoltFixer] Found {len(all_java_files)} Java files via sandbox lister")
+            except Exception as e:
+                logger.warning(f"[BoltFixer] Sandbox file listing failed: {e}")
+                all_java_files = []
+        else:
+            all_java_files = glob.glob(f"{project_str}/**/*.java", recursive=True)
+
+        # =====================================================================
+        # STEP 3: Read files - prioritize ROOT CAUSE classes
+        # =====================================================================
         related_contents = []
         files_found = 0
 
+        # First pass: Read ROOT CAUSE files (these need to be fixed)
         for java_file in all_java_files:
-            if files_found >= 5:  # Limit to 5 related files
+            if files_found >= 5:
                 break
 
-            class_name = Path(java_file).stem  # e.g., "Todo" from "Todo.java"
+            class_name = Path(java_file).stem
 
-            # Skip current file
             if class_name == current_class:
                 continue
 
-            # Check if this class name appears in the error output
-            # Use word boundary to avoid partial matches
-            if re.search(rf'\b{re.escape(class_name)}\b', error_output):
-                try:
-                    content = Path(java_file).read_text(encoding='utf-8')
-                    rel_path = Path(java_file).relative_to(project_path)
+            if class_name in root_cause_classes:
+                content = self._read_java_file(java_file, project_path)
+                if content:
                     related_contents.append(f"""
---- {rel_path} ---
+--- {content['path']} --- [ROOT CAUSE - FIX THIS FILE]
 ```java
-{content[:8000]}
+{content['content'][:8000]}
 ```
 """)
                     files_found += 1
-                    logger.info(f"[BoltFixer] Read related file: {rel_path} ({len(content)} chars)")
-                except Exception as e:
-                    logger.warning(f"[BoltFixer] Could not read {java_file}: {e}")
+                    logger.info(f"[BoltFixer] Read ROOT CAUSE file: {content['path']}")
+
+        # Second pass: Read other mentioned files (for context)
+        for java_file in all_java_files:
+            if files_found >= 5:
+                break
+
+            class_name = Path(java_file).stem
+
+            if class_name == current_class:
+                continue
+
+            if class_name in root_cause_classes:
+                continue  # Already read
+
+            if re.search(rf'\b{re.escape(class_name)}\b', error_output):
+                content = self._read_java_file(java_file, project_path)
+                if content:
+                    related_contents.append(f"""
+--- {content['path']} --- [CONTEXT]
+```java
+{content['content'][:8000]}
+```
+""")
+                    files_found += 1
+                    logger.info(f"[BoltFixer] Read context file: {content['path']}")
 
         if related_contents:
             logger.info(f"[BoltFixer] Found {files_found} related Java files")
 
         return "\n".join(related_contents)
+
+    def _read_java_file(self, java_file: str, project_path: Path) -> Optional[Dict[str, str]]:
+        """Helper to read a Java file from local or remote sandbox."""
+        try:
+            if self._sandbox_file_reader:
+                content = self._sandbox_file_reader(java_file)
+            else:
+                content = Path(java_file).read_text(encoding='utf-8')
+
+            if content:
+                try:
+                    rel_path = Path(java_file).relative_to(project_path)
+                except ValueError:
+                    rel_path = Path(java_file).name
+                return {"path": str(rel_path), "content": content}
+        except Exception as e:
+            logger.warning(f"[BoltFixer] Could not read {java_file}: {e}")
+        return None
 
 
 # Singleton instance
