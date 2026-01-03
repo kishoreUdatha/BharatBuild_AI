@@ -55,10 +55,16 @@ class BoltFixer:
     SYSTEM_PROMPT = """You are an automated code-fix agent.
 
 STRICT RULES:
-- Return ONLY a unified diff or file block
+- Return ONLY unified diffs or file blocks
 - Do NOT explain
 - Do NOT invent files
 - Do NOT modify unrelated code
+
+CRITICAL - FIX ALL ERROR FILES IN ONE RESPONSE:
+The build has MULTIPLE files with errors. You MUST fix ALL of them in a single response.
+- Read the ERROR FILES section carefully - each file listed has errors
+- Output a separate <file> or <patch> block for EACH file that needs fixing
+- Do NOT just fix one file and stop - fix ALL files with errors
 
 IMPORTANT - DEPENDENCY ERRORS:
 When you see errors like:
@@ -74,11 +80,12 @@ FIX THE ROOT CAUSE, NOT THE SYMPTOM:
 
 JAVA CONSISTENCY (MULTI-FILE):
 When fixing Java "cannot find symbol" errors:
-1. You may receive RELATED FILES (Entity, DTO, Service, Controller) - check them ALL
+1. You MUST check ALL RELATED FILES (Entity, DTO, Service, Controller)
 2. Ensure field/method names match EXACTLY across related files
 3. If DTO missing getter/setter - add it to the DTO
 4. If Service interface missing method - add to BOTH interface AND implementation
-5. Output MULTIPLE <file> blocks if multiple files need changes
+5. Output MULTIPLE <file> blocks - one for EACH file that needs changes
+6. If you see errors in UserDto, UserService, AND UserController - fix ALL THREE
 
 OUTPUT FORMAT:
 
@@ -253,7 +260,30 @@ No explanations. Only the <file> block."""
         # =================================================================
         file_content = ""
         related_files_content = ""
+        all_error_files_content = ""
         target_file = classified.file_path or error_file
+
+        # =================================================================
+        # STEP 4a: Extract ALL error files from build output (for batch fixing)
+        # =================================================================
+        all_error_files = ErrorClassifier.extract_all_error_files(combined_output)
+        logger.info(f"[BoltFixer:{project_id}] Found {len(all_error_files)} files with errors: {[f[0] for f in all_error_files]}")
+
+        if len(all_error_files) > 1:
+            # Multiple error files - read them all for batch fixing
+            error_files_sections = []
+            for err_file, err_line in all_error_files[:8]:  # Limit to 8 files
+                content = await self._read_file_content(project_path, err_file)
+                if content:
+                    error_files_sections.append(f"""
+--- ERROR FILE: {err_file} (line {err_line}) ---
+```java
+{content[:8000]}
+```
+""")
+            if error_files_sections:
+                all_error_files_content = "\n".join(error_files_sections)
+                logger.info(f"[BoltFixer:{project_id}] Read {len(error_files_sections)} error files for batch fixing")
 
         if target_file and project_path:
             # Try different paths to find the file
@@ -298,7 +328,8 @@ No explanations. Only the <file> block."""
             max_tokens = 16384
         else:
             system_prompt = self.SYSTEM_PROMPT
-            max_tokens = 4096
+            # Increase max_tokens for batch fixing (multiple files)
+            max_tokens = 16384 if len(all_error_files) > 1 else 4096
 
         # Build user prompt
         error_type_template = ErrorClassifier.get_claude_prompt_template(classified.error_type)
@@ -311,6 +342,17 @@ RELATED FILES (may need modification):
 {related_files_content}
 """
 
+        # Include all error files section for batch fixing
+        all_errors_section = ""
+        if all_error_files_content:
+            all_errors_section = f"""
+=== ALL FILES WITH ERRORS (FIX ALL OF THEM) ===
+{all_error_files_content}
+=== END OF ERROR FILES ===
+
+IMPORTANT: The above files ALL have errors. Output a <file> or <patch> block for EACH one.
+"""
+
         user_prompt = f"""{error_type_template}
 
 ERROR: {combined_output[:2000]}
@@ -321,7 +363,7 @@ FILE CONTENT:
 ```
 {file_content[:10000] if file_content else 'No file content available'}
 ```
-{related_section}
+{all_errors_section}{related_section}
 BUILD LOG:
 {combined_output[-2000:]}
 """
@@ -453,7 +495,11 @@ BUILD LOG:
                 continue
 
             # Determine best target path based on file type
-            if file_path.endswith('.java'):
+            # IMPORTANT: Check if path already has backend/frontend prefix to avoid duplication
+            if file_path.startswith('backend/') or file_path.startswith('frontend/'):
+                # Path already has prefix, use as-is
+                target_path = project_path / file_path
+            elif file_path.endswith('.java'):
                 target_path = project_path / "backend" / file_path
             elif file_path.endswith(('.ts', '.tsx', '.js', '.jsx', '.css', '.html')):
                 target_path = project_path / "frontend" / file_path
@@ -494,7 +540,11 @@ BUILD LOG:
                 continue
 
             # Determine best target path based on file type
-            if file_path.endswith('.java'):
+            # IMPORTANT: Check if path already has backend/frontend prefix to avoid duplication
+            if file_path.startswith('backend/') or file_path.startswith('frontend/'):
+                # Path already has prefix, use as-is
+                target_path = project_path / file_path
+            elif file_path.endswith('.java'):
                 target_path = project_path / "backend" / file_path
             elif file_path.endswith(('.ts', '.tsx', '.js', '.jsx', '.css', '.html')):
                 target_path = project_path / "frontend" / file_path
@@ -881,6 +931,42 @@ BUILD LOG:
                 return {"path": str(rel_path), "content": content}
         except Exception as e:
             logger.warning(f"[BoltFixer] Could not read {java_file}: {e}")
+        return None
+
+    async def _read_file_content(self, project_path: Path, file_path: str) -> Optional[str]:
+        """
+        Read file content by trying multiple possible paths.
+
+        Args:
+            project_path: Root project path
+            file_path: Relative file path (may or may not include backend/frontend prefix)
+
+        Returns:
+            File content or None if not found
+        """
+        # Try different path combinations
+        possible_paths = [
+            project_path / file_path,
+            project_path / "frontend" / file_path,
+            project_path / "backend" / file_path,
+        ]
+
+        # Also try without backend/ prefix if file_path already has it
+        if file_path.startswith("backend/"):
+            possible_paths.append(project_path / file_path.replace("backend/", ""))
+
+        for path in possible_paths:
+            try:
+                if self._sandbox_file_reader:
+                    content = self._sandbox_file_reader(str(path))
+                    if content:
+                        return content
+                elif path.exists():
+                    return path.read_text(encoding='utf-8')
+            except Exception as e:
+                logger.debug(f"[BoltFixer] Could not read {path}: {e}")
+                continue
+
         return None
 
 
