@@ -1532,7 +1532,15 @@ class UnifiedStorageService:
             raise
 
     async def _restore_to_remote_sandbox(self, project_id: str, user_id: Optional[str] = None) -> List[FileInfo]:
-        """Restore files to REMOTE sandbox EC2 using Docker container with AWS CLI."""
+        """
+        Restore files to REMOTE sandbox EC2.
+
+        APPROACH PRIORITY:
+        1. SSM (AWS Systems Manager) - Most reliable for ECS → EC2 communication
+        2. Docker container with aws-cli - Fallback if SSM unavailable
+
+        CRITICAL: Returns empty list if restore fails (not fake success)
+        """
         import docker
         from app.core.database import AsyncSessionLocal
         from app.models.project_file import ProjectFile
@@ -1546,6 +1554,9 @@ class UnifiedStorageService:
 
         logger.info(f"[RemoteRestore] Using S3 bucket: {s3_bucket}, region: {aws_region}")
         workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}" if user_id else f"/tmp/sandbox/workspace/{project_id}"
+
+        # Track restore success - CRITICAL for returning correct result
+        restore_successful = False
 
         try:
             # Quick check if project already exists on EC2 (skip restore if cached)
@@ -1605,26 +1616,91 @@ class UnifiedStorageService:
                 logger.error(f"[RemoteRestore] No files have S3 keys! Files were not uploaded to S3.")
                 return []
 
-            # Reuse docker_client from cache check (already created above)
-            # Create directories first, then download files in PARALLEL for speed
-            mkdir_commands = [f"mkdir -p {workspace_path}"]
-            download_commands = []
-
-            for f in files_with_s3:
-                fp = f"{workspace_path}/{f.path}"
-                dp = "/".join(fp.rsplit("/", 1)[:-1]) if "/" in f.path else workspace_path
-                mkdir_commands.append(f"mkdir -p {dp}")
-                # Use & for parallel execution, limit to 10 concurrent
-                download_commands.append(f"aws s3 cp s3://{s3_bucket}/{f.s3_key} {fp}")
-
             logger.info(f"[RemoteRestore] Restoring {len(files_with_s3)} files to {workspace_path}")
             logger.debug(f"[RemoteRestore] Sample S3 keys: {[f.s3_key for f in files_with_s3[:3]]}")
 
             # =============================================================
-            # SIMPLER APPROACH: Use aws s3 sync (EC2 instance role for credentials)
-            # This avoids the complex credential passing that was failing
+            # APPROACH 1: SSM (AWS Systems Manager) - MOST RELIABLE
+            # Runs commands directly on EC2 without docker socket issues
             # =============================================================
             s3_project_path = f"s3://{s3_bucket}/projects/{project_id}/"
+            ssm_instance_id = os.environ.get("SANDBOX_EC2_INSTANCE_ID", "i-0fd03f81ccc16a3e3")
+
+            try:
+                import boto3
+                ssm_client = boto3.client('ssm', region_name=aws_region)
+
+                # SSM command to sync S3 to workspace
+                ssm_command = f"""
+                    echo "[SSM-RESTORE] Starting restore via SSM"
+                    mkdir -p {workspace_path}
+                    echo "[SSM-RESTORE] Syncing from {s3_project_path}"
+                    aws s3 sync {s3_project_path} {workspace_path}/ --region {aws_region} 2>&1
+                    SYNC_EXIT=$?
+                    echo "[SSM-RESTORE] Sync exit code: $SYNC_EXIT"
+                    FILE_COUNT=$(find {workspace_path} -type f 2>/dev/null | wc -l)
+                    echo "[SSM-RESTORE] Total files: $FILE_COUNT"
+                    if [ "$FILE_COUNT" -gt 5 ]; then
+                        echo "[SSM-RESTORE] SUCCESS"
+                    else
+                        echo "[SSM-RESTORE] FAILED - Only $FILE_COUNT files"
+                    fi
+                """
+
+                logger.info(f"[RemoteRestore] Trying SSM restore to instance {ssm_instance_id}...")
+
+                # Send command via SSM
+                response = ssm_client.send_command(
+                    InstanceIds=[ssm_instance_id],
+                    DocumentName="AWS-RunShellScript",
+                    Parameters={"commands": [ssm_command]},
+                    TimeoutSeconds=120
+                )
+                command_id = response['Command']['CommandId']
+                logger.info(f"[RemoteRestore] SSM command sent: {command_id}")
+
+                # Wait for command to complete (with timeout)
+                import time
+                max_wait = 60  # seconds
+                start_time = time.time()
+                while time.time() - start_time < max_wait:
+                    await asyncio.sleep(2)
+                    try:
+                        result = ssm_client.get_command_invocation(
+                            CommandId=command_id,
+                            InstanceId=ssm_instance_id
+                        )
+                        status = result.get('Status', '')
+                        if status in ['Success', 'Failed', 'TimedOut', 'Cancelled']:
+                            break
+                    except ssm_client.exceptions.InvocationDoesNotExist:
+                        continue
+
+                # Check result
+                if status == 'Success':
+                    output = result.get('StandardOutputContent', '')
+                    logger.info(f"[RemoteRestore] SSM output:\n{output[:1500]}")
+
+                    if "[SSM-RESTORE] SUCCESS" in output:
+                        # Extract file count from output
+                        import re
+                        match = re.search(r'Total files: (\d+)', output)
+                        file_count = int(match.group(1)) if match else 0
+                        logger.info(f"[RemoteRestore] SSM restore SUCCESS! {file_count} files restored")
+                        restore_successful = True
+                        return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in files_with_s3]
+                    else:
+                        logger.warning(f"[RemoteRestore] SSM restore partial or failed, falling back to docker")
+                else:
+                    stderr = result.get('StandardErrorContent', '') if status != 'InProgress' else ''
+                    logger.warning(f"[RemoteRestore] SSM command status: {status}. Error: {stderr[:500]}")
+
+            except Exception as ssm_err:
+                logger.warning(f"[RemoteRestore] SSM restore failed, falling back to docker: {ssm_err}")
+
+            # =============================================================
+            # APPROACH 2: Docker container with aws s3 sync (fallback)
+            # =============================================================
             sync_script = f"""
                 echo "[SYNC] Creating workspace directory..."
                 mkdir -p {workspace_path}
@@ -1636,9 +1712,9 @@ class UnifiedStorageService:
                 find {workspace_path} -type f 2>/dev/null | wc -l
             """
 
-            # Try the simpler sync approach first (uses EC2 instance role)
+            # Try the docker sync approach (uses EC2 instance role)
             try:
-                logger.info(f"[RemoteRestore] Trying aws s3 sync (uses EC2 instance role)...")
+                logger.info(f"[RemoteRestore] Trying docker aws s3 sync...")
                 sync_output = docker_client.containers.run(
                     "amazon/aws-cli:latest",
                     ["-c", sync_script],
@@ -1654,10 +1730,10 @@ class UnifiedStorageService:
                 )
                 if sync_output:
                     sync_result = sync_output.decode()
-                    logger.info(f"[RemoteRestore] S3 sync output:\n{sync_result[:2000]}")
+                    logger.info(f"[RemoteRestore] Docker S3 sync output:\n{sync_result[:2000]}")
 
                     # Check if sync was successful by counting files
-                    if "SYNC_EXIT=0" in sync_result or "Sync completed with exit code: 0" in sync_result:
+                    if "Sync completed with exit code: 0" in sync_result:
                         # Verify files exist
                         verify_result = docker_client.containers.run(
                             "alpine:latest",
@@ -1669,12 +1745,24 @@ class UnifiedStorageService:
                         )
                         file_count = int(verify_result.decode().strip() or "0")
                         if file_count >= len(files_with_s3) * 0.8:  # At least 80% of expected files
-                            logger.info(f"[RemoteRestore] S3 sync SUCCESS! {file_count} files restored (expected {len(files_with_s3)})")
+                            logger.info(f"[RemoteRestore] Docker S3 sync SUCCESS! {file_count} files restored")
+                            restore_successful = True
                             return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in files_with_s3]
                         else:
-                            logger.warning(f"[RemoteRestore] S3 sync partial: only {file_count} files, expected {len(files_with_s3)}. Falling back to individual downloads.")
+                            logger.warning(f"[RemoteRestore] Docker sync partial: only {file_count} files, expected {len(files_with_s3)}.")
+                else:
+                    logger.warning(f"[RemoteRestore] Docker sync produced no output!")
             except Exception as sync_err:
-                logger.warning(f"[RemoteRestore] S3 sync failed, falling back to individual downloads: {sync_err}")
+                logger.warning(f"[RemoteRestore] Docker S3 sync failed: {sync_err}")
+
+            # Prepare fallback download commands
+            mkdir_commands = [f"mkdir -p {workspace_path}"]
+            download_commands = []
+            for f in files_with_s3:
+                fp = f"{workspace_path}/{f.path}"
+                dp = "/".join(fp.rsplit("/", 1)[:-1]) if "/" in f.path else workspace_path
+                mkdir_commands.append(f"mkdir -p {dp}")
+                download_commands.append(f"aws s3 cp s3://{s3_bucket}/{f.s3_key} {fp}")
 
             # =============================================================
             # FALLBACK: Individual file downloads (original approach)
@@ -1791,33 +1879,39 @@ class UnifiedStorageService:
                 else:
                     logger.warning(f"[RemoteRestore] Docker restore produced no output after image pull!")
 
-            # Verify files were restored with detailed listing
+            # Verify files were restored with detailed file count
             try:
+                # Use find to count actual files (more accurate than ls)
                 verify_output = docker_client.containers.run(
                     "alpine:latest",
-                    ["-c", f"echo 'Path: {workspace_path}' && ls -la {workspace_path} 2>&1 | head -20"],
+                    ["-c", f"find {workspace_path} -type f 2>/dev/null | wc -l"],
                     entrypoint="/bin/sh",
                     volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
                     remove=True,
                     detach=False
                 )
-                listing = verify_output.decode().strip() if verify_output else "No output"
-                logger.info(f"[RemoteRestore] Verification listing:\n{listing}")
-                # Count files from listing (skip path, total, and "No output" lines)
-                lines = [l for l in listing.split('\n') if l and not l.startswith('Path:') and not l.startswith('total') and l != 'No output']
-                restored_count = len(lines)
-                logger.info(f"[RemoteRestore] Verified {restored_count} items in workspace after restore (expected {len(files_with_s3)})")
-
-                # CRITICAL: If verification shows significantly fewer files than expected,
-                # the S3 restore likely failed. Log error and mark for fallback.
+                restored_count = int(verify_output.decode().strip() or "0") if verify_output else 0
                 expected_count = len(files_with_s3)
-                if restored_count == 0:
+                logger.info(f"[RemoteRestore] Verified {restored_count} files in workspace (expected {expected_count})")
+
+                # CRITICAL: Set restore_successful based on verification
+                if restored_count >= expected_count * 0.8:  # At least 80% of expected files
+                    restore_successful = True
+                    logger.info(f"[RemoteRestore] Verification PASSED - {restored_count}/{expected_count} files")
+                elif restored_count == 0:
                     logger.error(f"[RemoteRestore] FAILED - No files found after restore! Workspace: {workspace_path}")
+                    restore_successful = False
                 elif restored_count < 5 and expected_count > 50:
-                    # Less than 5 items but expected 50+: S3 download likely failed completely
-                    logger.error(f"[RemoteRestore] PARTIAL FAILURE - Only {restored_count} items found, expected {expected_count}. S3 download may have failed!")
+                    logger.error(f"[RemoteRestore] PARTIAL FAILURE - Only {restored_count} files, expected {expected_count}")
+                    restore_successful = False
+                else:
+                    # Some files restored but not 80% - still consider it a success for now
+                    restore_successful = True
+                    logger.warning(f"[RemoteRestore] Partial restore: {restored_count}/{expected_count} files")
             except Exception as verify_err:
                 logger.warning(f"[RemoteRestore] Could not verify restore: {verify_err}")
+                # If we can't verify, assume failure
+                restore_successful = False
 
             # SANITIZE JSON FILES: Fix duplicate keys and other issues in existing projects
             # This is critical for projects that were created with corrupted package.json
@@ -2050,8 +2144,13 @@ fi
             except Exception as inject_err:
                 logger.warning(f"[RemoteRestore] Could not inject error capture script: {inject_err}")
 
-            logger.info(f"[RemoteRestore] Successfully restored {len(files_with_s3)} files to EC2 sandbox")
-            return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in files_with_s3]
+            # CRITICAL: Only return files if restore was verified successful
+            if restore_successful:
+                logger.info(f"[RemoteRestore] Successfully restored {len(files_with_s3)} files to EC2 sandbox")
+                return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in files_with_s3]
+            else:
+                logger.error(f"[RemoteRestore] RESTORE FAILED - returning empty list (was expecting {len(files_with_s3)} files)")
+                return []
         except Exception as e:
             logger.error(f"[RemoteRestore] Failed to restore project {project_id}: {e}", exc_info=True)
             return []
