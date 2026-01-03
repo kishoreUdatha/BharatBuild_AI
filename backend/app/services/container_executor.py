@@ -1867,6 +1867,7 @@ class ContainerExecutor:
                                         # Sync fixed files to S3 immediately
                                         yield f"  ☁️ Syncing fixes to S3...\n"
                                         try:
+                                            from app.services.storage_service import storage_service
                                             synced_count = 0
                                             for file_path in fix_result.files_modified:
                                                 full_path = f"{project_path}/{file_path}"
