@@ -1969,7 +1969,6 @@ class ContainerExecutor:
 
         # Health check with auto-fix
         # Java/Maven projects need time to compile - check multiple times over 60s
-        max_fix_attempts = 3
         fix_attempt = 0
         containers_healthy = False
         all_files_modified = []  # Track files modified by auto-fix for S3 sync
@@ -1985,6 +1984,11 @@ class ContainerExecutor:
                 logger.info(f"[ContainerExecutor] Java project detected - using extended stability checks")
         except Exception as e:
             logger.warning(f"[ContainerExecutor] Error detecting Java project: {e}")
+
+        # Java projects often have multi-file consistency errors (Entity, DTO, Service, Controller)
+        # Need more fix attempts to fix all related files
+        max_fix_attempts = 6 if is_java_project else 3
+        logger.info(f"[ContainerExecutor] Max fix attempts: {max_fix_attempts} (Java={is_java_project})")
 
         # Service health check configuration
         # Order: infrastructure → backend → frontend → proxy
