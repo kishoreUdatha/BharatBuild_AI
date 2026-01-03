@@ -2070,20 +2070,16 @@ CMD ["node", "src/index.js"]
 ```
 
 SPRING BOOT BACKEND:
+⚠️ CRITICAL: Do NOT use mvnw (Maven wrapper) - it requires additional files that won't exist.
+Use the official maven Docker image instead:
 ```dockerfile
-FROM eclipse-temurin:17-jdk-alpine AS build
+FROM maven:3.9-eclipse-temurin-17
 WORKDIR /app
-COPY mvnw pom.xml ./
-COPY .mvn .mvn
-RUN ./mvnw dependency:go-offline
-COPY src src
-RUN ./mvnw package -DskipTests
-
-FROM eclipse-temurin:17-jre-alpine
-WORKDIR /app
-COPY --from=build /app/target/*.jar app.jar
+COPY pom.xml .
+RUN mvn dependency:go-offline -B || true
+COPY src ./src
 EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "app.jar"]
+CMD ["mvn", "spring-boot:run", "-Dcheckstyle.skip=true"]
 ```
 
 STREAMLIT/AI-ML APP:
