@@ -13,7 +13,8 @@
       "Bash(ping:*)",
       "Bash(\"C:\\\\Program Files\\\\Amazon\\\\AWSCLIV2\\\\aws.exe\" ssm get-command-invocation --command-id \"6f0a8051-733e-400e-9ead-60c5e04d2e8a\" --instance-id \"i-0fd03f81ccc16a3e3\" --query \"StandardOutputContent\" --output text)",
       "Bash(\"C:\\\\Program Files\\\\Amazon\\\\AWSCLIV2\\\\aws.exe\" ssm send-command --instance-ids \"i-0fd03f81ccc16a3e3\" --document-name \"AWS-RunShellScript\" --parameters \"commands=[\"\"docker ps -a --format ''table {{.Names}}\\\\t{{.Status}}''\"\"]\" --query \"Command.CommandId\" --output text)",
-      "Bash(\"C:\\\\Program Files\\\\Amazon\\\\AWSCLIV2\\\\aws.exe\" ssm get-command-invocation --command-id \"f448926b-378d-4278-9fbc-06898c1dd64a\" --instance-id \"i-0fd03f81ccc16a3e3\" --query \"StandardOutputContent\" --output text)"
+      "Bash(\"C:\\\\Program Files\\\\Amazon\\\\AWSCLIV2\\\\aws.exe\" ssm get-command-invocation --command-id \"f448926b-378d-4278-9fbc-06898c1dd64a\" --instance-id \"i-0fd03f81ccc16a3e3\" --query \"StandardOutputContent\" --output text)",
+      "Bash(MSYS_NO_PATHCONV=1 \"C:\\\\Program Files\\\\Amazon\\\\AWSCLIV2\\\\aws.exe\" logs tail:*)"
     ]
   }
 }

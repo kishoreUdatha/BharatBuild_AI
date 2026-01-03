@@ -1666,12 +1666,17 @@ class UnifiedStorageService:
 
             # Add error capturing to the restore script
             # Redirect stderr to stdout so we can see any errors
+            first_download = download_commands[0] if download_commands else "echo 'No downloads'"
             restore_script_with_logging = f"""
                 echo "[RESTORE] Starting restore to {workspace_path}"
+                echo "[RESTORE] AWS credentials check..."
+                aws sts get-caller-identity 2>&1 || echo "[RESTORE] WARNING: AWS credentials may not be valid!"
                 echo "[RESTORE] Creating directories..."
                 {mkdir_script}
                 echo "[RESTORE] Directories created"
-                echo "[RESTORE] Downloading {len(download_commands)} files..."
+                echo "[RESTORE] Testing first download to capture any S3 errors..."
+                {first_download} 2>&1 || echo "[RESTORE] ERROR: First download failed!"
+                echo "[RESTORE] Downloading remaining {len(download_commands) - 1} files..."
                 set +e  # Don't exit on error
                 {download_script}
                 DOWNLOAD_EXIT=$?
@@ -1679,6 +1684,8 @@ class UnifiedStorageService:
                 echo "[RESTORE] Download completed with exit code: $DOWNLOAD_EXIT"
                 echo "[RESTORE] Files in workspace:"
                 ls -la {workspace_path} 2>&1 | head -15 || echo "[RESTORE] Failed to list workspace"
+                echo "[RESTORE] Total file count:"
+                find {workspace_path} -type f 2>/dev/null | wc -l || echo "0"
             """
 
             try:
@@ -1690,11 +1697,15 @@ class UnifiedStorageService:
                     environment=container_env,
                     remove=True,
                     detach=False,
-                    network_mode="host"
+                    network_mode="host",
+                    stdout=True,
+                    stderr=True  # Capture stderr for S3 error messages
                 )
                 if output:
                     restore_output = output.decode()
-                    logger.info(f"[RemoteRestore] Docker restore output:\n{restore_output[:1000]}")
+                    logger.info(f"[RemoteRestore] Docker restore output:\n{restore_output[:2000]}")
+                else:
+                    logger.warning(f"[RemoteRestore] Docker restore produced no output! S3 downloads may have failed silently.")
             except docker.errors.ContainerError as ce:
                 logger.error(f"[RemoteRestore] Docker container error: {ce.stderr.decode() if ce.stderr else ce}")
                 return []
@@ -1710,10 +1721,14 @@ class UnifiedStorageService:
                     environment=container_env,  # Use proper credentials
                     remove=True,
                     detach=False,
-                    network_mode="host"
+                    network_mode="host",
+                    stdout=True,
+                    stderr=True
                 )
                 if retry_output:
-                    logger.info(f"[RemoteRestore] Docker restore output (after pull):\n{retry_output.decode()[:1000]}")
+                    logger.info(f"[RemoteRestore] Docker restore output (after pull):\n{retry_output.decode()[:2000]}")
+                else:
+                    logger.warning(f"[RemoteRestore] Docker restore produced no output after image pull!")
 
             # Verify files were restored with detailed listing
             try:
@@ -1727,12 +1742,19 @@ class UnifiedStorageService:
                 )
                 listing = verify_output.decode().strip() if verify_output else "No output"
                 logger.info(f"[RemoteRestore] Verification listing:\n{listing}")
-                # Count files from listing (skip first 3 lines: path, total, . and ..)
-                lines = [l for l in listing.split('\n') if l and not l.startswith('Path:') and not l.startswith('total')]
+                # Count files from listing (skip path, total, and "No output" lines)
+                lines = [l for l in listing.split('\n') if l and not l.startswith('Path:') and not l.startswith('total') and l != 'No output']
                 restored_count = len(lines)
-                logger.info(f"[RemoteRestore] Verified {restored_count} items in workspace after restore")
+                logger.info(f"[RemoteRestore] Verified {restored_count} items in workspace after restore (expected {len(files_with_s3)})")
+
+                # CRITICAL: If verification shows significantly fewer files than expected,
+                # the S3 restore likely failed. Log error and mark for fallback.
+                expected_count = len(files_with_s3)
                 if restored_count == 0:
                     logger.error(f"[RemoteRestore] FAILED - No files found after restore! Workspace: {workspace_path}")
+                elif restored_count < 5 and expected_count > 50:
+                    # Less than 5 items but expected 50+: S3 download likely failed completely
+                    logger.error(f"[RemoteRestore] PARTIAL FAILURE - Only {restored_count} items found, expected {expected_count}. S3 download may have failed!")
             except Exception as verify_err:
                 logger.warning(f"[RemoteRestore] Could not verify restore: {verify_err}")
 
