@@ -1829,6 +1829,48 @@ class ContainerExecutor:
                                 logger.warning(f"[ContainerExecutor] AI fixer error: {ai_err}")
                                 yield f"  ❌ AI fixer error: {ai_err}\n"
 
+                            # Step 3: Try BoltFixer for build-time compilation errors (Java/Maven/Gradle)
+                            build_error_patterns = [
+                                'BUILD FAILURE', 'COMPILATION ERROR', 'cannot find symbol',
+                                'package does not exist', 'error: cannot find symbol',
+                                'error: package .* does not exist', 'class .* not found',
+                                'error: cannot access', 'non-existing', 'does not exist'
+                            ]
+                            if any(pattern in output for pattern in build_error_patterns):
+                                yield f"  🔧 Step 3: Trying BoltFixer for compilation errors...\n"
+                                try:
+                                    from app.services.bolt_fixer import BoltFixer
+                                    bolt_fixer_instance = BoltFixer()
+
+                                    # Build payload for BoltFixer with build error context
+                                    bolt_payload = {
+                                        "stderr": output,
+                                        "stdout": "",
+                                        "exit_code": exit_code,
+                                        "primary_error_type": "build_failure"
+                                    }
+
+                                    fix_result = await bolt_fixer_instance.fix_from_backend(
+                                        project_id=project_id,
+                                        project_path=Path(project_path),
+                                        payload=bolt_payload,
+                                        sandbox_file_writer=self._write_file_to_sandbox,
+                                        sandbox_file_reader=self._read_file_from_sandbox,
+                                        sandbox_file_lister=self._list_files_from_sandbox
+                                    )
+
+                                    if fix_result.success and fix_result.files_modified:
+                                        yield f"  ✅ BoltFixer created/modified {len(fix_result.files_modified)} files:\n"
+                                        for f in fix_result.files_modified:
+                                            yield f"     📝 {f}\n"
+                                        yield f"  🔄 Retrying docker-compose build...\n"
+                                        continue  # Retry the build
+                                    else:
+                                        yield f"  ⚠️ BoltFixer could not fix: {fix_result.message if hasattr(fix_result, 'message') else 'No fix generated'}\n"
+                                except Exception as bolt_err:
+                                    logger.warning(f"[ContainerExecutor] BoltFixer build error: {bolt_err}")
+                                    yield f"  ⚠️ BoltFixer error: {bolt_err}\n"
+
                     yield f"\n❌ Docker Compose failed with exit code {exit_code}\n"
                     return
 
