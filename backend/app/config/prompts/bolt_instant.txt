@@ -49,6 +49,13 @@ RULES:
 8. Include tsconfig.node.json if using Vite with TypeScript
 9. Only use tailwind plugins that are in package.json devDependencies
 
+JAVA/SPRING BOOT CONSISTENCY (CRITICAL):
+1. Use FLAT DTOs - no nested static classes
+2. Field names MUST match exactly across Entity, DTO, Service, Controller
+3. Every getter/setter in Entity must exist in DTO with SAME name
+4. Service interface methods must match what Controller calls
+5. Use separate DTO files: UserDto.java, UserCreateDto.java, UserUpdateDto.java
+
 DO NOT GENERATE: .vscode/, .idea/, README.md
 
 THINK LIKE BOLT.NEW: Fast, Beautiful, Works immediately

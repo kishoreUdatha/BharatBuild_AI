@@ -423,6 +423,74 @@ class ContextEngine:
 
         return siblings
 
+    def get_related_java_files(self, file_path: str, all_files: List[Dict]) -> List[Dict]:
+        """
+        For Java projects, get related files that should be checked for consistency.
+
+        When fixing UserServiceImpl.java, also include:
+        - UserService.java (interface)
+        - User.java (model/entity)
+        - UserDto.java (DTO)
+        - UserController.java (controller)
+        - UserRepository.java (repository)
+
+        This enables the fixer to check consistency across related files.
+        """
+        if not file_path.endswith('.java'):
+            return []
+
+        related = []
+        file_name = Path(file_path).stem  # e.g., "UserServiceImpl"
+
+        # Extract entity name from various patterns
+        entity_name = None
+
+        # Pattern: UserServiceImpl -> User
+        if file_name.endswith('ServiceImpl'):
+            entity_name = file_name[:-11]  # Remove "ServiceImpl"
+        # Pattern: UserService -> User
+        elif file_name.endswith('Service'):
+            entity_name = file_name[:-7]  # Remove "Service"
+        # Pattern: UserController -> User
+        elif file_name.endswith('Controller'):
+            entity_name = file_name[:-10]  # Remove "Controller"
+        # Pattern: UserRepository -> User
+        elif file_name.endswith('Repository'):
+            entity_name = file_name[:-10]  # Remove "Repository"
+        # Pattern: UserDto -> User
+        elif file_name.endswith('Dto') or file_name.endswith('DTO'):
+            entity_name = file_name[:-3]  # Remove "Dto" or "DTO"
+        # Pattern: Could be the entity itself (User.java)
+        elif file_name[0].isupper() and not any(file_name.endswith(s) for s in ['Impl', 'Test', 'Config']):
+            entity_name = file_name
+
+        if not entity_name:
+            return []
+
+        logger.info(f"[ContextEngine] Looking for Java files related to entity: {entity_name}")
+
+        # Find all related files by entity name
+        related_patterns = [
+            f"{entity_name}.java",           # Entity/Model
+            f"{entity_name}Dto.java",        # DTO
+            f"{entity_name}DTO.java",        # DTO (alternative)
+            f"{entity_name}Service.java",    # Service interface
+            f"{entity_name}ServiceImpl.java", # Service implementation
+            f"{entity_name}Controller.java", # Controller
+            f"{entity_name}Repository.java", # Repository
+        ]
+
+        for f in all_files:
+            f_path = f.get('path', '')
+            f_name = Path(f_path).name
+
+            # Check if this file matches any related pattern
+            if f_name in related_patterns and f_path != file_path:
+                related.append(f)
+                logger.info(f"[ContextEngine] Found related Java file: {f_path}")
+
+        return related
+
     def build_context(
         self,
         user_message: str,
@@ -835,7 +903,27 @@ class ContextEngine:
                             is_primary=False
                         )
 
-        # 6. Sort by relevance and limit
+        # 8. Add RELATED Java files for consistency checking (CRITICAL for Java projects)
+        # When fixing UserServiceImpl.java, also include User.java, UserDto.java, etc.
+        primary_files = [p for p, f in scored_files.items() if f.is_primary]
+        for primary_path in primary_files:
+            if primary_path.endswith('.java'):
+                related_files = self.get_related_java_files(primary_path, all_files)
+                for related in related_files:
+                    related_path = related.get('path', '')
+                    if related_path not in scored_files:
+                        content = related.get('content', '') or self._read_file(related_path)
+                        if content:
+                            scored_files[related_path] = FileContext(
+                                path=related_path,
+                                content=content,
+                                relevance_score=95.0,  # Very high - consistency is critical
+                                reason=f"Related Java file for consistency with {Path(primary_path).name}",
+                                is_primary=False
+                            )
+                            logger.info(f"[ContextEngine] Added related Java file: {related_path}")
+
+        # 9. Sort by relevance and limit
         sorted_files = sorted(
             scored_files.values(),
             key=lambda f: (-f.relevance_score, f.path)

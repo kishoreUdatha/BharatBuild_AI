@@ -564,7 +564,17 @@ STEP 9: VERIFY ENUM IS SEPARATE FILE
 - Enum file goes in model/ or enums/ package
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 10: VERIFY EXCEPTION HANDLING
+STEP 10: DTO MUST BE FLAT (NO NESTED CLASSES)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- NEVER use nested static classes in DTOs
+- Each DTO purpose gets its OWN file:
+  ✅ UserDto.java, UserCreateDto.java, UserUpdateDto.java
+  ❌ UserDto.java with inner Response, Request classes
+- DTO field names MUST match Entity field names exactly
+- Include ALL getters and setters for every field
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 11: VERIFY EXCEPTION HANDLING
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Custom exceptions extend RuntimeException
 - Use .orElseThrow() for Optional handling
