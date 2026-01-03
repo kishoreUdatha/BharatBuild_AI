@@ -667,6 +667,17 @@ BUILD LOG:
         for match in re.finditer(r'cannot find symbol.*?(?:class|interface)\s+(\w+)', error_output, re.IGNORECASE):
             root_cause_classes.add(match.group(1))
 
+        # Pattern: "location: variable xxx of type com.package.ClassName" - CRITICAL for Java errors
+        # This catches errors like "location: variable userDto of type com.complaint.dto.UserDto"
+        for match in re.finditer(r'location:\s*variable\s+\w+\s+of\s+type\s+(?:@[\w.]+\s+)?(?:[\w.]+\.)?(\w+)', error_output, re.IGNORECASE):
+            root_cause_classes.add(match.group(1))
+
+        # Pattern: "type com.package.ClassName" - generic type reference
+        for match in re.finditer(r'\btype\s+(?:[\w.]+\.)?(\w+)(?:\s|$|,)', error_output):
+            cls = match.group(1)
+            if cls[0].isupper():  # Only class names (capitalized)
+                root_cause_classes.add(cls)
+
         # Pattern: "no suitable constructor found for X(...)"
         for match in re.finditer(r'no suitable (?:constructor|method).*?for\s+(\w+)', error_output, re.IGNORECASE):
             root_cause_classes.add(match.group(1))
@@ -680,6 +691,48 @@ BUILD LOG:
         # Pattern: "method X() in class Y" - Y is the root cause
         for match in re.finditer(r'method\s+\w+\([^)]*\)\s+in\s+(?:class|interface)\s+(\w+)', error_output, re.IGNORECASE):
             root_cause_classes.add(match.group(1))
+
+        # Pattern: "variable xxxRepository of type com.package.XxxRepository" - for repository errors
+        for match in re.finditer(r'variable\s+(\w+Repository)\s+of\s+type', error_output, re.IGNORECASE):
+            root_cause_classes.add(match.group(1))
+
+        # =====================================================================
+        # STEP 1b: Add RELATED files by entity name pattern
+        # If error is in UserServiceImpl, also include User, UserDto, UserService, UserRepository
+        # =====================================================================
+        if current_class:
+            # Extract entity name from patterns like UserServiceImpl, UserService, UserController
+            entity_patterns = [
+                (r'^(\w+)ServiceImpl$', lambda m: m.group(1)),      # UserServiceImpl -> User
+                (r'^(\w+)Service$', lambda m: m.group(1)),          # UserService -> User
+                (r'^(\w+)Controller$', lambda m: m.group(1)),       # UserController -> User
+                (r'^(\w+)Repository$', lambda m: m.group(1)),       # UserRepository -> User
+                (r'^(\w+)Dto$', lambda m: m.group(1)),              # UserDto -> User
+                (r'^(\w+)DTO$', lambda m: m.group(1)),              # UserDTO -> User
+            ]
+
+            entity_name = None
+            for pattern, extractor in entity_patterns:
+                match = re.match(pattern, current_class)
+                if match:
+                    entity_name = extractor(match)
+                    break
+
+            if entity_name:
+                # Add all related class patterns
+                related_patterns = [
+                    entity_name,                    # User (entity)
+                    f"{entity_name}Dto",            # UserDto
+                    f"{entity_name}DTO",            # UserDTO
+                    f"{entity_name}Service",        # UserService (interface)
+                    f"{entity_name}ServiceImpl",    # UserServiceImpl
+                    f"{entity_name}Repository",     # UserRepository
+                    f"{entity_name}Controller",     # UserController
+                ]
+                for pattern in related_patterns:
+                    if pattern != current_class:
+                        root_cause_classes.add(pattern)
+                logger.info(f"[BoltFixer] Added related classes for entity '{entity_name}': {related_patterns}")
 
         logger.info(f"[BoltFixer] Identified root cause classes: {root_cause_classes}")
 
@@ -706,7 +759,7 @@ BUILD LOG:
 
         # First pass: Read ROOT CAUSE files (these need to be fixed)
         for java_file in all_java_files:
-            if files_found >= 5:
+            if files_found >= 8:  # Increased to accommodate related files
                 break
 
             class_name = Path(java_file).stem
@@ -728,7 +781,7 @@ BUILD LOG:
 
         # Second pass: Read other mentioned files (for context)
         for java_file in all_java_files:
-            if files_found >= 5:
+            if files_found >= 8:  # Increased to accommodate related files
                 break
 
             class_name = Path(java_file).stem
