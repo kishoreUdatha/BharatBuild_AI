@@ -59,6 +59,27 @@ def _get_preview_url(port: int, project_id: str = None) -> str:
     return _get_preview_url_impl(port, project_id or "")
 
 
+# =============================================================================
+# SYSTEM PORTS - Blocked from host port allocation
+# =============================================================================
+# These ports are reserved for system services and MUST be remapped
+# to high ports (35000+) to avoid conflicts.
+SYSTEM_PORTS = {
+    80,      # HTTP (nginx, apache)
+    443,     # HTTPS (nginx, apache)
+    8080,    # Common web server (nginx, jenkins, tomcat)
+    3000,    # Common dev server (node, react, next.js)
+    5432,    # PostgreSQL
+    3306,    # MySQL
+    6379,    # Redis
+    27017,   # MongoDB
+    22,      # SSH
+    21,      # FTP
+    25,      # SMTP
+    53,      # DNS
+}
+
+
 class Technology(Enum):
     """Supported technology stacks - Universal Preview Architecture"""
     # Frontend Frameworks
@@ -1713,8 +1734,45 @@ class ContainerExecutor:
         except Exception as e:
             logger.warning(f"[ContainerExecutor] Preflight port cleanup failed: {e}")
 
+        # =================================================================
+        # PRE-BUILD VALIDATION - Fix issues BEFORE building
+        # =================================================================
+        try:
+            from app.services.pre_build_validator import pre_build_validator
+
+            yield f"\n📋 Pre-build validation...\n"
+
+            validation_result = await pre_build_validator.validate_and_fix(
+                project_id=project_id,
+                project_path=project_path,
+                technology=technology,
+                sandbox_file_reader=self._read_file_from_sandbox,
+                sandbox_file_writer=self._write_file_to_sandbox,
+                sandbox_runner=self._run_shell_on_sandbox
+            )
+
+            if validation_result.files_scanned > 0:
+                yield f"  📂 Scanned {validation_result.files_scanned} files\n"
+
+            if validation_result.issues:
+                yield f"  ⚠️ Found {len(validation_result.issues)} issues\n"
+
+            if validation_result.files_fixed > 0:
+                yield f"  ✅ Auto-fixed {validation_result.files_fixed} files:\n"
+                for fix in validation_result.fixes_applied[:5]:
+                    yield f"     • {fix}\n"
+
+            if validation_result.is_valid:
+                yield f"  ✅ Validation passed\n"
+            else:
+                yield f"  ⚠️ Some issues could not be auto-fixed\n"
+
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Pre-build validation failed: {e}")
+            yield f"  ⚠️ Pre-build validation skipped: {e}\n"
+
         # Run docker-compose up
-        yield f"  $ docker-compose up -d\n"
+        yield f"\n  $ docker-compose up -d\n"
 
         max_compose_attempts = 4  # Allow multiple retries for cascading fixes (port conflicts, etc.)
         compose_attempt = 0
@@ -2734,20 +2792,30 @@ class ContainerExecutor:
         Uses `ss -tlnp` to check which ports are currently in use, then returns
         a list of available ports in the specified range.
 
+        IMPORTANT: This function:
+        1. Uses high port range (35000+) to avoid system port conflicts
+        2. Pre-blocks all SYSTEM_PORTS (80, 443, 8080, etc.)
+
         Args:
             count: Number of available ports to find
-            start_port: Start of port range to search
-            end_port: End of port range to search
+            start_port: Start of port range to search (default 35000)
+            end_port: End of port range to search (default 39999)
 
         Returns:
             List of available port numbers
         """
         try:
+            # Ensure start_port is above system ports
+            if start_port < 1024:
+                start_port = 35000
+                logger.warning(f"[ContainerExecutor] Sandbox start_port adjusted to {start_port} to avoid system ports")
+
             # Get list of ports currently in use
             cmd = "ss -tlnp 2>/dev/null | grep LISTEN | awk '{print $4}' | grep -oE '[0-9]+$' | sort -u"
             exit_code, output = self._run_shell_on_sandbox(cmd, timeout=10)
 
-            used_ports = set()
+            # Pre-block all system ports for safety
+            used_ports = set(SYSTEM_PORTS)
             if exit_code == 0 and output:
                 for line in output.strip().split('\n'):
                     try:
@@ -2880,12 +2948,22 @@ class ContainerExecutor:
                 logger.info("[ContainerExecutor] No port mappings found in compose file")
                 return port_mapping, frontend_port, backend_port
 
-            # Find available ports
-            available_ports = self._find_available_ports_on_sandbox(count=len(ports_needed))
+            # Check for system ports that MUST be remapped
+            system_ports_found = [p for _, _, p, _ in ports_needed if p in SYSTEM_PORTS]
+            if system_ports_found:
+                logger.warning(f"[ContainerExecutor] Found SYSTEM PORTS that must be remapped: {system_ports_found}")
+
+            # Find available ports - request extra to ensure system ports get remapped
+            available_ports = self._find_available_ports_on_sandbox(count=len(ports_needed) + 5)
 
             if len(available_ports) < len(ports_needed):
                 logger.warning(f"[ContainerExecutor] Not enough available ports: need {len(ports_needed)}, found {len(available_ports)}")
-                # Use what we have
+                # Generate fallback ports for any remaining (especially system ports)
+                fallback_start = 36000
+                while len(available_ports) < len(ports_needed):
+                    if fallback_start not in available_ports:
+                        available_ports.append(fallback_start)
+                    fallback_start += 1
 
             # Allocate ports and update compose data
             modified = False
@@ -2901,7 +2979,11 @@ class ContainerExecutor:
                     service['ports'][port_idx] = f"{new_port}:{container_port}"
                     modified = True
 
-                    logger.info(f"[ContainerExecutor] {service_name}: {original_port}:{container_port} -> {new_port}:{container_port}")
+                    # Log system port remapping explicitly
+                    if original_port in SYSTEM_PORTS:
+                        logger.info(f"[ContainerExecutor] SYSTEM PORT REMAPPED: {service_name}: {original_port}:{container_port} -> {new_port}:{container_port}")
+                    else:
+                        logger.info(f"[ContainerExecutor] {service_name}: {original_port}:{container_port} -> {new_port}:{container_port}")
 
                     # Track frontend/backend ports
                     if any(name in service_name.lower() for name in ['frontend', 'web', 'ui', 'nginx', 'app']):
@@ -2910,6 +2992,18 @@ class ContainerExecutor:
                     elif any(name in service_name.lower() for name in ['backend', 'api', 'server']):
                         if backend_port is None:  # First match
                             backend_port = new_port
+                else:
+                    # CRITICAL: System ports MUST be remapped - fail loudly if we can't
+                    if original_port in SYSTEM_PORTS:
+                        logger.error(f"[ContainerExecutor] CRITICAL: Could not remap system port {original_port} for {service_name}")
+                        # Generate emergency fallback port
+                        emergency_port = 37000 + i
+                        port_mapping[original_port] = emergency_port
+                        service = compose_data['services'][service_name]
+                        container_port_clean = container_port.split('/')[0]
+                        service['ports'][port_idx] = f"{emergency_port}:{container_port}"
+                        modified = True
+                        logger.warning(f"[ContainerExecutor] EMERGENCY: {service_name}: {original_port} -> {emergency_port}")
 
             # Write updated compose file
             if modified:
@@ -3462,9 +3556,15 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
         IMPORTANT:
         1. Queries Docker daemon for used ports
         2. Also checks if port is actually bindable on host (non-Docker processes)
+        3. NEVER returns a system port (80, 443, 8080, etc.)
         """
+        # If preferred port is a system port, immediately jump to safe range
+        if preferred_port in SYSTEM_PORTS or preferred_port < 1024:
+            logger.warning(f"[ContainerExecutor] Preferred port {preferred_port} is a SYSTEM PORT - using safe range")
+            preferred_port = 10000  # Start from safe range
+
         # Get all used ports from Docker containers
-        used_ports = set()
+        used_ports = set(SYSTEM_PORTS)  # Pre-block all system ports
 
         # Add in-memory tracked ports
         for info in self.active_containers.values():
@@ -3492,7 +3592,8 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
         max_attempts = 100
 
         for _ in range(max_attempts):
-            if port not in used_ports and self._is_port_free(port):
+            # Double-check: never return system ports
+            if port not in SYSTEM_PORTS and port >= 1024 and port not in used_ports and self._is_port_free(port):
                 logger.info(f"[ContainerExecutor] Selected port {port} (preferred: {preferred_port})")
                 return port
             port += 1
@@ -4375,13 +4476,21 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
         """
         Find an available port for container mapping on the Docker host.
 
-        IMPORTANT: This queries the REMOTE Docker daemon to get actual used ports,
-        not local ports on the ECS task container.
+        IMPORTANT:
+        1. This queries the REMOTE Docker daemon to get actual used ports,
+           not local ports on the ECS task container.
+        2. NEVER returns system ports (80, 443, 8080, etc.)
         """
         import random
 
+        # Ensure start is in safe range (above system ports)
+        if start < 1024:
+            start = 10000
+            logger.warning(f"[ContainerExecutor] Start port adjusted to {start} to avoid system ports")
+
         # Get all used ports from Docker containers (not just in-memory tracking)
-        used_ports = set()
+        # Pre-block all system ports
+        used_ports = set(SYSTEM_PORTS)
 
         # Add in-memory tracked ports (from current session)
         for info in self.active_containers.values():
@@ -4413,13 +4522,15 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
         search_start = start + offset
 
         for port in range(search_start, end):
-            if port not in used_ports:
+            # Double-check: never return system ports
+            if port not in used_ports and port not in SYSTEM_PORTS and port >= 1024:
                 logger.info(f"[ContainerExecutor] Selected available port: {port}")
                 return port
 
         # Wrap around if we started with an offset
         for port in range(start, search_start):
-            if port not in used_ports:
+            # Double-check: never return system ports
+            if port not in used_ports and port not in SYSTEM_PORTS and port >= 1024:
                 logger.info(f"[ContainerExecutor] Selected available port (wrap): {port}")
                 return port
 

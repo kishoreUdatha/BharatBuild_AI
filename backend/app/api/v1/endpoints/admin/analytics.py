@@ -1291,3 +1291,91 @@ async def get_cost_alerts(
         },
         "alerts": alerts
     }
+
+
+@router.get("/token-logs/debug")
+async def debug_token_logs(
+    limit: int = Query(100, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    """
+    Debug endpoint to view raw TokenUsageLog records.
+    Helps diagnose why project costs might not be showing.
+    """
+    # Get total count
+    total_count = await db.scalar(select(func.count(TokenUsageLog.id)))
+
+    # Get records with NULL project_id
+    null_project_count = await db.scalar(
+        select(func.count(TokenUsageLog.id)).where(TokenUsageLog.project_id.is_(None))
+    )
+
+    # Get distinct project_ids
+    project_ids_result = await db.execute(
+        select(TokenUsageLog.project_id)
+        .distinct()
+        .where(TokenUsageLog.project_id.isnot(None))
+        .limit(50)
+    )
+    distinct_project_ids = [str(row[0]) for row in project_ids_result]
+
+    # Get recent records
+    recent_query = (
+        select(TokenUsageLog)
+        .order_by(desc(TokenUsageLog.created_at))
+        .limit(limit)
+    )
+    result = await db.execute(recent_query)
+    records = result.scalars().all()
+
+    # Check if any project_ids match existing projects
+    matching_projects = 0
+    if distinct_project_ids:
+        for pid in distinct_project_ids[:10]:
+            try:
+                from uuid import UUID
+                project = await db.get(Project, UUID(pid))
+                if project:
+                    matching_projects += 1
+            except:
+                pass
+
+    return {
+        "database_status": {
+            "total_token_log_records": total_count or 0,
+            "records_with_null_project_id": null_project_count or 0,
+            "records_with_valid_project_id": (total_count or 0) - (null_project_count or 0),
+            "distinct_project_ids": len(distinct_project_ids),
+            "matching_projects_in_db": matching_projects
+        },
+        "sample_project_ids": distinct_project_ids[:10],
+        "recent_records": [
+            {
+                "id": str(log.id),
+                "user_id": str(log.user_id) if log.user_id else None,
+                "project_id": str(log.project_id) if log.project_id else None,
+                "agent_type": log.agent_type.value if log.agent_type else None,
+                "operation": log.operation.value if log.operation else None,
+                "model": log.model,
+                "input_tokens": log.input_tokens,
+                "output_tokens": log.output_tokens,
+                "total_tokens": log.total_tokens,
+                "cost_paise": log.cost_paise,
+                "file_path": log.file_path,
+                "created_at": log.created_at.isoformat() if log.created_at else None
+            }
+            for log in records
+        ],
+        "diagnosis": {
+            "has_records": (total_count or 0) > 0,
+            "has_project_association": (null_project_count or 0) < (total_count or 0),
+            "projects_exist_in_db": matching_projects > 0,
+            "recommendation": (
+                "All good - records should appear in project costs" if (total_count or 0) > 0 and matching_projects > 0
+                else "No token records found - check if token tracking is working" if (total_count or 0) == 0
+                else "Token records exist but project_ids don't match any projects" if matching_projects == 0
+                else "Some records have NULL project_id - check token tracking code"
+            )
+        }
+    }
