@@ -2096,25 +2096,23 @@ class ContainerExecutor:
                         yield f"📤 Syncing fixed files to S3...\n"
                         try:
                             from app.services.storage_service import storage_service
-                            from app.core.database import AsyncSessionLocal
 
-                            async with AsyncSessionLocal() as db:
-                                synced_count = 0
-                                for file_path in fix_result.files_modified:
-                                    full_path = f"{project_path}/{file_path}"
-                                    # Read file content from sandbox
-                                    cat_cmd = f"cat '{full_path}'"
-                                    exit_code, content = self._run_shell_on_sandbox(cat_cmd, working_dir=project_path, timeout=10)
-                                    if exit_code == 0 and content:
-                                        await storage_service.save_file(
-                                            project_id=project_id,
-                                            file_path=file_path,
-                                            content=content,
-                                            db=db
-                                        )
-                                        synced_count += 1
-                                        logger.info(f"[ContainerExecutor] Synced to S3: {file_path}")
-                                await db.commit()
+                            synced_count = 0
+                            for file_path in fix_result.files_modified:
+                                full_path = f"{project_path}/{file_path}"
+                                # Read file content from sandbox
+                                cat_cmd = f"cat '{full_path}'"
+                                exit_code, content = self._run_shell_on_sandbox(cat_cmd, working_dir=project_path, timeout=10)
+                                if exit_code == 0 and content:
+                                    # upload_file expects bytes, not str
+                                    content_bytes = content.encode('utf-8') if isinstance(content, str) else content
+                                    await storage_service.upload_file(
+                                        project_id=project_id,
+                                        file_path=file_path,
+                                        content=content_bytes
+                                    )
+                                    synced_count += 1
+                                    logger.info(f"[ContainerExecutor] Synced to S3: {file_path}")
                             yield f"  ✅ {synced_count} file(s) synced to S3\n"
                         except Exception as sync_err:
                             logger.error(f"[ContainerExecutor] Immediate S3 sync error: {sync_err}")
@@ -2161,24 +2159,22 @@ class ContainerExecutor:
             yield f"\n📤 Syncing {len(all_files_modified)} fixed file(s) to storage...\n"
             try:
                 from app.services.storage_service import storage_service
-                from app.core.database import AsyncSessionLocal
 
-                async with AsyncSessionLocal() as db:
-                    synced_count = 0
-                    for file_path in all_files_modified:
-                        full_path = f"{project_path}/{file_path}"
-                        # Read file content from sandbox (handles remote mode)
-                        cat_cmd = f"cat '{full_path}'"
-                        exit_code, content = self._run_shell_on_sandbox(cat_cmd, working_dir=project_path, timeout=10)
-                        if exit_code == 0 and content:
-                            await storage_service.save_file(
-                                project_id=project_id,
-                                file_path=file_path,
-                                content=content,
-                                db=db
-                            )
-                            synced_count += 1
-                    await db.commit()
+                synced_count = 0
+                for file_path in all_files_modified:
+                    full_path = f"{project_path}/{file_path}"
+                    # Read file content from sandbox (handles remote mode)
+                    cat_cmd = f"cat '{full_path}'"
+                    exit_code, content = self._run_shell_on_sandbox(cat_cmd, working_dir=project_path, timeout=10)
+                    if exit_code == 0 and content:
+                        # upload_file expects bytes, not str
+                        content_bytes = content.encode('utf-8') if isinstance(content, str) else content
+                        await storage_service.upload_file(
+                            project_id=project_id,
+                            file_path=file_path,
+                            content=content_bytes
+                        )
+                        synced_count += 1
                 yield f"  ✅ {synced_count} file(s) synced to storage\n"
                 logger.info(f"[ContainerExecutor] Synced {synced_count} fixed files to S3")
             except Exception as sync_err:
