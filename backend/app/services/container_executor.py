@@ -1996,7 +1996,7 @@ class ContainerExecutor:
             'redis': {'timeout': 15, 'order': 1, 'success': ['Ready to accept connections', 'ready to accept connections'], 'errors': []},
             'backend': {'timeout': 120 if is_java_project else 60, 'order': 2,
                        'success': ['Started', 'Tomcat started', 'Application startup complete', 'Uvicorn running', 'Listening on port', 'Server is running'],
-                       'errors': ['BUILD FAILURE', 'COMPILATION ERROR', 'Error:', 'Exception:', 'FATAL']},
+                       'errors': ['BUILD FAILURE', 'COMPILATION ERROR', '[ERROR]', 'Error:', 'Exception:', 'FATAL', 'cannot find symbol', 'package does not exist']},
             'frontend': {'timeout': 45, 'order': 3,
                         'success': ['VITE', 'ready in', 'compiled successfully', 'Local:', 'Compiled', 'webpack compiled'],
                         'errors': ['npm ERR!', 'Error:', 'ELIFECYCLE', 'Cannot find module']},
@@ -2132,10 +2132,31 @@ class ContainerExecutor:
                         # Timeout - do final check
                         status_cmd = f"docker ps -a --filter 'name=^{container_name}$' --format '{{{{.Status}}}}'"
                         _, final_status = self._run_shell_on_sandbox(status_cmd, working_dir=project_path, timeout=10)
-                        if final_status and "Up" in final_status and "Restarting" not in final_status:
+
+                        # Also check logs one more time for errors
+                        logs_cmd = f"docker logs {container_name} 2>&1 | tail -100"
+                        _, final_logs = self._run_shell_on_sandbox(logs_cmd, working_dir=project_path, timeout=10)
+                        final_logs = final_logs or ""
+
+                        # Check for errors in final logs
+                        has_error_in_logs = False
+                        for err in error_indicators:
+                            if err in final_logs:
+                                has_error_in_logs = True
+                                service_error = f"Error in logs after timeout: {err}"
+                                logger.warning(f"[HealthCheck] {service_name}: Found error '{err}' in final logs")
+                                break
+
+                        if has_error_in_logs:
+                            yield f"     ❌ {service_name}: Build/startup failed - {service_error}\n"
+                            failure_detected = True
+                            failed_service = svc
+                            break
+                        elif final_status and "Up" in final_status and "Restarting" not in final_status and "health: starting" not in final_status:
                             yield f"     ⚠️ {service_name}: Running (unconfirmed)\n"
                         else:
-                            yield f"     ❌ {service_name}: Timeout - failed to start\n"
+                            # Still "health: starting" after timeout = likely failing
+                            yield f"     ❌ {service_name}: Timeout - health check never passed\n"
                             failure_detected = True
                             failed_service = svc
                             break
