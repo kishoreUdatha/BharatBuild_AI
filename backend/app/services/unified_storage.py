@@ -708,6 +708,70 @@ class UnifiedStorageService:
             logger.warning(f"[RemoteCheck] Failed to check EC2 sandbox: {e}")
             return False
 
+    async def sync_sandbox_to_s3(self, project_id: str, user_id: Optional[str] = None) -> int:
+        """
+        Sync files from sandbox to S3 and update database records.
+        Used when files exist on sandbox but were never uploaded to S3.
+
+        Returns: Number of files synced
+        """
+        import docker
+        from app.core.database import async_session
+        from app.models.project_file import ProjectFile, FileGenerationStatus
+        from sqlalchemy import select, cast
+        from sqlalchemy import String as SQLString
+        from uuid import UUID
+
+        synced_count = 0
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+        workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}" if user_id else f"/tmp/sandbox/workspace/{project_id}"
+
+        try:
+            # Get list of files from sandbox
+            if sandbox_docker_host:
+                docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+                result = docker_client.containers.run(
+                    image="alpine:latest",
+                    command=f"find {workspace_path} -type f -not -path '*/node_modules/*' -not -path '*/.git/*' | head -200",
+                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    remove=True, detach=False
+                )
+                file_paths = [p.strip() for p in result.decode().split('\\n') if p.strip()]
+            else:
+                sandbox_path = self.get_sandbox_path(project_id, user_id)
+                file_paths = [str(p) for p in sandbox_path.rglob('*') if p.is_file() and 'node_modules' not in str(p)]
+
+            logger.info(f"[SyncToS3] Found {len(file_paths)} files in sandbox to sync")
+
+            for full_path in file_paths[:100]:  # Limit to 100 files per sync
+                try:
+                    # Get relative path
+                    rel_path = full_path.replace(workspace_path + '/', '').replace(str(workspace_path) + '/', '')
+                    if not rel_path or rel_path.startswith('/'):
+                        continue
+
+                    # Read file content from sandbox
+                    content = await self.read_from_sandbox(project_id, rel_path, user_id)
+                    if not content:
+                        continue
+
+                    # Upload to S3 and save to database
+                    success = await self.save_to_database(project_id, rel_path, content)
+                    if success:
+                        synced_count += 1
+                        logger.debug(f"[SyncToS3] ✓ Synced: {rel_path}")
+
+                except Exception as file_err:
+                    logger.warning(f"[SyncToS3] Failed to sync {full_path}: {file_err}")
+                    continue
+
+            logger.info(f"[SyncToS3] Completed: {synced_count} files synced to S3")
+
+        except Exception as e:
+            logger.error(f"[SyncToS3] Sync failed: {e}", exc_info=True)
+
+        return synced_count
+
     # ==================== LAYER 2: S3/MINIO ====================
 
     def get_s3_prefix(self, user_id: str, project_id: str) -> str:
