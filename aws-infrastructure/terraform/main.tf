@@ -685,19 +685,31 @@ resource "aws_iam_role_policy" "ecs_task_ssm" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "ssm:SendCommand",
-        "ssm:GetCommandInvocation",
-        "ssm:ListCommands",
-        "ssm:ListCommandInvocations"
-      ]
-      Resource = [
-        "arn:aws:ssm:${var.aws_region}:*:document/AWS-RunShellScript",
-        "arn:aws:ec2:${var.aws_region}:*:instance/*"
-      ]
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:SendCommand",
+          "ssm:GetCommandInvocation",
+          "ssm:ListCommands",
+          "ssm:ListCommandInvocations"
+        ]
+        Resource = [
+          "arn:aws:ssm:${var.aws_region}:*:document/AWS-RunShellScript",
+          "arn:aws:ec2:${var.aws_region}:*:instance/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters"
+        ]
+        Resource = [
+          "arn:aws:ssm:${var.aws_region}:*:parameter/bharatbuild/*"
+        ]
+      }
+    ]
   })
 }
 
