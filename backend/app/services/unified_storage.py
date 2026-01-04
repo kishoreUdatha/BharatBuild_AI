@@ -1667,7 +1667,24 @@ class UnifiedStorageService:
             # Runs commands directly on EC2 without docker socket issues
             # =============================================================
             s3_project_path = f"s3://{s3_bucket}/projects/{project_id}/"
-            ssm_instance_id = os.environ.get("SANDBOX_EC2_INSTANCE_ID", "i-061277cc1f349e44b")
+
+            # Get instance ID: env var first, then SSM parameter, then empty (skip SSM restore)
+            ssm_instance_id = os.environ.get("SANDBOX_EC2_INSTANCE_ID", "")
+            if not ssm_instance_id:
+                try:
+                    import boto3
+                    ssm_param_client = boto3.client('ssm', region_name=aws_region)
+                    ssm_param_name = os.environ.get("SANDBOX_SSM_PARAM_INSTANCE_ID", "/bharatbuild/sandbox/instance-id")
+                    param_response = ssm_param_client.get_parameter(Name=ssm_param_name)
+                    ssm_instance_id = param_response['Parameter']['Value']
+                    logger.info(f"[RemoteRestore] Got instance ID from SSM: {ssm_instance_id}")
+                except Exception as ssm_param_err:
+                    logger.warning(f"[RemoteRestore] Could not get instance ID from SSM: {ssm_param_err}")
+
+            # Only try SSM restore if we have an instance ID
+            if not ssm_instance_id:
+                logger.warning("[RemoteRestore] No instance ID available, skipping SSM restore")
+                raise Exception("No instance ID configured for SSM restore")
 
             try:
                 import boto3
