@@ -91,6 +91,11 @@ def classify_error(error_message: str, context: str = "") -> tuple[ErrorCategory
         ("_run_shell_on_sandbox", "internal sandbox error"),
         ("ContainerExecutor", "internal executor error"),
         ("Failed to create helper container", "internal container error"),
+        ("No files found in database", "project restore failed"),
+        ("No files to restore", "project restore failed"),
+        ("ERROR: No files", "project restore failed"),
+        ("S3 restore failed", "S3 restore error"),
+        ("Project restore timed out", "restore timeout"),
     ]
     for pattern, reason in system_patterns:
         if pattern.lower() in combined:
