@@ -571,13 +571,21 @@ async def websocket_proxy(websocket: WebSocket, project_id: str, path: str):
     await websocket.accept()
 
     try:
-        # Connect to the target WebSocket
-        async with websockets.connect(
-            target_ws_url,
-            ping_interval=30,
-            ping_timeout=10,
-            close_timeout=5
-        ) as target_ws:
+        # Preview Gap #5: Add connect timeout to prevent hanging on dead endpoints
+        try:
+            async with asyncio.timeout(10):  # 10 second connect timeout
+                target_ws = await websockets.connect(
+                    target_ws_url,
+                    ping_interval=20,
+                    ping_timeout=5,
+                    close_timeout=3
+                )
+        except asyncio.TimeoutError:
+            logger.warning(f"[Preview WS] WebSocket connection timeout to {target_ws_url}")
+            await websocket.close(code=1013, reason="WebSocket connection timeout")
+            return
+
+        async with target_ws:
             # Create tasks for bidirectional message forwarding
             async def forward_to_target():
                 """Forward messages from client to target"""

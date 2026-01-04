@@ -30,7 +30,7 @@ import asyncio
 import re
 import time
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -1064,6 +1064,7 @@ Please analyze and fix these errors. If the output shows success or warnings onl
 
             # Process tool calls
             files_modified = []
+            sync_failures = []  # Track files that failed to sync to S3
             iterations = 0
             # Allow up to 5 iterations for complex fixes
             max_iterations = 5
@@ -1088,6 +1089,12 @@ Please analyze and fix these errors. If the output shows success or warnings onl
                             project_id=project_id
                         )
                         logger.info(f"[SimpleFixer] Tool result: {result[:200] if result else 'None'}")
+
+                        # Track sync failures for batch reporting
+                        if result and "S3 sync failed" in result:
+                            path = block.input.get("path", "unknown")
+                            sync_failures.append(path)
+                            logger.warning(f"[SimpleFixer] Sync failure tracked: {path}")
 
                         tool_results.append({
                             "type": "tool_result",
@@ -1120,10 +1127,17 @@ Please analyze and fix these errors. If the output shows success or warnings onl
                 self._track_tokens(response, model)
 
             logger.info(f"[SimpleFixer:{project_id}] Fixed {len(files_modified)} files in {iterations} iterations")
+
+            # Build result message with sync failure warnings
+            result_message = f"Fixed {len(files_modified)} files (model={model.split('-')[1]}, iterations={iterations})"
+            if sync_failures:
+                result_message += f" [WARNING: {len(sync_failures)} file(s) failed to sync to S3 - fixes may be lost on restart: {', '.join(sync_failures[:3])}]"
+                logger.warning(f"[SimpleFixer:{project_id}] {len(sync_failures)} sync failures: {sync_failures}")
+
             return SimpleFixResult(
                 success=len(files_modified) > 0,
                 files_modified=files_modified,
-                message=f"Fixed {len(files_modified)} files (model={model.split('-')[1]}, iterations={iterations})",
+                message=result_message,
                 patches_applied=len(files_modified)
             )
 
@@ -1891,6 +1905,7 @@ Please analyze and fix these errors. If the output shows success or warnings onl
         ]
 
         files_modified = []
+        sync_failures = []  # Track S3 sync failures
 
         for main_path in main_tsx_paths:
             if not main_path.exists():
@@ -1930,21 +1945,26 @@ Please analyze and fix these errors. If the output shows success or warnings onl
                     files_modified.append(rel_path)
                     logger.info(f"[SimpleFixer] Added missing React import to {rel_path}")
 
-                    # Sync to S3
+                    # Sync to S3 and track failures
                     path_parts = str(project_path).replace("\\", "/").split("/")
                     project_id = path_parts[-1] if path_parts else None
                     if project_id:
-                        await self._sync_to_s3(project_id, rel_path, new_content)
+                        sync_ok = await self._sync_to_s3(project_id, rel_path, new_content)
+                        if not sync_ok:
+                            sync_failures.append(rel_path)
 
             except Exception as e:
                 logger.warning(f"[SimpleFixer] Error checking {main_path}: {e}")
                 continue
 
         if files_modified:
+            message = f"Added missing 'import React from react' to {', '.join(files_modified)}"
+            if sync_failures:
+                message += f" [WARNING: {len(sync_failures)} sync failure(s)]"
             return SimpleFixResult(
                 success=True,
                 files_modified=files_modified,
-                message=f"Added missing 'import React from react' to {', '.join(files_modified)}",
+                message=message,
                 patches_applied=len(files_modified)
             )
 
@@ -2016,6 +2036,7 @@ Please analyze and fix these errors. If the output shows success or warnings onl
         ]
 
         files_modified = []
+        sync_failures = []  # Track S3 sync failures
 
         for css_path in css_file_paths:
             if not css_path.exists():
@@ -2040,15 +2061,26 @@ Please analyze and fix these errors. If the output shows success or warnings onl
                     files_modified.append(rel_path)
                     logger.info(f"[SimpleFixer] Fixed {missing_class} -> {replacement} in {rel_path}")
 
+                    # Sync to S3 and track failures
+                    path_parts = str(project_path).replace("\\", "/").split("/")
+                    project_id = path_parts[-1] if path_parts else None
+                    if project_id:
+                        sync_ok = await self._sync_to_s3(project_id, rel_path, content)
+                        if not sync_ok:
+                            sync_failures.append(rel_path)
+
             except Exception as e:
                 logger.warning(f"[SimpleFixer] Error fixing {css_path}: {e}")
                 continue
 
         if files_modified:
+            message = f"Replaced @apply {missing_class} with {replacement}"
+            if sync_failures:
+                message += f" [WARNING: {len(sync_failures)} sync failure(s)]"
             return SimpleFixResult(
                 success=True,
                 files_modified=files_modified,
-                message=f"Replaced @apply {missing_class} with {replacement}",
+                message=message,
                 patches_applied=len(files_modified)
             )
 
@@ -2080,6 +2112,7 @@ Please analyze and fix these errors. If the output shows success or warnings onl
         logger.info(f"[SimpleFixer] Found {len(matches)} export mismatch errors")
 
         files_modified = []
+        sync_failures = []  # Track S3 sync failures
         unique_files = set(matches)
 
         for rel_path in unique_files:
@@ -2136,21 +2169,26 @@ Please analyze and fix these errors. If the output shows success or warnings onl
                 files_modified.append(final_rel_path)
                 logger.info(f"[SimpleFixer] Added 'export default {component_name}' to {final_rel_path}")
 
-                # Sync to S3
+                # Sync to S3 and track failures
                 path_parts = str(project_path).replace("\\", "/").split("/")
                 project_id = path_parts[-1] if path_parts else None
                 if project_id:
-                    await self._sync_to_s3(project_id, final_rel_path, new_content)
+                    sync_ok = await self._sync_to_s3(project_id, final_rel_path, new_content)
+                    if not sync_ok:
+                        sync_failures.append(final_rel_path)
 
             except Exception as e:
                 logger.warning(f"[SimpleFixer] Error fixing {rel_path}: {e}")
                 continue
 
         if files_modified:
+            message = f"Added default exports to {len(files_modified)} component(s)"
+            if sync_failures:
+                message += f" [WARNING: {len(sync_failures)} sync failure(s)]"
             return SimpleFixResult(
                 success=True,
                 files_modified=files_modified,
-                message=f"Added default exports to {len(files_modified)} component(s)",
+                message=message,
                 patches_applied=len(files_modified)
             )
 
@@ -2544,36 +2582,96 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
             }
         ]
 
-    async def _sync_to_s3(self, project_id: str, file_path: str, content: str) -> None:
+    def _validate_fixed_content(self, file_path: str, content: str) -> Tuple[bool, str]:
         """
-        Sync fixed file to BOTH S3 AND database.
+        Gap #13: Validate fixed file content before S3 sync.
+
+        Returns (is_valid, error_message).
+        """
+        # Check for empty content
+        if not content or not content.strip():
+            return False, "Empty or whitespace-only content"
+
+        # Validate JSON files
+        if file_path.endswith('.json'):
+            try:
+                import json
+                json.loads(content)
+            except json.JSONDecodeError as e:
+                return False, f"Invalid JSON: {str(e)[:100]}"
+
+        # Validate JS/TS/TSX/JSX files - basic syntax check
+        if file_path.endswith(('.js', '.ts', '.tsx', '.jsx', '.mjs')):
+            # Check for obvious truncation or corruption
+            open_braces = content.count('{')
+            close_braces = content.count('}')
+            open_parens = content.count('(')
+            close_parens = content.count(')')
+
+            # Allow some tolerance (2) for template literals, strings, etc.
+            if abs(open_braces - close_braces) > 2:
+                return False, f"Unbalanced braces: {open_braces} open, {close_braces} close"
+            if abs(open_parens - close_parens) > 2:
+                return False, f"Unbalanced parentheses: {open_parens} open, {close_parens} close"
+
+        # Validate YAML files
+        if file_path.endswith(('.yml', '.yaml')):
+            try:
+                import yaml
+                yaml.safe_load(content)
+            except yaml.YAMLError as e:
+                return False, f"Invalid YAML: {str(e)[:100]}"
+
+        return True, ""
+
+    async def _sync_to_s3(self, project_id: str, file_path: str, content: str, max_retries: int = 3) -> bool:
+        """
+        Sync fixed file to BOTH S3 AND database with retries.
 
         CRITICAL: Uses save_to_database() which:
         1. Uploads to S3 with content-addressed key (hash-based)
         2. Updates database record with new s3_key
 
-        Previously only uploaded to a different S3 path, causing
-        fixes to be lost on restore (database pointed to old content).
+        Returns True if sync succeeded, False otherwise.
+        This allows callers to track sync failures and handle appropriately.
         """
-        try:
-            from app.services.unified_storage import unified_storage
+        import asyncio
+        from app.services.unified_storage import unified_storage
 
-            # Use save_to_database which properly updates BOTH S3 and database
-            # This uses content-addressed storage and updates the database record
-            success = await unified_storage.save_to_database(
-                project_id=project_id,
-                file_path=file_path,
-                content=content
-            )
+        # Gap #13: Validate content before syncing
+        is_valid, validation_error = self._validate_fixed_content(file_path, content)
+        if not is_valid:
+            logger.warning(f"[SimpleFixer] ✗ Content validation failed for {file_path}: {validation_error}")
+            return False
 
-            if success:
-                logger.info(f"[SimpleFixer] ✓ Persisted fix to S3+DB: {file_path}")
-            else:
-                logger.warning(f"[SimpleFixer] ✗ Failed to persist fix: {file_path}")
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                # Use save_to_database which properly updates BOTH S3 and database
+                success = await unified_storage.save_to_database(
+                    project_id=project_id,
+                    file_path=file_path,
+                    content=content
+                )
 
-        except Exception as e:
-            # Don't fail the fix if sync fails - but log it prominently
-            logger.error(f"[SimpleFixer] ✗ Failed to sync fix to S3+DB: {file_path} - {e}")
+                if success:
+                    logger.info(f"[SimpleFixer] ✓ Persisted fix to S3+DB: {file_path} (attempt {attempt + 1})")
+                    return True
+                else:
+                    logger.warning(f"[SimpleFixer] ✗ save_to_database returned False for: {file_path}")
+                    last_error = "save_to_database returned False"
+
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"[SimpleFixer] ✗ S3 sync attempt {attempt + 1}/{max_retries} failed for {file_path}: {e}")
+
+            # Exponential backoff before retry
+            if attempt < max_retries - 1:
+                await asyncio.sleep(0.5 * (2 ** attempt))
+
+        # All retries failed
+        logger.error(f"[SimpleFixer] ✗ CRITICAL: Failed to sync fix to S3+DB after {max_retries} attempts: {file_path} - {last_error}")
+        return False
 
     async def _execute_tool(
         self,
@@ -2588,12 +2686,13 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
 
             # CRITICAL FIX: AI sometimes returns container absolute paths like /app/frontend/file.ts
             # These need to be converted to relative paths for local filesystem operations
-            sandbox_base = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else "/tmp/sandbox/workspace"
+            # Use settings.SANDBOX_PATH consistently - supports both /tmp and /efs paths
+            sandbox_base = settings.SANDBOX_PATH
             if path.startswith("/app/"):
                 original_path = path
                 path = path[5:]  # Remove "/app/" prefix
                 logger.info(f"[SimpleFixer] Normalized container path: '{original_path}' -> '{path}'")
-            elif path.startswith(sandbox_base + "/") or path.startswith("/tmp/sandbox/workspace/"):
+            elif path.startswith(sandbox_base + "/") or path.startswith("/efs/sandbox/workspace/") or path.startswith("/tmp/sandbox/workspace/"):
                 # Remote sandbox absolute path - extract just the relative path
                 # Path format: {sandbox_base}/{user_id}/{project_id}/{relative_path}
                 original_path = path
@@ -2719,11 +2818,15 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                 full_path.write_text(content, encoding='utf-8')
                 logger.info(f"[SimpleFixer] Created file: {path} ({len(content)} chars)")
 
-                # LAYER 2: Sync to S3
+                # LAYER 2: Sync to S3 (with retry and failure tracking)
+                sync_success = True
                 if project_id:
-                    await self._sync_to_s3(project_id, path, content)
+                    sync_success = await self._sync_to_s3(project_id, path, content)
 
-                return f"Created {path} ({len(content)} chars)"
+                if sync_success:
+                    return f"Created {path} ({len(content)} chars)"
+                else:
+                    return f"Created {path} ({len(content)} chars) [WARNING: S3 sync failed - fix may be lost on restart]"
 
             elif tool_name == "str_replace":
                 if not full_path.exists():
@@ -2759,11 +2862,15 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                 full_path.write_text(new_content, encoding='utf-8')
                 logger.info(f"[SimpleFixer] Modified file: {path}")
 
-                # LAYER 2: Sync to S3
+                # LAYER 2: Sync to S3 (with retry and failure tracking)
+                sync_success = True
                 if project_id:
-                    await self._sync_to_s3(project_id, path, new_content)
+                    sync_success = await self._sync_to_s3(project_id, path, new_content)
 
-                return f"Replaced in {path}"
+                if sync_success:
+                    return f"Replaced in {path}"
+                else:
+                    return f"Replaced in {path} [WARNING: S3 sync failed - fix may be lost on restart]"
 
             elif tool_name == "view_file":
                 if not full_path.exists():

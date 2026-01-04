@@ -241,8 +241,23 @@ class WorkspaceRestoreService:
         config = CRITICAL_FILES_BY_TYPE.get(project_type, CRITICAL_FILES_BY_TYPE["node"])
         critical_files = set(config.get("required", []))
         any_of_files = set(config.get("any_of", []))
+        optional_entry = set(config.get("optional_entry", []))
 
-        for i, file in enumerate(files):
+        # Gap #16: Prioritize critical files - restore them first
+        # Order: required files, then any_of files, then optional_entry, then everything else
+        def file_priority(f):
+            if f.path in critical_files:
+                return 0  # Highest priority
+            if f.path in any_of_files:
+                return 1
+            if f.path in optional_entry:
+                return 2
+            return 3  # Normal files last
+
+        sorted_files = sorted(files, key=file_priority)
+        logger.info(f"[WorkspaceRestore] Prioritized {len(critical_files)} required, {len(any_of_files)} any_of files first")
+
+        for i, file in enumerate(sorted_files):
             is_critical = file.path in critical_files or file.path in any_of_files
 
             try:
@@ -254,8 +269,8 @@ class WorkspaceRestoreService:
                 # Get content - prioritize S3 with retry, fallback to inline for legacy data
                 content = None
                 if file.s3_key:
-                    # Download from S3 with retry
-                    content = await self._download_from_s3(file.s3_key)
+                    # Download from S3 with retry (more retries for critical files)
+                    content = await self._download_from_s3(file.s3_key, is_critical=is_critical)
                     if content is None:
                         error_msg = f"Failed to download {file.path} from S3 after {S3_MAX_RETRIES} retries"
                         if is_critical:
@@ -267,6 +282,20 @@ class WorkspaceRestoreService:
                 elif file.content_inline:
                     # Legacy fallback for old inline content
                     content = file.content_inline
+                    # Gap #5: Verify fallback content is valid
+                    if not content or not content.strip():
+                        error_msg = f"Empty fallback content for {file.path}"
+                        if is_critical:
+                            critical_failures.append(file.path)
+                        errors.append(error_msg)
+                        logger.warning(f"[WorkspaceRestore] {error_msg}")
+                        continue
+                    # Verify fallback hash if available
+                    if file.content_hash:
+                        import hashlib
+                        fallback_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
+                        if fallback_hash != file.content_hash:
+                            logger.warning(f"[WorkspaceRestore] Fallback content hash mismatch for {file.path}, using anyway")
                 else:
                     error_msg = f"No content available for {file.path}"
                     if is_critical:
@@ -304,18 +333,35 @@ class WorkspaceRestoreService:
                     errors.append(error_msg)
                     continue
 
-                # Gap #8: Verify written file matches expected hash/size
+                # Gap #4: Verify written file matches expected hash/size with retry
                 if file.content_hash:
                     import hashlib
                     actual_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
                     if actual_hash != file.content_hash:
-                        error_msg = f"Checksum mismatch for {file.path}: expected {file.content_hash[:8]}..., got {actual_hash[:8]}..."
-                        logger.warning(f"[WorkspaceRestore] {error_msg}")
-                        if is_critical:
-                            critical_failures.append(file.path)
-                        errors.append(error_msg)
-                        # Don't count as restored if checksum fails
-                        continue
+                        logger.warning(f"[WorkspaceRestore] Checksum mismatch for {file.path}, retrying S3 download...")
+                        # Retry: Re-download from S3 if available
+                        checksum_retry_success = False
+                        if file.s3_key:
+                            for retry in range(2):  # 2 retries
+                                await asyncio.sleep(0.5 * (retry + 1))  # Backoff
+                                retry_content = await self._download_from_s3(file.s3_key)
+                                if retry_content:
+                                    retry_hash = hashlib.sha256(retry_content.encode('utf-8')).hexdigest()
+                                    if retry_hash == file.content_hash:
+                                        # Retry succeeded, rewrite file
+                                        content = retry_content
+                                        file_path.write_text(content, encoding='utf-8')
+                                        checksum_retry_success = True
+                                        logger.info(f"[WorkspaceRestore] Checksum retry succeeded for {file.path}")
+                                        break
+                        if not checksum_retry_success:
+                            error_msg = f"Checksum mismatch for {file.path}: expected {file.content_hash[:8]}..., got {actual_hash[:8]}..."
+                            logger.warning(f"[WorkspaceRestore] {error_msg}")
+                            if is_critical:
+                                critical_failures.append(file.path)
+                            errors.append(error_msg)
+                            # Don't count as restored if checksum fails
+                            continue
 
                 if file.size_bytes:
                     actual_size = len(content.encode('utf-8'))
@@ -330,7 +376,7 @@ class WorkspaceRestoreService:
                     await progress_callback({
                         "type": "file_restored",
                         "file": file.path,
-                        "progress": (i + 1) / len(files) * 100,
+                        "progress": (i + 1) / len(sorted_files) * 100,
                         "is_critical": is_critical
                     })
 
@@ -539,7 +585,7 @@ class WorkspaceRestoreService:
                 if not user_id and project:
                     user_id = str(project.user_id)
 
-                sandbox_base = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else "/tmp/sandbox/workspace"
+                sandbox_base = settings.SANDBOX_PATH
                 workspace_path = f"{sandbox_base}/{user_id}/{project_id}" if user_id else f"{sandbox_base}/{project_id}"
 
                 # =====================================================================
@@ -687,23 +733,30 @@ class WorkspaceRestoreService:
             logger.error(f"[WorkspaceRestore] Error getting project files: {e}")
             return []
 
-    async def _download_from_s3(self, s3_key: str) -> Optional[str]:
+    async def _download_from_s3(self, s3_key: str, is_critical: bool = False) -> Optional[str]:
         """
-        Download file content from S3/MinIO with retry and exponential backoff.
+        Gap #17: Improved S3 download with retry and exponential backoff + jitter.
 
         Retry Strategy:
-        - Max 3 attempts
-        - Exponential backoff: 0.5s → 1s → 2s
+        - Max 3 attempts (5 for critical files)
+        - Exponential backoff with jitter: 0.5s → 1s → 2s (randomized ±20%)
+        - Skips retry for permanent errors (NoSuchKey, AccessDenied)
         - Logs each attempt for debugging
         """
+        import random
         from app.services.unified_storage import unified_storage
 
+        # More retries for critical files
+        max_retries = 5 if is_critical else S3_MAX_RETRIES
         last_error = None
         delay = S3_INITIAL_DELAY
 
-        for attempt in range(1, S3_MAX_RETRIES + 1):
+        # Permanent errors that shouldn't be retried
+        permanent_errors = ['NoSuchKey', 'AccessDenied', 'InvalidAccessKeyId', '404', '403']
+
+        for attempt in range(1, max_retries + 1):
             try:
-                logger.debug(f"[WorkspaceRestore] S3 download attempt {attempt}/{S3_MAX_RETRIES}: {s3_key}")
+                logger.debug(f"[WorkspaceRestore] S3 download attempt {attempt}/{max_retries}: {s3_key}")
                 content = await unified_storage.download_from_s3(s3_key)
 
                 if content is not None:
@@ -716,16 +769,24 @@ class WorkspaceRestoreService:
             except Exception as e:
                 last_error = str(e)
                 logger.warning(
-                    f"[WorkspaceRestore] S3 download attempt {attempt}/{S3_MAX_RETRIES} failed: {s3_key} - {e}"
+                    f"[WorkspaceRestore] S3 download attempt {attempt}/{max_retries} failed: {s3_key} - {e}"
                 )
 
+                # Don't retry permanent errors
+                if any(perm_err in str(e) for perm_err in permanent_errors):
+                    logger.error(f"[WorkspaceRestore] Permanent S3 error, skipping retries: {s3_key}")
+                    break
+
             # Don't wait after the last attempt
-            if attempt < S3_MAX_RETRIES:
-                logger.debug(f"[WorkspaceRestore] Retrying in {delay}s...")
-                await asyncio.sleep(delay)
+            if attempt < max_retries:
+                # Add jitter (±20%) to prevent thundering herd
+                jitter = random.uniform(0.8, 1.2)
+                wait_time = delay * jitter
+                logger.debug(f"[WorkspaceRestore] Retrying in {wait_time:.2f}s...")
+                await asyncio.sleep(wait_time)
                 delay = min(delay * S3_BACKOFF_MULTIPLIER, S3_MAX_DELAY)
 
-        logger.error(f"[WorkspaceRestore] S3 download failed after {S3_MAX_RETRIES} attempts: {s3_key} - {last_error}")
+        logger.error(f"[WorkspaceRestore] S3 download failed after {attempt} attempts: {s3_key} - {last_error}")
         return None
 
     def _detect_project_type(self, files: List[ProjectFile]) -> str:

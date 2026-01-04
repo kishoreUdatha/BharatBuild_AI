@@ -510,7 +510,7 @@ class UnifiedStorageService:
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
 
         # Build workspace path based on SANDBOX_PATH setting (supports EFS mount)
-        sandbox_base = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else "/tmp/sandbox/workspace"
+        sandbox_base = settings.SANDBOX_PATH
         if user_id:
             workspace_path = f"{sandbox_base}/{user_id}/{project_id}"
         else:
@@ -697,7 +697,7 @@ class UnifiedStorageService:
         import docker
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
         # Build workspace path based on SANDBOX_PATH setting (supports EFS mount)
-        sandbox_base = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else "/tmp/sandbox/workspace"
+        sandbox_base = settings.SANDBOX_PATH
         workspace_path = f"{sandbox_base}/{user_id}/{project_id}" if user_id else f"{sandbox_base}/{project_id}"
         try:
             docker_client = docker.DockerClient(base_url=sandbox_docker_host)
@@ -729,7 +729,7 @@ class UnifiedStorageService:
         synced_count = 0
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
         # Build workspace path based on SANDBOX_PATH setting (supports EFS mount)
-        sandbox_base = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else "/tmp/sandbox/workspace"
+        sandbox_base = settings.SANDBOX_PATH
         workspace_path = f"{sandbox_base}/{user_id}/{project_id}" if user_id else f"{sandbox_base}/{project_id}"
 
         try:
@@ -1561,7 +1561,7 @@ class UnifiedStorageService:
         aws_region = settings.AWS_REGION or "ap-south-1"
 
         # Build workspace path based on SANDBOX_PATH setting (supports EFS mount)
-        sandbox_base = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else "/tmp/sandbox/workspace"
+        sandbox_base = settings.SANDBOX_PATH
         workspace_path = f"{sandbox_base}/{user_id}/{project_id}" if user_id else f"{sandbox_base}/{project_id}"
 
         logger.info(f"[RemoteRestore] Using workspace: {workspace_path}, S3 bucket: {s3_bucket}")

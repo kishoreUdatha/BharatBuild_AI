@@ -17,6 +17,7 @@ Supported Technologies:
 import asyncio
 import socket
 import subprocess
+import threading
 import docker
 from docker.errors import NotFound, APIError
 from typing import Optional, Dict, Any, Tuple, AsyncGenerator, List
@@ -27,6 +28,9 @@ import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# Preview Gap #1: Thread lock for atomic port allocation
+_port_allocation_lock = threading.Lock()
 
 from app.core.logging_config import logger
 from app.services.execution_context import (
@@ -133,6 +137,18 @@ class DatabaseType(Enum):
     MONGODB = "mongodb"
     REDIS = "redis"
     NONE = "none"
+
+
+# Gap #15: Container State Tracking Enum
+class ContainerState(Enum):
+    """Container lifecycle states for tracking"""
+    CREATED = "created"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    ERRORED = "errored"
+    UNKNOWN = "unknown"
 
 
 # Database Container Configurations
@@ -426,6 +442,29 @@ class ContainerExecutor:
         self.docker_client: Optional[docker.DockerClient] = None
         self.active_containers: Dict[str, Dict[str, Any]] = {}  # project_id -> container info
         self._cleanup_task: Optional[asyncio.Task] = None
+
+    # Gap #15: Container state tracking methods
+    def _update_container_state(self, project_id: str, state: ContainerState, error: str = None):
+        """Update container state with timestamp for tracking"""
+        if project_id in self.active_containers:
+            self.active_containers[project_id]["state"] = state.value
+            self.active_containers[project_id]["state_updated_at"] = datetime.utcnow()
+            if error:
+                self.active_containers[project_id]["last_error"] = error
+            logger.debug(f"[ContainerExecutor] Container {project_id} state: {state.value}")
+
+    def get_container_state(self, project_id: str) -> Dict[str, Any]:
+        """Get container state info for debugging"""
+        if project_id in self.active_containers:
+            info = self.active_containers[project_id]
+            return {
+                "state": info.get("state", "unknown"),
+                "state_updated_at": info.get("state_updated_at"),
+                "last_error": info.get("last_error"),
+                "created_at": info.get("created_at"),
+                "host_port": info.get("host_port"),
+            }
+        return {"state": "not_found"}
 
     async def initialize(self):
         """Initialize Docker client"""
@@ -4359,6 +4398,27 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
                 NPM_CACHE_PATH: {"bind": "/root/.npm", "mode": "rw"}
             }
 
+            # Gap #1: Validate volume mount path exists before creating container
+            sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+            if sandbox_docker_host:
+                try:
+                    # Verify the project path exists on remote sandbox
+                    verify_result = self.docker_client.containers.run(
+                        "alpine:latest",
+                        ["-c", f"test -d '{path_str}' && ls '{path_str}' | wc -l"],
+                        entrypoint="/bin/sh",
+                        volumes={_get_sandbox_base(): {"bind": _get_sandbox_base(), "mode": "ro"}},
+                        remove=True,
+                        detach=False
+                    )
+                    file_count = verify_result.decode().strip() if verify_result else "0"
+                    if file_count == "0" or not file_count.isdigit():
+                        logger.warning(f"[ContainerExecutor] Volume path may be empty: {path_str} (files: {file_count})")
+                    else:
+                        logger.info(f"[ContainerExecutor] Volume mount validated: {path_str} ({file_count} files)")
+                except Exception as vol_err:
+                    logger.warning(f"[ContainerExecutor] Volume validation failed (continuing): {vol_err}")
+
             container = self.docker_client.containers.run(
                 image=config.image,
                 name=container_name,
@@ -4556,61 +4616,64 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
         1. This queries the REMOTE Docker daemon to get actual used ports,
            not local ports on the ECS task container.
         2. NEVER returns system ports (80, 443, 8080, etc.)
+        3. Preview Gap #1: Uses lock to prevent race conditions
         """
         import random
 
-        # Ensure start is in safe range (above system ports)
-        if start < 1024:
-            start = 10000
-            logger.warning(f"[ContainerExecutor] Start port adjusted to {start} to avoid system ports")
+        # Preview Gap #1: Acquire lock to prevent race condition during port allocation
+        with _port_allocation_lock:
+            # Ensure start is in safe range (above system ports)
+            if start < 1024:
+                start = 10000
+                logger.warning(f"[ContainerExecutor] Start port adjusted to {start} to avoid system ports")
 
-        # Get all used ports from Docker containers (not just in-memory tracking)
-        # Pre-block all system ports
-        used_ports = set(SYSTEM_PORTS)
+            # Get all used ports from Docker containers (not just in-memory tracking)
+            # Pre-block all system ports
+            used_ports = set(SYSTEM_PORTS)
 
-        # Add in-memory tracked ports (from current session)
-        for info in self.active_containers.values():
-            port = info.get("host_port") or info.get("port", 0)
-            if port:
-                used_ports.add(port)
+            # Add in-memory tracked ports (from current session)
+            for info in self.active_containers.values():
+                port = info.get("host_port") or info.get("port", 0)
+                if port:
+                    used_ports.add(port)
 
-        # Query Docker daemon for ALL containers with port mappings
-        # This catches containers from previous ECS task sessions
-        if self.docker_client:
-            try:
-                all_containers = self.docker_client.containers.list(all=True)
-                for container in all_containers:
-                    # Get port mappings from container
-                    ports = container.attrs.get('NetworkSettings', {}).get('Ports', {}) or {}
-                    for port_binding in ports.values():
-                        if port_binding:  # May be None if not mapped
-                            for binding in port_binding:
-                                host_port = binding.get('HostPort')
-                                if host_port:
-                                    used_ports.add(int(host_port))
-                logger.debug(f"[ContainerExecutor] Docker reports used ports: {sorted(used_ports)}")
-            except Exception as e:
-                logger.warning(f"[ContainerExecutor] Failed to query Docker for ports: {e}")
+            # Query Docker daemon for ALL containers with port mappings
+            # This catches containers from previous ECS task sessions
+            if self.docker_client:
+                try:
+                    all_containers = self.docker_client.containers.list(all=True)
+                    for container in all_containers:
+                        # Get port mappings from container
+                        ports = container.attrs.get('NetworkSettings', {}).get('Ports', {}) or {}
+                        for port_binding in ports.values():
+                            if port_binding:  # May be None if not mapped
+                                for binding in port_binding:
+                                    host_port = binding.get('HostPort')
+                                    if host_port:
+                                        used_ports.add(int(host_port))
+                    logger.debug(f"[ContainerExecutor] Docker reports used ports: {sorted(used_ports)}")
+                except Exception as e:
+                    logger.warning(f"[ContainerExecutor] Failed to query Docker for ports: {e}")
 
-        # Find an available port, starting from a random offset to reduce collisions
-        # This helps when multiple requests come in simultaneously
-        offset = random.randint(0, 1000)
-        search_start = start + offset
+            # Find an available port, starting from a random offset to reduce collisions
+            # This helps when multiple requests come in simultaneously
+            offset = random.randint(0, 1000)
+            search_start = start + offset
 
-        for port in range(search_start, end):
-            # Double-check: never return system ports
-            if port not in used_ports and port not in SYSTEM_PORTS and port >= 1024:
-                logger.info(f"[ContainerExecutor] Selected available port: {port}")
-                return port
+            for port in range(search_start, end):
+                # Double-check: never return system ports
+                if port not in used_ports and port not in SYSTEM_PORTS and port >= 1024:
+                    logger.info(f"[ContainerExecutor] Selected available port: {port}")
+                    return port
 
-        # Wrap around if we started with an offset
-        for port in range(start, search_start):
-            # Double-check: never return system ports
-            if port not in used_ports and port not in SYSTEM_PORTS and port >= 1024:
-                logger.info(f"[ContainerExecutor] Selected available port (wrap): {port}")
-                return port
+            # Wrap around if we started with an offset
+            for port in range(start, search_start):
+                # Double-check: never return system ports
+                if port not in used_ports and port not in SYSTEM_PORTS and port >= 1024:
+                    logger.info(f"[ContainerExecutor] Selected available port (wrap): {port}")
+                    return port
 
-        raise RuntimeError(f"No available ports in range {start}-{end}. Used ports: {len(used_ports)}")
+            raise RuntimeError(f"No available ports in range {start}-{end}. Used ports: {len(used_ports)}")
 
     async def _get_existing_container(self, project_id: str):
         """
@@ -5738,48 +5801,96 @@ echo "Done"
             server_started = False
             has_fatal_error = False
 
-            # Gap #6: Flexible port detection patterns (not hardcoded to 3000/5173)
-            # These patterns capture any port from logs dynamically
+            # Gap #9: Improved port detection patterns for complex URLs
+            # These patterns capture ports from various URL formats and log messages
             start_patterns = [
-                r"Local:\s*http://\S+:(\d+)",
-                r"listening on port (\d+)",
-                r"Server running at http://\S+:(\d+)",
-                r"Started.*on port (\d+)",
-                r"ready.*http://\S+:(\d+)",
-                r"VITE.*Local:\s*http://\S+:(\d+)",
-                r"http://(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)",  # Generic localhost URLs
-                r"https?://\[?::1?\]?:(\d+)",  # IPv6 localhost
-                r"running on.*:(\d+)",  # Generic "running on" patterns
-                r"available at.*:(\d+)",  # "available at" patterns
-                r"serving on.*:(\d+)",  # Python http.server
-                r"bound to.*:(\d+)",  # Bound to port
+                # Vite/React patterns
+                r"Local:\s*https?://[^:\s]+:(\d+)",
+                r"VITE.*Local:\s*https?://[^:\s]+:(\d+)",
                 r"ready in \d+",  # Vite ready message (no port capture)
+                # Generic HTTP URLs with ports (handles IPv4, IPv6, hostnames)
+                r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\d+\.\d+\.\d+\.\d+):(\d+)",
+                r"https?://\[[^\]]+\]:(\d+)",  # IPv6: http://[::1]:3000, http://[::1%eth0]:3000
+                # Explicit port messages
+                r"listening on port (\d+)",
+                r"listening on.*:(\d+)",
+                r"Server running at https?://[^:\s]+:(\d+)",
+                r"Started.*on port (\d+)",
+                r"started on port (\d+)",  # lowercase variant
+                r"ready.*https?://[^:\s]+:(\d+)",
+                # Generic patterns
+                r"running on.*:(\d+)",
+                r"available at.*:(\d+)",
+                r"serving on.*:(\d+)",
+                r"bound to.*:(\d+)",
+                r"Listening on tcp://.*:(\d+)",  # Rails Puma
+                # Express.js patterns
+                r"Express server listening on (\d+)",
+                r"Server listening on (\d+)",
+                r"app listening on port (\d+)",
+                # Spring Boot/Java patterns
+                r"Tomcat started on port\(s\):\s*(\d+)",
+                r"Netty started on port\(s\):\s*(\d+)",
+                r"Started.*on port (\d+)",
+                # Python patterns
+                r"Uvicorn running on https?://[^:\s]+:(\d+)",
+                r"Running on https?://[^:\s]+:(\d+)",  # Flask
+                r"Application startup complete",  # FastAPI/Uvicorn (no port)
+                # Compilation success (no port capture)
                 r"compiled successfully",  # Webpack
                 r"compiled client and server",  # Next.js
-                r"Application startup complete",  # FastAPI/Uvicorn
-                r"Listening on tcp://.*:(\d+)",  # Rails Puma
             ]
 
-            # Fatal error patterns - stop and show error (Bolt-style)
-            # Medium #15: Added OOM detection patterns
-            error_patterns = [
+            # Gap #6: Improved error detection patterns - comprehensive across technologies
+            # Gap #8: Patterns classified as BUILD or RUNTIME errors
+            # BUILD errors: happen during compilation/bundling (npm install, build)
+            # RUNTIME errors: happen when server is running (syntax, type errors in execution)
+            build_error_patterns = [
                 r"npm ERR!",
                 r"npm error",  # npm 10+ uses lowercase "error" instead of "ERR!"
-                r"Error: Cannot find module",
-                r"Module not found",
+                r"404 Not Found",  # npm registry 404
+                r"E404",  # npm error code E404
+                r"ENOENT: no such file",  # Missing file during build
+                r"ERESOLVE",  # npm dependency resolution failed
+                r"peer dep missing",  # npm peer dependency
+                r"BUILD FAILURE",  # Maven/Gradle
+                r"COMPILATION ERROR",  # Java compilation
+                r"cannot find symbol",  # Java
+                r"package does not exist",  # Java
+                r"\[ERROR\].*\.java:\[\d+",  # Maven error format
+                r"error\[E\d+\]",  # Rust compilation
+                r"error: cannot find",  # Generic compilation
+                r"Failed to compile",  # Webpack/Vite
+                r"Bundler error",  # esbuild/rollup
+                r"Build failed with",  # Generic build
+                r"pip install.*failed",  # Python pip
+                r"Could not find a version",  # pip/npm version error
+            ]
+            runtime_error_patterns = [
+                r"Error: Cannot find module",  # Node.js runtime
+                r"Module not found",  # Module import at runtime
                 r"SyntaxError:",
                 r"ReferenceError:",
                 r"TypeError:",
-                r"EADDRINUSE",
+                r"EADDRINUSE",  # Port already in use
                 r"Address already in use",
-                r"ENOENT: no such file",
                 r"Permission denied",
-                r"Traceback \(most recent call last\)",
-                r"ImportError:",
-                r"ModuleNotFoundError:",
-                r"404 Not Found",  # npm registry 404
-                r"E404",  # npm error code E404
-                # Medium #15: OOM (Out of Memory) detection
+                r"Traceback \(most recent call last\)",  # Python runtime
+                r"ImportError:",  # Python import
+                r"ModuleNotFoundError:",  # Python module
+                r"NameError:",  # Python undefined
+                r"ValueError:",  # Python value
+                r"AttributeError:",  # Python attribute
+                r"KeyError:",  # Python key
+                r"NullPointerException",  # Java runtime
+                r"IllegalArgumentException",  # Java
+                r"RuntimeException",  # Java
+                r"ClassNotFoundException",  # Java classloader
+                r"No such property",  # Groovy/Grails
+                r"undefined is not",  # JavaScript runtime
+                r"is not defined",  # JavaScript reference
+                r"Cannot read properties of",  # JavaScript null access
+                # OOM (Out of Memory) detection
                 r"JavaScript heap out of memory",
                 r"FATAL ERROR.*allocation failed",
                 r"Killed",  # Linux OOM killer
@@ -5789,6 +5900,8 @@ echo "Done"
                 r"java\.lang\.OutOfMemoryError",  # Java OOM
                 r"ENOMEM",  # Node.js memory error
             ]
+            # Combined for backward compatibility
+            error_patterns = build_error_patterns + runtime_error_patterns
 
             # Use asyncio queue for thread-safe async log streaming
             log_queue: asyncio.Queue = asyncio.Queue()
