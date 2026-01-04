@@ -45,7 +45,8 @@ if platform.system() == "Windows":
 else:
     _default_sandbox = "/tmp/sandbox/workspace"
 
-SANDBOX_BASE_PATH = os.getenv("SANDBOX_BASE_PATH", _default_sandbox)
+# Check SANDBOX_PATH first (ECS env var), then SANDBOX_BASE_PATH for backwards compatibility
+SANDBOX_BASE_PATH = os.getenv("SANDBOX_PATH", os.getenv("SANDBOX_BASE_PATH", _default_sandbox))
 S3_WORKSPACE_PREFIX = "workspaces"  # Structure: workspaces/{user_id}/{project_id}/
 
 # ===== BROWSER ERROR CAPTURE SCRIPT =====
