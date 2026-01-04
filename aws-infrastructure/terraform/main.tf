@@ -678,6 +678,29 @@ resource "aws_iam_role_policy" "ecs_task_s3" {
   })
 }
 
+# SSM access for task role (for S3 restore via sandbox EC2)
+resource "aws_iam_role_policy" "ecs_task_ssm" {
+  name = "${var.app_name}-ecs-task-ssm-policy"
+  role = aws_iam_role.ecs_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ssm:SendCommand",
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommands",
+        "ssm:ListCommandInvocations"
+      ]
+      Resource = [
+        "arn:aws:ssm:${var.aws_region}:*:document/AWS-RunShellScript",
+        "arn:aws:ec2:${var.aws_region}:*:instance/*"
+      ]
+    }]
+  })
+}
+
 # =============================================================================
 # S3 Bucket for Storage
 # =============================================================================
