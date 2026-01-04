@@ -506,6 +506,8 @@ docker pull openjdk:17-slim &
 docker pull nginx:alpine &
 docker pull postgres:15-alpine &
 docker pull redis:7-alpine &
+docker pull docker/compose:latest &
+docker pull alpine:latest &
 wait
 
 # Install Docker Compose

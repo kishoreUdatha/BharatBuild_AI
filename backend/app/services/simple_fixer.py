@@ -79,6 +79,24 @@ def classify_error(error_message: str, context: str = "") -> tuple[ErrorCategory
     combined = f"{error_lower} {context_lower}"
 
     # =====================================================
+    # SYSTEM ERRORS - Internal platform errors, NOT fixable by user code
+    # These are issues with the BharatBuild platform itself
+    # =====================================================
+    system_patterns = [
+        ("No such image: docker/compose", "helper container image missing"),
+        ("No such image: python:", "helper container image missing"),
+        ("No such image: node:", "helper container image missing"),
+        ("No such image: alpine", "helper container image missing"),
+        ("helper container", "internal helper container error"),
+        ("_run_shell_on_sandbox", "internal sandbox error"),
+        ("ContainerExecutor", "internal executor error"),
+        ("Failed to create helper container", "internal container error"),
+    ]
+    for pattern, reason in system_patterns:
+        if pattern.lower() in combined:
+            return ErrorCategory.NETWORK, f"SYSTEM: {reason}"  # Use NETWORK to skip AI fix
+
+    # =====================================================
     # NETWORK ERRORS - NOT fixable by code changes
     # =====================================================
     network_patterns = [
@@ -672,17 +690,28 @@ class SimpleFixer:
         logger.info(f"[SimpleFixer:{project_id}] Error classified as {error_category.value}: {category_reason}")
 
         # =====================================================
-        # NETWORK ERRORS - Not fixable by code changes
+        # NETWORK/SYSTEM ERRORS - Not fixable by code changes
         # =====================================================
         if error_category == ErrorCategory.NETWORK:
-            logger.warning(f"[SimpleFixer:{project_id}] Network error detected - not fixable by code")
-            return SimpleFixResult(
-                success=False,
-                files_modified=[],
-                message=f"Network error ({category_reason}) - cannot be fixed by code changes. "
-                        "Please check your internet connection or wait for registry availability.",
-                patches_applied=0
-            )
+            # Differentiate system errors from network errors
+            if category_reason.startswith("SYSTEM:"):
+                logger.warning(f"[SimpleFixer:{project_id}] System error detected - internal platform issue")
+                return SimpleFixResult(
+                    success=False,
+                    files_modified=[],
+                    message=f"Internal system error ({category_reason}) - this is a platform issue, not your code. "
+                            "Please try again or contact support if the issue persists.",
+                    patches_applied=0
+                )
+            else:
+                logger.warning(f"[SimpleFixer:{project_id}] Network error detected - not fixable by code")
+                return SimpleFixResult(
+                    success=False,
+                    files_modified=[],
+                    message=f"Network error ({category_reason}) - cannot be fixed by code changes. "
+                            "Please check your internet connection or wait for registry availability.",
+                    patches_applied=0
+                )
 
         # =====================================================
         # DEPENDENCY ERRORS - Try package manager fixes first
