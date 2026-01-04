@@ -73,7 +73,7 @@ class SandboxReconstructionService:
     """
 
     # Base path for sandbox workspaces (supports EFS mount)
-    WORKSPACE_BASE = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else os.environ.get("SANDBOX_WORKSPACE_PATH", "C:/tmp/sandbox/workspace")
+    WORKSPACE_BASE = settings.SANDBOX_PATH
 
     def __init__(self, db: AsyncSession):
         self.db = db

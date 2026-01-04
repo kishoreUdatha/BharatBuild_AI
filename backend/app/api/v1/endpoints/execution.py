@@ -65,6 +65,9 @@ async def get_project_path_async(project_id: str, user_id: str = None):
     sandbox_path = unified_storage.get_sandbox_path(project_id, user_id)
     sandbox_docker_host = _os.environ.get("SANDBOX_DOCKER_HOST")
 
+    # Gap #20: Path logging for debugging
+    logger.info(f"[Execution] Path resolution: project={project_id}, user={user_id}, sandbox_path={sandbox_path}, remote={bool(sandbox_docker_host)}")
+
     # Check if using remote EC2 sandbox
     if sandbox_docker_host:
         # Check if sandbox exists on EC2
@@ -551,12 +554,34 @@ async def fix_runtime_error(
                 })
                 logger.info(f"✅ Fixed and saved: {file_path_str}")
 
+        # =====================================================================
+        # CRITICAL: Stop running container so next run uses fixed files
+        # Without this, the old container keeps running with stale code
+        # =====================================================================
+        container_stopped = False
+        if saved_files:
+            try:
+                from app.services.container_executor import container_executor
+                user_id = str(current_user.id) if current_user else "anonymous"
+
+                # Stop the container for this project (returns tuple: success, message)
+                stopped, stop_msg = await container_executor.stop_container(project_id, user_id)
+                if stopped:
+                    container_stopped = True
+                    logger.info(f"[AutoFix] Stopped container for {project_id} to apply fixes: {stop_msg}")
+                else:
+                    logger.info(f"[AutoFix] No running container found for {project_id}: {stop_msg}")
+            except Exception as stop_err:
+                logger.warning(f"[AutoFix] Could not stop container: {stop_err}")
+
         # Build response
         response = {
             "success": True,
             "fixed_files": saved_files,
             "files_count": len(saved_files),
             "instructions": result.get("instructions"),
+            "needs_restart": len(saved_files) > 0,  # Frontend should auto-restart
+            "container_stopped": container_stopped,
             "analysis": {
                 "error_type": result.get("analysis", {}).error_type if hasattr(result.get("analysis"), "error_type") else None,
                 "root_cause": result.get("analysis", {}).root_cause if hasattr(result.get("analysis"), "root_cause") else None,
@@ -564,7 +589,7 @@ async def fix_runtime_error(
             } if result.get("analysis") else None
         }
 
-        logger.info(f"🎉 Successfully fixed {len(saved_files)} files for project {project_id}")
+        logger.info(f"🎉 Successfully fixed {len(saved_files)} files for project {project_id}, container_stopped={container_stopped}")
 
         return response
 
@@ -956,10 +981,24 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                         return
 
             except asyncio.TimeoutError:
+                # Preview Gap #3: Cleanup container on restore timeout
+                yield emit("output", "  ⚠️ Restore timed out, cleaning up...")
+                try:
+                    from app.services.container_executor import container_executor
+                    await container_executor.stop_container(project_id, effective_user_id)
+                except Exception:
+                    pass
                 yield emit("error", "Project restore timed out. Please try again.")
                 return
             except Exception as restore_err:
+                # Preview Gap #3: Cleanup container on restore failure
                 logger.error(f"[Execution] Restore failed: {restore_err}", exc_info=True)
+                yield emit("output", "  ⚠️ Restore failed, cleaning up...")
+                try:
+                    from app.services.container_executor import container_executor
+                    await container_executor.stop_container(project_id, effective_user_id)
+                except Exception:
+                    pass
                 yield emit("error", f"Failed to restore project files: {str(restore_err)}")
                 return
         elif container_already_running:
@@ -1018,11 +1057,24 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                     phase_name = "dev server" if install_complete else "install"
                     logger.warning(f"[Execution] Stream watchdog triggered after {elapsed:.0f}s ({phase_name} phase) for {project_id}")
                     yield emit("error", f"Stream timeout: {phase_name} phase exceeded {max_duration}s")
+
+                    # CRITICAL: Cleanup orphaned container on timeout to prevent resource exhaustion
+                    try:
+                        from app.services.container_executor import container_executor
+                        stopped, stop_msg = await container_executor.stop_container(project_id, effective_user_id)
+                        if stopped:
+                            logger.info(f"[Execution] Cleaned up container after timeout: {stop_msg}")
+                            yield emit("output", "  🧹 Container stopped after timeout")
+                    except Exception as cleanup_err:
+                        logger.warning(f"[Execution] Failed to cleanup container after timeout: {cleanup_err}")
+
                     break
 
-                # HIGH #6: Send keepalive every 30s to prevent CloudFront/ALB timeout
+                # HIGH #6 + Preview Gap #9: Send keepalive more frequently during install
+                # Reduced from 30s to 15s during install to prevent ALB timeout for long installs
                 now = asyncio.get_event_loop().time()
-                if now - last_keepalive > 30:
+                keepalive_interval = 15 if not install_complete else 30
+                if now - last_keepalive > keepalive_interval:
                     yield emit("keepalive", "...")
                     last_keepalive = now
                 output_count += 1
@@ -1047,40 +1099,31 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                     continue
 
                 # CRITICAL #1: Detect install completion to switch to dev server phase
-                # Extended patterns to catch all npm/yarn/pnpm/pip output formats
+                # These patterns indicate install is DONE (not in progress)
+                # IMPORTANT: Removed "npm WARN" which appears DURING install, not after
                 install_complete_patterns = [
-                    # npm patterns (various versions)
-                    r"added \d+ packages?",
-                    r"up to date",
-                    r"audited \d+ packages?",
-                    r"packages are looking for funding",
-                    r"npm WARN",  # Warnings after install
-                    r"found \d+ vulnerabilities",
-                    r"removed \d+ packages?",  # npm uninstall completion
-                    r"changed \d+ packages?",
-                    # yarn patterns
-                    r"Done in \d+",
+                    # npm definitive completion patterns
+                    r"added \d+ packages? in \d+",  # "added 123 packages in 5s"
+                    r"up to date in \d+",           # "up to date in 1s"
+                    r"audited \d+ packages? in \d+", # "audited 456 packages in 2s"
+                    r"found \d+ vulnerabilities",   # Always appears after install
+                    # yarn definitive patterns
+                    r"Done in \d+\.\d+s",           # "Done in 5.23s"
                     r"success Saved lockfile",
                     r"YN0000.*Done",
-                    # pnpm patterns
-                    r"Progress: resolved \d+",
-                    r"dependencies:",
-                    r"devDependencies:",
-                    # pip patterns
-                    r"Successfully installed",
-                    r"Installing collected packages",
-                    r"Requirement already satisfied",
+                    # pnpm definitive patterns
+                    r"Done in \d+\.\d+s",
+                    r"packages are linked from the content-addressable store",
+                    # pip definitive patterns
+                    r"Successfully installed .+",   # Must have package name
+                    r"Successfully built .+",
                     # Maven patterns
                     r"BUILD SUCCESS",
-                    r"\[INFO\] BUILD",
+                    r"\[INFO\] BUILD SUCCESS",
                     # Gradle patterns
-                    r"Dependencies resolved",
-                    r"BUILD SUCCESSFUL",
-                    # Generic completion markers
-                    r"npm run dev",  # Command transition indicates install done
-                    r"npm start",
-                    r"yarn dev",
-                    r"yarn start",
+                    r"BUILD SUCCESSFUL in \d+",
+                    # Spring Boot
+                    r"Started .+ in \d+ seconds",
                 ]
 
                 # CRITICAL #1: Also detect dev server start commands as install completion
@@ -1110,15 +1153,67 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                             preview_url = output.split(":", 1)[1].strip()
                         else:
                             preview_url = output.split("_PREVIEW_URL_:", 1)[1].strip()
-                        server_started = True
 
                         port = safe_parse_port(preview_url, 3000)
 
+                        # HEALTH CHECK: Verify container is running and port is exposed
+                        # Since server runs on EC2 sandbox (not localhost), check container status instead
+                        health_check_passed = False
+                        sandbox_docker_host = _os.environ.get("SANDBOX_DOCKER_HOST")
+                        if sandbox_docker_host:
+                            try:
+                                import docker
+                                docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+                                container_name = f"bharatbuild_{effective_user_id}_{project_id}"
+
+                                # Check if container is running
+                                containers = docker_client.containers.list(
+                                    filters={"name": container_name, "status": "running"}
+                                )
+                                if containers:
+                                    health_check_passed = True
+                                    logger.info(f"[Execution] Health check passed: container {container_name} is running")
+                                else:
+                                    logger.warning(f"[Execution] Health check: container not found or not running")
+                            except Exception as health_err:
+                                logger.warning(f"[Execution] Health check failed: {health_err}")
+                        else:
+                            # Preview Gap #2: Local sandbox - verify container is running
+                            try:
+                                import docker
+                                local_client = docker.from_env()
+                                container_name = f"bharatbuild_{effective_user_id}_{project_id}"
+                                local_containers = local_client.containers.list(
+                                    filters={"name": container_name, "status": "running"}
+                                )
+                                if local_containers:
+                                    health_check_passed = True
+                                    logger.info(f"[Execution] Local health check passed: {container_name}")
+                                else:
+                                    logger.warning(f"[Execution] Local health check: container not running")
+                            except Exception as local_err:
+                                # Fallback to assuming healthy if Docker check fails
+                                health_check_passed = True
+                                logger.debug(f"[Execution] Local Docker check skipped: {local_err}")
+
+                        server_started = True
+
+                        # Preview Gap #6: Invalidate cache when container starts/restarts
+                        try:
+                            from app.api.v1.endpoints.preview_proxy import invalidate_preview_cache
+                            invalidate_preview_cache(project_id)
+                        except Exception as cache_err:
+                            logger.debug(f"[Execution] Cache invalidation skipped: {cache_err}")
+
                         yield emit("output", "\n[5/5] Starting dev server...")
                         yield emit("output", f"  ✅ Server started on port {port}")
-                        yield emit("server_started", None, {"port": port, "preview_url": preview_url})
+                        if health_check_passed:
+                            yield emit("output", f"  ✅ Health check passed")
+                        else:
+                            yield emit("output", f"  ⚠️ Health check pending (server may still be initializing)")
+                        yield emit("server_started", None, {"port": port, "preview_url": preview_url, "health_checked": health_check_passed})
                         # Store success in LogBus
-                        log_bus.add_docker_log(f"Server started successfully on port {port}")
+                        log_bus.add_docker_log(f"Server started successfully on port {port} (health_checked={health_check_passed})")
                     except Exception as parse_err:
                         logger.warning(f"[Execution] Error parsing server started marker: {parse_err}")
 

@@ -68,7 +68,7 @@ class UnifiedFileManager:
     """
 
     # Sandbox base path (supports EFS mount)
-    SANDBOX_BASE = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else "/tmp/sandbox/workspace"
+    SANDBOX_BASE = settings.SANDBOX_PATH
 
     def __init__(self):
         self._docker_client = None

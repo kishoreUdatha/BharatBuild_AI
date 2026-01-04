@@ -84,7 +84,7 @@ class DockerSandboxService:
     CONTAINER_PREFIX = "sandbox_"
 
     # Base workspace path on host (supports EFS mount)
-    WORKSPACE_BASE = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else os.environ.get("SANDBOX_WORKSPACE_PATH", "/tmp/sandbox/workspace")
+    WORKSPACE_BASE = settings.SANDBOX_PATH
 
     def __init__(self, db: AsyncSession):
         self.db = db
