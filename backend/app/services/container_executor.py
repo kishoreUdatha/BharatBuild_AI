@@ -86,7 +86,11 @@ def _get_sandbox_docker_host() -> str:
     """
     Get sandbox Docker host URL with dynamic IP discovery support.
 
-    When SANDBOX_USE_DYNAMIC_IP=true, reads the IP from SSM Parameter Store.
+    Priority order:
+    1. Static env var SANDBOX_DOCKER_HOST (if set and not empty)
+    2. SSM Parameter Store (always tries if static not set)
+    3. DOCKER_HOST env var as final fallback
+
     This supports Spot instances with ASG where the IP changes on replacement.
 
     Returns:
@@ -94,74 +98,83 @@ def _get_sandbox_docker_host() -> str:
     """
     import time
 
-    use_dynamic_ip = os.environ.get("SANDBOX_USE_DYNAMIC_IP", "false").lower() == "true"
+    # 1. Try static env var first
+    static_host = os.environ.get("SANDBOX_DOCKER_HOST", "")
+    if static_host:
+        return static_host
 
-    if use_dynamic_ip:
-        ssm_param = os.environ.get("SANDBOX_SSM_PARAM_DOCKER_HOST", "/bharatbuild/sandbox/docker-host")
+    # 2. Try SSM Parameter Store (always, not just when flag is set)
+    ssm_param = os.environ.get("SANDBOX_SSM_PARAM_DOCKER_HOST", "/bharatbuild/sandbox/docker-host")
 
-        # Check cache first
-        if ssm_param in _ssm_cache:
-            cached_value, cached_time = _ssm_cache[ssm_param]
-            if time.time() - cached_time < _SSM_CACHE_TTL:
-                return cached_value
+    # Check cache first
+    if ssm_param in _ssm_cache:
+        cached_value, cached_time = _ssm_cache[ssm_param]
+        if time.time() - cached_time < _SSM_CACHE_TTL:
+            return cached_value
 
-        # Fetch from SSM
-        try:
-            import boto3
-            ssm = boto3.client('ssm')
-            response = ssm.get_parameter(Name=ssm_param)
-            value = response['Parameter']['Value']
+    # Fetch from SSM
+    try:
+        import boto3
+        ssm = boto3.client('ssm', region_name=os.environ.get("AWS_REGION", "ap-south-1"))
+        response = ssm.get_parameter(Name=ssm_param)
+        value = response['Parameter']['Value']
 
-            # Cache the result
-            _ssm_cache[ssm_param] = (value, time.time())
-            logger.info(f"[ContainerExecutor] Dynamic IP from SSM: {value}")
-            return value
-        except Exception as e:
-            logger.warning(f"[ContainerExecutor] Failed to get dynamic IP from SSM: {e}")
-            # Fall through to static env var
+        # Cache the result
+        _ssm_cache[ssm_param] = (value, time.time())
+        logger.info(f"[ContainerExecutor] Docker host from SSM: {value}")
+        return value
+    except Exception as e:
+        logger.warning(f"[ContainerExecutor] Failed to get Docker host from SSM: {e}")
 
-    # Static fallback
-    return os.environ.get("SANDBOX_DOCKER_HOST") or os.environ.get("DOCKER_HOST", "")
+    # 3. Final fallback to DOCKER_HOST
+    return os.environ.get("DOCKER_HOST", "")
 
 
 def _get_sandbox_instance_id() -> str:
     """
     Get sandbox EC2 instance ID with dynamic discovery support.
 
-    When SANDBOX_USE_DYNAMIC_IP=true, reads from SSM Parameter Store.
+    Priority order:
+    1. Static env var SANDBOX_EC2_INSTANCE_ID (if set and not empty)
+    2. SSM Parameter Store (always tries if static not set)
+
+    This supports Spot instances with ASG where the instance ID changes on replacement.
 
     Returns:
         EC2 instance ID (e.g., "i-0abc123def456")
     """
     import time
 
-    use_dynamic_ip = os.environ.get("SANDBOX_USE_DYNAMIC_IP", "false").lower() == "true"
+    # 1. Try static env var first
+    static_id = os.environ.get("SANDBOX_EC2_INSTANCE_ID", "")
+    if static_id:
+        return static_id
 
-    if use_dynamic_ip:
-        ssm_param = os.environ.get("SANDBOX_SSM_PARAM_INSTANCE_ID", "/bharatbuild/sandbox/instance-id")
+    # 2. Try SSM Parameter Store (always, not just when flag is set)
+    ssm_param = os.environ.get("SANDBOX_SSM_PARAM_INSTANCE_ID", "/bharatbuild/sandbox/instance-id")
 
-        # Check cache first
-        if ssm_param in _ssm_cache:
-            cached_value, cached_time = _ssm_cache[ssm_param]
-            if time.time() - cached_time < _SSM_CACHE_TTL:
-                return cached_value
+    # Check cache first
+    if ssm_param in _ssm_cache:
+        cached_value, cached_time = _ssm_cache[ssm_param]
+        if time.time() - cached_time < _SSM_CACHE_TTL:
+            return cached_value
 
-        # Fetch from SSM
-        try:
-            import boto3
-            ssm = boto3.client('ssm')
-            response = ssm.get_parameter(Name=ssm_param)
-            value = response['Parameter']['Value']
+    # Fetch from SSM
+    try:
+        import boto3
+        ssm = boto3.client('ssm', region_name=os.environ.get("AWS_REGION", "ap-south-1"))
+        response = ssm.get_parameter(Name=ssm_param)
+        value = response['Parameter']['Value']
 
-            # Cache the result
-            _ssm_cache[ssm_param] = (value, time.time())
-            logger.info(f"[ContainerExecutor] Dynamic instance ID from SSM: {value}")
-            return value
-        except Exception as e:
-            logger.warning(f"[ContainerExecutor] Failed to get instance ID from SSM: {e}")
+        # Cache the result
+        _ssm_cache[ssm_param] = (value, time.time())
+        logger.info(f"[ContainerExecutor] Instance ID from SSM: {value}")
+        return value
+    except Exception as e:
+        logger.warning(f"[ContainerExecutor] Failed to get instance ID from SSM: {e}")
 
-    # Static fallback
-    return os.environ.get("SANDBOX_EC2_INSTANCE_ID", "")
+    # No fallback - return empty string
+    return ""
 
 
 # =============================================================================
