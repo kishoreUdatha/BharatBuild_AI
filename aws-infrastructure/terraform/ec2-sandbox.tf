@@ -308,7 +308,8 @@ resource "aws_instance" "sandbox" {
 # =============================================================================
 
 resource "aws_spot_instance_request" "sandbox" {
-  count = var.sandbox_use_spot ? 1 : 0
+  # Only create standalone spot instance when ASG is disabled
+  count = var.sandbox_use_spot && !var.sandbox_enable_autoscaling ? 1 : 0
 
   ami                         = data.aws_ami.amazon_linux_2023.id
   instance_type               = var.sandbox_instance_type
@@ -340,28 +341,28 @@ resource "aws_spot_instance_request" "sandbox" {
 
 # Tags for the actual spot instance (must be applied separately)
 resource "aws_ec2_tag" "sandbox_spot_name" {
-  count       = var.sandbox_use_spot ? 1 : 0
+  count       = var.sandbox_use_spot && !var.sandbox_enable_autoscaling ? 1 : 0
   resource_id = aws_spot_instance_request.sandbox[0].spot_instance_id
   key         = "Name"
   value       = "${var.app_name}-sandbox-server"
 }
 
 resource "aws_ec2_tag" "sandbox_spot_environment" {
-  count       = var.sandbox_use_spot ? 1 : 0
+  count       = var.sandbox_use_spot && !var.sandbox_enable_autoscaling ? 1 : 0
   resource_id = aws_spot_instance_request.sandbox[0].spot_instance_id
   key         = "Environment"
   value       = "production"
 }
 
 resource "aws_ec2_tag" "sandbox_spot_project" {
-  count       = var.sandbox_use_spot ? 1 : 0
+  count       = var.sandbox_use_spot && !var.sandbox_enable_autoscaling ? 1 : 0
   resource_id = aws_spot_instance_request.sandbox[0].spot_instance_id
   key         = "Project"
   value       = var.app_name
 }
 
 resource "aws_ec2_tag" "sandbox_spot_managed_by" {
-  count       = var.sandbox_use_spot ? 1 : 0
+  count       = var.sandbox_use_spot && !var.sandbox_enable_autoscaling ? 1 : 0
   resource_id = aws_spot_instance_request.sandbox[0].spot_instance_id
   key         = "ManagedBy"
   value       = "terraform"
@@ -809,7 +810,7 @@ resource "aws_lb_target_group_attachment" "sandbox" {
 }
 
 resource "aws_lb_target_group_attachment" "sandbox_spot" {
-  count            = var.sandbox_use_spot ? 1 : 0
+  count            = var.sandbox_use_spot && !var.sandbox_enable_autoscaling ? 1 : 0
   target_group_arn = aws_lb_target_group.sandbox.arn
   target_id        = aws_spot_instance_request.sandbox[0].spot_instance_id
   port             = 8080  # Nginx reverse proxy port
@@ -872,7 +873,7 @@ resource "aws_eip_association" "sandbox" {
 }
 
 resource "aws_eip_association" "sandbox_spot" {
-  count         = var.sandbox_use_spot ? 1 : 0
+  count         = var.sandbox_use_spot && !var.sandbox_enable_autoscaling ? 1 : 0
   instance_id   = aws_spot_instance_request.sandbox[0].spot_instance_id
   allocation_id = aws_eip.sandbox.id
 }
