@@ -310,6 +310,8 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "SANDBOX_PREVIEW_BASE_URL", value = var.domain_name != "" ? "https://${var.domain_name}/sandbox" : "http://${aws_lb.main.dns_name}/sandbox" },
       # Sandbox workspace path (EFS mount for persistence)
       { name = "SANDBOX_PATH", value = "/efs/sandbox/workspace" },
+      # Sandbox EC2 instance ID for SSM commands
+      { name = "SANDBOX_EC2_INSTANCE_ID", value = var.sandbox_use_spot ? (length(aws_spot_instance_request.sandbox) > 0 ? aws_spot_instance_request.sandbox[0].spot_instance_id : "") : (length(aws_instance.sandbox) > 0 ? aws_instance.sandbox[0].id : "") },
       # EFS enabled for hot storage (S3 still used for archival)
       { name = "EFS_ENABLED", value = "true" },
       # RESET_DB - Set to true to drop and recreate all tables (one-time use)
