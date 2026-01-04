@@ -79,6 +79,7 @@ jobs:
             -var="db_password=${{ secrets.DB_PASSWORD }}" \
             -var="redis_auth_token=${{ secrets.REDIS_AUTH_TOKEN }}" \
             -var="route53_zone_exists=${{ github.event.inputs.route53_zone_exists }}" \
+            -var="acm_certificate_arn=${{ secrets.ACM_CERTIFICATE_ARN }}" \
             -out=tfplan
 
       - name: Terraform Apply
@@ -95,6 +96,7 @@ jobs:
             -var="db_password=${{ secrets.DB_PASSWORD }}" \
             -var="redis_auth_token=${{ secrets.REDIS_AUTH_TOKEN }}" \
             -var="route53_zone_exists=${{ github.event.inputs.route53_zone_exists }}" \
+            -var="acm_certificate_arn=${{ secrets.ACM_CERTIFICATE_ARN }}" \
             -auto-approve
 
       - name: Upload Plan
