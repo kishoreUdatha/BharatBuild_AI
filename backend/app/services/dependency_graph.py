@@ -43,6 +43,32 @@ class DependencyGraph:
         self._nodes: Dict[str, FileNode] = {}
         self._class_to_file: Dict[str, str] = {}  # Maps class names to file paths
 
+    # Supported file extensions for dependency graph
+    SUPPORTED_EXTENSIONS = [
+        # JavaScript/TypeScript
+        "*.ts", "*.tsx", "*.js", "*.jsx",
+        # Java
+        "*.java",
+        # Python
+        "*.py",
+        # Go
+        "*.go",
+        # Rust
+        "*.rs",
+        # C/C++
+        "*.c", "*.cpp", "*.cc", "*.h", "*.hpp",
+        # C#
+        "*.cs",
+        # PHP
+        "*.php",
+        # Ruby
+        "*.rb",
+        # Dart/Flutter
+        "*.dart",
+        # Solidity
+        "*.sol",
+    ]
+
     def build_from_files(
         self,
         project_path: Path,
@@ -62,22 +88,17 @@ class DependencyGraph:
         project_str = str(project_path)
 
         if file_lister:
-            # Use sandbox file lister
-            all_files.extend(file_lister(project_str, "*.java"))
-            all_files.extend(file_lister(project_str, "*.ts"))
-            all_files.extend(file_lister(project_str, "*.tsx"))
-            all_files.extend(file_lister(project_str, "*.js"))
-            all_files.extend(file_lister(project_str, "*.jsx"))
-            all_files.extend(file_lister(project_str, "*.py"))
+            # Use sandbox file lister for all supported extensions
+            for ext in self.SUPPORTED_EXTENSIONS:
+                try:
+                    all_files.extend(file_lister(project_str, ext))
+                except Exception:
+                    pass  # Skip if extension not supported
         else:
-            # Use local glob
+            # Use local glob for all supported extensions
             import glob
-            all_files.extend(glob.glob(f"{project_str}/**/*.java", recursive=True))
-            all_files.extend(glob.glob(f"{project_str}/**/*.ts", recursive=True))
-            all_files.extend(glob.glob(f"{project_str}/**/*.tsx", recursive=True))
-            all_files.extend(glob.glob(f"{project_str}/**/*.js", recursive=True))
-            all_files.extend(glob.glob(f"{project_str}/**/*.jsx", recursive=True))
-            all_files.extend(glob.glob(f"{project_str}/**/*.py", recursive=True))
+            for ext in self.SUPPORTED_EXTENSIONS:
+                all_files.extend(glob.glob(f"{project_str}/**/{ext}", recursive=True))
 
         logger.info(f"[DependencyGraph] Building graph from {len(all_files)} files")
 
@@ -133,6 +154,30 @@ class DependencyGraph:
 
         elif ext == '.py':
             node.imports = self._parse_python_imports(content)
+
+        elif ext == '.go':
+            node.imports = self._parse_go_imports(content)
+
+        elif ext == '.rs':
+            node.imports = self._parse_rust_imports(content)
+
+        elif ext in ('.c', '.cpp', '.cc', '.h', '.hpp'):
+            node.imports = self._parse_c_imports(content)
+
+        elif ext == '.cs':
+            node.imports = self._parse_csharp_imports(content)
+
+        elif ext == '.php':
+            node.imports = self._parse_php_imports(content)
+
+        elif ext == '.rb':
+            node.imports = self._parse_ruby_imports(content)
+
+        elif ext == '.dart':
+            node.imports = self._parse_dart_imports(content, rel_path)
+
+        elif ext == '.sol':
+            node.imports = self._parse_solidity_imports(content)
 
         self._nodes[rel_path] = node
 
@@ -233,6 +278,151 @@ class DependencyGraph:
             module = match.group(1)
             imports.add(module.split('.')[0])
             imports.add(module)
+
+        return imports
+
+    def _parse_go_imports(self, content: str) -> Set[str]:
+        """Parse Go import statements"""
+        imports = set()
+
+        # Single import: import "fmt"
+        single_pattern = r'import\s+"([^"]+)"'
+        for match in re.finditer(single_pattern, content):
+            imports.add(match.group(1))
+
+        # Multi import: import ( "fmt" "os" )
+        multi_pattern = r'import\s*\(([\s\S]*?)\)'
+        for match in re.finditer(multi_pattern, content):
+            block = match.group(1)
+            for line in block.split('\n'):
+                pkg_match = re.search(r'"([^"]+)"', line)
+                if pkg_match:
+                    imports.add(pkg_match.group(1))
+
+        return imports
+
+    def _parse_rust_imports(self, content: str) -> Set[str]:
+        """Parse Rust use statements"""
+        imports = set()
+
+        # use statements: use std::io;
+        use_pattern = r'use\s+([\w:]+)'
+        for match in re.finditer(use_pattern, content):
+            path = match.group(1)
+            imports.add(path.split('::')[0])  # Add crate name
+            imports.add(path)
+
+        # extern crate
+        extern_pattern = r'extern\s+crate\s+(\w+)'
+        for match in re.finditer(extern_pattern, content):
+            imports.add(match.group(1))
+
+        # mod statements
+        mod_pattern = r'mod\s+(\w+)\s*;'
+        for match in re.finditer(mod_pattern, content):
+            imports.add(match.group(1))
+
+        return imports
+
+    def _parse_c_imports(self, content: str) -> Set[str]:
+        """Parse C/C++ #include statements"""
+        imports = set()
+
+        # #include <header.h> or #include "header.h"
+        include_pattern = r'#include\s*[<"]([^>"]+)[>"]'
+        for match in re.finditer(include_pattern, content):
+            header = match.group(1)
+            imports.add(header)
+            # Also add base name
+            imports.add(Path(header).stem)
+
+        return imports
+
+    def _parse_csharp_imports(self, content: str) -> Set[str]:
+        """Parse C# using statements"""
+        imports = set()
+
+        # using statements
+        using_pattern = r'using\s+([\w.]+)\s*;'
+        for match in re.finditer(using_pattern, content):
+            namespace = match.group(1)
+            imports.add(namespace)
+            imports.add(namespace.split('.')[0])  # Root namespace
+
+        return imports
+
+    def _parse_php_imports(self, content: str) -> Set[str]:
+        """Parse PHP use/require/include statements"""
+        imports = set()
+
+        # use statements
+        use_pattern = r'use\s+([\w\\]+)'
+        for match in re.finditer(use_pattern, content):
+            imports.add(match.group(1).replace('\\', '/'))
+
+        # require/include
+        require_pattern = r'(?:require|include)(?:_once)?\s*[\'"]([^"\']+)[\'"]'
+        for match in re.finditer(require_pattern, content):
+            imports.add(match.group(1))
+
+        return imports
+
+    def _parse_ruby_imports(self, content: str) -> Set[str]:
+        """Parse Ruby require/load statements"""
+        imports = set()
+
+        # require statements
+        require_pattern = r'require\s+[\'"]([^"\']+)[\'"]'
+        for match in re.finditer(require_pattern, content):
+            imports.add(match.group(1))
+
+        # require_relative
+        require_rel_pattern = r'require_relative\s+[\'"]([^"\']+)[\'"]'
+        for match in re.finditer(require_rel_pattern, content):
+            imports.add(match.group(1))
+
+        # load statements
+        load_pattern = r'load\s+[\'"]([^"\']+)[\'"]'
+        for match in re.finditer(load_pattern, content):
+            imports.add(match.group(1))
+
+        return imports
+
+    def _parse_dart_imports(self, content: str, file_path: str) -> Set[str]:
+        """Parse Dart import statements"""
+        imports = set()
+        base_dir = str(Path(file_path).parent)
+
+        # import statements
+        import_pattern = r'import\s+[\'"]([^"\']+)[\'"]'
+        for match in re.finditer(import_pattern, content):
+            import_path = match.group(1)
+            if import_path.startswith('package:'):
+                # Package import
+                imports.add(import_path.split(':')[1].split('/')[0])
+            else:
+                imports.add(import_path)
+
+        # part/part of
+        part_pattern = r'part\s+[\'"]([^"\']+)[\'"]'
+        for match in re.finditer(part_pattern, content):
+            imports.add(match.group(1))
+
+        return imports
+
+    def _parse_solidity_imports(self, content: str) -> Set[str]:
+        """Parse Solidity import statements"""
+        imports = set()
+
+        # import "file.sol";
+        import_pattern = r'import\s+[\'"]([^"\']+)[\'"]'
+        for match in re.finditer(import_pattern, content):
+            imports.add(match.group(1))
+
+        # import {Symbol} from "file.sol";
+        import_from_pattern = r'import\s+\{[^}]+\}\s+from\s+[\'"]([^"\']+)[\'"]'
+        for match in re.finditer(import_from_pattern, content):
+            imports.add(match.group(1))
 
         return imports
 

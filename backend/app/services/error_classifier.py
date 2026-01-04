@@ -162,6 +162,231 @@ class ErrorClassifier:
         (r'@Autowired.*failed|Could\s+not\s+autowire',
          ErrorType.CONFIG_ERROR,
          "Fix Spring autowiring", 0.85),
+
+        # =================================================================
+        # PYTHON ERRORS (AI/ML, Django, Flask, FastAPI)
+        # =================================================================
+        (r'IndentationError:|TabError:',
+         ErrorType.SYNTAX_ERROR,
+         "Fix Python indentation", 0.95),
+        (r'ModuleNotFoundError:|ImportError:',
+         ErrorType.IMPORT_ERROR,
+         "Fix Python import", 0.9),
+        (r'NameError:\s+name\s+[\'"].*[\'"]\s+is\s+not\s+defined',
+         ErrorType.UNDEFINED_VARIABLE,
+         "Fix undefined Python variable", 0.9),
+        (r'AttributeError:\s+.*has\s+no\s+attribute',
+         ErrorType.TYPE_ERROR,
+         "Fix missing Python attribute", 0.85),
+        (r'TypeError:\s+.*argument|TypeError:\s+.*expected',
+         ErrorType.TYPE_ERROR,
+         "Fix Python type error", 0.85),
+        (r'KeyError:|IndexError:',
+         ErrorType.TYPE_ERROR,
+         "Fix Python key/index error", 0.8),
+        (r'ValueError:\s+|ZeroDivisionError:',
+         ErrorType.TYPE_ERROR,
+         "Fix Python value error", 0.8),
+        # TensorFlow/PyTorch/ML errors
+        (r'tensorflow.*error|tf\..*Error|InvalidArgumentError',
+         ErrorType.CONFIG_ERROR,
+         "Fix TensorFlow configuration", 0.85),
+        (r'RuntimeError:.*CUDA|torch.*error|cuDNN',
+         ErrorType.CONFIG_ERROR,
+         "Fix PyTorch/CUDA configuration", 0.8),
+        (r'shape\s+mismatch|dimension.*mismatch|incompatible\s+shapes',
+         ErrorType.TYPE_ERROR,
+         "Fix tensor shape mismatch", 0.85),
+        # Django/Flask errors
+        (r'django\..*Error|ImproperlyConfigured',
+         ErrorType.CONFIG_ERROR,
+         "Fix Django configuration", 0.85),
+        (r'flask\..*error|werkzeug.*error',
+         ErrorType.CONFIG_ERROR,
+         "Fix Flask configuration", 0.85),
+
+        # =================================================================
+        # GO ERRORS
+        # =================================================================
+        (r'undefined:\s+\w+|undeclared\s+name',
+         ErrorType.UNDEFINED_VARIABLE,
+         "Fix undefined Go variable", 0.9),
+        (r'cannot\s+use.*as.*in|incompatible.*type',
+         ErrorType.TYPE_ERROR,
+         "Fix Go type mismatch", 0.9),
+        (r'imported\s+and\s+not\s+used|declared\s+and\s+not\s+used',
+         ErrorType.IMPORT_ERROR,
+         "Fix unused Go import/variable", 0.9),
+        (r'no\s+required\s+module\s+provides|missing\s+go\.sum\s+entry',
+         ErrorType.DEPENDENCY_CONFLICT,
+         "Fix Go module dependency", 0.9),
+        (r'syntax\s+error:.*unexpected',
+         ErrorType.SYNTAX_ERROR,
+         "Fix Go syntax error", 0.9),
+
+        # =================================================================
+        # RUST ERRORS
+        # =================================================================
+        (r'error\[E\d+\]:|cannot\s+find.*in\s+this\s+scope',
+         ErrorType.UNDEFINED_VARIABLE,
+         "Fix Rust undefined symbol", 0.9),
+        (r'mismatched\s+types|expected.*found',
+         ErrorType.TYPE_ERROR,
+         "Fix Rust type mismatch", 0.9),
+        (r'borrow\s+checker|cannot\s+borrow|borrowed\s+value',
+         ErrorType.TYPE_ERROR,
+         "Fix Rust borrow checker error", 0.85),
+        (r'use\s+of\s+moved\s+value|value\s+moved\s+here',
+         ErrorType.TYPE_ERROR,
+         "Fix Rust ownership error", 0.85),
+        (r'unresolved\s+import|could\s+not\s+find.*in.*crate',
+         ErrorType.IMPORT_ERROR,
+         "Fix Rust import", 0.9),
+        (r'failed\s+to\s+resolve.*dependencies|Cargo.*error',
+         ErrorType.DEPENDENCY_CONFLICT,
+         "Fix Cargo dependency", 0.9),
+
+        # =================================================================
+        # C/C++ ERRORS (GCC, Clang)
+        # =================================================================
+        (r'error:.*undeclared|use\s+of\s+undeclared\s+identifier',
+         ErrorType.UNDEFINED_VARIABLE,
+         "Fix C/C++ undeclared variable", 0.9),
+        (r'error:.*undefined\s+reference|undefined\s+symbol',
+         ErrorType.IMPORT_ERROR,
+         "Fix C/C++ linker error", 0.85),
+        (r'error:.*incompatible.*type|cannot\s+convert',
+         ErrorType.TYPE_ERROR,
+         "Fix C/C++ type error", 0.9),
+        (r'error:.*expected.*before|expected.*declaration',
+         ErrorType.SYNTAX_ERROR,
+         "Fix C/C++ syntax error", 0.9),
+        (r'fatal\s+error:.*No\s+such\s+file|cannot\s+find.*include',
+         ErrorType.MISSING_FILE,
+         "Fix C/C++ include path", 0.9),
+        (r'segmentation\s+fault|SIGSEGV',
+         ErrorType.TYPE_ERROR,
+         "Fix C/C++ memory error", 0.7),
+
+        # =================================================================
+        # .NET / C# ERRORS
+        # =================================================================
+        (r'CS\d{4}:|error\s+CS\d+',
+         ErrorType.TYPE_ERROR,
+         "Fix C# compiler error", 0.9),
+        (r'The\s+type\s+or\s+namespace.*could\s+not\s+be\s+found',
+         ErrorType.IMPORT_ERROR,
+         "Fix C# namespace/using", 0.9),
+        (r'does\s+not\s+contain\s+a\s+definition\s+for',
+         ErrorType.UNDEFINED_VARIABLE,
+         "Fix C# undefined member", 0.9),
+        (r'NullReferenceException|Object\s+reference\s+not\s+set',
+         ErrorType.TYPE_ERROR,
+         "Fix C# null reference", 0.85),
+        (r'Cannot\s+implicitly\s+convert\s+type',
+         ErrorType.TYPE_ERROR,
+         "Fix C# type conversion", 0.9),
+
+        # =================================================================
+        # PHP ERRORS
+        # =================================================================
+        (r'PHP\s+Parse\s+error|syntax\s+error,\s+unexpected',
+         ErrorType.SYNTAX_ERROR,
+         "Fix PHP syntax error", 0.9),
+        (r'Undefined\s+variable|Undefined\s+index',
+         ErrorType.UNDEFINED_VARIABLE,
+         "Fix PHP undefined variable", 0.9),
+        (r'Class\s+[\'"].*[\'"]\s+not\s+found|Interface.*not\s+found',
+         ErrorType.IMPORT_ERROR,
+         "Fix PHP class not found", 0.9),
+        (r'Call\s+to\s+undefined\s+function|Call\s+to\s+undefined\s+method',
+         ErrorType.UNDEFINED_VARIABLE,
+         "Fix PHP undefined function", 0.9),
+        (r'Type\s+error:.*must\s+be|TypeError:.*Argument',
+         ErrorType.TYPE_ERROR,
+         "Fix PHP type error", 0.85),
+
+        # =================================================================
+        # RUBY ERRORS
+        # =================================================================
+        (r'NameError:.*undefined\s+local\s+variable',
+         ErrorType.UNDEFINED_VARIABLE,
+         "Fix Ruby undefined variable", 0.9),
+        (r'NoMethodError:.*undefined\s+method',
+         ErrorType.UNDEFINED_VARIABLE,
+         "Fix Ruby undefined method", 0.9),
+        (r'LoadError:.*cannot\s+load\s+such\s+file',
+         ErrorType.IMPORT_ERROR,
+         "Fix Ruby require/load error", 0.9),
+        (r'SyntaxError:.*unexpected',
+         ErrorType.SYNTAX_ERROR,
+         "Fix Ruby syntax error", 0.9),
+        (r'TypeError:.*no\s+implicit\s+conversion',
+         ErrorType.TYPE_ERROR,
+         "Fix Ruby type error", 0.85),
+        (r'Bundler::GemNotFound|Could\s+not\s+find\s+gem',
+         ErrorType.DEPENDENCY_CONFLICT,
+         "Fix Ruby gem dependency", 0.9),
+
+        # =================================================================
+        # FLUTTER / DART ERRORS
+        # =================================================================
+        (r'Error:.*isn\'t\s+defined|Undefined\s+name',
+         ErrorType.UNDEFINED_VARIABLE,
+         "Fix Dart undefined name", 0.9),
+        (r'Error:.*can\'t\s+be\s+assigned\s+to|type.*can\'t\s+be\s+assigned',
+         ErrorType.TYPE_ERROR,
+         "Fix Dart type error", 0.9),
+        (r'Error:.*Expected.*found|Unexpected.*token',
+         ErrorType.SYNTAX_ERROR,
+         "Fix Dart syntax error", 0.9),
+        (r'Error:.*getter.*isn\'t\s+defined|setter.*isn\'t\s+defined',
+         ErrorType.UNDEFINED_VARIABLE,
+         "Fix Dart getter/setter", 0.9),
+        (r'flutter.*error|pub\s+get\s+failed|Could\s+not\s+find\s+package',
+         ErrorType.DEPENDENCY_CONFLICT,
+         "Fix Flutter/pub dependency", 0.9),
+        (r'RenderFlex.*overflowed|A\s+RenderFlex\s+overflowed',
+         ErrorType.REACT_ERROR,
+         "Fix Flutter layout overflow", 0.85),
+
+        # =================================================================
+        # SOLIDITY / BLOCKCHAIN ERRORS
+        # =================================================================
+        (r'DeclarationError:|TypeError:.*solidity',
+         ErrorType.TYPE_ERROR,
+         "Fix Solidity type error", 0.9),
+        (r'Undeclared\s+identifier|not\s+found\s+in\s+scope',
+         ErrorType.UNDEFINED_VARIABLE,
+         "Fix Solidity undefined identifier", 0.9),
+        (r'ParserError:|SyntaxError:.*solidity',
+         ErrorType.SYNTAX_ERROR,
+         "Fix Solidity syntax error", 0.9),
+        (r'CompilerError:|InternalCompilerError',
+         ErrorType.CONFIG_ERROR,
+         "Fix Solidity compiler error", 0.85),
+        (r'out\s+of\s+gas|gas\s+required\s+exceeds',
+         ErrorType.CONFIG_ERROR,
+         "Fix Solidity gas issue", 0.8),
+        (r'revert|require\s+failed|assert\s+failed',
+         ErrorType.TYPE_ERROR,
+         "Fix Solidity require/assert", 0.8),
+
+        # =================================================================
+        # ANGULAR / VUE ERRORS
+        # =================================================================
+        (r'NG\d+:|Angular.*error|@angular.*error',
+         ErrorType.CONFIG_ERROR,
+         "Fix Angular error", 0.9),
+        (r'Template\s+parse\s+errors|Can\'t\s+bind\s+to',
+         ErrorType.CONFIG_ERROR,
+         "Fix Angular template error", 0.9),
+        (r'\[Vue\s+warn\]|VueCompilerError|vue.*error',
+         ErrorType.CONFIG_ERROR,
+         "Fix Vue error", 0.9),
+        (r'Component.*is\s+not\s+defined|Unknown\s+custom\s+element',
+         ErrorType.IMPORT_ERROR,
+         "Fix Vue/Angular component import", 0.9),
     ]
 
     # Patterns for errors Claude CANNOT fix (infrastructure issues)
