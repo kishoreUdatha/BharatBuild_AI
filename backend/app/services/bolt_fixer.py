@@ -25,6 +25,8 @@ from app.services.retry_limiter import retry_limiter
 from app.services.diff_parser import DiffParser
 from app.services.patch_applier import PatchApplier
 from app.services.storage_service import storage_service
+from app.services.batch_tracker import batch_tracker
+from app.services.dependency_graph import build_dependency_graph, DependencyGraph
 
 
 # =============================================================================
@@ -34,6 +36,7 @@ MAX_CONTEXT_CHARS = 100000      # ~25k tokens - safe limit for Claude
 MAX_FILES_PER_BATCH = 6         # Max files to include in one fix
 CHARS_PER_FILE_LIMIT = 12000    # Truncate files larger than this
 CONTEXT_LINES_AROUND_ERROR = 60 # Lines to keep around error when truncating
+MAX_FIX_PASSES = 5              # Maximum multi-pass fix attempts
 
 
 @dataclass
@@ -45,6 +48,9 @@ class BoltFixResult:
     patches_applied: int = 0
     error_type: Optional[str] = None
     fix_strategy: Optional[str] = None
+    current_pass: int = 1
+    remaining_errors: int = 0
+    needs_another_pass: bool = False
 
 
 class BoltFixer:
@@ -139,6 +145,8 @@ No explanations. Only the <file> block."""
         self._sandbox_file_writer = None  # Set by fix_from_backend if provided
         self._sandbox_file_reader = None  # Set by fix_from_backend if provided
         self._sandbox_file_lister = None  # Set by fix_from_backend if provided
+        self._dependency_graph: Optional[DependencyGraph] = None
+        self._current_project_id: Optional[str] = None
 
     def _write_file(self, file_path: Path, content: str, project_id: str) -> bool:
         """
@@ -271,22 +279,71 @@ No explanations. Only the <file> block."""
         related_files_content = ""
         all_error_files_content = ""
         target_file = classified.file_path or error_file
+        self._current_project_id = project_id
 
         # =================================================================
-        # STEP 4a: Extract ALL error files with PRIORITY-BASED SELECTION
+        # STEP 4a: Extract ALL error files with DEPENDENCY-AWARE SELECTION
         # =================================================================
         all_error_files = ErrorClassifier.extract_all_error_files(combined_output)
         total_error_count = len(all_error_files)
         logger.info(f"[BoltFixer:{project_id}] Found {total_error_count} files with errors: {[f[0] for f in all_error_files]}")
 
-        if total_error_count > 1:
-            # PRIORITIZE: Fix root cause files first (DTOs, Entities, Interfaces)
-            all_error_files = self._prioritize_error_files(all_error_files, combined_output)
+        # BUILD DEPENDENCY GRAPH for intelligent prioritization
+        try:
+            self._dependency_graph = build_dependency_graph(
+                project_path,
+                file_reader=self._sandbox_file_reader,
+                file_lister=self._sandbox_file_lister
+            )
+            graph_stats = self._dependency_graph.get_stats()
+            logger.info(f"[BoltFixer:{project_id}] Dependency graph: {graph_stats}")
+        except Exception as e:
+            logger.warning(f"[BoltFixer:{project_id}] Could not build dependency graph: {e}")
+            self._dependency_graph = None
 
-            # LIMIT: Cap at MAX_FILES_PER_BATCH to fit context
-            if total_error_count > MAX_FILES_PER_BATCH:
-                logger.info(f"[BoltFixer:{project_id}] Limiting from {total_error_count} to {MAX_FILES_PER_BATCH} files (prioritized)")
-                all_error_files = all_error_files[:MAX_FILES_PER_BATCH]
+        if total_error_count > 1:
+            # USE DEPENDENCY GRAPH for smarter prioritization
+            if self._dependency_graph:
+                # Get fix order from dependency graph
+                all_error_files = self._dependency_graph.get_fix_order(all_error_files)
+                logger.info(f"[BoltFixer:{project_id}] Dependency-ordered files: {[f[0].split('/')[-1] for f in all_error_files[:6]]}")
+            else:
+                # Fallback to rule-based prioritization
+                all_error_files = self._prioritize_error_files(all_error_files, combined_output)
+
+            # USE BATCH TRACKER for multi-pass fixing
+            batch_files, current_pass = batch_tracker.get_next_batch(
+                project_id, all_error_files, MAX_FILES_PER_BATCH
+            )
+
+            if not batch_files:
+                logger.info(f"[BoltFixer:{project_id}] No more batches to process")
+                return BoltFixResult(
+                    success=False,
+                    files_modified=[],
+                    message="All batches attempted",
+                    error_type=classified.error_type.value,
+                    fix_strategy="batch_exhausted",
+                    current_pass=current_pass
+                )
+
+            # Check if batch can be attempted
+            can_attempt, batch_reason = batch_tracker.can_attempt_batch(
+                project_id, [f for f, _ in batch_files]
+            )
+            if not can_attempt:
+                logger.warning(f"[BoltFixer:{project_id}] Batch blocked: {batch_reason}")
+                return BoltFixResult(
+                    success=False,
+                    files_modified=[],
+                    message=batch_reason,
+                    error_type=classified.error_type.value,
+                    fix_strategy="batch_blocked",
+                    current_pass=current_pass
+                )
+
+            all_error_files = batch_files
+            logger.info(f"[BoltFixer:{project_id}] Pass {current_pass}: Processing batch of {len(batch_files)} files")
 
             # READ with smart truncation and context limit tracking
             error_files_sections = []
@@ -596,7 +653,7 @@ BUILD LOG:
         # =================================================================
 
         # =================================================================
-        # STEP 9: RECORD ATTEMPT AND RETURN
+        # STEP 9: RECORD BATCH ATTEMPT AND RETURN
         # =================================================================
         success = len(files_modified) > 0
         # Never mark as "fixed" - we can't know if fix is complete from here
@@ -604,13 +661,37 @@ BUILD LOG:
         # Container health check determines if truly fixed (container starts successfully)
         retry_limiter.record_attempt(project_id, error_hash, tokens_used=tokens_used, fixed=False)
 
+        # Record batch attempt for multi-pass tracking
+        current_pass = 1
+        remaining_errors = total_error_count - len(files_modified)
+        needs_another_pass = remaining_errors > 0 and success
+
+        if total_error_count > 1:
+            batch_tracker.record_batch_attempt(
+                project_id=project_id,
+                files=[f for f, _ in all_error_files],
+                success=success,
+                files_fixed=files_modified,
+                error_count_before=total_error_count,
+                error_count_after=remaining_errors
+            )
+            progress = batch_tracker.get_fix_progress(project_id)
+            current_pass = progress.get("current_pass", 1)
+            logger.info(
+                f"[BoltFixer:{project_id}] Batch complete: "
+                f"pass={current_pass}, fixed={len(files_modified)}, remaining={remaining_errors}"
+            )
+
         return BoltFixResult(
             success=success,
             files_modified=files_modified,
-            message=f"Fixed {len(files_modified)} file(s)" if success else "No files fixed",
+            message=f"Pass {current_pass}: Fixed {len(files_modified)} file(s)" if success else "No files fixed",
             patches_applied=len(files_modified),
             error_type=classified.error_type.value,
-            fix_strategy="bolt_fixer"
+            fix_strategy="bolt_fixer",
+            current_pass=current_pass,
+            remaining_errors=remaining_errors,
+            needs_another_pass=needs_another_pass
         )
 
     async def _call_claude(

@@ -23,11 +23,10 @@ resource "aws_cloudfront_distribution" "main" {
       https_port               = 443
       origin_protocol_policy   = "http-only"
       origin_ssl_protocols     = ["TLSv1.2"]
-      # With Origin Shield enabled, max is 180 seconds
-      # SSE streaming needs longer timeout for project restore operations
-      # Backend sends keepalive events every 5 seconds to prevent timeout
+      # 180 seconds timeout for SSE streaming (project restore operations)
+      # Requires Origin Shield to be enabled (see below)
+      # If deploy fails, run terraform apply twice (Origin Shield must be active first)
       origin_read_timeout      = 180
-      # 60 seconds is the max allowed for keepalive
       origin_keepalive_timeout = 60
     }
 
@@ -36,7 +35,7 @@ resource "aws_cloudfront_distribution" "main" {
       value = "bharatbuild-cloudfront"
     }
 
-    # Enable Origin Shield to allow origin_read_timeout up to 180 seconds
+    # REQUIRED: Origin Shield enables 180s timeout (vs 60s max without it)
     # Using ap-south-1 region to match ALB location for best performance
     origin_shield {
       enabled              = true
