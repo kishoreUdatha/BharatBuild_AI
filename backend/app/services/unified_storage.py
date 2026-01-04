@@ -508,11 +508,12 @@ class UnifiedStorageService:
 
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
 
-        # Build workspace path on EC2
+        # Build workspace path based on SANDBOX_PATH setting (supports EFS mount)
+        sandbox_base = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else "/tmp/sandbox/workspace"
         if user_id:
-            workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}"
+            workspace_path = f"{sandbox_base}/{user_id}/{project_id}"
         else:
-            workspace_path = f"/tmp/sandbox/workspace/{project_id}"
+            workspace_path = f"{sandbox_base}/{project_id}"
 
         full_path = f"{workspace_path}/{file_path}"
         dir_path = "/".join(full_path.rsplit("/", 1)[:-1]) if "/" in file_path else workspace_path
@@ -535,7 +536,7 @@ class UnifiedStorageService:
                     docker_client.containers.run(
                         image="alpine:latest",
                         command=f"sh -c \"{write_script}\"",
-                        volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                        volumes={sandbox_base: {"bind": sandbox_base, "mode": "rw"}},  # Use sandbox_base for EFS support
                         remove=True,
                         detach=False,
                     )
@@ -546,7 +547,7 @@ class UnifiedStorageService:
                     docker_client.containers.run(
                         image="alpine:latest",
                         command=f"sh -c \"{write_script}\"",
-                        volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                        volumes={sandbox_base: {"bind": sandbox_base, "mode": "rw"}},  # Use sandbox_base for EFS support
                         remove=True,
                         detach=False,
                     )
@@ -694,13 +695,15 @@ class UnifiedStorageService:
         """Check if sandbox exists on REMOTE EC2"""
         import docker
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
-        workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}" if user_id else f"/tmp/sandbox/workspace/{project_id}"
+        # Build workspace path based on SANDBOX_PATH setting (supports EFS mount)
+        sandbox_base = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else "/tmp/sandbox/workspace"
+        workspace_path = f"{sandbox_base}/{user_id}/{project_id}" if user_id else f"{sandbox_base}/{project_id}"
         try:
             docker_client = docker.DockerClient(base_url=sandbox_docker_host)
             result = docker_client.containers.run(
                 image="alpine:latest",
                 command=f"sh -c '[ -d {workspace_path} ] && [ \"$(ls -A {workspace_path})\" ] && echo EXISTS || echo MISSING'",
-                volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},  # Use sandbox_base for EFS support
                 remove=True, detach=False,
             )
             return result.decode().strip() == "EXISTS" if result else False
@@ -724,7 +727,9 @@ class UnifiedStorageService:
 
         synced_count = 0
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
-        workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}" if user_id else f"/tmp/sandbox/workspace/{project_id}"
+        # Build workspace path based on SANDBOX_PATH setting (supports EFS mount)
+        sandbox_base = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else "/tmp/sandbox/workspace"
+        workspace_path = f"{sandbox_base}/{user_id}/{project_id}" if user_id else f"{sandbox_base}/{project_id}"
 
         try:
             # Get list of files from sandbox
@@ -733,7 +738,7 @@ class UnifiedStorageService:
                 result = docker_client.containers.run(
                     image="alpine:latest",
                     command=f"find {workspace_path} -type f -not -path '*/node_modules/*' -not -path '*/.git/*' | head -200",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},  # Use sandbox_base for EFS support
                     remove=True, detach=False
                 )
                 file_paths = [p.strip() for p in result.decode().split('\\n') if p.strip()]
@@ -1535,9 +1540,11 @@ class UnifiedStorageService:
         """
         Restore files to REMOTE sandbox EC2.
 
-        APPROACH PRIORITY:
-        1. SSM (AWS Systems Manager) - Most reliable for ECS → EC2 communication
-        2. Docker container with aws-cli - Fallback if SSM unavailable
+        APPROACH PRIORITY (in order):
+        1. EFS - If enabled, files already persist on shared filesystem (no restore needed)
+        2. Cached on EC2 - If files exist, skip S3 restore (preserves auto-fixer changes)
+        3. SSM (AWS Systems Manager) - Most reliable for ECS → EC2 communication
+        4. Docker container with aws-cli - Fallback if SSM unavailable
 
         CRITICAL: Returns empty list if restore fails (not fake success)
         """
@@ -1552,8 +1559,43 @@ class UnifiedStorageService:
         s3_bucket = settings.effective_bucket_name
         aws_region = settings.AWS_REGION or "ap-south-1"
 
-        logger.info(f"[RemoteRestore] Using S3 bucket: {s3_bucket}, region: {aws_region}")
-        workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}" if user_id else f"/tmp/sandbox/workspace/{project_id}"
+        # Build workspace path based on SANDBOX_PATH setting (supports EFS mount)
+        sandbox_base = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else "/tmp/sandbox/workspace"
+        workspace_path = f"{sandbox_base}/{user_id}/{project_id}" if user_id else f"{sandbox_base}/{project_id}"
+
+        logger.info(f"[RemoteRestore] Using workspace: {workspace_path}, S3 bucket: {s3_bucket}")
+
+        # =============================================================
+        # EFS MODE: Files already persist on shared filesystem
+        # No S3 restore needed - just check if files exist
+        # =============================================================
+        if getattr(settings, 'EFS_ENABLED', False):
+            logger.info(f"[RemoteRestore] EFS mode enabled - checking for existing files")
+            try:
+                docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+                check_output = docker_client.containers.run(
+                    "alpine:latest",
+                    ["-c", f"find {workspace_path} -type f ! -path '*/node_modules/*' 2>/dev/null | wc -l"],
+                    entrypoint="/bin/sh",
+                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},
+                    remove=True,
+                    detach=False
+                )
+                file_count = int(check_output.decode().strip() or "0")
+
+                if file_count > 3:
+                    logger.info(f"[RemoteRestore] EFS: Found {file_count} files, no restore needed")
+                    # Return file info from DB
+                    async with AsyncSessionLocal() as session:
+                        result = await session.execute(
+                            select(ProjectFile).where(cast(ProjectFile.project_id, SQLString(36)) == str(UUID(project_id))).where(ProjectFile.is_folder == False)
+                        )
+                        file_records = result.scalars().all()
+                    return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in file_records]
+                else:
+                    logger.info(f"[RemoteRestore] EFS: Project not found on EFS, falling back to S3 restore")
+            except Exception as efs_err:
+                logger.warning(f"[RemoteRestore] EFS check failed: {efs_err}, falling back to S3")
 
         # Track restore success - CRITICAL for returning correct result
         restore_successful = False
@@ -1569,7 +1611,7 @@ class UnifiedStorageService:
                     "alpine:latest",
                     ["-c", f"find {workspace_path} -type f ! -path '*/node_modules/*' 2>/dev/null | wc -l"],
                     entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},  # Use sandbox_base for EFS support
                     remove=True,
                     detach=False
                 )
@@ -1719,7 +1761,7 @@ class UnifiedStorageService:
                     "amazon/aws-cli:latest",
                     ["-c", sync_script],
                     entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "rw"}},  # Use sandbox_base for EFS support
                     # NO credentials passed - uses EC2 instance role
                     environment={"AWS_REGION": aws_region, "AWS_DEFAULT_REGION": aws_region},
                     remove=True,
@@ -1739,7 +1781,7 @@ class UnifiedStorageService:
                             "alpine:latest",
                             ["-c", f"find {workspace_path} -type f 2>/dev/null | wc -l"],
                             entrypoint="/bin/sh",
-                            volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                            volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},  # Use sandbox_base for EFS support
                             remove=True,
                             detach=False
                         )
@@ -1842,7 +1884,7 @@ class UnifiedStorageService:
                     "amazon/aws-cli:latest",
                     ["-c", restore_script_with_logging],  # Use enhanced script with logging
                     entrypoint="/bin/sh",    # Override entrypoint to use shell
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "rw"}},  # Use sandbox_base for EFS support
                     environment=container_env,
                     remove=True,
                     detach=False,
@@ -1866,7 +1908,7 @@ class UnifiedStorageService:
                     "amazon/aws-cli:latest",
                     ["-c", restore_script_with_logging],
                     entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "rw"}},  # Use sandbox_base for EFS support
                     environment=container_env,  # Use proper credentials
                     remove=True,
                     detach=False,
@@ -1886,7 +1928,7 @@ class UnifiedStorageService:
                     "alpine:latest",
                     ["-c", f"find {workspace_path} -type f 2>/dev/null | wc -l"],
                     entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},  # Use sandbox_base for EFS support
                     remove=True,
                     detach=False
                 )
@@ -1940,7 +1982,7 @@ echo "[SANITIZE] Done"
                     "python:3.11-slim",
                     ["-c", sanitize_script],
                     entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "rw"}},  # Use sandbox_base for EFS support
                     remove=True,
                     detach=False
                 )
@@ -2037,7 +2079,7 @@ echo "[DOCKERFILE-FIX] Done"
                     "alpine:latest",
                     ["-c", dockerfile_fix_script],
                     entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "rw"}},  # Use sandbox_base for EFS support
                     remove=True,
                     detach=False
                 )
@@ -2098,7 +2140,7 @@ echo "[VITE-FIX] Done"
                     "alpine:latest",
                     ["-c", vite_fix_script],
                     entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "rw"}},  # Use sandbox_base for EFS support
                     remove=True,
                     detach=False
                 )
@@ -2136,7 +2178,7 @@ fi
                     "alpine:latest",
                     ["-c", inject_script],
                     entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "rw"}},  # Use sandbox_base for EFS support
                     remove=True,
                     detach=False
                 )

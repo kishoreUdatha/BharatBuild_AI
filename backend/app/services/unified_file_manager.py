@@ -20,6 +20,7 @@ from enum import Enum
 import json
 
 from app.core.logging_config import logger
+from app.core.config import settings
 
 
 class ProjectStructure(Enum):
@@ -66,8 +67,8 @@ class UnifiedFileManager:
         await file_manager.write_file(project_id, user_id, "src/App.tsx", content, component="frontend")
     """
 
-    # Sandbox base path
-    SANDBOX_BASE = "/tmp/sandbox/workspace"
+    # Sandbox base path (supports EFS mount)
+    SANDBOX_BASE = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else "/tmp/sandbox/workspace"
 
     def __init__(self):
         self._docker_client = None

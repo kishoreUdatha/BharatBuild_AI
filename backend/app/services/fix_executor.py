@@ -182,8 +182,8 @@ async def execute_fix_internal(project_id: str, log_payload: Dict[str, Any]) -> 
         user_id = None  # Will be extracted from path
 
         if not project_path.exists():
-            # Try sandbox path
-            sandbox_base = Path(settings.SANDBOX_PATH) if hasattr(settings, 'SANDBOX_PATH') else Path("C:/tmp/sandbox/workspace")
+            # Try sandbox path (uses settings.SANDBOX_PATH for EFS support)
+            sandbox_base = Path(settings.SANDBOX_PATH)
             # Find the project directory (could be nested under user_id)
             for user_dir in sandbox_base.iterdir():
                 if user_dir.is_dir():

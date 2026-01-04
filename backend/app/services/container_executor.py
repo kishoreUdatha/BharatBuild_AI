@@ -59,6 +59,17 @@ def _get_preview_url(port: int, project_id: str = None) -> str:
     return _get_preview_url_impl(port, project_id or "")
 
 
+def _get_sandbox_base() -> str:
+    """
+    Get sandbox base path from settings (supports EFS mount).
+
+    Returns settings.SANDBOX_PATH for Docker volume mounts.
+    This ensures EFS compatibility when SANDBOX_PATH=/efs/sandbox/workspace
+    """
+    from app.core.config import settings
+    return settings.SANDBOX_PATH
+
+
 # =============================================================================
 # SYSTEM PORTS - Blocked from host port allocation
 # =============================================================================
@@ -529,7 +540,7 @@ class ContainerExecutor:
                     "alpine:latest",
                     ["-c", f"test -d {project_path} && echo 'EXISTS' || echo 'MISSING'"],
                     entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    volumes={_get_sandbox_base(): {"bind": _get_sandbox_base(), "mode": "ro"}},
                     remove=True,
                     detach=False
                 )
@@ -543,7 +554,7 @@ class ContainerExecutor:
                     "alpine:latest",
                     ["-c", f"test -d {project_path}/frontend && test -f {project_path}/frontend/package.json && echo 'FRONTEND' || echo 'ROOT'"],
                     entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    volumes={_get_sandbox_base(): {"bind": _get_sandbox_base(), "mode": "ro"}},
                     remove=True,
                     detach=False
                 )
@@ -569,7 +580,7 @@ class ContainerExecutor:
                         "alpine:latest",
                         ["-c", f"test -f {check_path_str}/{required_file} && echo 'EXISTS' || echo 'MISSING'"],
                         entrypoint="/bin/sh",
-                        volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                        volumes={_get_sandbox_base(): {"bind": _get_sandbox_base(), "mode": "ro"}},
                         remove=True,
                         detach=False
                     )
@@ -782,7 +793,7 @@ class ContainerExecutor:
                 """
 
                 # Mount the parent sandbox directory to ensure we can see the project
-                parent_mount = "/tmp/sandbox/workspace"
+                parent_mount = _get_sandbox_base()
 
                 # Use create + start + logs pattern instead of run() for better TCP reliability
                 # The run() method with remove=True has race condition issues over TCP
@@ -861,7 +872,7 @@ class ContainerExecutor:
                             "alpine:latest",
                             command=["-c", check_script],
                             entrypoint="/bin/sh",
-                            volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}}
+                            volumes={_get_sandbox_base(): {"bind": _get_sandbox_base(), "mode": "ro"}}
                         )
                         try:
                             container.start()
@@ -959,7 +970,7 @@ class ContainerExecutor:
 
             check_script = " && ".join(checks)
 
-            parent_mount = "/tmp/sandbox/workspace"
+            parent_mount = _get_sandbox_base()
             container = self.docker_client.containers.create(
                 "alpine:latest",
                 command=["-c", check_script],
@@ -1774,6 +1785,10 @@ class ContainerExecutor:
         # Run docker-compose up
         yield f"\n  $ docker-compose up -d\n"
 
+        # Track ALL files modified by auto-fix for S3 sync AFTER build succeeds
+        # This is initialized here to cover both docker-compose build fixes AND health check fixes
+        all_files_modified = []
+
         max_compose_attempts = 4  # Allow multiple retries for cascading fixes (port conflicts, etc.)
         compose_attempt = 0
 
@@ -1864,27 +1879,9 @@ class ContainerExecutor:
                                         for f in fix_result.files_modified:
                                             yield f"     📝 {f}\n"
 
-                                        # Sync fixed files to S3 immediately
-                                        yield f"  ☁️ Syncing fixes to S3...\n"
-                                        try:
-                                            from app.services.storage_service import storage_service
-                                            synced_count = 0
-                                            for file_path in fix_result.files_modified:
-                                                full_path = f"{project_path}/{file_path}"
-                                                cat_cmd = f"cat '{full_path}'"
-                                                exit_code_cat, content = self._run_shell_on_sandbox(cat_cmd, working_dir=project_path, timeout=10)
-                                                if exit_code_cat == 0 and content:
-                                                    content_bytes = content.encode('utf-8') if isinstance(content, str) else content
-                                                    await storage_service.upload_file(
-                                                        project_id=project_id,
-                                                        file_path=file_path,
-                                                        content=content_bytes
-                                                    )
-                                                    synced_count += 1
-                                            yield f"  ✅ {synced_count} file(s) synced to S3\n"
-                                        except Exception as sync_err:
-                                            logger.warning(f"[ContainerExecutor] Build fix S3 sync error: {sync_err}")
-                                            yield f"  ⚠️ S3 sync warning: {sync_err}\n"
+                                        # Track files for S3 sync AFTER build succeeds
+                                        # NOTE: S3 sync is DEFERRED - see final sync after health checks pass
+                                        all_files_modified.extend(fix_result.files_modified)
 
                                         yield f"  🔄 Retrying docker-compose build...\n"
                                         continue  # Retry the build
@@ -1972,7 +1969,7 @@ class ContainerExecutor:
         # Java/Maven projects need time to compile - check multiple times over 60s
         fix_attempt = 0
         containers_healthy = False
-        all_files_modified = []  # Track files modified by auto-fix for S3 sync
+        # NOTE: all_files_modified is initialized earlier (before docker-compose loop)
 
         # Check schedule depends on project type
         # Java/Maven projects need longer waits due to slow compilation (60-120 seconds)
@@ -2237,36 +2234,10 @@ class ContainerExecutor:
                             yield f"   📝 {f}\n"
 
                         # Track files for S3 sync after build succeeds
+                        # NOTE: S3 sync is DEFERRED until build succeeds (see below)
+                        # This ensures we don't persist broken fixes to S3
+                        # Changes remain on EC2 sandbox for subsequent fix attempts
                         all_files_modified.extend(fix_result.files_modified)
-
-                        # =================================================================
-                        # IMMEDIATE S3 SYNC - Sync fixed files to S3 right away
-                        # This ensures fixes are persisted even if build fails
-                        # =================================================================
-                        yield f"📤 Syncing fixed files to S3...\n"
-                        try:
-                            from app.services.storage_service import storage_service
-
-                            synced_count = 0
-                            for file_path in fix_result.files_modified:
-                                full_path = f"{project_path}/{file_path}"
-                                # Read file content from sandbox
-                                cat_cmd = f"cat '{full_path}'"
-                                exit_code, content = self._run_shell_on_sandbox(cat_cmd, working_dir=project_path, timeout=10)
-                                if exit_code == 0 and content:
-                                    # upload_file expects bytes, not str
-                                    content_bytes = content.encode('utf-8') if isinstance(content, str) else content
-                                    await storage_service.upload_file(
-                                        project_id=project_id,
-                                        file_path=file_path,
-                                        content=content_bytes
-                                    )
-                                    synced_count += 1
-                                    logger.info(f"[ContainerExecutor] Synced to S3: {file_path}")
-                            yield f"  ✅ {synced_count} file(s) synced to S3\n"
-                        except Exception as sync_err:
-                            logger.error(f"[ContainerExecutor] Immediate S3 sync error: {sync_err}")
-                            yield f"  ⚠️ S3 sync failed: {sync_err}\n"
 
                         # Rebuild and restart docker-compose
                         yield f"\n🔄 Rebuilding containers with fixes...\n"
@@ -2305,8 +2276,18 @@ class ContainerExecutor:
 
         # Sync fixed files to S3 AFTER build succeeds
         # This ensures we only persist fixes that actually work
+        # NOTE: S3 sync ALWAYS happens for long-term archive (retrieval after months)
+        # EFS benefit: Files are safe during build, even if S3 sync fails or user disconnects
         if all_files_modified:
-            yield f"\n📤 Syncing {len(all_files_modified)} fixed file(s) to storage...\n"
+            from app.core.config import settings as app_settings
+
+            # Log EFS status
+            if getattr(app_settings, 'EFS_ENABLED', False):
+                yield f"\n💾 EFS: {len(all_files_modified)} file(s) already safe on shared storage\n"
+                logger.info(f"[ContainerExecutor] EFS mode - files safe, now archiving to S3")
+
+            # ALWAYS sync to S3 for long-term archive (user may return after months)
+            yield f"📤 Archiving {len(all_files_modified)} fixed file(s) to S3...\n"
             try:
                 from app.services.storage_service import storage_service
 
@@ -2325,11 +2306,14 @@ class ContainerExecutor:
                             content=content_bytes
                         )
                         synced_count += 1
-                yield f"  ✅ {synced_count} file(s) synced to storage\n"
-                logger.info(f"[ContainerExecutor] Synced {synced_count} fixed files to S3")
+                yield f"  ✅ {synced_count} file(s) archived to S3\n"
+                logger.info(f"[ContainerExecutor] Archived {synced_count} fixed files to S3")
             except Exception as sync_err:
-                logger.error(f"[ContainerExecutor] S3 sync error: {sync_err}")
-                yield f"  ⚠️ Storage sync failed: {sync_err}\n"
+                logger.error(f"[ContainerExecutor] S3 archive error: {sync_err}")
+                yield f"  ⚠️ S3 archive failed: {sync_err}\n"
+                # With EFS, files are still safe even if S3 sync fails
+                if getattr(app_settings, 'EFS_ENABLED', False):
+                    yield f"  💾 Files still safe on EFS (will retry S3 archive later)\n"
 
         # Generate preview URL
         preview_url = _get_preview_url(frontend_port, project_id)
@@ -3149,11 +3133,12 @@ mkdir -p "$(dirname {file_path})"
 echo "{encoded_content}" | base64 -d > "{file_path}"
 '''
 
+            sandbox_base = _get_sandbox_base()
             result = self.docker_client.containers.run(
                 "alpine:latest",
                 ["-c", script],
                 entrypoint="/bin/sh",
-                volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                volumes={sandbox_base: {"bind": sandbox_base, "mode": "rw"}},
                 remove=True,
                 detach=False
             )
@@ -3208,12 +3193,13 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
 
             # Use docker/compose image which has docker-compose installed
             # Create container, start, wait, get logs, remove (more reliable for TCP)
+            sandbox_base = _get_sandbox_base()
             container = self.docker_client.containers.create(
                 "docker/compose:latest",
                 ["-c", script],
                 entrypoint="/bin/sh",
                 volumes={
-                    "/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"},
+                    sandbox_base: {"bind": sandbox_base, "mode": "rw"},
                     "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}
                 },
                 network_mode="host"
@@ -3499,7 +3485,7 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
                     "alpine:latest",
                     ["-c", f'test -f "{file_path}" && echo "EXISTS" || echo "MISSING"'],
                     entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    volumes={_get_sandbox_base(): {"bind": _get_sandbox_base(), "mode": "ro"}},
                     remove=True,
                     detach=False
                 )
@@ -3520,7 +3506,7 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
                     "alpine:latest",
                     ["-c", f'ls -la "{file_path}" 2>&1'],
                     entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    volumes={_get_sandbox_base(): {"bind": _get_sandbox_base(), "mode": "ro"}},
                     remove=True,
                     detach=False
                 )
@@ -3543,7 +3529,7 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
                     "alpine:latest",
                     ["-c", f'ls -la "{dir_path}" 2>&1 | head -20'],
                     entrypoint="/bin/sh",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                    volumes={_get_sandbox_base(): {"bind": _get_sandbox_base(), "mode": "ro"}},
                     remove=True,
                     detach=False
                 )
@@ -4659,13 +4645,13 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
         This prevents corrupted cache issues that cause double-path problems like:
         /node_modules/.vite/deps/node_modules/.vite/deps/chunk-XXX.js
 
-        The cache is at: /tmp/sandbox/workspace/{user_id}/{project_id}/node_modules/.vite
+        The cache is at: {SANDBOX_PATH}/{user_id}/{project_id}/node_modules/.vite
         """
         try:
             sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
             if not sandbox_docker_host:
                 # Local sandbox - clear directly
-                sandbox_path = Path("/tmp/sandbox/workspace") / user_id / project_id / "node_modules" / ".vite"
+                sandbox_path = Path(_get_sandbox_base()) / user_id / project_id / "node_modules" / ".vite"
                 if sandbox_path.exists():
                     import shutil
                     shutil.rmtree(sandbox_path)
@@ -4676,7 +4662,8 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
             import docker
             docker_client = docker.DockerClient(base_url=sandbox_docker_host, timeout=30)
 
-            workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}"
+            sandbox_base = _get_sandbox_base()
+            workspace_path = f"{sandbox_base}/{user_id}/{project_id}"
             vite_cache_path = f"{workspace_path}/node_modules/.vite"
 
             # Run a quick container to clear the cache
@@ -4684,7 +4671,7 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
                 result = docker_client.containers.run(
                     image="alpine:latest",
                     command=f"sh -c 'rm -rf {vite_cache_path} && echo CLEARED || echo SKIPPED'",
-                    volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "rw"}},
                     remove=True,
                     detach=False,
                 )
@@ -4709,7 +4696,8 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
 
             import docker
             docker_client = docker.DockerClient(base_url=sandbox_docker_host, timeout=60)
-            workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}"
+            sandbox_base = _get_sandbox_base()
+            workspace_path = f"{sandbox_base}/{user_id}/{project_id}"
 
             # Note: Using .format() instead of f-string because the script contains backslashes
             fix_script = """#!/bin/sh
@@ -4821,7 +4809,7 @@ echo "Done"
 
             result = docker_client.containers.run(
                 "node:20-alpine", ["-c", fix_script], entrypoint="/bin/sh",
-                volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "rw"}},
+                volumes={sandbox_base: {"bind": sandbox_base, "mode": "rw"}},
                 remove=True, detach=False, stdout=True, stderr=True
             )
             output = result.decode().strip() if result else "No output"

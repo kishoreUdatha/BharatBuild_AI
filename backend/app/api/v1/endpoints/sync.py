@@ -586,8 +586,8 @@ async def get_project_files(
         # 1.5 FALLBACK: Search for project in ANY user's sandbox directory
         # This handles cases where files were created by auto-fix or other processes
         from pathlib import Path
-        import platform
-        sandbox_base = Path("C:/tmp/sandbox/workspace") if platform.system() == "Windows" else Path("/tmp/sandbox/workspace")
+        # Use settings.SANDBOX_PATH for EFS support (no platform-specific paths)
+        sandbox_base = Path(settings.SANDBOX_PATH)
 
         if sandbox_base.exists():
             for potential_user_dir in sandbox_base.iterdir():
