@@ -78,10 +78,10 @@ docker pull python:3.11-slim &
 docker pull python:3.12-slim &
 docker pull python:3.11 &
 
-# Java / JVM
+# Java / JVM (using Eclipse Temurin - OpenJDK slim images are deprecated)
 echo "  - Pulling Java images..."
-docker pull openjdk:17-slim &
-docker pull openjdk:21-slim &
+docker pull eclipse-temurin:17-jdk-alpine &
+docker pull eclipse-temurin:21-jdk-alpine &
 docker pull maven:3.9-eclipse-temurin-17 &
 docker pull maven:3.9-eclipse-temurin-21 &
 docker pull gradle:8-jdk17-alpine &
@@ -123,6 +123,38 @@ docker pull nginx:alpine &
 docker pull alpine:latest &
 docker pull docker/compose:latest &
 docker pull busybox:latest &
+
+# AI/ML & Data Science
+echo "  - Pulling AI/ML images..."
+docker pull tensorflow/tensorflow:latest &
+docker pull pytorch/pytorch:latest &
+docker pull jupyter/scipy-notebook:latest &
+docker pull jupyter/tensorflow-notebook:latest &
+
+# Blockchain / Web3
+echo "  - Pulling Blockchain images..."
+docker pull trufflesuite/ganache:latest &
+docker pull ethereum/solc:stable &
+
+# Security / Networking Tools
+echo "  - Pulling Security & Networking images..."
+docker pull owasp/zap2docker-stable:latest &
+docker pull nmap:latest || docker pull instrumentisto/nmap:latest &
+docker pull wireshark/wireshark:latest || true &
+
+# React / Angular / Vue (with build tools)
+echo "  - Pulling Frontend framework images..."
+docker pull node:20 &
+docker pull node:lts &
+
+# Flutter / Mobile
+echo "  - Pulling Mobile dev images..."
+docker pull cirrusci/flutter:stable &
+
+# C/C++ Development
+echo "  - Pulling C/C++ images..."
+docker pull gcc:latest &
+docker pull gcc:13 &
 
 # Wait for all pulls to complete
 echo "  - Waiting for all image pulls to complete..."

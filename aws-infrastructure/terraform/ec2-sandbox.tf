@@ -34,7 +34,7 @@ variable "sandbox_enable_autoscaling" {
 
 variable "sandbox_custom_ami_id" {
   description = "Custom AMI ID with pre-baked Docker images (leave empty to use Amazon Linux 2023)"
-  default     = ""  # Set to your pre-baked AMI ID after running build-sandbox-ami.sh
+  default     = "ami-0b4eaf40674cec484"  # Pre-baked AMI with Docker + all images (created 2025-01-04)
 }
 
 variable "sandbox_use_dynamic_ip" {
@@ -575,6 +575,43 @@ docker pull alpine:latest &
 docker pull docker/compose:latest &
 docker pull busybox:latest &
 
+# =============================================================================
+# AI/ML & DATA SCIENCE
+# =============================================================================
+docker pull tensorflow/tensorflow:latest &
+docker pull pytorch/pytorch:latest &
+docker pull jupyter/scipy-notebook:latest &
+docker pull jupyter/tensorflow-notebook:latest &
+
+# =============================================================================
+# BLOCKCHAIN / WEB3
+# =============================================================================
+docker pull trufflesuite/ganache:latest &
+docker pull ethereum/solc:stable &
+
+# =============================================================================
+# SECURITY / NETWORKING
+# =============================================================================
+docker pull owasp/zap2docker-stable:latest &
+docker pull instrumentisto/nmap:latest &
+
+# =============================================================================
+# FRONTEND FRAMEWORKS (Full Node for React/Angular/Vue)
+# =============================================================================
+docker pull node:20 &
+docker pull node:lts &
+
+# =============================================================================
+# MOBILE DEVELOPMENT
+# =============================================================================
+docker pull cirrusci/flutter:stable &
+
+# =============================================================================
+# C/C++ DEVELOPMENT
+# =============================================================================
+docker pull gcc:latest &
+docker pull gcc:13 &
+
 wait
 
 # Install Docker Compose
@@ -849,7 +886,8 @@ resource "aws_launch_template" "sandbox" {
   count = var.sandbox_enable_autoscaling ? 1 : 0
 
   name_prefix   = "${var.app_name}-sandbox-"
-  image_id      = data.aws_ami.amazon_linux_2023.id
+  # Use custom pre-baked AMI if provided, otherwise Amazon Linux 2023
+  image_id      = var.sandbox_custom_ami_id != "" ? var.sandbox_custom_ami_id : data.aws_ami.amazon_linux_2023.id
   instance_type = var.sandbox_instance_type
 
   iam_instance_profile {
