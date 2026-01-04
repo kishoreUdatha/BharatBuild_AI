@@ -1666,7 +1666,7 @@ class UnifiedStorageService:
             # Runs commands directly on EC2 without docker socket issues
             # =============================================================
             s3_project_path = f"s3://{s3_bucket}/projects/{project_id}/"
-            ssm_instance_id = os.environ.get("SANDBOX_EC2_INSTANCE_ID", "i-0fd03f81ccc16a3e3")
+            ssm_instance_id = os.environ.get("SANDBOX_EC2_INSTANCE_ID", "i-061277cc1f349e44b")
 
             try:
                 import boto3
