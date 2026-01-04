@@ -1865,6 +1865,23 @@ class ContainerExecutor:
                         else:
                             yield f"  ⚠️ Infrastructure fix not applicable: {fix_result.message}\n"
 
+                            # Check for SYSTEM errors that should NOT be sent to AI fixer
+                            # These are internal platform issues, not user code problems
+                            system_error_patterns = [
+                                "no such image: docker/compose",
+                                "no such image: python:",
+                                "no such image: node:",
+                                "no such image: alpine",
+                                "helper container",
+                                "failed to create helper container",
+                            ]
+                            is_system_error = any(p in output.lower() for p in system_error_patterns)
+
+                            if is_system_error:
+                                yield f"  ⚠️ System error detected - this is a platform issue, not your code\n"
+                                yield f"  💡 The platform helper container image is missing. Please try again.\n"
+                                break  # Don't retry with AI fixer
+
                             # Step 2: Try ProductionFixer (AI-powered) for code/config issues
                             yield f"  🤖 Step 2: Trying AI-powered fixes...\n"
                             try:
@@ -3224,25 +3241,67 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
                 output = result.stdout + result.stderr
                 return result.returncode, output
 
-            # Remote mode - use helper container with docker-compose installed
+            # Remote mode - use helper container with docker/docker-compose from host
             cd_cmd = f'cd "{working_dir}" && ' if working_dir else ''
-            script = f'{cd_cmd}{command}'
+
+            # If command uses docker-compose, wrap with fallback to handle binary compatibility
+            if "docker-compose" in command:
+                # Try mounted binary first, fallback to docker compose v2 syntax
+                wrapped_cmd = f'''
+if /usr/local/bin/docker-compose --version >/dev/null 2>&1; then
+    {command}
+elif docker compose version >/dev/null 2>&1; then
+    {command.replace("docker-compose", "docker compose")}
+else
+    echo "ERROR: docker-compose not available" && exit 1
+fi
+'''
+                script = f'{cd_cmd}{wrapped_cmd}'
+            else:
+                script = f'{cd_cmd}{command}'
 
             logger.info(f"[ContainerExecutor] Running via helper container: {script[:100]}...")
 
-            # Use docker/compose image which has docker-compose installed
-            # Create container, start, wait, get logs, remove (more reliable for TCP)
+            # Use alpine image with host's docker-compose binary mounted
+            # EC2 has docker-compose at /usr/local/bin/docker-compose and alpine is pre-pulled
             sandbox_base = _get_sandbox_base()
-            container = self.docker_client.containers.create(
-                "docker/compose:latest",
-                ["-c", script],
-                entrypoint="/bin/sh",
-                volumes={
-                    sandbox_base: {"bind": sandbox_base, "mode": "rw"},
-                    "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}
-                },
-                network_mode="host"
-            )
+
+            # Volume mounts: workspace, docker socket, and host's docker-compose binary
+            volumes = {
+                sandbox_base: {"bind": sandbox_base, "mode": "rw"},
+                "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"},
+                "/usr/local/bin/docker-compose": {"bind": "/usr/local/bin/docker-compose", "mode": "ro"},
+                "/usr/bin/docker": {"bind": "/usr/bin/docker", "mode": "ro"},
+            }
+
+            # Try glibc-based images first (better binary compatibility with host binaries)
+            # python:3.11-slim is Debian-based (glibc), alpine uses musl which may not work
+            helper_images = ["python:3.11-slim", "node:18-alpine", "alpine:latest"]
+            container = None
+            last_error = None
+
+            for helper_image in helper_images:
+                try:
+                    logger.info(f"[ContainerExecutor] Trying helper image: {helper_image}")
+                    container = self.docker_client.containers.create(
+                        helper_image,
+                        ["-c", script],
+                        entrypoint="/bin/sh",
+                        volumes=volumes,
+                        network_mode="host"
+                    )
+                    break  # Success, exit loop
+                except (docker.errors.ImageNotFound, docker.errors.NotFound, docker.errors.APIError) as e:
+                    last_error = e
+                    err_msg = str(e).lower()
+                    if "no such image" in err_msg or "not found" in err_msg:
+                        logger.warning(f"[ContainerExecutor] Image {helper_image} not found, trying next...")
+                        continue
+                    else:
+                        raise  # Re-raise if it's not an image error
+
+            if container is None:
+                raise RuntimeError(f"Failed to create helper container with any available image: {last_error}")
 
             try:
                 # Start and wait for completion
