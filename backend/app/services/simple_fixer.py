@@ -2588,22 +2588,26 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
 
             # CRITICAL FIX: AI sometimes returns container absolute paths like /app/frontend/file.ts
             # These need to be converted to relative paths for local filesystem operations
+            sandbox_base = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else "/tmp/sandbox/workspace"
             if path.startswith("/app/"):
                 original_path = path
                 path = path[5:]  # Remove "/app/" prefix
                 logger.info(f"[SimpleFixer] Normalized container path: '{original_path}' -> '{path}'")
-            elif path.startswith("/tmp/sandbox/workspace/"):
+            elif path.startswith(sandbox_base + "/") or path.startswith("/tmp/sandbox/workspace/"):
                 # Remote sandbox absolute path - extract just the relative path
-                # Path format: /tmp/sandbox/workspace/{user_id}/{project_id}/{relative_path}
+                # Path format: {sandbox_base}/{user_id}/{project_id}/{relative_path}
                 original_path = path
                 path_parts = path.split("/")
-                # Find relative path after project_id (index 6: ['', 'tmp', 'sandbox', 'workspace', 'user_id', 'project_id', ...])
-                if len(path_parts) > 6:
-                    path = "/".join(path_parts[6:])
-                    logger.info(f"[SimpleFixer] Extracted relative path from sandbox: '{original_path}' -> '{path}'")
-                else:
-                    path = path_parts[-1] if path_parts else path
-                    logger.warning(f"[SimpleFixer] Could not parse sandbox path, using filename: '{original_path}' -> '{path}'")
+                # Find relative path after workspace (then user_id, project_id)
+                if "workspace" in path_parts:
+                    workspace_idx = path_parts.index("workspace")
+                    # After workspace: user_id, project_id, then relative path
+                    if len(path_parts) > workspace_idx + 3:
+                        path = "/".join(path_parts[workspace_idx + 3:])
+                        logger.info(f"[SimpleFixer] Extracted relative path from sandbox: '{original_path}' -> '{path}'")
+                    else:
+                        path = path_parts[-1] if path_parts else path
+                        logger.warning(f"[SimpleFixer] Could not parse sandbox path, using filename: '{original_path}' -> '{path}'")
             elif path.startswith("/"):
                 # Other absolute path - strip leading slash
                 original_path = path
@@ -2613,7 +2617,7 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
             # NORMALIZE PATH: Apply project structure rules (fullstack -> frontend/ or backend/)
             # This ensures files go to correct folders based on project type
             if project_id:
-                # Try to extract user_id from project_path (format: /tmp/sandbox/workspace/{user_id}/{project_id})
+                # Try to extract user_id from project_path (format: {sandbox_base}/{user_id}/{project_id})
                 try:
                     path_parts = str(project_path).split("/")
                     if "workspace" in path_parts:

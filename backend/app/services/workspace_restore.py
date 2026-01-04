@@ -539,7 +539,8 @@ class WorkspaceRestoreService:
                 if not user_id and project:
                     user_id = str(project.user_id)
 
-                workspace_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}" if user_id else f"/tmp/sandbox/workspace/{project_id}"
+                sandbox_base = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else "/tmp/sandbox/workspace"
+                workspace_path = f"{sandbox_base}/{user_id}/{project_id}" if user_id else f"{sandbox_base}/{project_id}"
 
                 # =====================================================================
                 # FIRST: Check if files already exist on EC2 sandbox
@@ -554,7 +555,7 @@ class WorkspaceRestoreService:
                         "alpine:latest",
                         ["-c", check_cmd],
                         entrypoint="/bin/sh",
-                        volumes={"/tmp/sandbox/workspace": {"bind": "/tmp/sandbox/workspace", "mode": "ro"}},
+                        volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},
                         remove=True,
                         detach=False
                     )

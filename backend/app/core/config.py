@@ -492,10 +492,26 @@ class Settings(BaseSettings):
     MAX_PROJECT_SIZE_MB: int = 50  # Max total size per project
 
     # ==========================================
-    # Sandbox Cleanup Settings (Bolt.new style ephemeral storage)
+    # Sandbox Storage Settings
     # ==========================================
-    SANDBOX_PATH: str = "C:/tmp/sandbox/workspace"  # Ephemeral storage path
-    SANDBOX_IDLE_TIMEOUT_MINUTES: int = 120  # Delete projects after 2 hours idle (development mode)
+    # EFS Mode (Recommended for Production):
+    #   - Set SANDBOX_PATH=/efs/sandbox/workspace
+    #   - Set EFS_ENABLED=true
+    #   - EFS = fast working storage (cleaned up after idle)
+    #   - S3 = long-term archive (restore after weeks/months)
+    #
+    # Local Mode (Development):
+    #   - Set SANDBOX_PATH=/tmp/sandbox/workspace
+    #   - Set EFS_ENABLED=false
+    #   - Files sync to S3 for persistence
+    # ==========================================
+    SANDBOX_PATH: str = "C:/tmp/sandbox/workspace"  # Use /efs/sandbox/workspace for EFS
+    EFS_ENABLED: bool = False  # Set True when using EFS mount
+    # NOTE: S3 sync still happens AFTER build success for long-term archive
+    # EFS is for fast working storage, S3 is for retrieval after months
+
+    # Cleanup Settings
+    SANDBOX_IDLE_TIMEOUT_MINUTES: int = 120  # Delete projects after 2 hours idle
     SANDBOX_CLEANUP_INTERVAL_MINUTES: int = 5  # Check every 5 minutes
     SANDBOX_MIN_AGE_MINUTES: int = 5  # Don't delete projects younger than 5 min
     SANDBOX_CLEANUP_ENABLED: bool = True  # Enable/disable auto-cleanup

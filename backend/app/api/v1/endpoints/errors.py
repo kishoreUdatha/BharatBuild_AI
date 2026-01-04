@@ -411,8 +411,8 @@ async def execute_fix_with_notification(
             project_path = Path(settings.USER_PROJECTS_PATH) / project_id
 
             if not project_path.exists():
-                # Try sandbox path
-                sandbox_base = Path(settings.SANDBOX_PATH) if hasattr(settings, 'SANDBOX_PATH') else Path("/tmp/sandbox/workspace")
+                # Try sandbox path (uses settings.SANDBOX_PATH for EFS support)
+                sandbox_base = Path(settings.SANDBOX_PATH)
                 try:
                     for user_dir in sandbox_base.iterdir():
                         if user_dir.is_dir():
@@ -624,8 +624,8 @@ async def execute_fix_with_notification(
                             except Exception as stop_err:
                                 logger.warning(f"[ErrorHandler:{project_id}] Container stop warning: {stop_err}")
 
-                        # Step 2: Get the sandbox path
-                        sandbox_path = f"/tmp/sandbox/workspace/{user_id}/{project_id}"
+                        # Step 2: Get the sandbox path (uses settings.SANDBOX_PATH for EFS support)
+                        sandbox_path = f"{settings.SANDBOX_PATH}/{user_id}/{project_id}"
 
                         # Step 3: Run the project again (will restore from S3, run npm install, start dev server)
                         logger.info(f"[ErrorHandler:{project_id}] 🚀 Starting fresh container...")
@@ -1239,7 +1239,8 @@ async def approve_fix(
     project_path = Path(settings.USER_PROJECTS_PATH) / project_id
 
     if not project_path.exists():
-        sandbox_base = Path(settings.SANDBOX_PATH) if hasattr(settings, 'SANDBOX_PATH') else Path("/tmp/sandbox/workspace")
+        # Use settings.SANDBOX_PATH for EFS support
+        sandbox_base = Path(settings.SANDBOX_PATH)
         for user_dir in sandbox_base.iterdir():
             if user_dir.is_dir():
                 potential_path = user_dir / project_id

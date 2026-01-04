@@ -20,6 +20,7 @@ from app.models.sandbox import SandboxInstance, SandboxStatus
 from app.models.project_tree import ProjectFileTree
 from app.services.sandbox_db_service import SandboxDBService
 from app.core.logging_config import logger
+from app.core.config import settings
 
 
 def to_str(value: Union[UUID, str, None]) -> Optional[str]:
@@ -71,8 +72,8 @@ class SandboxReconstructionService:
     This is exactly how Bolt.new works.
     """
 
-    # Base path for sandbox workspaces
-    WORKSPACE_BASE = os.environ.get("SANDBOX_WORKSPACE_PATH", "C:/tmp/sandbox/workspace")
+    # Base path for sandbox workspaces (supports EFS mount)
+    WORKSPACE_BASE = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else os.environ.get("SANDBOX_WORKSPACE_PATH", "C:/tmp/sandbox/workspace")
 
     def __init__(self, db: AsyncSession):
         self.db = db

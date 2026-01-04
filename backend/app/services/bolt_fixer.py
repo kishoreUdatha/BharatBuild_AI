@@ -27,6 +27,15 @@ from app.services.patch_applier import PatchApplier
 from app.services.storage_service import storage_service
 
 
+# =============================================================================
+# CONTEXT LIMIT CONFIGURATION
+# =============================================================================
+MAX_CONTEXT_CHARS = 100000      # ~25k tokens - safe limit for Claude
+MAX_FILES_PER_BATCH = 6         # Max files to include in one fix
+CHARS_PER_FILE_LIMIT = 12000    # Truncate files larger than this
+CONTEXT_LINES_AROUND_ERROR = 60 # Lines to keep around error when truncating
+
+
 @dataclass
 class BoltFixResult:
     """Result from BoltFixer - compatible with SimpleFixResult"""
@@ -264,26 +273,50 @@ No explanations. Only the <file> block."""
         target_file = classified.file_path or error_file
 
         # =================================================================
-        # STEP 4a: Extract ALL error files from build output (for batch fixing)
+        # STEP 4a: Extract ALL error files with PRIORITY-BASED SELECTION
         # =================================================================
         all_error_files = ErrorClassifier.extract_all_error_files(combined_output)
-        logger.info(f"[BoltFixer:{project_id}] Found {len(all_error_files)} files with errors: {[f[0] for f in all_error_files]}")
+        total_error_count = len(all_error_files)
+        logger.info(f"[BoltFixer:{project_id}] Found {total_error_count} files with errors: {[f[0] for f in all_error_files]}")
 
-        if len(all_error_files) > 1:
-            # Multiple error files - read them all for batch fixing
+        if total_error_count > 1:
+            # PRIORITIZE: Fix root cause files first (DTOs, Entities, Interfaces)
+            all_error_files = self._prioritize_error_files(all_error_files, combined_output)
+
+            # LIMIT: Cap at MAX_FILES_PER_BATCH to fit context
+            if total_error_count > MAX_FILES_PER_BATCH:
+                logger.info(f"[BoltFixer:{project_id}] Limiting from {total_error_count} to {MAX_FILES_PER_BATCH} files (prioritized)")
+                all_error_files = all_error_files[:MAX_FILES_PER_BATCH]
+
+            # READ with smart truncation and context limit tracking
             error_files_sections = []
-            for err_file, err_line in all_error_files[:8]:  # Limit to 8 files
+            total_chars = 0
+
+            for err_file, err_line in all_error_files:
                 content = await self._read_file_content(project_path, err_file)
-                if content:
-                    error_files_sections.append(f"""
+                if not content:
+                    continue
+
+                # SMART TRUNCATE: Keep relevant context around error
+                if len(content) > CHARS_PER_FILE_LIMIT:
+                    content = self._smart_truncate(content, err_line, CHARS_PER_FILE_LIMIT)
+
+                # CHECK CONTEXT LIMIT: Stop if we're approaching max
+                if total_chars + len(content) > MAX_CONTEXT_CHARS:
+                    logger.warning(f"[BoltFixer:{project_id}] Context limit reached at {total_chars} chars, included {len(error_files_sections)} files")
+                    break
+
+                error_files_sections.append(f"""
 --- ERROR FILE: {err_file} (line {err_line}) ---
 ```java
-{content[:8000]}
+{content}
 ```
 """)
+                total_chars += len(content)
+
             if error_files_sections:
                 all_error_files_content = "\n".join(error_files_sections)
-                logger.info(f"[BoltFixer:{project_id}] Read {len(error_files_sections)} error files for batch fixing")
+                logger.info(f"[BoltFixer:{project_id}] Batch fixing {len(error_files_sections)}/{total_error_count} files ({total_chars} chars)")
 
         if target_file and project_path:
             # Try different paths to find the file
@@ -652,6 +685,143 @@ BUILD LOG:
 
         return files
 
+    def _prioritize_error_files(
+        self,
+        error_files: List[Tuple[str, int]],
+        error_output: str
+    ) -> List[Tuple[str, int]]:
+        """
+        Prioritize files by error severity - fix ROOT CAUSE files first.
+
+        Priority order:
+        1. DTO/Entity files (often the root cause of "cannot find symbol")
+        2. Files with most error mentions
+        3. Service/Repository interfaces
+        4. Other files
+
+        Returns:
+            Sorted list of (file_path, line_num) by priority
+        """
+        scored_files = []
+
+        for file_path, line_num in error_files:
+            score = 0
+            file_name = Path(file_path).stem
+
+            # Count how many times this file appears in errors
+            error_count = error_output.lower().count(file_name.lower())
+            score += error_count * 10
+
+            # HIGH PRIORITY: DTO/Entity files (often root cause)
+            if 'Dto' in file_name or 'DTO' in file_name:
+                score += 100
+            if 'Entity' in file_name or file_name[0].isupper() and len(file_name) < 20:
+                # Short capitalized names are often entity classes
+                score += 80
+
+            # MEDIUM PRIORITY: Service interfaces (dependencies)
+            if 'Service' in file_name and 'Impl' not in file_name:
+                score += 60  # Interface before implementation
+            if 'Repository' in file_name:
+                score += 50
+
+            # LOWER PRIORITY: Implementation files
+            if 'ServiceImpl' in file_name or 'Impl' in file_name:
+                score += 30
+            if 'Controller' in file_name:
+                score += 20
+
+            # Boost if "cannot find symbol" mentions this class
+            if f"class {file_name}" in error_output or f"symbol: class {file_name}" in error_output:
+                score += 70
+
+            # Boost if error location is IN this file
+            if f"{file_path}:" in error_output or f"{file_name}.java:" in error_output:
+                score += 40
+
+            scored_files.append((file_path, line_num, score))
+
+        # Sort by score (highest first)
+        scored_files.sort(key=lambda x: x[2], reverse=True)
+
+        # Log prioritization for debugging
+        logger.info(f"[BoltFixer] File priority: {[(f[0].split('/')[-1], f[2]) for f in scored_files[:5]]}")
+
+        # Return without score
+        return [(f[0], f[1]) for f in scored_files]
+
+    def _smart_truncate(
+        self,
+        content: str,
+        error_line: int,
+        max_chars: int = CHARS_PER_FILE_LIMIT
+    ) -> str:
+        """
+        Truncate file content intelligently, keeping:
+        1. Package/import declarations (top)
+        2. Context around error line
+        3. Class closing braces (bottom)
+
+        Args:
+            content: Full file content
+            error_line: Line number where error occurred
+            max_chars: Maximum characters to return
+
+        Returns:
+            Truncated content with markers
+        """
+        if len(content) <= max_chars:
+            return content
+
+        lines = content.split('\n')
+        total_lines = len(lines)
+
+        if error_line <= 0:
+            error_line = total_lines // 2  # Default to middle
+
+        # Sections to include
+        result_sections = []
+        chars_used = 0
+
+        # SECTION 1: Keep first 15 lines (package, imports, class declaration)
+        header_lines = min(15, total_lines)
+        header = '\n'.join(lines[:header_lines])
+        result_sections.append(header)
+        chars_used += len(header)
+
+        # SECTION 2: Context around error line
+        context_lines = CONTEXT_LINES_AROUND_ERROR
+        remaining_chars = max_chars - chars_used - 500  # Reserve for footer
+
+        # Adjust context based on remaining space
+        while context_lines > 10:
+            start = max(header_lines, error_line - context_lines)
+            end = min(total_lines - 5, error_line + context_lines)
+            context = '\n'.join(lines[start:end])
+
+            if len(context) <= remaining_chars:
+                break
+            context_lines -= 10
+
+        start = max(header_lines, error_line - context_lines)
+        end = min(total_lines - 5, error_line + context_lines)
+
+        if start > header_lines:
+            result_sections.append(f"\n// ... [TRUNCATED lines {header_lines + 1}-{start}] ...\n")
+
+        result_sections.append('\n'.join(lines[start:end]))
+
+        # SECTION 3: Keep last 5 lines (closing braces)
+        if end < total_lines - 5:
+            result_sections.append(f"\n// ... [TRUNCATED lines {end + 1}-{total_lines - 5}] ...\n")
+
+        result_sections.append('\n'.join(lines[-5:]))
+
+        truncated = '\n'.join(result_sections)
+        logger.debug(f"[BoltFixer] Truncated file from {len(content)} to {len(truncated)} chars")
+
+        return truncated
+
     async def _sync_to_s3(
         self,
         project_id: str,
@@ -663,11 +833,20 @@ BUILD LOG:
 
         This ensures fixes survive container restarts.
         Database stores metadata, S3 stores content.
+
+        NOTE: S3 sync ALWAYS happens for long-term archive.
+        EFS is for fast working storage, S3 is for retrieval after months.
+        The container_executor handles the sync after build success.
         """
         from uuid import UUID
         from sqlalchemy import select
         from app.core.database import AsyncSessionLocal
         from app.models.project_file import ProjectFile
+        from app.core.config import settings
+
+        # Log EFS status but ALWAYS sync to S3 for long-term archive
+        if getattr(settings, 'EFS_ENABLED', False):
+            logger.info(f"[BoltFixer:{project_id}] EFS mode - files safe, archiving to S3 for long-term storage")
 
         for file_path in files_modified:
             try:

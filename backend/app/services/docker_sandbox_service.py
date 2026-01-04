@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.sandbox_db_service import SandboxDBService
 from app.models.sandbox import SandboxStatus
 from app.core.logging_config import logger
+from app.core.config import settings
 
 # Sandbox public URL for preview (use sandbox EC2 public IP/domain in production)
 SANDBOX_PUBLIC_URL = os.getenv("SANDBOX_PUBLIC_URL") or os.getenv("SANDBOX_PREVIEW_BASE_URL", "http://localhost")
@@ -82,8 +83,8 @@ class DockerSandboxService:
     # Container name prefix
     CONTAINER_PREFIX = "sandbox_"
 
-    # Base workspace path on host
-    WORKSPACE_BASE = os.environ.get("SANDBOX_WORKSPACE_PATH", "/tmp/sandbox/workspace")
+    # Base workspace path on host (supports EFS mount)
+    WORKSPACE_BASE = settings.SANDBOX_PATH if hasattr(settings, 'SANDBOX_PATH') else os.environ.get("SANDBOX_WORKSPACE_PATH", "/tmp/sandbox/workspace")
 
     def __init__(self, db: AsyncSession):
         self.db = db
