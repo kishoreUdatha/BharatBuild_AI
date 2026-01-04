@@ -19,7 +19,7 @@ variable "sandbox_instance_type" {
 
 variable "sandbox_use_spot" {
   description = "Use spot instances for sandbox (70% cheaper but can be interrupted)"
-  default     = true
+  default     = true  # Spot + ASG + Pre-baked AMI for cost savings with auto-recovery
 }
 
 variable "sandbox_key_name" {
@@ -28,8 +28,18 @@ variable "sandbox_key_name" {
 }
 
 variable "sandbox_enable_autoscaling" {
-  description = "Enable auto-scaling for sandbox servers"
-  default     = false  # Set to true for production
+  description = "Enable auto-scaling for sandbox servers (required for spot auto-recovery)"
+  default     = true  # Enabled for spot instance auto-recovery
+}
+
+variable "sandbox_custom_ami_id" {
+  description = "Custom AMI ID with pre-baked Docker images (leave empty to use Amazon Linux 2023)"
+  default     = ""  # Set to your pre-baked AMI ID after running build-sandbox-ami.sh
+}
+
+variable "sandbox_use_dynamic_ip" {
+  description = "Use SSM Parameter Store for dynamic IP discovery (required for spot/ASG)"
+  default     = true
 }
 
 variable "sandbox_min_size" {
@@ -497,17 +507,74 @@ systemctl restart docker
 docker network create bharatbuild-sandbox || true
 
 # Pull common base images (speeds up sandbox creation)
+# =============================================================================
+# FRONTEND / JAVASCRIPT
+# =============================================================================
 docker pull node:18-alpine &
 docker pull node:20-alpine &
+docker pull node:22-alpine &
+
+# =============================================================================
+# PYTHON
+# =============================================================================
 docker pull python:3.11-slim &
 docker pull python:3.12-slim &
-docker pull golang:1.21-alpine &
+docker pull python:3.11 &
+
+# =============================================================================
+# JAVA / JVM
+# =============================================================================
 docker pull openjdk:17-slim &
-docker pull nginx:alpine &
+docker pull openjdk:21-slim &
+docker pull maven:3.9-eclipse-temurin-17 &
+docker pull maven:3.9-eclipse-temurin-21 &
+docker pull gradle:8-jdk17-alpine &
+
+# =============================================================================
+# GO
+# =============================================================================
+docker pull golang:1.21-alpine &
+docker pull golang:1.22-alpine &
+
+# =============================================================================
+# .NET
+# =============================================================================
+docker pull mcr.microsoft.com/dotnet/sdk:8.0 &
+docker pull mcr.microsoft.com/dotnet/aspnet:8.0 &
+
+# =============================================================================
+# RUST
+# =============================================================================
+docker pull rust:1.75-slim &
+
+# =============================================================================
+# PHP
+# =============================================================================
+docker pull php:8.3-apache &
+docker pull php:8.3-fpm-alpine &
+
+# =============================================================================
+# RUBY
+# =============================================================================
+docker pull ruby:3.3-slim &
+
+# =============================================================================
+# DATABASES
+# =============================================================================
 docker pull postgres:15-alpine &
+docker pull postgres:16-alpine &
+docker pull mysql:8.0 &
+docker pull mongo:7 &
 docker pull redis:7-alpine &
-docker pull docker/compose:latest &
+
+# =============================================================================
+# WEB SERVERS / UTILITIES
+# =============================================================================
+docker pull nginx:alpine &
 docker pull alpine:latest &
+docker pull docker/compose:latest &
+docker pull busybox:latest &
+
 wait
 
 # Install Docker Compose
@@ -960,6 +1027,63 @@ output "sandbox_docker_url" {
 output "sandbox_docker_url_no_tls" {
   description = "Docker API URL without TLS (development only)"
   value       = var.sandbox_enable_autoscaling ? null : (var.sandbox_use_spot ? (length(aws_spot_instance_request.sandbox) > 0 ? "tcp://${aws_spot_instance_request.sandbox[0].private_ip}:2375" : null) : (length(aws_instance.sandbox) > 0 ? "tcp://${aws_instance.sandbox[0].private_ip}:2375" : null))
+}
+
+# =============================================================================
+# SSM Parameters for Dynamic IP Discovery
+# =============================================================================
+# These parameters are updated by the sandbox instance on startup
+# Backend reads these to discover current sandbox IP
+
+resource "aws_ssm_parameter" "sandbox_docker_host" {
+  name        = "/bharatbuild/sandbox/docker-host"
+  description = "Docker API endpoint for sandbox (updated by instance on startup)"
+  type        = "String"
+  value       = "tcp://0.0.0.0:2375"  # Placeholder - updated by instance
+
+  lifecycle {
+    ignore_changes = [value]  # Don't overwrite instance updates
+  }
+
+  tags = {
+    Name        = "${var.app_name}-sandbox-docker-host"
+    Environment = "production"
+    ManagedBy   = "terraform"
+  }
+}
+
+resource "aws_ssm_parameter" "sandbox_instance_id" {
+  name        = "/bharatbuild/sandbox/instance-id"
+  description = "Current sandbox instance ID (updated by instance on startup)"
+  type        = "String"
+  value       = "pending"  # Placeholder - updated by instance
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+
+  tags = {
+    Name        = "${var.app_name}-sandbox-instance-id"
+    Environment = "production"
+    ManagedBy   = "terraform"
+  }
+}
+
+resource "aws_ssm_parameter" "sandbox_private_ip" {
+  name        = "/bharatbuild/sandbox/private-ip"
+  description = "Current sandbox private IP (updated by instance on startup)"
+  type        = "String"
+  value       = "0.0.0.0"  # Placeholder - updated by instance
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+
+  tags = {
+    Name        = "${var.app_name}-sandbox-private-ip"
+    Environment = "production"
+    ManagedBy   = "terraform"
+  }
 }
 
 output "sandbox_preview_url" {
