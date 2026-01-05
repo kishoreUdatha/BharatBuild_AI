@@ -579,6 +579,7 @@ class WorkspaceRestoreService:
             logger.info(f"[WorkspaceRestore] Remote Docker mode detected, checking EC2 sandbox")
             try:
                 import docker
+                from app.services.docker_client_helper import get_docker_client
 
                 # Get user_id from project if not provided
                 project = await self._get_project(project_id, db)
@@ -593,7 +594,11 @@ class WorkspaceRestoreService:
                 # If they do, DON'T restore from S3 - use existing files
                 # This preserves auto-fixer changes!
                 # =====================================================================
-                docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+                # Use TLS-enabled docker client helper
+                docker_client = get_docker_client()
+                if not docker_client:
+                    # Fallback to non-TLS (will fail if Docker requires TLS)
+                    docker_client = docker.DockerClient(base_url=sandbox_docker_host)
                 try:
                     # Count files on EC2 sandbox (exclude node_modules)
                     check_cmd = f"find {workspace_path} -type f ! -path '*/node_modules/*' 2>/dev/null | wc -l"
