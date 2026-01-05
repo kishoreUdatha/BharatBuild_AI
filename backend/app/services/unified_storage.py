@@ -523,8 +523,11 @@ class UnifiedStorageService:
 
         for attempt in range(max_retries):
             try:
-                # Connect to remote Docker on EC2
-                docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+                # Connect to remote Docker on EC2 with TLS support
+                from app.services.docker_client_helper import get_docker_client
+                docker_client = get_docker_client()
+                if not docker_client:
+                    docker_client = docker.DockerClient(base_url=sandbox_docker_host)
 
                 # Encode content as base64 to handle special characters safely
                 content_b64 = base64.b64encode(content.encode('utf-8')).decode('ascii')
@@ -700,7 +703,11 @@ class UnifiedStorageService:
         sandbox_base = settings.SANDBOX_PATH
         workspace_path = f"{sandbox_base}/{user_id}/{project_id}" if user_id else f"{sandbox_base}/{project_id}"
         try:
-            docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+            # Use TLS-enabled docker client
+            from app.services.docker_client_helper import get_docker_client
+            docker_client = get_docker_client()
+            if not docker_client:
+                docker_client = docker.DockerClient(base_url=sandbox_docker_host)
             result = docker_client.containers.run(
                 image="alpine:latest",
                 command=f"sh -c '[ -d {workspace_path} ] && [ \"$(ls -A {workspace_path})\" ] && echo EXISTS || echo MISSING'",
@@ -735,7 +742,11 @@ class UnifiedStorageService:
         try:
             # Get list of files from sandbox
             if sandbox_docker_host:
-                docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+                # Use TLS-enabled docker client
+                from app.services.docker_client_helper import get_docker_client
+                docker_client = get_docker_client()
+                if not docker_client:
+                    docker_client = docker.DockerClient(base_url=sandbox_docker_host)
                 result = docker_client.containers.run(
                     image="alpine:latest",
                     command=f"find {workspace_path} -type f -not -path '*/node_modules/*' -not -path '*/.git/*' | head -200",
@@ -1587,7 +1598,11 @@ class UnifiedStorageService:
         if getattr(settings, 'EFS_ENABLED', False):
             logger.info(f"[RemoteRestore] EFS mode enabled - checking for existing files")
             try:
-                docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+                # Use TLS-enabled docker client
+                from app.services.docker_client_helper import get_docker_client
+                docker_client = get_docker_client()
+                if not docker_client:
+                    docker_client = docker.DockerClient(base_url=sandbox_docker_host)
                 check_output = docker_client.containers.run(
                     "alpine:latest",
                     ["-c", f"find {workspace_path} -type f ! -path '*/node_modules/*' 2>/dev/null | wc -l"],
