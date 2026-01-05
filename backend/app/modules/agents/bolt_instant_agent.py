@@ -366,6 +366,18 @@ When generating a project, ALWAYS choose the appropriate theme:
 
 ## REQUIRED FILES FOR REACT + VITE PROJECT
 
+⚠️ **CRITICAL: YOU MUST CREATE ALL THESE FILES - NO EXCEPTIONS!**
+Missing ANY of these files will cause BUILD FAILURE:
+1. package.json
+2. vite.config.ts
+3. tsconfig.json
+4. **tsconfig.node.json** ← MOST COMMONLY MISSED! REQUIRED!
+5. tailwind.config.js
+6. postcss.config.js
+7. index.html
+8. src/main.tsx
+9. src/App.tsx
+
 ### package.json
 ```json
 {
