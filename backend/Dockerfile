@@ -137,6 +137,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================
+# Install AWS CLI (for fetching secrets)
+# ============================================
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install && \
+    rm -rf awscliv2.zip aws
+
+# ============================================
 # Set Python 3.11 as default
 # ============================================
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
@@ -199,7 +207,13 @@ COPY . .
 # ============================================
 # Create necessary directories
 # ============================================
-RUN mkdir -p uploads temp generated logs user_projects models datasets
+RUN mkdir -p uploads temp generated logs user_projects models datasets /certs
+
+# ============================================
+# Copy and setup entrypoint script
+# ============================================
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # ============================================
 # Expose ports
@@ -213,6 +227,7 @@ EXPOSE 6006
 EXPOSE 5000
 
 # ============================================
-# Run the application
+# Run the application with entrypoint
 # ============================================
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
