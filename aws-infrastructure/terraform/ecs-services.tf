@@ -319,6 +319,11 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "SANDBOX_EC2_INSTANCE_ID", value = var.sandbox_enable_autoscaling ? "" : (var.sandbox_use_spot ? (length(aws_spot_instance_request.sandbox) > 0 ? aws_spot_instance_request.sandbox[0].spot_instance_id : "") : (length(aws_instance.sandbox) > 0 ? aws_instance.sandbox[0].id : "")) },
       # EFS enabled for hot storage (S3 still used for archival)
       { name = "EFS_ENABLED", value = "true" },
+      # Docker TLS Configuration (certs fetched from Secrets Manager at startup)
+      { name = "DOCKER_TLS_ENABLED", value = "true" },
+      { name = "DOCKER_TLS_CA_SECRET", value = "bharatbuild/docker-tls/ca-cert" },
+      { name = "DOCKER_TLS_CERT_SECRET", value = "bharatbuild/docker-tls/client-cert" },
+      { name = "DOCKER_TLS_KEY_SECRET", value = "bharatbuild/docker-tls/client-key" },
       # RESET_DB - Set to true to drop and recreate all tables (one-time use)
       { name = "RESET_DB", value = "false" },
       # OAuth Redirect URIs (must match frontend callback pages)
