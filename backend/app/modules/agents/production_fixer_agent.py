@@ -1214,6 +1214,8 @@ OUTPUT THE FIX NOW:
         logger.info("[ProductionFixerAgent] Using fallback XML/regex parsing")
 
         # Parse patches
+        # Track already-seen paths to avoid duplicates from multiple patterns
+        seen_patch_paths = set()
         patch_patterns = [
             r'<patch\s+path=["\']([^"\']+)["\']>(.*?)</patch>',
             r'<patch\s+path=([^\s>]+)>(.*?)</patch>',
@@ -1224,6 +1226,11 @@ OUTPUT THE FIX NOW:
                 path, patch_content = match
                 # Strip quotes and whitespace from path
                 path = path.strip().strip('"').strip("'")
+
+                # Skip if already processed (prevents duplicates from multiple patterns)
+                if path in seen_patch_paths:
+                    continue
+                seen_patch_paths.add(path)
 
                 # SAFETY VALIDATION for fallback patches
                 safety_result = self._validate_patch_safety(path, patch_content, "patch")
@@ -1244,6 +1251,8 @@ OUTPUT THE FIX NOW:
                 })
 
         # Parse file blocks
+        # Track already-seen paths to avoid duplicates from multiple patterns
+        seen_file_paths = set()
         file_patterns = [
             r'<file\s+path=["\']([^"\']+)["\']>(.*?)</file>',
             r'<file\s+path=([^\s>]+)>(.*?)</file>',
@@ -1255,6 +1264,11 @@ OUTPUT THE FIX NOW:
                 # Strip quotes and whitespace from path (same as patches)
                 path = path.strip().strip('"').strip("'")
                 content = content.strip()
+
+                # Skip if already processed (prevents duplicates from multiple patterns)
+                if path in seen_file_paths:
+                    continue
+                seen_file_paths.add(path)
 
                 # SAFETY VALIDATION for new files
                 safety_result = self._validate_patch_safety(path, content, "file")
