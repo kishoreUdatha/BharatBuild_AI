@@ -2258,15 +2258,18 @@ Please analyze and fix these errors. If the output shows success or warnings onl
     async def _try_deterministic_config_file_fix(
         self,
         project_path: Path,
-        error_text: str
+        error_text: str,
+        project_id: Optional[str] = None
     ) -> Optional[SimpleFixResult]:
         """
-        Deterministically fix missing config files (no AI needed).
+        Deterministically fix missing config/entry files (no AI needed).
 
         Handles common missing files:
         - tsconfig.node.json (Vite TypeScript projects)
         - postcss.config.js/cjs (Tailwind CSS projects)
-        - tailwind.config.js (Tailwind CSS projects)
+        - index.html (Vite entry point)
+        - src/main.tsx (React entry)
+        - src/App.tsx (React main component)
         """
         # Config file templates
         CONFIG_TEMPLATES = {
@@ -2280,7 +2283,7 @@ Please analyze and fix these errors. If the output shows success or warnings onl
   },
   "include": ["vite.config.ts"]
 }''',
-            "postcss.config.js": '''module.exports = {
+            "postcss.config.js": '''export default {
   plugins: {
     tailwindcss: {},
     autoprefixer: {},
@@ -2292,63 +2295,143 @@ Please analyze and fix these errors. If the output shows success or warnings onl
     autoprefixer: {},
   },
 }''',
+            "tailwind.config.js": '''/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}''',
+            "index.html": '''<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>App</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>''',
+            "src/main.tsx": '''import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App'
+import './index.css'
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+)''',
+            "src/App.tsx": '''function App() {
+  return (
+    <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+      <h1 className="text-3xl font-bold text-gray-800">Hello World</h1>
+    </div>
+  )
+}
+
+export default App''',
+            "src/index.css": '''@tailwind base;
+@tailwind components;
+@tailwind utilities;''',
         }
 
-        # Patterns to detect missing config files
+        # Patterns to detect missing files
         config_patterns = [
+            # tsconfig.node.json
             (r'ENOENT.*tsconfig\.node\.json', 'tsconfig.node.json'),
-            (r'parsing.*tsconfig\.node\.json\s+failed', 'tsconfig.node.json'),
+            (r'parsing.*tsconfig\.node\.json.*failed', 'tsconfig.node.json'),
             (r'Cannot find.*tsconfig\.node\.json', 'tsconfig.node.json'),
+            # postcss.config
             (r'ENOENT.*postcss\.config', 'postcss.config.js'),
             (r'Cannot find.*postcss\.config', 'postcss.config.js'),
+            (r'Loading PostCSS.*failed', 'postcss.config.js'),
+            # tailwind.config
+            (r'ENOENT.*tailwind\.config', 'tailwind.config.js'),
+            (r'Cannot find.*tailwindcss', 'tailwind.config.js'),
+            # index.html
+            (r'ENOENT.*index\.html', 'index.html'),
+            (r'Could not resolve.*index\.html', 'index.html'),
+            (r'Failed to scan for dependencies.*index\.html', 'index.html'),
+            # main.tsx
+            (r'ENOENT.*main\.tsx', 'src/main.tsx'),
+            (r'Cannot find module.*[\'"]\.\/main[\'"]', 'src/main.tsx'),
+            (r'Failed to resolve.*main\.tsx', 'src/main.tsx'),
+            # App.tsx
+            (r'ENOENT.*App\.tsx', 'src/App.tsx'),
+            (r'Cannot find module.*[\'"]\.\/App[\'"]', 'src/App.tsx'),
+            # index.css
+            (r'ENOENT.*index\.css', 'src/index.css'),
+            (r'Cannot find.*index\.css', 'src/index.css'),
         ]
 
         files_created = []
+        logger.info(f"[SimpleFixer] Checking deterministic config fix for error: {error_text[:200]}...")
 
         for pattern, config_file in config_patterns:
             if re.search(pattern, error_text, re.IGNORECASE):
+                logger.info(f"[SimpleFixer] ✓ Pattern matched: {pattern} -> {config_file}")
                 template = CONFIG_TEMPLATES.get(config_file)
                 if not template:
+                    logger.warning(f"[SimpleFixer] No template for {config_file}")
                     continue
 
-                # Try root and frontend/ directories
-                for prefix in ['', 'frontend/']:
+                # Determine if file goes in root or has its own path (e.g., src/main.tsx)
+                if '/' in config_file:
+                    # File has directory path (e.g., src/main.tsx)
+                    prefixes = ['', 'frontend/']
+                else:
+                    # Config file in root
+                    prefixes = ['', 'frontend/']
+
+                for prefix in prefixes:
                     file_path = project_path / prefix / config_file
                     if file_path.exists():
+                        logger.info(f"[SimpleFixer] File already exists: {file_path}")
                         continue  # File exists, skip
 
-                    # Check if this is a valid project directory (has package.json nearby)
-                    pkg_json = project_path / prefix / 'package.json'
-                    if not pkg_json.exists() and prefix:
-                        continue  # Not a valid project root
+                    # For non-root files, check if this is a valid project directory
+                    if prefix:
+                        pkg_json = project_path / prefix / 'package.json'
+                        if not pkg_json.exists():
+                            continue  # Not a valid project root
 
                     try:
                         file_path.parent.mkdir(parents=True, exist_ok=True)
                         file_path.write_text(template, encoding='utf-8')
                         rel_path = f"{prefix}{config_file}" if prefix else config_file
                         files_created.append(rel_path)
-                        logger.info(f"[SimpleFixer] Created missing config: {rel_path}")
+                        logger.info(f"[SimpleFixer] ✓ Created missing file: {rel_path}")
 
-                        # Sync to S3
-                        path_parts = str(project_path).replace("\\", "/").split("/")
-                        project_id = path_parts[-1] if path_parts else None
-                        if project_id:
-                            await self._sync_to_s3(project_id, rel_path, template)
+                        # Note: S3 sync will be done by errors.py after this returns
+                        # The project_id extraction here was incorrect, so we skip it
+                        # errors.py has the correct project_id and handles sync properly
 
                         break  # Only create in one location
 
                     except Exception as e:
-                        logger.warning(f"[SimpleFixer] Error creating {config_file}: {e}")
+                        logger.error(f"[SimpleFixer] ✗ Error creating {config_file}: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
                         continue
 
         if files_created:
+            logger.info(f"[SimpleFixer] ✓ Deterministic fix created {len(files_created)} file(s): {files_created}")
             return SimpleFixResult(
                 success=True,
                 files_modified=files_created,
-                message=f"Created missing config file(s): {', '.join(files_created)}",
+                message=f"Created missing file(s): {', '.join(files_created)}",
                 patches_applied=len(files_created)
             )
 
+        logger.info(f"[SimpleFixer] No deterministic config fix matched")
         return None
 
     async def fix(
