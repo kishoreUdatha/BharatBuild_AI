@@ -259,6 +259,28 @@ resource "aws_iam_role_policy_attachment" "sandbox_ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# SSM PutParameter permission for dynamic IP discovery
+# Allows sandbox to update SSM parameters with its current IP on startup
+resource "aws_iam_role_policy" "sandbox_ssm_params" {
+  name = "${var.app_name}-sandbox-ssm-params-policy"
+  role = aws_iam_role.sandbox.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ssm:PutParameter",
+        "ssm:GetParameter"
+      ]
+      Resource = [
+        "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/${var.app_name}/sandbox/*",
+        "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/${var.app_name}/docker/*"
+      ]
+    }]
+  })
+}
+
 # =============================================================================
 # CloudWatch Log Group for Sandbox
 # =============================================================================
@@ -461,6 +483,19 @@ chmod 0444 ca.pem server-cert.pem client-cert.pem
 aws ssm put-parameter --name "/${var.app_name}/docker/ca-cert" --value "$(cat ca.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
 aws ssm put-parameter --name "/${var.app_name}/docker/client-cert" --value "$(cat client-cert.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
 aws ssm put-parameter --name "/${var.app_name}/docker/client-key" --value "$(cat client-key.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
+
+# ==========================================================
+# Update SSM Parameters for Dynamic IP Discovery
+# This allows ECS backend to find this instance when ASG replaces it
+# ==========================================================
+INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+echo "Updating SSM parameters: PRIVATE_IP=$PRIVATE_IP, INSTANCE_ID=$INSTANCE_ID" >> /var/log/sandbox-setup.log
+
+aws ssm put-parameter --name "/${var.app_name}/sandbox/docker-host" --value "tcp://$PRIVATE_IP:2375" --type String --overwrite --region ${var.aws_region} || true
+aws ssm put-parameter --name "/${var.app_name}/sandbox/instance-id" --value "$INSTANCE_ID" --type String --overwrite --region ${var.aws_region} || true
+aws ssm put-parameter --name "/${var.app_name}/sandbox/private-ip" --value "$PRIVATE_IP" --type String --overwrite --region ${var.aws_region} || true
+
+echo "SSM sandbox parameters updated successfully" >> /var/log/sandbox-setup.log
 
 # ==========================================================
 # Configure Docker with TLS

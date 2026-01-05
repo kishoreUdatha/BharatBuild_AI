@@ -209,9 +209,29 @@ echo "[8/8] Creating startup script for dynamic IP..."
 cat > /usr/local/bin/update-sandbox-ip.sh <<'STARTUPSCRIPT'
 #!/bin/bash
 # Update SSM parameter with this instance's private IP
-INSTANCE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
-INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
-REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+# Uses IMDSv2 for compatibility with Amazon Linux 2023
+
+# Get IMDSv2 token first
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+
+# Use token to get metadata
+INSTANCE_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
+INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
+
+# Fallback to IMDSv1 if IMDSv2 fails
+if [ -z "$INSTANCE_IP" ]; then
+    INSTANCE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+    INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+    REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+fi
+
+# Final fallback for region
+if [ -z "$REGION" ]; then
+    REGION="ap-south-1"
+fi
+
+echo "Detected: IP=$INSTANCE_IP, ID=$INSTANCE_ID, Region=$REGION"
 
 # Update SSM parameters
 aws ssm put-parameter \
