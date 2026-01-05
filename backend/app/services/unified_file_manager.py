@@ -82,10 +82,14 @@ class UnifiedFileManager:
             if sandbox_docker_host:
                 try:
                     import docker
-                    self._docker_client = docker.DockerClient(
-                        base_url=sandbox_docker_host,
-                        timeout=30
-                    )
+                    # Try TLS-enabled docker client helper first
+                    from app.services.docker_client_helper import get_docker_client as get_tls_client
+                    self._docker_client = get_tls_client(timeout=30)
+                    if not self._docker_client:
+                        self._docker_client = docker.DockerClient(
+                            base_url=sandbox_docker_host,
+                            timeout=30
+                        )
                     self._docker_client.ping()
                     logger.info(f"[UnifiedFileManager] Connected to remote Docker: {sandbox_docker_host}")
                 except Exception as e:

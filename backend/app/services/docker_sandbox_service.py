@@ -100,8 +100,12 @@ class DockerSandboxService:
                 # Check for remote Docker host (ECS -> EC2 sandbox)
                 sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
                 if sandbox_docker_host:
-                    logger.info(f"Connecting to remote Docker host: {sandbox_docker_host}")
-                    self._docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+                    # Try TLS-enabled docker client helper first
+                    from app.services.docker_client_helper import get_docker_client as get_tls_client
+                    self._docker_client = get_tls_client()
+                    if not self._docker_client:
+                        logger.info(f"Connecting to remote Docker host: {sandbox_docker_host}")
+                        self._docker_client = docker.DockerClient(base_url=sandbox_docker_host)
                     self._docker_client.ping()
                     logger.info("Docker client initialized via SANDBOX_DOCKER_HOST")
                 else:

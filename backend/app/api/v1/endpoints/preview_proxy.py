@@ -146,7 +146,12 @@ def get_docker_client() -> Optional[docker.DockerClient]:
             try:
                 logger.info(f"[Preview] Attempting Docker connection to {SANDBOX_DOCKER_HOST} (attempt {attempt + 1}/{max_retries})")
                 # HIGH #5: Increased timeout from 5s to 30s for slow Docker hosts
-                client = docker.DockerClient(base_url=SANDBOX_DOCKER_HOST, timeout=30)
+                # Try TLS-enabled docker client helper first
+                from app.services.docker_client_helper import get_docker_client as get_tls_client
+                client = get_tls_client(timeout=30)
+                if not client:
+                    # Fallback to direct connection
+                    client = docker.DockerClient(base_url=SANDBOX_DOCKER_HOST, timeout=30)
                 client.ping()
                 _docker_client = client
                 logger.info(f"[Preview] Docker client connected successfully to {SANDBOX_DOCKER_HOST}")
