@@ -577,7 +577,18 @@ class ContainerExecutor:
         try:
             # First, try sandbox Docker host (supports dynamic IP discovery for Spot/ASG)
             sandbox_docker_host = _get_sandbox_docker_host()
-            if sandbox_docker_host:
+            # Try TLS-enabled docker client helper first (supports Secrets Manager certs)
+            try:
+                from app.services.docker_client_helper import get_docker_client
+                self.docker_client = get_docker_client(timeout=DOCKER_API_TIMEOUT)
+                if self.docker_client:
+                    logger.info(f"[ContainerExecutor] Docker client initialized via docker_client_helper (TLS-enabled)")
+            except Exception as helper_err:
+                logger.warning(f"[ContainerExecutor] docker_client_helper failed: {helper_err}")
+                self.docker_client = None
+
+            # Fallback to direct connection if helper failed
+            if not self.docker_client and sandbox_docker_host:
                 try:
                     self.docker_client = docker.DockerClient(
                         base_url=sandbox_docker_host,
