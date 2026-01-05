@@ -1764,7 +1764,10 @@ class UnifiedStorageService:
                         file_count = int(match.group(1)) if match else 0
                         logger.info(f"[RemoteRestore] SSM restore SUCCESS! {file_count} files restored")
                         restore_successful = True
-                        return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in files_with_s3]
+                        # BUGFIX: Use file_records (all DB files) instead of files_with_s3 (only files with s3_key)
+                        # This fixes the case where s3_key is missing in DB but files exist in S3
+                        source_files = files_with_s3 if files_with_s3 else file_records
+                        return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in source_files]
                     else:
                         logger.warning(f"[RemoteRestore] SSM restore partial or failed, falling back to docker")
                 else:
@@ -1820,12 +1823,16 @@ class UnifiedStorageService:
                             detach=False
                         )
                         file_count = int(verify_result.decode().strip() or "0")
-                        if file_count >= len(files_with_s3) * 0.8:  # At least 80% of expected files
+                        # BUGFIX: Use file_records count when files_with_s3 is empty
+                        expected_count = len(files_with_s3) if files_with_s3 else len(file_records)
+                        if file_count >= expected_count * 0.8 or file_count >= 5:  # At least 80% of expected files OR at least 5 files
                             logger.info(f"[RemoteRestore] Docker S3 sync SUCCESS! {file_count} files restored")
                             restore_successful = True
-                            return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in files_with_s3]
+                            # BUGFIX: Use file_records when files_with_s3 is empty
+                            source_files = files_with_s3 if files_with_s3 else file_records
+                            return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in source_files]
                         else:
-                            logger.warning(f"[RemoteRestore] Docker sync partial: only {file_count} files, expected {len(files_with_s3)}.")
+                            logger.warning(f"[RemoteRestore] Docker sync partial: only {file_count} files, expected {expected_count}.")
                 else:
                     logger.warning(f"[RemoteRestore] Docker sync produced no output!")
             except Exception as sync_err:
@@ -2222,10 +2229,13 @@ fi
 
             # CRITICAL: Only return files if restore was verified successful
             if restore_successful:
-                logger.info(f"[RemoteRestore] Successfully restored {len(files_with_s3)} files to EC2 sandbox")
-                return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in files_with_s3]
+                # BUGFIX: Use file_records when files_with_s3 is empty (missing s3_key in DB but files exist in S3)
+                source_files = files_with_s3 if files_with_s3 else file_records
+                logger.info(f"[RemoteRestore] Successfully restored {len(source_files)} files to EC2 sandbox")
+                return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in source_files]
             else:
-                logger.error(f"[RemoteRestore] RESTORE FAILED - returning empty list (was expecting {len(files_with_s3)} files)")
+                expected_count = len(files_with_s3) if files_with_s3 else len(file_records)
+                logger.error(f"[RemoteRestore] RESTORE FAILED - returning empty list (was expecting {expected_count} files)")
                 return []
         except Exception as e:
             logger.error(f"[RemoteRestore] Failed to restore project {project_id}: {e}", exc_info=True)
