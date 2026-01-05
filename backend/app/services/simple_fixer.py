@@ -1036,6 +1036,15 @@ class SimpleFixer:
                 logger.info(f"[SimpleFixer:{project_id}] Deterministic export fix applied - skipping AI")
                 return export_fix_result
 
+            # =================================================================
+            # STEP 0d: Try deterministic config file fix (fast, free, no AI)
+            # Handles: tsconfig.node.json, postcss.config.js, etc.
+            # =================================================================
+            config_fix_result = await self._try_deterministic_config_file_fix(project_path, error_text)
+            if config_fix_result:
+                logger.info(f"[SimpleFixer:{project_id}] Deterministic config file fix applied - skipping AI")
+                return config_fix_result
+
             # COST OPTIMIZATION #2: Select model based on complexity
             model = self._select_model(complexity)
 
@@ -2228,6 +2237,102 @@ Please analyze and fix these errors. If the output shows success or warnings onl
 
         return None
 
+    async def _try_deterministic_config_file_fix(
+        self,
+        project_path: Path,
+        error_text: str
+    ) -> Optional[SimpleFixResult]:
+        """
+        Deterministically fix missing config files (no AI needed).
+
+        Handles common missing files:
+        - tsconfig.node.json (Vite TypeScript projects)
+        - postcss.config.js/cjs (Tailwind CSS projects)
+        - tailwind.config.js (Tailwind CSS projects)
+        """
+        # Config file templates
+        CONFIG_TEMPLATES = {
+            "tsconfig.node.json": '''{
+  "compilerOptions": {
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true
+  },
+  "include": ["vite.config.ts"]
+}''',
+            "postcss.config.js": '''module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}''',
+            "postcss.config.cjs": '''module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}''',
+        }
+
+        # Patterns to detect missing config files
+        config_patterns = [
+            (r'ENOENT.*tsconfig\.node\.json', 'tsconfig.node.json'),
+            (r'parsing.*tsconfig\.node\.json\s+failed', 'tsconfig.node.json'),
+            (r'Cannot find.*tsconfig\.node\.json', 'tsconfig.node.json'),
+            (r'ENOENT.*postcss\.config', 'postcss.config.js'),
+            (r'Cannot find.*postcss\.config', 'postcss.config.js'),
+        ]
+
+        files_created = []
+
+        for pattern, config_file in config_patterns:
+            if re.search(pattern, error_text, re.IGNORECASE):
+                template = CONFIG_TEMPLATES.get(config_file)
+                if not template:
+                    continue
+
+                # Try root and frontend/ directories
+                for prefix in ['', 'frontend/']:
+                    file_path = project_path / prefix / config_file
+                    if file_path.exists():
+                        continue  # File exists, skip
+
+                    # Check if this is a valid project directory (has package.json nearby)
+                    pkg_json = project_path / prefix / 'package.json'
+                    if not pkg_json.exists() and prefix:
+                        continue  # Not a valid project root
+
+                    try:
+                        file_path.parent.mkdir(parents=True, exist_ok=True)
+                        file_path.write_text(template, encoding='utf-8')
+                        rel_path = f"{prefix}{config_file}" if prefix else config_file
+                        files_created.append(rel_path)
+                        logger.info(f"[SimpleFixer] Created missing config: {rel_path}")
+
+                        # Sync to S3
+                        path_parts = str(project_path).replace("\\", "/").split("/")
+                        project_id = path_parts[-1] if path_parts else None
+                        if project_id:
+                            await self._sync_to_s3(project_id, rel_path, template)
+
+                        break  # Only create in one location
+
+                    except Exception as e:
+                        logger.warning(f"[SimpleFixer] Error creating {config_file}: {e}")
+                        continue
+
+        if files_created:
+            return SimpleFixResult(
+                success=True,
+                files_modified=files_created,
+                message=f"Created missing config file(s): {', '.join(files_created)}",
+                patches_applied=len(files_created)
+            )
+
+        return None
+
     async def fix(
         self,
         project_path: Path,
@@ -2239,7 +2344,7 @@ Please analyze and fix these errors. If the output shows success or warnings onl
         Fix an error using AI - COST OPTIMIZED.
 
         Simple flow:
-        1. TRY DETERMINISTIC FIX FIRST (fast, free) - React import, Tailwind CSS errors
+        1. TRY DETERMINISTIC FIX FIRST (fast, free) - React import, Tailwind CSS errors, config files
         2. Classify error complexity for model selection
         3. Gather SMALLER context (only error-mentioned files + key configs)
         4. Send to AI with selected model
@@ -2269,6 +2374,15 @@ Please analyze and fix these errors. If the output shows success or warnings onl
             if export_fix_result:
                 logger.info(f"[SimpleFixer] Deterministic export fix applied - skipping AI")
                 return export_fix_result
+
+            # =================================================================
+            # STEP 0d: Try deterministic config file fix (fast, free, no AI)
+            # Handles: tsconfig.node.json, postcss.config.js, etc.
+            # =================================================================
+            config_fix_result = await self._try_deterministic_config_file_fix(project_path, output)
+            if config_fix_result:
+                logger.info(f"[SimpleFixer] Deterministic config file fix applied - skipping AI")
+                return config_fix_result
 
             # COST OPTIMIZATION #2: Classify error for model selection
             errors = [{"message": output[-2000:], "source": "terminal"}]
