@@ -547,6 +547,67 @@ For Repository interfaces:
 - Method names follow Spring Data JPA naming convention
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 7B: JPA QUERY DATE FUNCTIONS (HIBERNATE 6 COMPATIBILITY!)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ Spring Boot 3.x uses Hibernate 6 which has STRICT type checking!
+
+❌ WRONG - DATE/YEAR/MONTH functions in JPQL (Hibernate 6 incompatible):
+```java
+@Query("SELECT COUNT(u) FROM User u WHERE DATE(u.createdAt) = CURRENT_DATE")
+long countUsersCreatedToday();  // FAILS! Type comparison error
+
+@Query("SELECT u FROM User u WHERE YEAR(u.createdAt) = :year")
+List<User> findByYear(@Param("year") int year);  // FAILS!
+```
+
+✅ CORRECT - Use native queries for date functions:
+```java
+@Query(value = "SELECT COUNT(*) FROM users WHERE DATE(created_at) = CURRENT_DATE", nativeQuery = true)
+long countUsersCreatedToday();  // Works with native SQL
+
+@Query(value = "SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = :year", nativeQuery = true)
+List<User> findByYear(@Param("year") int year);  // Works with native SQL
+```
+
+✅ ALTERNATIVE - Use LocalDateTime range comparisons in JPQL:
+```java
+@Query("SELECT COUNT(u) FROM User u WHERE u.createdAt >= :startOfDay AND u.createdAt < :endOfDay")
+long countUsersCreatedOnDate(@Param("startOfDay") LocalDateTime start, @Param("endOfDay") LocalDateTime end);
+
+// Service layer calculates the range:
+LocalDateTime start = LocalDate.now().atStartOfDay();
+LocalDateTime end = start.plusDays(1);
+repository.countUsersCreatedOnDate(start, end);
+```
+
+RULE: For date part extraction (DATE, YEAR, MONTH), use nativeQuery = true!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 7C: REPOSITORY METHODS MUST MATCH ENTITY FIELDS!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ Repository methods auto-generate queries based on field names!
+
+❌ WRONG - Method references field that doesn't exist:
+```java
+// User entity has: enabled (boolean)
+// But repository has:
+List<User> findByIsActive(boolean active);  // FAILS! No 'isActive' field!
+long countByIsActive(boolean active);       // FAILS! No 'isActive' field!
+```
+
+✅ CORRECT - Method matches actual entity field:
+```java
+// User entity has: enabled (boolean)
+List<User> findByEnabled(boolean enabled);  // Works! Matches 'enabled' field
+long countByEnabled(boolean enabled);       // Works!
+```
+
+BEFORE ADDING REPOSITORY METHODS:
+1. Check the Entity class for exact field names
+2. Use those exact names in findBy/countBy methods
+3. For boolean fields: findByEnabled NOT findByIsEnabled (unless field is named isEnabled)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 8: VERIFY SERVICE REQUIREMENTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 For Service classes:
@@ -557,11 +618,87 @@ For Service classes:
 - All dependencies are injected through constructor
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 9: VERIFY ENUM IS SEPARATE FILE
+STEP 8B: AVOID DUPLICATE @BEAN DEFINITIONS (CRITICAL!)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ DUPLICATE BEANS CAUSE APPLICATION STARTUP FAILURES!
+
+❌ WRONG - Same bean defined in multiple config classes:
+```java
+// CorsConfig.java
+@Configuration
+public class CorsConfig {
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() { ... }  // DUPLICATE!
+}
+
+// SecurityConfig.java
+@Configuration
+public class SecurityConfig {
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() { ... }  // DUPLICATE!
+}
+```
+
+✅ CORRECT - Define each bean ONLY ONCE:
+```java
+// SecurityConfig.java - CORS bean defined only here
+@Configuration
+public class SecurityConfig {
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOrigins(Arrays.asList("*"));
+        config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE"));
+        config.setAllowedHeaders(Arrays.asList("*"));
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
+    }
+}
+
+// CorsConfig.java - No duplicate bean, just additional config if needed
+@Configuration
+public class CorsConfig {
+    // Do NOT define corsConfigurationSource here - it's in SecurityConfig!
+}
+```
+
+RULE: Search existing config classes before adding @Bean methods!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 9: VERIFY ENUM IS SEPARATE FILE (CRITICAL!)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ INNER ENUMS CAUSE BUILD FAILURES - NEVER USE THEM!
+
+❌ WRONG - Inner enum inside Entity class:
+```java
+// User.java
+public class User {
+    public enum Role { USER, ADMIN }    // INNER ENUM - CAUSES PROBLEMS!
+    private Role role;
+}
+// Service uses User.Role - confusing and error-prone
+```
+
+✅ CORRECT - Separate enum file:
+```java
+// enums/UserRole.java
+public enum UserRole { USER, ADMIN, MODERATOR }
+
+// User.java
+public class User {
+    @Enumerated(EnumType.STRING)
+    private UserRole role;    // Uses external enum
+}
+// Service uses UserRole directly - clear and consistent
+```
+
+RULES:
 - NEVER create enum inside another class
-- Each enum must be in its own .java file
-- Enum file goes in model/ or enums/ package
+- Each enum MUST be in its own .java file
+- Enum file goes in model/enums/ or enums/ package
+- ALL files referencing enum use: import ...enums.UserRole;
+- NEVER use ClassName.EnumName pattern (e.g., User.Role)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 10: DTO MUST BE FLAT (NO NESTED CLASSES)
@@ -644,13 +781,56 @@ For each import in your code:
 - If importing User type → User MUST be defined in types file
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 5: VERIFY EXPORT MATCHES IMPORT STYLE
+STEP 5: VERIFY EXPORT MATCHES IMPORT STYLE (CRITICAL!)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-For each export/import:
-- default export → import Button from './Button'
-- named export → import { Button } from './Button'
-- Check context to see which style the file uses
-- NEVER mix: import { Button } when it's default export
+⚠️ EXPORT/IMPORT MISMATCH IS THE #1 BUILD ERROR - BE VERY CAREFUL!
+
+FOR REACT/VITE PROJECTS - ALWAYS USE DEFAULT EXPORTS FOR COMPONENTS:
+❌ WRONG - Named export but imported as default:
+```tsx
+// Component.tsx
+export function Component() { ... }    // Named export
+
+// App.tsx
+import Component from './Component'    // FAILS! Expects default export
+```
+
+✅ CORRECT - Use default export for components:
+```tsx
+// Component.tsx
+export default function Component() { ... }    // Default export
+
+// App.tsx
+import Component from './Component'    // Works!
+```
+
+FOR PAGE COMPONENTS - ALWAYS USE DEFAULT EXPORT:
+```tsx
+// pages/HomePage.tsx
+export default function HomePage() {
+  return <div>Home</div>
+}
+
+// pages/auth/LoginPage.tsx
+export default function LoginPage() {
+  return <div>Login</div>
+}
+```
+
+FOR LAYOUT COMPONENTS - ALWAYS USE DEFAULT EXPORT:
+```tsx
+// components/Layout.tsx
+export default function Layout() {
+  return <div><Outlet /></div>
+}
+```
+
+RULES:
+- ALL page components: export default function PageName()
+- ALL layout components: export default function LayoutName()
+- ALL reusable components: export default function ComponentName()
+- Services/Utils can use named exports: export const api = ...
+- Types/Interfaces use named exports: export interface User { ... }
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 6: VERIFY PROPS INTERFACE
@@ -1573,6 +1753,40 @@ ALL PROJECTS MUST RUN IN DOCKER:
 - Use Alpine images for smaller size
 - Include health checks
 
+⚠️ .DOCKERIGNORE RULES (CRITICAL - BUILD FAILURES IF WRONG!):
+NEVER exclude these config files - they are required during Docker build:
+❌ WRONG - Excluding build config files:
+```
+# .dockerignore
+tailwind.config.js    # BREAKS Tailwind CSS generation!
+postcss.config.js     # BREAKS PostCSS processing!
+vite.config.ts        # BREAKS Vite build!
+tsconfig.json         # BREAKS TypeScript compilation!
+```
+
+✅ CORRECT - Only exclude non-essential files:
+```
+# .dockerignore
+node_modules
+dist
+.git
+.env.local
+*.md
+coverage
+__tests__
+*.test.ts
+*.spec.ts
+```
+
+REQUIRED FILES THAT MUST BE COPIED IN DOCKER BUILD:
+- package.json (dependencies)
+- tailwind.config.js (Tailwind content paths)
+- postcss.config.js (PostCSS plugins)
+- vite.config.ts (Vite configuration)
+- tsconfig.json (TypeScript config)
+- index.html (entry point)
+- src/ directory (source code)
+
 DOCKER-COMPOSE NETWORK RULES (CRITICAL!):
 - NEVER use hardcoded subnets or IPAM configuration
 - Let Docker automatically assign IP ranges
@@ -1599,6 +1813,114 @@ Or even simpler (Docker creates default network):
 ```yaml
 # No networks section needed - Docker handles it automatically
 ```
+
+═══════════════════════════════════════════════════════════════════════════════
+              🐳 DOCKERFILE BASE IMAGE RULES (CRITICAL!)
+═══════════════════════════════════════════════════════════════════════════════
+
+⚠️ USE CORRECT BASE IMAGES - WRONG IMAGES CAUSE BUILD FAILURES!
+
+JAVA/SPRING BOOT:
+❌ WRONG - openjdk images are deprecated/unavailable:
+```dockerfile
+FROM openjdk:17-slim        # DOES NOT EXIST!
+FROM openjdk:17-jdk-slim    # MAY NOT EXIST!
+```
+
+✅ CORRECT - Use Eclipse Temurin (official OpenJDK distribution):
+```dockerfile
+# For build stage
+FROM maven:3.8.4-openjdk-17-slim AS build
+
+# For runtime stage
+FROM eclipse-temurin:17-jre        # Recommended for runtime
+FROM eclipse-temurin:17-jdk-slim   # If you need full JDK
+```
+
+NODE.JS/FRONTEND:
+✅ CORRECT base images:
+```dockerfile
+FROM node:20-alpine    # Lightweight, recommended
+FROM node:20-slim      # Alternative
+```
+
+PYTHON:
+✅ CORRECT base images:
+```dockerfile
+FROM python:3.11-slim      # Recommended
+FROM python:3.11-alpine    # Smallest size
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+              📦 FRONTEND BUILD RULES (CRITICAL!)
+═══════════════════════════════════════════════════════════════════════════════
+
+NPM COMMANDS:
+❌ WRONG - npm ci requires package-lock.json:
+```dockerfile
+RUN npm ci    # FAILS if no package-lock.json!
+```
+
+✅ CORRECT - Use npm install for generated projects:
+```dockerfile
+RUN npm install    # Works without package-lock.json
+```
+
+TYPESCRIPT BUILD:
+❌ WRONG - tsc before vite fails on TS errors:
+```json
+"build": "tsc && vite build"    # FAILS on type errors!
+```
+
+✅ CORRECT - Vite handles TypeScript:
+```json
+"build": "vite build"    # Vite compiles TS internally
+```
+
+TAILWIND CSS:
+❌ WRONG - Using undefined custom classes:
+```css
+@apply border-border;    /* border-border is NOT a standard Tailwind class! */
+```
+
+✅ CORRECT - Use only standard Tailwind classes:
+```css
+@apply border-gray-200;    /* Standard Tailwind class */
+```
+
+⚠️ TAILWIND PLUGINS - MUST BE INSTALLED IN package.json!
+❌ WRONG - Using plugins that aren't installed:
+```javascript
+// tailwind.config.js
+plugins: [
+    require('@tailwindcss/forms'),      // NOT in package.json!
+    require('@tailwindcss/typography'), // NOT in package.json!
+]
+```
+
+✅ CORRECT - Either install plugins OR don't use them:
+Option 1: Don't use plugins (simpler):
+```javascript
+// tailwind.config.js
+plugins: [],  // Empty - no extra plugins needed
+```
+
+Option 2: If using plugins, add to package.json:
+```json
+// package.json
+"devDependencies": {
+    "tailwindcss": "^3.3.5",
+    "@tailwindcss/forms": "^0.5.7",      // MUST be installed!
+    "@tailwindcss/typography": "^0.5.10" // MUST be installed!
+}
+```
+
+RULE: Every require() in tailwind.config.js MUST have matching package in package.json!
+
+TSCONFIG FILES:
+⚠️ If tsconfig.json references other files, CREATE THEM:
+- If tsconfig.json has: "references": [{ "path": "./tsconfig.node.json" }]
+- You MUST create tsconfig.node.json file!
 
 PORT ALLOCATION RULES (CRITICAL - AVOID CONFLICTS!):
 System services and common apps already use certain ports. NEVER use these host ports:
