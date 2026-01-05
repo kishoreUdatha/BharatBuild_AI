@@ -1500,7 +1500,21 @@ class UnifiedStorageService:
                     content = file_record.content_inline
                     logger.debug(f"[RestoreLocal] Using inline content for {file_record.path} ({len(content)} bytes)")
                 else:
-                    logger.warning(f"[RestoreLocal] No s3_key or content_inline for {file_record.path}")
+                    # FALLBACK: Try to construct S3 key from project_id and path
+                    # This handles cases where s3_key wasn't saved but file exists in S3
+                    fallback_s3_key = f"projects/{project_id}/{file_record.path}"
+                    logger.info(f"[RestoreLocal] No s3_key in DB, trying fallback: {fallback_s3_key}")
+                    try:
+                        content_bytes = await storage_service.download_file(fallback_s3_key)
+                        if content_bytes:
+                            content = content_bytes.decode('utf-8')
+                            logger.info(f"[RestoreLocal] Fallback S3 download succeeded for {file_record.path} ({len(content)} bytes)")
+                            # Update the database record with the correct s3_key for future restores
+                            file_record.s3_key = fallback_s3_key
+                        else:
+                            logger.warning(f"[RestoreLocal] Fallback S3 download returned empty for {file_record.path}")
+                    except Exception as fallback_err:
+                        logger.warning(f"[RestoreLocal] No s3_key or content_inline for {file_record.path}, fallback also failed: {fallback_err}")
 
                 if content:
                     file_path = target_path / file_record.path
@@ -1656,10 +1670,12 @@ class UnifiedStorageService:
             logger.info(f"[RemoteRestore] Found {len(file_records)} files in DB, {len(files_with_s3)} have S3 keys")
 
             if not files_with_s3:
-                logger.error(f"[RemoteRestore] No files have S3 keys! Files were not uploaded to S3.")
-                return []
+                # FALLBACK: Try S3 sync anyway - files might exist in S3 even if s3_key not saved in DB
+                # This handles cases where file upload succeeded but DB update failed
+                logger.warning(f"[RemoteRestore] No files have S3 keys in DB, but will try S3 sync anyway (files may exist in S3)")
+                # Don't return early - proceed with S3 sync
 
-            logger.info(f"[RemoteRestore] Restoring {len(files_with_s3)} files to {workspace_path}")
+            logger.info(f"[RemoteRestore] Restoring files to {workspace_path} (DB has {len(files_with_s3)} with keys, will sync all from S3)")
             logger.debug(f"[RemoteRestore] Sample S3 keys: {[f.s3_key for f in files_with_s3[:3]]}")
 
             # =============================================================
