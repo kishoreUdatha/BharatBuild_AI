@@ -488,10 +488,12 @@ async def execute_fix_with_notification(
 
                 # Config files that should NOT be synced to running containers
                 # These files cause Vite/build tool restarts when changed
+                # NOTE: tsconfig.node.json and tsconfig.app.json are static reference
+                # configs that Vite doesn't watch - they SHOULD be synced for missing file fixes
                 CONFIG_FILES = {
                     'vite.config.ts', 'vite.config.js', 'vite.config.mjs',
                     'package.json', 'package-lock.json',
-                    'tsconfig.json', 'tsconfig.node.json', 'tsconfig.app.json',
+                    'tsconfig.json',  # Vite watches this, but NOT tsconfig.node.json/app.json
                     'postcss.config.js', 'postcss.config.cjs', 'postcss.config.mjs',
                     'tailwind.config.js', 'tailwind.config.ts',
                     '.env', '.env.local', '.env.production',
