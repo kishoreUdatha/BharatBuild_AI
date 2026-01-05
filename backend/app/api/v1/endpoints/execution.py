@@ -1179,7 +1179,11 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                         if sandbox_docker_host:
                             try:
                                 import docker
-                                docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+                                # TLS-enabled docker client
+                                from app.services.docker_client_helper import get_docker_client as get_tls_client
+                                docker_client = get_tls_client()
+                                if not docker_client:
+                                    docker_client = docker.DockerClient(base_url=sandbox_docker_host)
                                 container_name = f"bharatbuild_{effective_user_id}_{project_id}"
 
                                 # Check if container is running
