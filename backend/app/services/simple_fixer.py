@@ -852,13 +852,19 @@ class SimpleFixer:
             error_text += " " + err.get("message", "")
 
         # =================================================================
-        # STEP 0: Try deterministic config fix FIRST (before any classification)
-        # This handles tsconfig.node.json, postcss.config.js etc. without AI
+        # STEP 0: Try deterministic fixes FIRST (before any classification)
+        # This handles tsconfig.node.json, postcss.config.js, port conflicts etc. without AI
         # =================================================================
         config_fix_result = await self._try_deterministic_config_file_fix(project_path, error_text)
         if config_fix_result:
             logger.info(f"[SimpleFixer:{project_id}] Deterministic config file fix applied (early) - skipping AI")
             return config_fix_result
+
+        # Try port conflict fix
+        port_fix_result = await self._try_deterministic_port_fix(project_path, error_text, project_id)
+        if port_fix_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic port fix applied - skipping AI")
+            return port_fix_result
 
         error_category, category_reason = classify_error(error_text, context)
 
@@ -963,13 +969,19 @@ class SimpleFixer:
         }]
 
         # =================================================================
-        # STEP 0: Try deterministic config fix FIRST (before any classification)
-        # This handles tsconfig.node.json, postcss.config.js etc. without AI
+        # STEP 0: Try deterministic fixes FIRST (before any classification)
+        # This handles tsconfig.node.json, postcss.config.js, port conflicts etc. without AI
         # =================================================================
         config_fix_result = await self._try_deterministic_config_file_fix(project_path, combined_context)
         if config_fix_result:
             logger.info(f"[SimpleFixer:{project_id}] Deterministic config file fix applied (early) - skipping AI")
             return config_fix_result
+
+        # Try port conflict fix
+        port_fix_result = await self._try_deterministic_port_fix(project_path, combined_context, project_id)
+        if port_fix_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic port fix applied - skipping AI")
+            return port_fix_result
 
         # =================================================================
         # BOLT.NEW STYLE: Classify error by category FIRST
@@ -1062,6 +1074,14 @@ class SimpleFixer:
             if config_fix_result:
                 logger.info(f"[SimpleFixer:{project_id}] Deterministic config file fix applied - skipping AI")
                 return config_fix_result
+
+            # =================================================================
+            # STEP 0e: Try deterministic port conflict fix (fast, free, no AI)
+            # =================================================================
+            port_fix_result = await self._try_deterministic_port_fix(project_path, error_text, project_id)
+            if port_fix_result:
+                logger.info(f"[SimpleFixer:{project_id}] Deterministic port fix applied - skipping AI")
+                return port_fix_result
 
             # COST OPTIMIZATION #2: Select model based on complexity
             model = self._select_model(complexity)
@@ -2434,6 +2454,136 @@ export default App''',
         logger.info(f"[SimpleFixer] No deterministic config fix matched")
         return None
 
+    async def _try_deterministic_port_fix(
+        self,
+        project_path: Path,
+        error_text: str,
+        project_id: Optional[str] = None
+    ) -> Optional[SimpleFixResult]:
+        """
+        Deterministically fix port conflict errors (no AI needed).
+
+        Handles EADDRINUSE errors by changing the port in vite.config.ts/js.
+        Tries ports 5174, 5175, 5176, etc. until finding an available one.
+        """
+        # Port conflict patterns
+        port_patterns = [
+            r'EADDRINUSE.*:(\d+)',
+            r'port (\d+) is already in use',
+            r'address already in use.*:(\d+)',
+            r'listen EADDRINUSE.*:(\d+)',
+            r'Error: listen EADDRINUSE',
+        ]
+
+        # Check if this is a port conflict error
+        conflicting_port = None
+        for pattern in port_patterns:
+            match = re.search(pattern, error_text, re.IGNORECASE)
+            if match:
+                if match.groups():
+                    conflicting_port = int(match.group(1))
+                else:
+                    conflicting_port = 5173  # Default Vite port
+                logger.info(f"[SimpleFixer] Port conflict detected: {conflicting_port}")
+                break
+
+        if not conflicting_port:
+            return None
+
+        # Find vite.config.ts or vite.config.js
+        vite_config_paths = [
+            project_path / 'vite.config.ts',
+            project_path / 'vite.config.js',
+            project_path / 'vite.config.mjs',
+            project_path / 'frontend' / 'vite.config.ts',
+            project_path / 'frontend' / 'vite.config.js',
+            project_path / 'frontend' / 'vite.config.mjs',
+        ]
+
+        vite_config = None
+        for path in vite_config_paths:
+            if path.exists():
+                vite_config = path
+                break
+
+        if not vite_config:
+            logger.warning(f"[SimpleFixer] Port conflict detected but no vite.config found")
+            return None
+
+        try:
+            content = vite_config.read_text(encoding='utf-8')
+            original_content = content
+
+            # Calculate new port (increment by 1)
+            new_port = conflicting_port + 1
+            if new_port > 5180:
+                new_port = 5174  # Reset to 5174 if we've gone too high
+
+            # Check if server config already exists
+            if 'server:' in content or 'server :' in content:
+                # Server config exists, update the port
+                # Pattern 1: port: 5173
+                content = re.sub(
+                    r'port\s*:\s*\d+',
+                    f'port: {new_port}',
+                    content
+                )
+                # If no port was in server config, add it
+                if f'port: {new_port}' not in content and 'port:' not in content:
+                    # Add port to existing server config
+                    content = re.sub(
+                        r'(server\s*:\s*\{)',
+                        f'\\1\n    port: {new_port},',
+                        content
+                    )
+            else:
+                # No server config, add it
+                # Look for defineConfig({ and add server config after plugins
+                if 'plugins:' in content:
+                    content = re.sub(
+                        r'(plugins\s*:\s*\[[^\]]*\]\s*,?)',
+                        f'''\\1
+  server: {{
+    port: {new_port},
+    host: true,
+  }},''',
+                        content,
+                        count=1
+                    )
+                else:
+                    # Add before closing of defineConfig
+                    content = re.sub(
+                        r'(defineConfig\s*\(\s*\{)',
+                        f'''\\1
+  server: {{
+    port: {new_port},
+    host: true,
+  }},''',
+                        content,
+                        count=1
+                    )
+
+            if content != original_content:
+                vite_config.write_text(content, encoding='utf-8')
+                rel_path = str(vite_config.relative_to(project_path))
+                logger.info(f"[SimpleFixer] ✓ Port conflict fixed: {conflicting_port} -> {new_port} in {rel_path}")
+
+                return SimpleFixResult(
+                    success=True,
+                    files_modified=[rel_path],
+                    message=f"Port conflict fixed: changed port from {conflicting_port} to {new_port}",
+                    patches_applied=1
+                )
+            else:
+                logger.warning(f"[SimpleFixer] Could not modify vite.config for port fix")
+                return None
+
+        except Exception as e:
+            logger.error(f"[SimpleFixer] Error fixing port conflict: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+
     async def fix(
         self,
         project_path: Path,
@@ -2484,6 +2634,14 @@ export default App''',
             if config_fix_result:
                 logger.info(f"[SimpleFixer] Deterministic config file fix applied - skipping AI")
                 return config_fix_result
+
+            # =================================================================
+            # STEP 0e: Try deterministic port conflict fix (fast, free, no AI)
+            # =================================================================
+            port_fix_result = await self._try_deterministic_port_fix(project_path, output)
+            if port_fix_result:
+                logger.info(f"[SimpleFixer] Deterministic port fix applied - skipping AI")
+                return port_fix_result
 
             # COST OPTIMIZATION #2: Classify error for model selection
             errors = [{"message": output[-2000:], "source": "terminal"}]

@@ -496,12 +496,15 @@ async def execute_fix_with_notification(
                     'tsconfig.json',  # Vite watches this, but NOT tsconfig.node.json/app.json
                     'postcss.config.js', 'postcss.config.cjs', 'postcss.config.mjs',
                     'tailwind.config.js', 'tailwind.config.ts',
-                    '.env', '.env.local', '.env.production',
                     'webpack.config.js', 'next.config.js', 'next.config.mjs',
                 }
 
+                # Environment files - sync to container but require restart
+                ENV_FILES = {'.env', '.env.local', '.env.production', '.env.development'}
+
                 config_files_modified = []
                 source_files_modified = []
+                env_files_modified = []
 
                 for file_path in result.files_modified:
                     try:
@@ -509,12 +512,14 @@ async def execute_fix_with_notification(
                         if full_path.exists():
                             content = full_path.read_text(encoding='utf-8', errors='ignore')
 
-                            # Check if this is a config file
+                            # Check if this is a config file or env file
                             file_name = Path(file_path).name
                             is_config_file = file_name in CONFIG_FILES
+                            is_env_file = file_name in ENV_FILES
 
-                            # STEP 1: Sync SOURCE files to RUNNING CONTAINER (for HMR)
+                            # STEP 1: Sync SOURCE files and ENV files to RUNNING CONTAINER
                             # SKIP config files - they cause restart loops
+                            # ENV files need restart but should be synced first
                             if IS_REMOTE_SANDBOX and user_id and not is_config_file:
                                 try:
                                     container_synced = await unified_storage._write_to_remote_sandbox(
@@ -525,7 +530,10 @@ async def execute_fix_with_notification(
                                     )
                                     if container_synced:
                                         logger.info(f"[ErrorHandler:{project_id}] ✓ Synced to CONTAINER: {file_path}")
-                                        source_files_modified.append(file_path)
+                                        if is_env_file:
+                                            env_files_modified.append(file_path)
+                                        else:
+                                            source_files_modified.append(file_path)
                                     else:
                                         logger.warning(f"[ErrorHandler:{project_id}] Container sync failed: {file_path}")
                                 except Exception as container_err:
@@ -606,6 +614,13 @@ async def execute_fix_with_notification(
             # STEP 5: Handle file changes
             # SOURCE files: HMR handles automatically - preview refreshes without restart
             # CONFIG files: Need container restart to apply (npm install, etc.)
+            # ENV files: Need container restart for process to pick up new env vars
+            if env_files_modified:
+                logger.info(f"[ErrorHandler:{project_id}] 🔧 ENV files fixed: {env_files_modified}")
+                logger.info(f"[ErrorHandler:{project_id}] Container restart required for .env changes")
+                # Treat env files same as config files - need restart
+                config_files_modified.extend(env_files_modified)
+
             if config_files_modified:
                 logger.info(f"[ErrorHandler:{project_id}] Config files fixed: {config_files_modified}")
 
