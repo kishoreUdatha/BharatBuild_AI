@@ -477,12 +477,25 @@ class ContainerManager:
         Connect to Docker with TLS support and graceful fallback.
 
         Tries multiple connection methods:
-        1. Remote Docker with TLS (production)
-        2. Remote Docker without TLS (development)
-        3. Local Docker socket
-        4. None (graceful degradation)
+        1. docker_client_helper (uses AWS Secrets Manager certs)
+        2. Remote Docker with TLS (production)
+        3. Remote Docker without TLS (development)
+        4. Local Docker socket
+        5. None (graceful degradation)
         """
-        # Try remote Docker host first
+        # Try docker_client_helper first (uses AWS Secrets Manager certs)
+        if docker_host:
+            try:
+                from app.services.docker_client_helper import get_docker_client as get_tls_client
+                client = get_tls_client()
+                if client:
+                    client.ping()
+                    logger.info("Connected to Docker via docker_client_helper (Secrets Manager TLS)")
+                    return client
+            except Exception as e:
+                logger.debug(f"docker_client_helper failed: {e}")
+
+        # Fallback: Try remote Docker host
         if docker_host:
             # Try with TLS if enabled
             if settings.DOCKER_TLS_ENABLED and os.path.exists(settings.DOCKER_TLS_CA_CERT):
