@@ -379,8 +379,12 @@ class DockerSandboxManager:
             try:
                 # Check if we should connect to remote Docker host (EC2 sandbox server)
                 if SANDBOX_DOCKER_HOST:
-                    logger.info(f"Connecting to remote Docker host: {SANDBOX_DOCKER_HOST}")
-                    self._client = docker.DockerClient(base_url=SANDBOX_DOCKER_HOST)
+                    # Try TLS-enabled docker client helper first
+                    from app.services.docker_client_helper import get_docker_client as get_tls_client
+                    self._client = get_tls_client()
+                    if not self._client:
+                        logger.info(f"Connecting to remote Docker host: {SANDBOX_DOCKER_HOST}")
+                        self._client = docker.DockerClient(base_url=SANDBOX_DOCKER_HOST)
                 else:
                     # Local Docker - try multiple connection methods
                     import platform
