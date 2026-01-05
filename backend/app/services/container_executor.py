@@ -4896,7 +4896,11 @@ fi
 
             # Remote sandbox - use Docker to clear the cache
             import docker
-            docker_client = docker.DockerClient(base_url=sandbox_docker_host, timeout=30)
+            # TLS-enabled docker client
+            from app.services.docker_client_helper import get_docker_client as get_tls_client
+            docker_client = get_tls_client(timeout=30)
+            if not docker_client:
+                docker_client = docker.DockerClient(base_url=sandbox_docker_host, timeout=30)
 
             sandbox_base = _get_sandbox_base()
             workspace_path = f"{sandbox_base}/{user_id}/{project_id}"
@@ -4931,7 +4935,11 @@ fi
                 return True
 
             import docker
-            docker_client = docker.DockerClient(base_url=sandbox_docker_host, timeout=60)
+            # TLS-enabled docker client
+            from app.services.docker_client_helper import get_docker_client as get_tls_client
+            docker_client = get_tls_client(timeout=60)
+            if not docker_client:
+                docker_client = docker.DockerClient(base_url=sandbox_docker_host, timeout=60)
             sandbox_base = _get_sandbox_base()
             workspace_path = f"{sandbox_base}/{user_id}/{project_id}"
 

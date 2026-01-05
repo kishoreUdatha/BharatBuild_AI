@@ -110,7 +110,11 @@ async def get_sandbox_connection_health(
         try:
             import docker
             start = time.time()
-            client = docker.DockerClient(base_url=sandbox_docker_host, timeout=10)
+            # TLS-enabled docker client
+            from app.services.docker_client_helper import get_docker_client as get_tls_client
+            client = get_tls_client(timeout=10)
+            if not client:
+                client = docker.DockerClient(base_url=sandbox_docker_host, timeout=10)
             version = client.version()
             api_latency = (time.time() - start) * 1000
 
@@ -300,7 +304,11 @@ async def _list_ec2_sandboxes(
     sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
 
     try:
-        client = docker.DockerClient(base_url=sandbox_docker_host, timeout=10)
+        # TLS-enabled docker client
+            from app.services.docker_client_helper import get_docker_client as get_tls_client
+            client = get_tls_client(timeout=10)
+            if not client:
+                client = docker.DockerClient(base_url=sandbox_docker_host, timeout=10)
         all_containers = client.containers.list(all=True)
     except Exception as e:
         logger.error(f"Failed to connect to EC2 Docker: {e}")
@@ -587,7 +595,11 @@ async def _get_ec2_sandbox_stats():
     sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
 
     try:
-        client = docker.DockerClient(base_url=sandbox_docker_host, timeout=10)
+        # TLS-enabled docker client
+            from app.services.docker_client_helper import get_docker_client as get_tls_client
+            client = get_tls_client(timeout=10)
+            if not client:
+                client = docker.DockerClient(base_url=sandbox_docker_host, timeout=10)
         all_containers = client.containers.list(all=True)
     except Exception as e:
         logger.error(f"Failed to connect to EC2 Docker for stats: {e}")
