@@ -1615,42 +1615,50 @@ class UnifiedStorageService:
         # Track restore success - CRITICAL for returning correct result
         restore_successful = False
 
+        # Try to create Docker client (may fail if TLS required but not configured)
+        docker_client = None
+        try:
+            from app.services.docker_client_helper import get_docker_client
+            docker_client = get_docker_client(timeout=30)
+        except Exception as docker_init_err:
+            logger.warning(f"[RemoteRestore] Docker client init failed: {docker_init_err}, will use SSM restore")
+
         try:
             # Quick check if project already exists on EC2 (skip restore if cached)
-            docker_client = docker.DockerClient(base_url=sandbox_docker_host)
-            try:
-                # FIXED: Use recursive file count (excluding node_modules) instead of top-level ls
-                # Old: ls | wc -l only counted top-level items (4-5 for typical project)
-                # New: find -type f counts all actual files recursively
-                check_output = docker_client.containers.run(
-                    "alpine:latest",
-                    ["-c", f"find {workspace_path} -type f ! -path '*/node_modules/*' 2>/dev/null | wc -l"],
-                    entrypoint="/bin/sh",
-                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},  # Use sandbox_base for EFS support
-                    remove=True,
-                    detach=False
-                )
-                file_count = int(check_output.decode().strip() or "0")
-                if file_count > 3:  # Project has files, skip S3 restore (preserves auto-fixer changes!)
-                    logger.info(f"[RemoteRestore] Project cached on EC2 ({file_count} files), SKIPPING S3 restore")
-                    # =============================================================
-                    # CACHED PROJECT - Use existing EC2 files WITHOUT modifications
-                    # =============================================================
-                    # WHY: Preserve auto-fixer changes between runs
-                    # - JSON sanitization, Dockerfile fixes, Vite fixes were removed
-                    # - These fixes only run during FIRST S3 restore (see below)
-                    # - If issues exist, auto-fixer will handle them during build
-                    # =============================================================
+            if docker_client:
+                try:
+                    # FIXED: Use recursive file count (excluding node_modules) instead of top-level ls
+                    # Old: ls | wc -l only counted top-level items (4-5 for typical project)
+                    # New: find -type f counts all actual files recursively
+                    check_output = docker_client.containers.run(
+                        "alpine:latest",
+                        ["-c", f"find {workspace_path} -type f ! -path '*/node_modules/*' 2>/dev/null | wc -l"],
+                        entrypoint="/bin/sh",
+                        volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},  # Use sandbox_base for EFS support
+                        remove=True,
+                        detach=False
+                    )
+                    file_count = int(check_output.decode().strip() or "0")
+                    if file_count > 3:  # Project has files, skip S3 restore (preserves auto-fixer changes!)
+                        logger.info(f"[RemoteRestore] Project cached on EC2 ({file_count} files), SKIPPING S3 restore")
+                        # =============================================================
+                        # CACHED PROJECT - Use existing EC2 files WITHOUT modifications
+                        # =============================================================
+                        # WHY: Preserve auto-fixer changes between runs
+                        # - JSON sanitization, Dockerfile fixes, Vite fixes were removed
+                        # - These fixes only run during FIRST S3 restore (see below)
+                        # - If issues exist, auto-fixer will handle them during build
+                        # =============================================================
 
-                    # Return file info from DB without re-downloading or modifying
-                    async with AsyncSessionLocal() as session:
-                        result = await session.execute(
-                            select(ProjectFile).where(cast(ProjectFile.project_id, SQLString(36)) == str(UUID(project_id))).where(ProjectFile.is_folder == False)
-                        )
-                        file_records = result.scalars().all()
-                    return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in file_records]
-            except Exception as check_err:
-                logger.debug(f"[RemoteRestore] Cache check failed, proceeding with restore: {check_err}")
+                        # Return file info from DB without re-downloading or modifying
+                        async with AsyncSessionLocal() as session:
+                            result = await session.execute(
+                                select(ProjectFile).where(cast(ProjectFile.project_id, SQLString(36)) == str(UUID(project_id))).where(ProjectFile.is_folder == False)
+                            )
+                            file_records = result.scalars().all()
+                        return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in file_records]
+                except Exception as check_err:
+                    logger.debug(f"[RemoteRestore] Cache check failed, proceeding with restore: {check_err}")
 
             project_uuid = str(UUID(project_id))
             logger.info(f"[RemoteRestore] Querying database for project: {project_uuid}")
