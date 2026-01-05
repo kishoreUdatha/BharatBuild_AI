@@ -851,6 +851,15 @@ class SimpleFixer:
         for err in errors:
             error_text += " " + err.get("message", "")
 
+        # =================================================================
+        # STEP 0: Try deterministic config fix FIRST (before any classification)
+        # This handles tsconfig.node.json, postcss.config.js etc. without AI
+        # =================================================================
+        config_fix_result = await self._try_deterministic_config_file_fix(project_path, error_text)
+        if config_fix_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic config file fix applied (early) - skipping AI")
+            return config_fix_result
+
         error_category, category_reason = classify_error(error_text, context)
 
         # Try specialized handler first
@@ -952,6 +961,15 @@ class SimpleFixer:
             "line": error_line,
             "severity": "error"
         }]
+
+        # =================================================================
+        # STEP 0: Try deterministic config fix FIRST (before any classification)
+        # This handles tsconfig.node.json, postcss.config.js etc. without AI
+        # =================================================================
+        config_fix_result = await self._try_deterministic_config_file_fix(project_path, combined_context)
+        if config_fix_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic config file fix applied (early) - skipping AI")
+            return config_fix_result
 
         # =================================================================
         # BOLT.NEW STYLE: Classify error by category FIRST
