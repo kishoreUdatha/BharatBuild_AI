@@ -35,6 +35,7 @@ from app.services.unified_storage import unified_storage
 from app.services.sandbox_cleanup import touch_project
 from app.services.log_bus import get_log_bus
 from app.services.container_executor import container_executor
+from app.services.simple_fixer import classify_error, ErrorCategory
 
 # Store running processes by project_id for stop functionality
 _running_processes: dict[str, asyncio.subprocess.Process] = {}
@@ -463,6 +464,21 @@ async def fix_runtime_error(
 
         # Merge file contents from LogBus payload
         file_contents.update(fixer_payload.get("fileContext", {}))
+
+        # ========== SYSTEM ERROR CHECK ==========
+        # Check if this is a PLATFORM/SYSTEM error that AI cannot fix
+        error_category, error_reason = classify_error(request.error_message or "")
+
+        if error_category == ErrorCategory.NETWORK and error_reason.startswith("SYSTEM:"):
+            logger.warning(f"[Execution] ⚠️ SYSTEM ERROR detected: {error_reason}")
+            logger.warning(f"[Execution] Skipping AI fixer - this is a platform error, not a code issue")
+            return {
+                "success": False,
+                "error": f"Platform error (not fixable by AI): {error_reason}",
+                "system_error": True,
+                "fixed_files": [],
+                "suggestion": "This is an internal platform error. The AI fixer cannot fix platform issues like missing Docker images, project restore failures, or sandbox connectivity problems. Please try regenerating the project or contact support."
+            }
 
         # Prepare context for fixer agent (Bolt.new style)
         context = AgentContext(

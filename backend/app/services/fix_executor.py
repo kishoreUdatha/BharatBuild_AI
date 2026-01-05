@@ -78,6 +78,7 @@ def _record_fix_attempt(project_id: str):
 from app.modules.agents.production_fixer_agent import production_fixer_agent
 from app.modules.agents.base_agent import AgentContext
 from app.modules.automation.context_engine import ContextEngine
+from app.services.simple_fixer import classify_error, ErrorCategory
 from app.services.unified_storage import UnifiedStorageService as UnifiedStorageManager
 from app.services.restart_manager import restart_project
 from app.core.config import settings
@@ -281,6 +282,23 @@ async def execute_fix_internal(project_id: str, log_payload: Dict[str, Any]) -> 
                 "error": "No errors to fix",
                 "patches_applied": 0,
                 "files_modified": []
+            }
+
+        # ========== SYSTEM ERROR CHECK ==========
+        # Check if this is a PLATFORM/SYSTEM error that AI cannot fix
+        # These are internal BharatBuild errors, not user code issues
+        error_category, error_reason = classify_error(error_description)
+
+        if error_category == ErrorCategory.NETWORK and error_reason.startswith("SYSTEM:"):
+            logger.warning(f"[FixExecutor:{project_id}] ⚠️ SYSTEM ERROR detected: {error_reason}")
+            logger.warning(f"[FixExecutor:{project_id}] Skipping AI fixer - this is a platform error, not a code issue")
+            return {
+                "success": False,
+                "error": f"Platform error (not fixable by AI): {error_reason}",
+                "system_error": True,
+                "patches_applied": 0,
+                "files_modified": [],
+                "reason": "This is an internal platform error. The AI fixer cannot fix platform issues like missing Docker images, project restore failures, or sandbox connectivity problems. Please try regenerating the project or contact support."
             }
 
         # ========== BUILD FILE CONTEXT FROM CONTEXT ENGINE ==========
