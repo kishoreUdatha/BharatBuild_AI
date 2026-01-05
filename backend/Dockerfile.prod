@@ -54,12 +54,19 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     gnupg \
     lsb-release \
+    unzip \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
     && apt-get update \
     && apt-get install -y docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
+
+# Install AWS CLI (for fetching Docker TLS certs from Secrets Manager)
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install && \
+    rm -rf awscliv2.zip aws
 
 # Copy requirements first for caching
 COPY requirements.prod.txt .
@@ -72,7 +79,7 @@ RUN pip install --upgrade pip setuptools wheel && \
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p uploads temp generated logs user_projects
+RUN mkdir -p uploads temp generated logs user_projects /certs
 
 # Copy and setup entrypoint script for automatic migrations
 COPY scripts/entrypoint.sh /entrypoint.sh
