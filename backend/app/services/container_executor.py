@@ -6374,7 +6374,11 @@ echo "Done"
                         yield f"__ERROR__:Server startup timeout after {timeout_seconds}s\n"
                         log_bus.add_docker_error(f"Server startup timeout after {timeout_seconds}s")
                         break
-                    # Send keepalive
+                    # Server is ready - stop the keepalive loop (BUG FIX: was looping forever)
+                    if server_started:
+                        logger.info(f"[ContainerExecutor] Server ready, stopping log monitor loop")
+                        break
+                    # Send keepalive (only if server not yet started)
                     yield f"  ⏳ Waiting for server... ({int(elapsed)}s)\n"
                     continue
 
