@@ -41,6 +41,96 @@ from app.core.logging_config import logger
 
 router = APIRouter(prefix="/preview", tags=["Preview Proxy"])
 
+
+# =============================================================================
+# RESPONSE REWRITING - Fix absolute paths in HTML/JS for path-based proxying
+# =============================================================================
+
+def rewrite_absolute_paths(content: bytes, project_id: str, content_type: str) -> bytes:
+    """
+    Rewrite absolute paths in HTML/JS responses to include the preview prefix.
+
+    Vite dev server generates absolute paths like:
+    - /@vite/client
+    - /src/main.tsx
+    - /node_modules/.vite/deps/react.js
+
+    These need to be rewritten to:
+    - /api/v1/preview/{project_id}/@vite/client
+    - /api/v1/preview/{project_id}/src/main.tsx
+    - etc.
+    """
+    if not content:
+        return content
+
+    # Only rewrite HTML and JavaScript content
+    is_html = 'text/html' in content_type
+    is_js = 'javascript' in content_type or 'application/json' in content_type
+
+    if not (is_html or is_js):
+        return content
+
+    try:
+        text = content.decode('utf-8')
+    except UnicodeDecodeError:
+        return content  # Binary content, don't modify
+
+    prefix = f"/api/v1/preview/{project_id}"
+
+    # Patterns to rewrite (order matters - more specific first)
+    rewrites = [
+        # Vite HMR client
+        ('src="/@vite/', f'src="{prefix}/@vite/'),
+        ("src='/@vite/", f"src='{prefix}/@vite/"),
+        ('"/@vite/', f'"{prefix}/@vite/'),
+        ("'/@vite/", f"'{prefix}/@vite/"),
+
+        # React refresh
+        ('src="/@react-refresh', f'src="{prefix}/@react-refresh'),
+        ("src='/@react-refresh", f"src='{prefix}/@react-refresh"),
+        ('"/@react-refresh', f'"{prefix}/@react-refresh'),
+        ("'/@react-refresh", f"'{prefix}/@react-refresh"),
+
+        # Node modules (Vite deps)
+        ('"/node_modules/', f'"{prefix}/node_modules/'),
+        ("'/node_modules/", f"'{prefix}/node_modules/"),
+        ('from "/node_modules/', f'from "{prefix}/node_modules/'),
+        ("from '/node_modules/", f"from '{prefix}/node_modules/"),
+
+        # Source files
+        ('src="/src/', f'src="{prefix}/src/'),
+        ("src='/src/", f"src='{prefix}/src/"),
+        ('href="/src/', f'href="{prefix}/src/'),
+        ("href='/src/", f"href='{prefix}/src/"),
+        ('from "/src/', f'from "{prefix}/src/'),
+        ("from '/src/", f"from '{prefix}/src/"),
+        ('"/src/', f'"{prefix}/src/'),
+        ("'/src/", f"'{prefix}/src/"),
+
+        # Generic absolute paths in imports (be careful not to match URLs)
+        # Only match paths that start with / but not //
+    ]
+
+    for old, new in rewrites:
+        text = text.replace(old, new)
+
+    # Special handling for HTML script/link tags with absolute paths
+    if is_html:
+        import re
+        # Match src="/" or href="/" but not src="//" (URLs)
+        text = re.sub(
+            r'(src|href)="(/(?!/)[^"]*)"',
+            lambda m: f'{m.group(1)}="{prefix}{m.group(2)}"' if not m.group(2).startswith(prefix) else m.group(0),
+            text
+        )
+        text = re.sub(
+            r"(src|href)='(/(?!/)[^']*)'",
+            lambda m: f"{m.group(1)}='{prefix}{m.group(2)}'" if not m.group(2).startswith(prefix) else m.group(0),
+            text
+        )
+
+    return text.encode('utf-8')
+
 # Check if using remote Docker (EC2 sandbox)
 SANDBOX_DOCKER_HOST = os.environ.get("SANDBOX_DOCKER_HOST", "")
 IS_REMOTE_DOCKER = bool(SANDBOX_DOCKER_HOST)
@@ -505,8 +595,15 @@ async def proxy_preview(project_id: str, path: str, request: Request):
         response_headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
         response_headers['Access-Control-Allow-Headers'] = '*'
 
+        # Rewrite absolute paths in HTML/JS responses to include preview prefix
+        content_type = response.headers.get('content-type', '')
+        content = response.content
+        if content_type and ('text/html' in content_type or 'javascript' in content_type):
+            content = rewrite_absolute_paths(content, project_id, content_type)
+            logger.debug(f"[Preview] Rewrote absolute paths in {content_type} response for {project_id}")
+
         return Response(
-            content=response.content,
+            content=content,
             status_code=response.status_code,
             headers=response_headers,
             media_type=response.headers.get('content-type')

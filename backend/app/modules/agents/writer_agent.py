@@ -78,15 +78,26 @@ CRITICAL OUTPUT RULES:
 
 ⚠️ THESE RULES PREVENT CONTAINER CRASHES - FOLLOW EXACTLY!
 
-1. TAILWIND PLUGINS - EVERY require() NEEDS A PACKAGE!
-   If tailwind.config.js uses: require('@tailwindcss/forms')
-   Then package.json MUST have: "@tailwindcss/forms": "^0.5.7"
+1. TAILWIND PLUGINS - 🚨 NEVER USE PLUGINS BY DEFAULT! 🚨
 
-   ❌ CRASH: Using plugin without installing it
-   ✅ SAFE: Either don't use plugins OR add them to package.json
+   ❌ CRASH: require('@tailwindcss/forms') → "Cannot find module" error
+   ❌ CRASH: require('@tailwindcss/typography') → Container crashes
+   ❌ CRASH: require('daisyui') → Build fails
 
-   RECOMMENDED: Don't use Tailwind plugins unless explicitly requested.
-   Use plugins: [] (empty array) by default.
+   ✅ SAFE: ALWAYS use empty plugins array:
+   ```javascript
+   // tailwind.config.js - CORRECT DEFAULT
+   export default {
+     content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+     theme: { extend: {} },
+     plugins: [],  // EMPTY! No plugins unless package.json has them!
+   }
+   ```
+
+   ONLY add plugins if user EXPLICITLY requests them AND you add to package.json FIRST:
+   - @tailwindcss/forms → add "@tailwindcss/forms": "^0.5.7" to devDependencies
+   - @tailwindcss/typography → add "@tailwindcss/typography": "^0.5.10"
+   - @tailwindcss/aspect-ratio → add "@tailwindcss/aspect-ratio": "^0.4.2"
 
 2. VITE CONFIG - MUST HAVE base: './' FOR PREVIEW TO WORK!
    vite.config.ts MUST include: base: './'
