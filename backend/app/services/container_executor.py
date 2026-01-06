@@ -6121,18 +6121,27 @@ echo "Done"
             except RuntimeError:
                 loop = asyncio.get_event_loop()
 
+            # ANSI escape code pattern for stripping colors from pattern matching
+            ansi_escape_pattern = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\r')
+
             def stream_logs_sync():
                 """Synchronous log streaming in separate thread"""
                 try:
                     for log in container.logs(stream=True, follow=True, timestamps=False):
                         try:
-                            line = log.decode('utf-8', errors='ignore').strip()
-                            if line:
-                                # Put log line in queue (thread-safe)
-                                asyncio.run_coroutine_threadsafe(
-                                    log_queue.put(line),
-                                    loop
-                                )
+                            # Decode the chunk
+                            chunk = log.decode('utf-8', errors='ignore')
+                            # Split by newlines to handle multi-line chunks
+                            # Docker logs can send multiple lines in one chunk
+                            lines = chunk.split('\n')
+                            for line in lines:
+                                line = line.strip()
+                                if line:
+                                    # Put each line in queue separately (thread-safe)
+                                    asyncio.run_coroutine_threadsafe(
+                                        log_queue.put(line),
+                                        loop
+                                    )
                         except Exception as decode_err:
                             logger.debug(f"[ContainerExecutor] Log decode error: {decode_err}")
                             continue
@@ -6170,9 +6179,13 @@ echo "Done"
                     # Store log in LogBus for auto-fixer context
                     log_bus.add_docker_log(line)
 
+                    # Strip ANSI escape codes for pattern matching (keep original for display)
+                    # This fixes Vite detection: "\x1b[32mVITE\x1b[0m ready in 1089 ms" -> "VITE ready in 1089 ms"
+                    clean_line = ansi_escape_pattern.sub('', line)
+
                     # BACKEND-FIRST: Buffer into ExecutionContext (SINGLE SOURCE OF TRUTH)
                     # Detect if line is stderr by checking for error patterns
-                    is_stderr_line = any(re.search(p, line, re.IGNORECASE) for p in error_patterns)
+                    is_stderr_line = any(re.search(p, clean_line, re.IGNORECASE) for p in error_patterns)
                     if is_stderr_line:
                         exec_ctx.add_stderr(line)
                     else:
@@ -6181,7 +6194,7 @@ echo "Done"
                     # Check for FATAL ERROR patterns first (Bolt-style)
                     if not has_fatal_error and not server_started:
                         for pattern in error_patterns:
-                            if re.search(pattern, line, re.IGNORECASE):
+                            if re.search(pattern, clean_line, re.IGNORECASE):
                                 has_fatal_error = True
                                 error_lines.append(line)
                                 # Mark as error in LogBus
@@ -6191,7 +6204,7 @@ echo "Done"
                                 logger.error(f"[ContainerExecutor] Fatal error detected: {pattern}")
 
                                 # High #10: Special handling for port conflict errors
-                                if re.search(r"EADDRINUSE|Address already in use", line, re.IGNORECASE):
+                                if re.search(r"EADDRINUSE|Address already in use", clean_line, re.IGNORECASE):
                                     yield f"\n⚠️ PORT CONFLICT DETECTED\n"
                                     yield f"The port is already in use. Possible solutions:\n"
                                     yield f"  1. Stop other running projects first\n"
@@ -6201,7 +6214,7 @@ echo "Done"
                                     log_bus.add_docker_error(f"Port conflict on {host_port}")
 
                                 # Medium #15: Special handling for OOM errors
-                                if re.search(r"out of memory|heap out of memory|ENOMEM|MemoryError|OutOfMemoryError|Killed|allocation failed", line, re.IGNORECASE):
+                                if re.search(r"out of memory|heap out of memory|ENOMEM|MemoryError|OutOfMemoryError|Killed|allocation failed", clean_line, re.IGNORECASE):
                                     yield f"\n⚠️ OUT OF MEMORY DETECTED\n"
                                     yield f"The container ran out of memory. Possible solutions:\n"
                                     yield f"  1. Reduce the number of dependencies\n"
@@ -6223,11 +6236,12 @@ echo "Done"
                             exec_ctx.add_stderr(line)
 
                     # Check for server start patterns (only if no fatal error)
+                    # Use clean_line (ANSI stripped) for reliable pattern matching
                     if not server_started and not has_fatal_error:
                         for pattern in start_patterns:
-                            match = re.search(pattern, line, re.IGNORECASE)
+                            match = re.search(pattern, clean_line, re.IGNORECASE)
                             if match:
-                                logger.info(f"[ContainerExecutor] Server start pattern matched: {pattern}")
+                                logger.info(f"[ContainerExecutor] Server start pattern matched: {pattern} in: {clean_line[:100]}")
                                 yield f"\n🔍 Server start detected, verifying accessibility...\n"
 
                                 # ================================================================
