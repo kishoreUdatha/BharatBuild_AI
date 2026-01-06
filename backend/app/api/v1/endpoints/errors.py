@@ -488,15 +488,21 @@ async def execute_fix_with_notification(
 
                 # Config files that should NOT be synced to running containers
                 # These files cause Vite/build tool restarts when changed
-                # NOTE: tsconfig.node.json and tsconfig.app.json are static reference
-                # configs that Vite doesn't watch - they SHOULD be synced for missing file fixes
                 CONFIG_FILES = {
                     'vite.config.ts', 'vite.config.js', 'vite.config.mjs',
                     'package.json', 'package-lock.json',
-                    'tsconfig.json',  # Vite watches this, but NOT tsconfig.node.json/app.json
+                    'tsconfig.json',
                     'postcss.config.js', 'postcss.config.cjs', 'postcss.config.mjs',
                     'tailwind.config.js', 'tailwind.config.ts',
                     'webpack.config.js', 'next.config.js', 'next.config.mjs',
+                }
+
+                # Startup-critical files that SHOULD be synced but REQUIRE container restart
+                # These are needed for Vite/build tools to start - if missing, Vite crashes
+                STARTUP_CRITICAL_FILES = {
+                    'tsconfig.node.json', 'tsconfig.app.json',  # Vite startup deps
+                    'index.html',  # Entry point
+                    'src/main.tsx', 'src/main.ts', 'src/main.jsx', 'src/main.js',  # App entry
                 }
 
                 # Environment files - sync to container but require restart
@@ -505,6 +511,7 @@ async def execute_fix_with_notification(
                 config_files_modified = []
                 source_files_modified = []
                 env_files_modified = []
+                startup_critical_modified = []  # Files that require container restart
 
                 for file_path in result.files_modified:
                     try:
@@ -512,32 +519,54 @@ async def execute_fix_with_notification(
                         if full_path.exists():
                             content = full_path.read_text(encoding='utf-8', errors='ignore')
 
-                            # Check if this is a config file or env file
+                            # Check file type for sync strategy
                             file_name = Path(file_path).name
                             is_config_file = file_name in CONFIG_FILES
                             is_env_file = file_name in ENV_FILES
+                            is_startup_critical = file_name in STARTUP_CRITICAL_FILES
 
                             # STEP 1: Sync SOURCE files and ENV files to RUNNING CONTAINER
                             # SKIP config files - they cause restart loops
                             # ENV files need restart but should be synced first
                             if IS_REMOTE_SANDBOX and user_id and not is_config_file:
-                                try:
-                                    container_synced = await unified_storage._write_to_remote_sandbox(
-                                        project_id=project_id,
-                                        file_path=file_path,
-                                        content=content,
-                                        user_id=user_id
-                                    )
-                                    if container_synced:
-                                        logger.info(f"[ErrorHandler:{project_id}] ✓ Synced to CONTAINER: {file_path}")
-                                        if is_env_file:
-                                            env_files_modified.append(file_path)
+                                # Retry logic with exponential backoff (configurable via settings)
+                                max_retries = settings.CONTAINER_SYNC_MAX_RETRIES
+                                retry_delay = 1.0  # Start with 1 second
+                                retry_backoff = settings.CONTAINER_SYNC_RETRY_BACKOFF
+                                container_synced = False
+
+                                for attempt in range(max_retries):
+                                    try:
+                                        container_synced = await unified_storage._write_to_remote_sandbox(
+                                            project_id=project_id,
+                                            file_path=file_path,
+                                            content=content,
+                                            user_id=user_id
+                                        )
+                                        if container_synced:
+                                            logger.info(f"[ErrorHandler:{project_id}] ✓ Synced to CONTAINER: {file_path}")
+                                            if is_startup_critical:
+                                                startup_critical_modified.append(file_path)
+                                                logger.info(f"[ErrorHandler:{project_id}] ⚡ Startup-critical file synced: {file_path} (requires restart)")
+                                            elif is_env_file:
+                                                env_files_modified.append(file_path)
+                                            else:
+                                                source_files_modified.append(file_path)
+                                            break
                                         else:
-                                            source_files_modified.append(file_path)
-                                    else:
-                                        logger.warning(f"[ErrorHandler:{project_id}] Container sync failed: {file_path}")
-                                except Exception as container_err:
-                                    logger.warning(f"[ErrorHandler:{project_id}] Container sync error for {file_path}: {container_err}")
+                                            if attempt < max_retries - 1:
+                                                logger.warning(f"[ErrorHandler:{project_id}] Container sync failed (attempt {attempt + 1}/{max_retries}): {file_path}")
+                                                await asyncio.sleep(retry_delay)
+                                                retry_delay *= retry_backoff  # Exponential backoff
+                                            else:
+                                                logger.error(f"[ErrorHandler:{project_id}] Container sync FAILED after {max_retries} attempts: {file_path}")
+                                    except Exception as container_err:
+                                        if attempt < max_retries - 1:
+                                            logger.warning(f"[ErrorHandler:{project_id}] Container sync error (attempt {attempt + 1}/{max_retries}): {container_err}")
+                                            await asyncio.sleep(retry_delay)
+                                            retry_delay *= retry_backoff
+                                        else:
+                                            logger.error(f"[ErrorHandler:{project_id}] Container sync FAILED after {max_retries} attempts: {file_path} - {container_err}")
                             elif is_config_file:
                                 config_files_modified.append(file_path)
                                 logger.info(f"[ErrorHandler:{project_id}] ⚠️ Config file skipped for container sync: {file_path}")
@@ -615,6 +644,13 @@ async def execute_fix_with_notification(
             # SOURCE files: HMR handles automatically - preview refreshes without restart
             # CONFIG files: Need container restart to apply (npm install, etc.)
             # ENV files: Need container restart for process to pick up new env vars
+            # STARTUP-CRITICAL files: Need container restart (vite crashed at startup)
+            if startup_critical_modified:
+                logger.info(f"[ErrorHandler:{project_id}] ⚡ STARTUP-CRITICAL files fixed: {startup_critical_modified}")
+                logger.info(f"[ErrorHandler:{project_id}] Container restart REQUIRED - Vite needs these files to start")
+                # Startup-critical files require restart (vite crashed, HMR won't help)
+                config_files_modified.extend(startup_critical_modified)
+
             if env_files_modified:
                 logger.info(f"[ErrorHandler:{project_id}] 🔧 ENV files fixed: {env_files_modified}")
                 logger.info(f"[ErrorHandler:{project_id}] Container restart required for .env changes")

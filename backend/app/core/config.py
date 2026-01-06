@@ -406,6 +406,23 @@ class Settings(BaseSettings):
     AUTOFIXER_INSTALL_TIMEOUT: int = 120  # Timeout for install commands
     LOG_RETENTION_MINUTES: int = 30  # Log bus retention
 
+    # SimpleFixer Model & Cost Settings
+    SIMPLEFIXER_HAIKU_MODEL: str = "claude-3-5-haiku-20241022"
+    SIMPLEFIXER_SONNET_MODEL: str = "claude-sonnet-4-20250514"
+    SIMPLEFIXER_HAIKU_INPUT_COST: float = 0.25  # $ per 1M tokens
+    SIMPLEFIXER_HAIKU_OUTPUT_COST: float = 1.25  # $ per 1M tokens
+    SIMPLEFIXER_SONNET_INPUT_COST: float = 3.0  # $ per 1M tokens
+    SIMPLEFIXER_SONNET_OUTPUT_COST: float = 15.0  # $ per 1M tokens
+
+    # SimpleFixer Iteration Limits (by error complexity)
+    SIMPLEFIXER_SIMPLE_MAX_ITERATIONS: int = 2
+    SIMPLEFIXER_MODERATE_MAX_ITERATIONS: int = 3
+    SIMPLEFIXER_COMPLEX_MAX_ITERATIONS: int = 5
+
+    # Container Sync Settings
+    CONTAINER_SYNC_MAX_RETRIES: int = 3
+    CONTAINER_SYNC_RETRY_BACKOFF: float = 1.5  # Exponential backoff multiplier
+
     # ==========================================
     # Timeouts and Intervals (in seconds/milliseconds as noted)
     # ==========================================
