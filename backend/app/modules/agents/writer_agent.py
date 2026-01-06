@@ -2565,6 +2565,26 @@ Think: Premium, Beautiful, Production-Ready - like code from Apple, Stripe, or V
             # ================================================================
             await self._fix_index_html(project_id, project_path, fixes_applied)
 
+            # ================================================================
+            # FIX 11: Python requirements.txt - Add missing packages
+            # ================================================================
+            await self._fix_python_requirements(project_id, project_path, fixes_applied)
+
+            # ================================================================
+            # FIX 12: Java pom.xml - Add missing dependencies
+            # ================================================================
+            await self._fix_java_dependencies(project_id, project_path, fixes_applied)
+
+            # ================================================================
+            # FIX 13: Go go.mod - Add missing dependencies
+            # ================================================================
+            await self._fix_go_dependencies(project_id, project_path, fixes_applied)
+
+            # ================================================================
+            # FIX 14: Next.js config - Create next.config.js and globals.css
+            # ================================================================
+            await self._fix_nextjs_config(project_id, project_path, fixes_applied)
+
             if fixes_applied:
                 logger.info(f"[Writer Agent] Applied {len(fixes_applied)} auto-fixes: {fixes_applied}")
 
@@ -2794,6 +2814,337 @@ Think: Premium, Beautiful, Production-Ready - like code from Apple, Stripe, or V
 
         except Exception as e:
             logger.warning(f"[Writer Agent] Python __init__.py fix failed: {e}")
+
+    async def _fix_python_requirements(
+        self,
+        project_id: str,
+        project_path: Path,
+        fixes_applied: List[str]
+    ) -> None:
+        """Fix 11: Scan Python imports and add missing packages to requirements.txt"""
+        import re
+
+        # Check if this is a Python project
+        requirements_path = project_path / "requirements.txt"
+        if not requirements_path.exists():
+            return
+
+        # Known Python packages and their pip names
+        PYTHON_PACKAGES = {
+            # Web frameworks
+            'fastapi': 'fastapi',
+            'flask': 'Flask',
+            'django': 'Django',
+            'uvicorn': 'uvicorn',
+            'gunicorn': 'gunicorn',
+            # Database
+            'sqlalchemy': 'SQLAlchemy',
+            'databases': 'databases',
+            'asyncpg': 'asyncpg',
+            'psycopg2': 'psycopg2-binary',
+            'pymongo': 'pymongo',
+            'redis': 'redis',
+            # Auth & Security
+            'passlib': 'passlib[bcrypt]',
+            'python_jose': 'python-jose[cryptography]',
+            'jose': 'python-jose[cryptography]',
+            'bcrypt': 'bcrypt',
+            # HTTP & APIs
+            'httpx': 'httpx',
+            'aiohttp': 'aiohttp',
+            'requests': 'requests',
+            # Validation
+            'pydantic': 'pydantic',
+            'pydantic_settings': 'pydantic-settings',
+            # Utils
+            'dotenv': 'python-dotenv',
+            'python_multipart': 'python-multipart',
+            'jinja2': 'Jinja2',
+            'boto3': 'boto3',
+            'pillow': 'Pillow',
+            'PIL': 'Pillow',
+            'pandas': 'pandas',
+            'numpy': 'numpy',
+            'celery': 'celery',
+            # Testing
+            'pytest': 'pytest',
+            'pytest_asyncio': 'pytest-asyncio',
+        }
+
+        try:
+            # Read existing requirements
+            existing_reqs = requirements_path.read_text(encoding='utf-8').lower()
+
+            # Scan all Python files for imports
+            imports_found = set()
+            for py_file in project_path.rglob("*.py"):
+                if 'venv' in str(py_file) or 'site-packages' in str(py_file):
+                    continue
+                try:
+                    content = py_file.read_text(encoding='utf-8')
+                    # Find imports
+                    for match in re.finditer(r'^(?:from|import)\s+([a-zA-Z_][a-zA-Z0-9_]*)', content, re.MULTILINE):
+                        imports_found.add(match.group(1).lower())
+                except:
+                    continue
+
+            # Find missing packages
+            missing_packages = []
+            for imp in imports_found:
+                if imp in PYTHON_PACKAGES:
+                    pip_name = PYTHON_PACKAGES[imp]
+                    # Check if already in requirements (case-insensitive)
+                    if pip_name.lower().split('[')[0] not in existing_reqs:
+                        missing_packages.append(pip_name)
+
+            if missing_packages:
+                # Add missing packages to requirements.txt
+                current_content = requirements_path.read_text(encoding='utf-8')
+                new_content = current_content.rstrip() + '\n'
+                new_content += '\n# Auto-added by Writer Agent\n'
+                for pkg in missing_packages:
+                    new_content += f'{pkg}\n'
+
+                requirements_path.write_text(new_content, encoding='utf-8')
+
+                await file_manager.create_file(
+                    project_id=project_id,
+                    file_path="requirements.txt",
+                    content=new_content
+                )
+
+                fixes_applied.append(f"requirements.txt (+{len(missing_packages)} packages)")
+                logger.info(f"[Writer Agent] Added {len(missing_packages)} missing packages to requirements.txt: {missing_packages}")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] Python requirements fix failed: {e}")
+
+    async def _fix_java_dependencies(
+        self,
+        project_id: str,
+        project_path: Path,
+        fixes_applied: List[str]
+    ) -> None:
+        """Fix 12: Check Java pom.xml for missing dependencies"""
+        import re
+
+        pom_path = project_path / "pom.xml"
+        if not pom_path.exists():
+            return
+
+        # Known Java/Spring dependencies
+        JAVA_PACKAGES = {
+            'lombok': '<dependency>\n            <groupId>org.projectlombok</groupId>\n            <artifactId>lombok</artifactId>\n            <optional>true</optional>\n        </dependency>',
+            'jakarta.validation': '<dependency>\n            <groupId>org.springframework.boot</groupId>\n            <artifactId>spring-boot-starter-validation</artifactId>\n        </dependency>',
+            'springframework.web': '<dependency>\n            <groupId>org.springframework.boot</groupId>\n            <artifactId>spring-boot-starter-web</artifactId>\n        </dependency>',
+            'springframework.data.jpa': '<dependency>\n            <groupId>org.springframework.boot</groupId>\n            <artifactId>spring-boot-starter-data-jpa</artifactId>\n        </dependency>',
+            'springframework.security': '<dependency>\n            <groupId>org.springframework.boot</groupId>\n            <artifactId>spring-boot-starter-security</artifactId>\n        </dependency>',
+        }
+
+        try:
+            pom_content = pom_path.read_text(encoding='utf-8')
+
+            # Scan Java files for imports
+            imports_found = set()
+            for java_file in project_path.rglob("*.java"):
+                try:
+                    content = java_file.read_text(encoding='utf-8')
+                    for match in re.finditer(r'^import\s+([\w.]+);', content, re.MULTILINE):
+                        imports_found.add(match.group(1))
+                except:
+                    continue
+
+            # Check for missing dependencies
+            missing_deps = []
+            for imp in imports_found:
+                for pkg_key, dep_xml in JAVA_PACKAGES.items():
+                    if pkg_key in imp and dep_xml not in pom_content:
+                        if dep_xml not in missing_deps:
+                            missing_deps.append(dep_xml)
+
+            if missing_deps:
+                # Add before </dependencies>
+                if '</dependencies>' in pom_content:
+                    insert_point = pom_content.find('</dependencies>')
+                    new_deps = '\n        '.join(missing_deps)
+                    new_content = pom_content[:insert_point] + '\n        ' + new_deps + '\n    ' + pom_content[insert_point:]
+
+                    pom_path.write_text(new_content, encoding='utf-8')
+
+                    await file_manager.create_file(
+                        project_id=project_id,
+                        file_path="pom.xml",
+                        content=new_content
+                    )
+
+                    fixes_applied.append(f"pom.xml (+{len(missing_deps)} dependencies)")
+                    logger.info(f"[Writer Agent] Added {len(missing_deps)} missing dependencies to pom.xml")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] Java dependencies fix failed: {e}")
+
+    async def _fix_go_dependencies(
+        self,
+        project_id: str,
+        project_path: Path,
+        fixes_applied: List[str]
+    ) -> None:
+        """Fix 13: Check Go go.mod for missing dependencies"""
+        import re
+
+        go_mod_path = project_path / "go.mod"
+        if not go_mod_path.exists():
+            return
+
+        # Known Go packages
+        GO_PACKAGES = {
+            'gin-gonic/gin': 'github.com/gin-gonic/gin v1.9.1',
+            'gorilla/mux': 'github.com/gorilla/mux v1.8.1',
+            'gorm.io/gorm': 'gorm.io/gorm v1.25.5',
+            'gorm.io/driver/postgres': 'gorm.io/driver/postgres v1.5.4',
+            'gorm.io/driver/mysql': 'gorm.io/driver/mysql v1.5.2',
+            'godotenv': 'github.com/joho/godotenv v1.5.1',
+            'jwt-go': 'github.com/golang-jwt/jwt/v5 v5.2.0',
+            'uuid': 'github.com/google/uuid v1.5.0',
+            'validator': 'github.com/go-playground/validator/v10 v10.16.0',
+            'cors': 'github.com/rs/cors v1.10.1',
+        }
+
+        try:
+            go_mod_content = go_mod_path.read_text(encoding='utf-8')
+
+            # Scan Go files for imports
+            imports_found = set()
+            for go_file in project_path.rglob("*.go"):
+                try:
+                    content = go_file.read_text(encoding='utf-8')
+                    for match in re.finditer(r'"(github\.com/[^"]+|gorm\.io/[^"]+)"', content):
+                        imports_found.add(match.group(1))
+                except:
+                    continue
+
+            # Check for missing dependencies
+            missing_deps = []
+            for imp in imports_found:
+                for pkg_key, dep_line in GO_PACKAGES.items():
+                    if pkg_key in imp and dep_line.split()[0] not in go_mod_content:
+                        if dep_line not in missing_deps:
+                            missing_deps.append(dep_line)
+
+            if missing_deps:
+                # Add after require (
+                if 'require (' in go_mod_content:
+                    insert_point = go_mod_content.find('require (') + len('require (')
+                    new_deps = '\n\t'.join(missing_deps)
+                    new_content = go_mod_content[:insert_point] + '\n\t' + new_deps + go_mod_content[insert_point:]
+
+                    go_mod_path.write_text(new_content, encoding='utf-8')
+
+                    await file_manager.create_file(
+                        project_id=project_id,
+                        file_path="go.mod",
+                        content=new_content
+                    )
+
+                    fixes_applied.append(f"go.mod (+{len(missing_deps)} dependencies)")
+                    logger.info(f"[Writer Agent] Added {len(missing_deps)} missing dependencies to go.mod")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] Go dependencies fix failed: {e}")
+
+    async def _fix_nextjs_config(
+        self,
+        project_id: str,
+        project_path: Path,
+        fixes_applied: List[str]
+    ) -> None:
+        """Fix 14: Ensure Next.js projects have proper configuration"""
+
+        # Check if this is a Next.js project
+        package_json = project_path / "package.json"
+        if not package_json.exists():
+            return
+
+        try:
+            import json
+            pkg_content = package_json.read_text(encoding='utf-8')
+            pkg_data = json.loads(pkg_content)
+
+            all_deps = {}
+            for key in ['dependencies', 'devDependencies']:
+                if key in pkg_data:
+                    all_deps.update(pkg_data[key])
+
+            if 'next' not in all_deps:
+                return
+
+            # Check for next.config.js/mjs
+            next_config_js = project_path / "next.config.js"
+            next_config_mjs = project_path / "next.config.mjs"
+            next_config_ts = project_path / "next.config.ts"
+
+            if not any([next_config_js.exists(), next_config_mjs.exists(), next_config_ts.exists()]):
+                # Create next.config.js
+                config_content = """/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: '**',
+      },
+    ],
+  },
+}
+
+module.exports = nextConfig
+"""
+                next_config_js.write_text(config_content, encoding='utf-8')
+
+                await file_manager.create_file(
+                    project_id=project_id,
+                    file_path="next.config.js",
+                    content=config_content
+                )
+
+                fixes_applied.append("next.config.js")
+                logger.info(f"[Writer Agent] Created missing next.config.js")
+
+            # Check for globals.css in app directory
+            app_dir = project_path / "app"
+            if app_dir.exists():
+                globals_css = app_dir / "globals.css"
+                if not globals_css.exists():
+                    # Check for tailwind
+                    if 'tailwindcss' in all_deps:
+                        css_content = """@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-rgb: 255, 255, 255;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-rgb));
+}
+"""
+                        globals_css.write_text(css_content, encoding='utf-8')
+
+                        await file_manager.create_file(
+                            project_id=project_id,
+                            file_path="app/globals.css",
+                            content=css_content
+                        )
+
+                        fixes_applied.append("app/globals.css")
+                        logger.info(f"[Writer Agent] Created missing app/globals.css with Tailwind")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] Next.js config fix failed: {e}")
 
     async def _fix_path_aliases(
         self,
