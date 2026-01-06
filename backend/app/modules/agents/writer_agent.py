@@ -3040,6 +3040,45 @@ export default defineConfig({
         except Exception as e:
             logger.warning(f"[Writer Agent] index.html fix failed: {e}")
 
+        # =====================================================================
+        # Fix 8: Create postcss.config.js for Tailwind projects
+        # =====================================================================
+        try:
+            tailwind_config = project_path / "tailwind.config.js"
+            tailwind_config_ts = project_path / "tailwind.config.ts"
+            postcss_config = project_path / "postcss.config.js"
+            postcss_config_cjs = project_path / "postcss.config.cjs"
+            postcss_config_mjs = project_path / "postcss.config.mjs"
+
+            has_tailwind = tailwind_config.exists() or tailwind_config_ts.exists()
+            has_postcss = postcss_config.exists() or postcss_config_cjs.exists() or postcss_config_mjs.exists()
+
+            if has_tailwind and not has_postcss:
+                logger.info(f"[Writer Agent] Creating missing postcss.config.js for Tailwind project")
+
+                postcss_content = """export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+"""
+                # Write file
+                postcss_config.write_text(postcss_content, encoding='utf-8')
+
+                if file_manager:
+                    await file_manager.create_file(
+                        project_id=project_id,
+                        file_path="postcss.config.js",
+                        content=postcss_content
+                    )
+
+                fixes_applied.append("postcss.config.js")
+                logger.info(f"[Writer Agent] Created missing postcss.config.js")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] postcss.config.js fix failed: {e}")
+
     async def _execute_terminal_command(
         self,
         command: str,
