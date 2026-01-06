@@ -44,6 +44,7 @@ from app.services.execution_context import (
 from app.modules.agents.docker_infra_fixer_agent import docker_infra_fixer, DockerInfraFixerAgent
 from app.modules.agents.production_fixer_agent import production_fixer_agent
 from app.modules.agents.base_agent import AgentContext
+from app.services.project_sanitizer import sanitize_project_file
 
 # =============================================================================
 # PREVIEW URL - Use centralized function from app.core.preview_url
@@ -1962,6 +1963,44 @@ class ContainerExecutor:
         except Exception as e:
             logger.warning(f"[ContainerExecutor] Pre-build validation failed: {e}")
             yield f"  ⚠️ Pre-build validation skipped: {e}\n"
+
+        # =================================================================
+        # PRE-SANITIZE DOCKERFILES - Fix common issues before build
+        # Handles: npm ci → npm install, --only=production → --omit=dev
+        # =================================================================
+        try:
+            dockerfiles_sanitized = 0
+            # Find all Dockerfiles in project
+            find_cmd = "find . -name 'Dockerfile*' -type f 2>/dev/null"
+            exit_code, dockerfile_list = self._run_shell_on_sandbox(find_cmd, working_dir=project_path, timeout=10)
+
+            if exit_code == 0 and dockerfile_list.strip():
+                for dockerfile_rel in dockerfile_list.strip().split('\n'):
+                    dockerfile_rel = dockerfile_rel.strip()
+                    if not dockerfile_rel:
+                        continue
+
+                    dockerfile_path = os.path.join(project_path, dockerfile_rel.lstrip('./'))
+                    try:
+                        # Read Dockerfile
+                        content = self._read_file_from_sandbox(dockerfile_path)
+                        if content:
+                            # Sanitize it
+                            _, sanitized_content, fixes = sanitize_project_file("Dockerfile", content)
+
+                            # If any fixes were applied, write back
+                            if fixes and sanitized_content != content:
+                                self._write_file_to_sandbox(dockerfile_path, sanitized_content)
+                                dockerfiles_sanitized += 1
+                                for fix in fixes:
+                                    yield f"  🔧 {dockerfile_rel}: {fix}\n"
+                    except Exception as df_err:
+                        logger.debug(f"[ContainerExecutor] Could not sanitize {dockerfile_rel}: {df_err}")
+
+            if dockerfiles_sanitized > 0:
+                yield f"  ✅ Pre-sanitized {dockerfiles_sanitized} Dockerfile(s)\n"
+        except Exception as e:
+            logger.debug(f"[ContainerExecutor] Dockerfile pre-sanitization skipped: {e}")
 
         # Run docker-compose up
         yield f"\n  $ docker-compose up -d\n"
