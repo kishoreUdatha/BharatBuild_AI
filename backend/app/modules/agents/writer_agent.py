@@ -2387,6 +2387,24 @@ Think: Premium, Beautiful, Production-Ready - like code from Apple, Stripe, or V
                             f"Consider splitting into smaller files."
                         )
 
+                    # TRUNCATION DETECTION: Check if file appears truncated
+                    truncation_error = self._detect_truncation(file_path, content)
+                    if truncation_error:
+                        logger.error(
+                            f"[Writer Agent] 🚨 TRUNCATED FILE DETECTED: {file_path} - {truncation_error}"
+                        )
+                        result["errors"].append(
+                            f"File {file_path} appears truncated: {truncation_error}. "
+                            f"The file has {line_count} lines - please regenerate with smaller components."
+                        )
+                        # Still write the file but mark as error so auto-fixer can handle it
+                        result["truncated_files"] = result.get("truncated_files", [])
+                        result["truncated_files"].append({
+                            "path": file_path,
+                            "line_count": line_count,
+                            "error": truncation_error
+                        })
+
                     # Write file using file_manager
                     write_result = await file_manager.create_file(
                         project_id=project_id,
@@ -2442,6 +2460,95 @@ Think: Premium, Beautiful, Production-Ready - like code from Apple, Stripe, or V
                     result["errors"].append(f"Command error: {str(e)}")
 
         return result
+
+    def _detect_truncation(self, file_path: str, content: str) -> Optional[str]:
+        """
+        Detect if a file appears to be truncated (incomplete).
+
+        Returns error message if truncated, None if OK.
+        """
+        if not content or not content.strip():
+            return "Empty file"
+
+        # Get file extension
+        ext = file_path.split('.')[-1].lower() if '.' in file_path else ''
+
+        # Count brackets/braces
+        if ext in ['tsx', 'ts', 'jsx', 'js', 'java', 'go', 'rs', 'c', 'cpp', 'cs']:
+            open_braces = content.count('{')
+            close_braces = content.count('}')
+            open_parens = content.count('(')
+            close_parens = content.count(')')
+            open_brackets = content.count('[')
+            close_brackets = content.count(']')
+
+            # Check for significant imbalance (allowing for string literals)
+            if open_braces > close_braces + 2:
+                return f"Missing {open_braces - close_braces} closing braces '}}'"
+            if open_parens > close_parens + 3:
+                return f"Missing {open_parens - close_parens} closing parentheses ')'"
+            if open_brackets > close_brackets + 2:
+                return f"Missing {open_brackets - close_brackets} closing brackets ']'"
+
+        # Check for TSX/JSX specific patterns
+        if ext in ['tsx', 'jsx']:
+            # Check for unclosed JSX tags (simplified check)
+            if content.count('<') > content.count('>') + 5:
+                return "Possible unclosed JSX tags"
+
+            # Check if file ends mid-component (no closing export or return)
+            lines = content.strip().split('\n')
+            last_line = lines[-1].strip() if lines else ''
+
+            # Suspicious endings for TSX/JSX
+            suspicious_endings = [
+                'className=',
+                'onClick=',
+                'onChange=',
+                'value=',
+                '<div',
+                '<span',
+                '<button',
+                '<input',
+                'return (',
+                'return <',
+            ]
+            for ending in suspicious_endings:
+                if last_line.startswith(ending) or last_line.endswith(ending):
+                    return f"File ends with incomplete code: '{last_line[:50]}...'"
+
+        # Check for Python
+        if ext == 'py':
+            # Check for incomplete function/class
+            lines = content.strip().split('\n')
+            last_line = lines[-1].strip() if lines else ''
+
+            if last_line.endswith(':') and not last_line.startswith('#'):
+                return f"File ends with incomplete block: '{last_line}'"
+
+            # Check indentation suggests truncation
+            if len(lines) > 10:
+                last_lines = lines[-5:]
+                if all(line.startswith('    ') or line.startswith('\t') for line in last_lines if line.strip()):
+                    # All last lines are indented - might be truncated mid-function
+                    if not any(keyword in last_line for keyword in ['return', 'pass', 'raise', 'break', 'continue']):
+                        if last_line and not last_line.startswith('#'):
+                            return "File may be truncated mid-function"
+
+        # Check for Java
+        if ext == 'java':
+            # Must end with closing brace for class
+            content_stripped = content.strip()
+            if not content_stripped.endswith('}'):
+                return "Java file must end with closing brace"
+
+        # General check: file ends mid-line with obvious truncation
+        if content and not content.endswith('\n'):
+            last_line = content.split('\n')[-1]
+            if len(last_line) > 100 and not any(last_line.rstrip().endswith(c) for c in [';', '}', ')', ']', ',', ':', '"', "'"]):
+                return f"File appears cut off mid-line"
+
+        return None
 
     async def _validate_and_fix_dependencies(
         self,
