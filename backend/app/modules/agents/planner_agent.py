@@ -208,6 +208,28 @@ CRITICAL: The <files> section is MANDATORY AND MUST BE COMPLETE!
                     🔗 DEPENDENCY GRAPH (CRITICAL FOR BUILD SUCCESS!)
 ═══════════════════════════════════════════════════════════════════════════════
 
+🚨 UNIVERSAL RULES FOR ALL TECHNOLOGIES (PREVENT BUILD FAILURES):
+
+1. FILE SIZE LIMIT: Keep ALL files under 300 lines!
+   ❌ Large files (500+ lines) get truncated → "Unexpected end of file" error
+   ✅ Split into smaller files/components/modules
+
+2. DEPENDENCY FILES MUST LIST EVERYTHING:
+   - React/Node: package.json must list ALL npm packages used
+   - Python: requirements.txt must list ALL pip packages used
+   - Java Maven: pom.xml must list ALL dependencies used
+   - Java Gradle: build.gradle must list ALL dependencies used
+   - Go: go.mod must list ALL modules used
+   - Rust: Cargo.toml must list ALL crates used
+
+3. CONFIG FILES MUST BE CORRECT:
+   - Vite: base: './' required for preview URLs to work
+   - Tailwind: plugins: [] (empty) unless package.json has the plugin
+   - PostCSS: postcss.config.js REQUIRED for Tailwind to work
+   - Next.js: proper next.config.js for deployment
+   - Spring Boot: proper application.properties/yml
+   - TypeScript: tsconfig.json with proper paths and references
+
 ⚠️ FILES MUST BE ORDERED BY DEPENDENCIES TO AVOID BUILD ERRORS!
 
 For EACH file, you MUST specify:
@@ -224,6 +246,11 @@ DEPENDENCY RULES:
 TECHNOLOGY-SPECIFIC PATTERNS:
 
 📦 JAVA/SPRING BOOT:
+
+🚨 BUILD-CRITICAL FOR JAVA:
+- pom.xml/build.gradle: MUST list ALL dependencies (spring-boot-starter-web, lombok, etc.)
+- application.properties: MUST have correct database URL, port, etc.
+- Each class file: Keep under 300 lines (split into services/utils if needed)
 
 ⚠️ CRITICAL JAVA RULES:
 1. ENUMS MUST BE SEPARATE FILES - NEVER use inner enums in entity classes!
@@ -278,6 +305,32 @@ JAVA FILE ORDER (by priority):
   </file>
 
 ⚛️ REACT/TYPESCRIPT:
+
+🚨 BUILD-CRITICAL CONFIG FILES (MUST INCLUDE THESE EXACTLY):
+
+1. vite.config.ts - MUST have base: './' for preview to work:
+   <file path="vite.config.ts" priority="1" depends_on="">
+     <description>Vite config - MUST include base: './' for path-based preview URLs</description>
+     <exports>defineConfig with base: './'</exports>
+   </file>
+
+2. tailwind.config.js - DO NOT use plugins unless adding to package.json:
+   <file path="tailwind.config.js" priority="1" depends_on="">
+     <description>Tailwind config - Use plugins: [] (empty) unless dependencies added</description>
+     <exports>Tailwind configuration with plugins: []</exports>
+   </file>
+
+3. package.json - MUST list ALL dependencies used in code:
+   <file path="package.json" priority="1" depends_on="">
+     <description>Dependencies - EVERY import in code must be listed here</description>
+   </file>
+
+🚨 FILE SIZE LIMITS (PREVENT TRUNCATION):
+- Each component file MUST be under 300 lines
+- If a component needs more, SPLIT into sub-components:
+  ❌ BAD: App.tsx with 700 lines → gets truncated → build fails
+  ✅ GOOD: App.tsx (50 lines) + Dashboard.tsx (150 lines) + Sidebar.tsx (100 lines)
+
 - Types/Interfaces (priority 1-5): No dependencies
   <file path="src/types/user.ts" priority="1" depends_on="">
     <exports>User, UserRole, AuthState</exports>
@@ -308,6 +361,12 @@ JAVA FILE ORDER (by priority):
   </file>
 
 🐍 PYTHON/FASTAPI:
+
+🚨 BUILD-CRITICAL FOR PYTHON:
+- requirements.txt: MUST list ALL packages (fastapi, uvicorn, sqlalchemy, etc.)
+- .env.example: MUST have all required environment variables
+- Each module file: Keep under 300 lines (split into utils/helpers if needed)
+
 - Models/Schemas (priority 1-5): No dependencies
   <file path="app/schemas/user.py" priority="1" depends_on="">
     <exports>UserCreate, UserResponse, UserUpdate</exports>
