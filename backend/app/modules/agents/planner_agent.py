@@ -249,7 +249,7 @@ CRITICAL: The <files> section is MANDATORY AND MUST BE COMPLETE!
 
 3. CONFIG FILES MUST BE CORRECT:
    - Vite: base: './' required for preview URLs to work
-   - Tailwind: plugins: [] (empty) unless package.json has the plugin
+   - Tailwind: 🚨 plugins: [] (ALWAYS EMPTY!) - NEVER use @tailwindcss/forms etc.
    - PostCSS: postcss.config.js REQUIRED for Tailwind to work
    - Next.js: proper next.config.js for deployment
    - Spring Boot: proper application.properties/yml
