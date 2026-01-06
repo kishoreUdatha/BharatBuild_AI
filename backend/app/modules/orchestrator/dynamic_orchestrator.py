@@ -1857,6 +1857,7 @@ class DynamicOrchestrator:
             'project_type': None,
             'complexity': None,
             'tech_stack': None,
+            'design_theme': None,  # NEW: Color theme from Planner
             'features': []
         }
 
@@ -2022,6 +2023,35 @@ class DynamicOrchestrator:
                             'name': name,
                             'description': description
                         })
+
+            # Extract design_theme from lxml DOM (NEW: for color theming)
+            design_theme_elem = dom.find('design_theme')
+            if design_theme_elem is not None:
+                design_theme = {}
+
+                domain_elem = design_theme_elem.find('domain')
+                if domain_elem is not None and domain_elem.text:
+                    design_theme['domain'] = domain_elem.text.strip()
+
+                primary_elem = design_theme_elem.find('primary_color')
+                if primary_elem is not None and primary_elem.text:
+                    design_theme['primary_color'] = primary_elem.text.strip()
+
+                secondary_elem = design_theme_elem.find('secondary_color')
+                if secondary_elem is not None and secondary_elem.text:
+                    design_theme['secondary_color'] = secondary_elem.text.strip()
+
+                background_elem = design_theme_elem.find('background')
+                if background_elem is not None and background_elem.text:
+                    design_theme['background'] = background_elem.text.strip()
+
+                accent_elem = design_theme_elem.find('accent')
+                if accent_elem is not None and accent_elem.text:
+                    design_theme['accent'] = accent_elem.text.strip()
+
+                if design_theme:
+                    result['design_theme'] = design_theme
+                    logger.info(f"[lxml DOM Parser] Extracted design_theme: {design_theme}")
 
         except Exception as e:
             logger.error(f"[lxml DOM Parser] Error parsing lxml DOM: {e}")
@@ -3579,7 +3609,8 @@ Ensure every import in every file has a corresponding file in the plan.
             "raw": plan_xml or xml_parser.get_text(),
             "files": parsed_data.get('files', []),  # NEW: file list for file-by-file generation
             "tasks": parsed_data.get('tasks', []),  # Legacy: task list for backward compatibility
-            "features": parsed_data.get('features', [])
+            "features": parsed_data.get('features', []),
+            "design_theme": parsed_data.get('design_theme'),  # NEW: Color theme for Writer
         }
 
         # Determine if we're using file-based or task-based plan
