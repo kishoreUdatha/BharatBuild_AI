@@ -934,6 +934,18 @@ async def execute_fix_with_notification(
 
             await notify_fix_completed(project_id, result.patches_applied, result.files_modified)
         elif result.success:
+            # SimpleFixer succeeded but didn't apply patches (e.g., package.json not in DB)
+            # Try direct npm install for missing module errors as fallback
+            if IS_REMOTE_SANDBOX and user_id:
+                direct_packages = await _try_direct_npm_install_fallback(
+                    project_id, errors, context, user_id
+                )
+                if direct_packages:
+                    logger.info(f"[ErrorHandler:{project_id}] Direct npm install succeeded: {direct_packages}")
+                    await notify_fix_completed(project_id, len(direct_packages),
+                        [f"npm install {p}" for p in direct_packages])
+                    return  # Exit early - fix was successful
+
             logger.info(f"[ErrorHandler:{project_id}] SimpleFixer: {result.message}")
             # No fix needed - don't notify as failed
         else:
@@ -1018,6 +1030,120 @@ async def notify_fix_failed(project_id: str, error: str):
     })
 
 
+async def _try_direct_npm_install_fallback(
+    project_id: str,
+    errors: List[Dict],
+    context: str,
+    user_id: str
+) -> Optional[List[str]]:
+    """
+    Fallback: Directly run npm install for missing npm modules.
+
+    This bypasses the need for package.json to be in the database/temp directory.
+    Used when SimpleFixer can't find local files to modify but the error is
+    clearly a missing npm package.
+
+    Returns:
+        List of installed packages if successful, None otherwise
+    """
+    import re
+
+    # Known npm packages that are often missing
+    KNOWN_NPM_PACKAGES = {
+        '@tailwindcss/forms', '@tailwindcss/typography', '@tailwindcss/aspect-ratio',
+        '@headlessui/react', '@radix-ui/react-dialog', '@radix-ui/react-slot',
+        'clsx', 'class-variance-authority', 'tailwind-merge', 'lucide-react',
+        'framer-motion', 'react-hook-form', '@hookform/resolvers', 'zod',
+        'zustand', '@tanstack/react-query', 'date-fns', 'lodash', 'axios',
+        'chart.js', 'react-chartjs-2', 'react-icons', 'daisyui',
+    }
+
+    # Patterns to extract missing package names
+    patterns = [
+        r"Cannot find module ['\"](@?[\w\-/.]+)['\"]",
+        r"\[postcss\] Cannot find module ['\"](@?[\w\-/.]+)['\"]",
+        r"Module not found.*Can't resolve ['\"](@?[\w\-/.]+)['\"]",
+    ]
+
+    # Combine all error messages and context
+    combined_text = context + "\n" + "\n".join(e.get("message", "") for e in errors)
+
+    # Extract missing packages
+    missing_packages = set()
+    for pattern in patterns:
+        matches = re.findall(pattern, combined_text, re.IGNORECASE)
+        for match in matches:
+            pkg_name = match
+            # Only include npm packages (not local files)
+            if pkg_name.startswith('.') or pkg_name.startswith('/'):
+                continue
+            # Accept scoped packages (@scope/pkg) or known packages
+            if pkg_name.startswith('@') or pkg_name in KNOWN_NPM_PACKAGES:
+                missing_packages.add(pkg_name)
+
+    if not missing_packages:
+        logger.debug(f"[ErrorHandler:{project_id}] No missing npm packages detected for direct install")
+        return None
+
+    logger.info(f"[ErrorHandler:{project_id}] 📦 Attempting direct npm install for: {missing_packages}")
+
+    try:
+        from app.services.container_executor import container_executor
+
+        # Get the container for this project
+        container = await container_executor._get_existing_container(project_id)
+        if not container:
+            logger.warning(f"[ErrorHandler:{project_id}] No container found for direct npm install")
+            return None
+
+        # Install packages directly in the container
+        packages_str = " ".join(missing_packages)
+        install_cmd = f"npm install {packages_str} --save 2>&1"
+
+        logger.info(f"[ErrorHandler:{project_id}] Running: {install_cmd}")
+
+        exit_code, output = container.exec_run(
+            f"sh -c 'cd /app && {install_cmd}'",
+            demux=True
+        )
+
+        stdout = output[0].decode('utf-8') if output[0] else ""
+        stderr = output[1].decode('utf-8') if output[1] else ""
+        combined_output = stdout + stderr
+
+        if exit_code == 0:
+            logger.info(f"[ErrorHandler:{project_id}] ✅ Direct npm install succeeded: {packages_str}")
+            logger.debug(f"[ErrorHandler:{project_id}] Output: {combined_output[:500]}")
+
+            # Restart the dev server by stopping and letting it auto-restart
+            try:
+                # Kill any running dev server processes
+                container.exec_run("sh -c 'pkill -f \"vite|next|webpack\" || true'", demux=True)
+                logger.info(f"[ErrorHandler:{project_id}] Killed dev server for restart")
+
+                # Give it a moment then restart
+                import asyncio
+                await asyncio.sleep(1)
+
+                # Start the dev server again (in background)
+                container.exec_run(
+                    "sh -c 'cd /app && npm run dev > /tmp/dev.log 2>&1 &'",
+                    detach=True
+                )
+                logger.info(f"[ErrorHandler:{project_id}] Dev server restarted")
+            except Exception as restart_err:
+                logger.warning(f"[ErrorHandler:{project_id}] Dev server restart failed: {restart_err}")
+
+            return list(missing_packages)
+        else:
+            logger.warning(f"[ErrorHandler:{project_id}] Direct npm install failed (exit={exit_code}): {combined_output[:300]}")
+            return None
+
+    except Exception as e:
+        logger.error(f"[ErrorHandler:{project_id}] Direct npm install error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return None
 
 
 async def notify_rebuild_started(project_id: str):
