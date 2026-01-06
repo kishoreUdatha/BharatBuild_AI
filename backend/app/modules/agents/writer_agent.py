@@ -2374,6 +2374,19 @@ Think: Premium, Beautiful, Production-Ready - like code from Apple, Stripe, or V
                         logger.warning(f"[Writer Agent] Skipping file with missing path or content")
                         continue
 
+                    # FILE SIZE CHECK: Warn if file exceeds 300 lines (may cause truncation)
+                    line_count = content.count('\n') + 1
+                    if line_count > 300:
+                        logger.warning(
+                            f"[Writer Agent] ⚠️ LARGE FILE WARNING: {file_path} has {line_count} lines "
+                            f"(exceeds 300 line limit). This may cause truncation issues!"
+                        )
+                        result["warnings"] = result.get("warnings", [])
+                        result["warnings"].append(
+                            f"File {file_path} has {line_count} lines - may cause build issues. "
+                            f"Consider splitting into smaller files."
+                        )
+
                     # Write file using file_manager
                     write_result = await file_manager.create_file(
                         project_id=project_id,
@@ -2485,6 +2498,28 @@ Think: Premium, Beautiful, Production-Ready - like code from Apple, Stripe, or V
             'date-fns': '^3.3.1',
             'lodash': '^4.17.21',
             'axios': '^1.6.7',
+            # Icons - CRITICAL: Commonly used but often missing!
+            'react-icons': '^5.0.1',
+            '@heroicons/react': '^2.1.1',
+            # Charts - CRITICAL: LLMs often use these
+            'recharts': '^2.12.0',
+            'chart.js': '^4.4.1',
+            'react-chartjs-2': '^5.2.0',
+            # Routing - CRITICAL: Almost every React app needs this
+            'react-router-dom': '^6.22.0',
+            # Notifications/Toasts
+            'react-toastify': '^10.0.4',
+            'sonner': '^1.4.0',
+            'react-hot-toast': '^2.4.1',
+            # Tables and Data
+            '@tanstack/react-table': '^8.11.0',
+            # File handling
+            'react-dropzone': '^14.2.3',
+            # Form inputs
+            'react-select': '^5.8.0',
+            # Date pickers
+            'react-datepicker': '^6.1.0',
+            '@types/react-datepicker': '^4.19.0',
         }
 
         try:
@@ -2931,6 +2966,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  base: './',  // CRITICAL: Required for path-based preview URLs
   server: {
     host: '0.0.0.0',
     port: 3000,
@@ -2943,6 +2979,7 @@ import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
   plugins: [vue()],
+  base: './',  // CRITICAL: Required for path-based preview URLs
   server: {
     host: '0.0.0.0',
     port: 3000,
@@ -2953,6 +2990,7 @@ export default defineConfig({
                 vite_config = '''import { defineConfig } from 'vite'
 
 export default defineConfig({
+  base: './',  // CRITICAL: Required for path-based preview URLs
   server: {
     host: '0.0.0.0',
     port: 3000,
@@ -3078,6 +3116,138 @@ export default defineConfig({
 
         except Exception as e:
             logger.warning(f"[Writer Agent] postcss.config.js fix failed: {e}")
+
+        # =====================================================================
+        # Fix 9: Create index.css with @tailwind directives for Tailwind projects
+        # =====================================================================
+        try:
+            tailwind_config = project_path / "tailwind.config.js"
+            tailwind_config_ts = project_path / "tailwind.config.ts"
+
+            has_tailwind = tailwind_config.exists() or tailwind_config_ts.exists()
+
+            if has_tailwind:
+                # Check for index.css in various locations
+                src_dir = project_path / "src"
+                index_css = src_dir / "index.css"
+                globals_css = src_dir / "globals.css"
+                styles_css = src_dir / "styles.css"
+                app_css = src_dir / "App.css"
+
+                # Check if any CSS file with @tailwind exists
+                has_tailwind_css = False
+                for css_file in [index_css, globals_css, styles_css, app_css]:
+                    if css_file.exists():
+                        content = css_file.read_text(encoding='utf-8')
+                        if '@tailwind' in content:
+                            has_tailwind_css = True
+                            break
+
+                if not has_tailwind_css:
+                    # Create src directory if it doesn't exist
+                    src_dir.mkdir(parents=True, exist_ok=True)
+
+                    logger.info(f"[Writer Agent] Creating index.css with @tailwind directives")
+
+                    css_content = """@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Global styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+"""
+                    index_css.write_text(css_content, encoding='utf-8')
+
+                    if file_manager:
+                        await file_manager.create_file(
+                            project_id=project_id,
+                            file_path="src/index.css",
+                            content=css_content
+                        )
+
+                    fixes_applied.append("src/index.css")
+                    logger.info(f"[Writer Agent] Created index.css with @tailwind directives")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] index.css fix failed: {e}")
+
+        # =====================================================================
+        # Fix 10: Ensure main.tsx imports index.css for Tailwind to work
+        # =====================================================================
+        try:
+            src_dir = project_path / "src"
+            main_tsx = src_dir / "main.tsx"
+            main_ts = src_dir / "main.ts"
+            main_jsx = src_dir / "main.jsx"
+            main_js = src_dir / "main.js"
+
+            # Find the main entry file
+            main_file = None
+            for mf in [main_tsx, main_ts, main_jsx, main_js]:
+                if mf.exists():
+                    main_file = mf
+                    break
+
+            if main_file:
+                content = main_file.read_text(encoding='utf-8')
+
+                # Check if CSS is imported
+                has_css_import = any(imp in content for imp in [
+                    "import './index.css'",
+                    'import "./index.css"',
+                    "import './globals.css'",
+                    'import "./globals.css"',
+                    "import './styles.css'",
+                    'import "./styles.css"',
+                    "import './App.css'",
+                    'import "./App.css"',
+                ])
+
+                if not has_css_import:
+                    # Check if index.css exists
+                    index_css = src_dir / "index.css"
+                    if index_css.exists():
+                        logger.info(f"[Writer Agent] Adding CSS import to {main_file.name}")
+
+                        # Add import after first line (typically 'use client' or import)
+                        lines = content.split('\n')
+                        insert_index = 0
+
+                        # Find good position to insert (after 'use client' or first imports)
+                        for i, line in enumerate(lines):
+                            if line.strip().startswith("import ") or line.strip() == "'use client'" or line.strip() == '"use client"':
+                                insert_index = i + 1
+                                break
+
+                        # Insert CSS import
+                        lines.insert(insert_index, "import './index.css'")
+                        new_content = '\n'.join(lines)
+
+                        main_file.write_text(new_content, encoding='utf-8')
+
+                        if file_manager:
+                            relative_path = str(main_file.relative_to(project_path))
+                            await file_manager.update_file(
+                                project_id=project_id,
+                                file_path=relative_path,
+                                content=new_content
+                            )
+
+                        fixes_applied.append(f"{main_file.name} CSS import")
+                        logger.info(f"[Writer Agent] Added CSS import to {main_file.name}")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] main.tsx CSS import fix failed: {e}")
 
     async def _execute_terminal_command(
         self,
