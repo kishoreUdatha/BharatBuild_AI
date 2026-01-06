@@ -2460,6 +2460,21 @@ Think: Premium, Beautiful, Production-Ready - like code from Apple, Stripe, or V
             # ================================================================
             await self._fix_path_aliases(project_id, project_path, fixes_applied)
 
+            # ================================================================
+            # FIX 5: Next.js route files - Add NextRequest/NextResponse imports
+            # ================================================================
+            await self._fix_nextjs_routes(project_id, project_path, fixes_applied)
+
+            # ================================================================
+            # FIX 6: Vite config - Ensure vite.config.ts exists for Vite projects
+            # ================================================================
+            await self._fix_vite_config(project_id, project_path, fixes_applied)
+
+            # ================================================================
+            # FIX 7: Index.html - Ensure entry point exists for Vite
+            # ================================================================
+            await self._fix_index_html(project_id, project_path, fixes_applied)
+
             if fixes_applied:
                 logger.info(f"[Writer Agent] Applied {len(fixes_applied)} auto-fixes: {fixes_applied}")
 
@@ -2756,6 +2771,219 @@ Think: Premium, Beautiful, Production-Ready - like code from Apple, Stripe, or V
 
         except Exception as e:
             logger.warning(f"[Writer Agent] Path alias fix failed: {e}")
+
+    async def _fix_nextjs_routes(
+        self,
+        project_id: str,
+        project_path: Path,
+        fixes_applied: List[str]
+    ) -> None:
+        """Fix 5: Add NextRequest/NextResponse imports to Next.js route files"""
+        import re
+
+        # Check if this is a Next.js project
+        app_dir = project_path / "app"
+        if not app_dir.exists():
+            return
+
+        try:
+            fixed_files = []
+
+            # Find all route.ts files
+            for route_file in app_dir.rglob("route.ts"):
+                content = route_file.read_text(encoding='utf-8')
+
+                # Check if file has GET/POST/PUT/DELETE exports
+                has_route_handlers = bool(re.search(r'export\s+(?:async\s+)?function\s+(GET|POST|PUT|DELETE|PATCH)', content))
+
+                if not has_route_handlers:
+                    continue
+
+                # Check if NextRequest/NextResponse are imported
+                has_next_imports = 'NextRequest' in content or 'NextResponse' in content
+                has_import_statement = bool(re.search(r"from\s+['\"]next/server['\"]", content))
+
+                if not has_import_statement and has_route_handlers:
+                    # Add import at the top
+                    import_line = "import { NextRequest, NextResponse } from 'next/server';\n"
+
+                    # Check if there's a 'use server' directive
+                    if content.startswith("'use server'") or content.startswith('"use server"'):
+                        # Insert after directive
+                        lines = content.split('\n', 1)
+                        new_content = lines[0] + '\n' + import_line + (lines[1] if len(lines) > 1 else '')
+                    else:
+                        new_content = import_line + content
+
+                    route_file.write_text(new_content, encoding='utf-8')
+
+                    rel_path = route_file.relative_to(project_path)
+                    await file_manager.create_file(
+                        project_id=project_id,
+                        file_path=str(rel_path),
+                        content=new_content
+                    )
+                    fixed_files.append(str(rel_path))
+
+            if fixed_files:
+                fixes_applied.append(f"Next.js routes ({len(fixed_files)} files)")
+                logger.info(f"[Writer Agent] Added NextRequest/NextResponse imports to {len(fixed_files)} route files")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] Next.js route fix failed: {e}")
+
+    async def _fix_vite_config(
+        self,
+        project_id: str,
+        project_path: Path,
+        fixes_applied: List[str]
+    ) -> None:
+        """Fix 6: Ensure vite.config.ts exists for Vite projects"""
+
+        # Check if this is a Vite project (has vite in package.json)
+        package_json_path = project_path / "package.json"
+        if not package_json_path.exists():
+            return
+
+        try:
+            import json
+            package_content = package_json_path.read_text(encoding='utf-8')
+            package_data = json.loads(package_content)
+
+            # Check if vite is a dependency
+            all_deps = {}
+            for dep_key in ['dependencies', 'devDependencies']:
+                if dep_key in package_data:
+                    all_deps.update(package_data[dep_key])
+
+            if 'vite' not in all_deps:
+                return
+
+            # Check if vite.config exists
+            vite_config_ts = project_path / "vite.config.ts"
+            vite_config_js = project_path / "vite.config.js"
+
+            if vite_config_ts.exists() or vite_config_js.exists():
+                return
+
+            # Determine if React or Vue
+            is_react = '@vitejs/plugin-react' in all_deps or 'react' in all_deps
+            is_vue = '@vitejs/plugin-vue' in all_deps or 'vue' in all_deps
+
+            if is_react:
+                vite_config = '''import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    host: '0.0.0.0',
+    port: 3000,
+  },
+})
+'''
+            elif is_vue:
+                vite_config = '''import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    host: '0.0.0.0',
+    port: 3000,
+  },
+})
+'''
+            else:
+                vite_config = '''import { defineConfig } from 'vite'
+
+export default defineConfig({
+  server: {
+    host: '0.0.0.0',
+    port: 3000,
+  },
+})
+'''
+
+            vite_config_ts.write_text(vite_config, encoding='utf-8')
+
+            await file_manager.create_file(
+                project_id=project_id,
+                file_path="vite.config.ts",
+                content=vite_config
+            )
+
+            fixes_applied.append("vite.config.ts")
+            logger.info(f"[Writer Agent] Created missing vite.config.ts")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] Vite config fix failed: {e}")
+
+    async def _fix_index_html(
+        self,
+        project_id: str,
+        project_path: Path,
+        fixes_applied: List[str]
+    ) -> None:
+        """Fix 7: Ensure index.html exists for Vite projects"""
+
+        # Check if this is a Vite project
+        vite_config_ts = project_path / "vite.config.ts"
+        vite_config_js = project_path / "vite.config.js"
+
+        if not (vite_config_ts.exists() or vite_config_js.exists()):
+            return
+
+        index_html_path = project_path / "index.html"
+        if index_html_path.exists():
+            return
+
+        try:
+            # Check what entry point exists
+            main_tsx = project_path / "src" / "main.tsx"
+            main_ts = project_path / "src" / "main.ts"
+            main_jsx = project_path / "src" / "main.jsx"
+            main_js = project_path / "src" / "main.js"
+
+            if main_tsx.exists():
+                entry = "/src/main.tsx"
+            elif main_ts.exists():
+                entry = "/src/main.ts"
+            elif main_jsx.exists():
+                entry = "/src/main.jsx"
+            elif main_js.exists():
+                entry = "/src/main.js"
+            else:
+                entry = "/src/main.tsx"  # Default
+
+            index_html = f'''<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vite App</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="{entry}"></script>
+  </body>
+</html>
+'''
+
+            index_html_path.write_text(index_html, encoding='utf-8')
+
+            await file_manager.create_file(
+                project_id=project_id,
+                file_path="index.html",
+                content=index_html
+            )
+
+            fixes_applied.append("index.html")
+            logger.info(f"[Writer Agent] Created missing index.html")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] index.html fix failed: {e}")
 
     async def _execute_terminal_command(
         self,
