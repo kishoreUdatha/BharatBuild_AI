@@ -365,16 +365,24 @@ class SimpleFixer:
     4. Lower max iterations (5 instead of 20)
     """
 
-    # Model costs per 1M tokens (for estimation)
-    MODEL_COSTS = {
-        "claude-3-5-haiku-20241022": {"input": 0.25, "output": 1.25},  # Haiku - CHEAP
-        "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},    # Sonnet - EXPENSIVE
-    }
+    # Model costs per 1M tokens (configurable via settings)
+    @property
+    def MODEL_COSTS(self):
+        return {
+            settings.SIMPLEFIXER_HAIKU_MODEL: {
+                "input": settings.SIMPLEFIXER_HAIKU_INPUT_COST,
+                "output": settings.SIMPLEFIXER_HAIKU_OUTPUT_COST
+            },
+            settings.SIMPLEFIXER_SONNET_MODEL: {
+                "input": settings.SIMPLEFIXER_SONNET_INPUT_COST,
+                "output": settings.SIMPLEFIXER_SONNET_OUTPUT_COST
+            },
+        }
 
     def __init__(self):
         self.client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self.model_haiku = "claude-3-5-haiku-20241022"   # For simple errors (12x cheaper)
-        self.model_sonnet = "claude-sonnet-4-20250514"  # For complex errors
+        self.model_haiku = settings.SIMPLEFIXER_HAIKU_MODEL   # For simple errors (12x cheaper)
+        self.model_sonnet = settings.SIMPLEFIXER_SONNET_MODEL  # For complex errors
         # Auto-fix mode: True = immediate fix, False = queue for confirmation (Bolt.new style)
         self.auto_fix_enabled = True  # Can be toggled via API
         # Token tracking
@@ -547,13 +555,19 @@ class SimpleFixer:
         Assumptions:
         - Input: context_size chars ~ context_size/4 tokens
         - Output: ~2000 tokens per iteration
-        - Simple: 2 iterations avg, Moderate: 3, Complex: 5
+        - Iteration limits configurable via settings
         """
         model = self.model_haiku if complexity == ErrorComplexity.SIMPLE else self.model_sonnet
         costs = self.MODEL_COSTS[model]
 
         input_tokens = context_size / 4  # rough estimate
-        iterations = 2 if complexity == ErrorComplexity.SIMPLE else (3 if complexity == ErrorComplexity.MODERATE else 5)
+        # Get iteration limits from settings
+        if complexity == ErrorComplexity.SIMPLE:
+            iterations = settings.SIMPLEFIXER_SIMPLE_MAX_ITERATIONS
+        elif complexity == ErrorComplexity.MODERATE:
+            iterations = settings.SIMPLEFIXER_MODERATE_MAX_ITERATIONS
+        else:
+            iterations = settings.SIMPLEFIXER_COMPLEX_MAX_ITERATIONS
         output_tokens = 2000 * iterations
 
         input_cost = (input_tokens / 1_000_000) * costs["input"]
@@ -866,6 +880,30 @@ class SimpleFixer:
             logger.info(f"[SimpleFixer:{project_id}] Deterministic port fix applied - skipping AI")
             return port_fix_result
 
+        # Try unused import fix
+        unused_fix_result = await self._try_deterministic_unused_import_fix(project_path, error_text, project_id)
+        if unused_fix_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic unused import fix applied - skipping AI")
+            return unused_fix_result
+
+        # Try package 404 fix
+        package_fix_result = await self._try_deterministic_package_fix(project_path, error_text, project_id)
+        if package_fix_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic package fix applied - skipping AI")
+            return package_fix_result
+
+        # Try null/undefined optional chaining fix
+        null_fix_result = await self._try_deterministic_null_check_fix(project_path, error_text, project_id)
+        if null_fix_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic null check fix applied - skipping AI")
+            return null_fix_result
+
+        # Try import extension fix
+        ext_fix_result = await self._try_deterministic_import_extension_fix(project_path, error_text, project_id)
+        if ext_fix_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic import extension fix applied - skipping AI")
+            return ext_fix_result
+
         error_category, category_reason = classify_error(error_text, context)
 
         # Try specialized handler first
@@ -982,6 +1020,30 @@ class SimpleFixer:
         if port_fix_result:
             logger.info(f"[SimpleFixer:{project_id}] Deterministic port fix applied - skipping AI")
             return port_fix_result
+
+        # Try unused import fix
+        unused_fix_result = await self._try_deterministic_unused_import_fix(project_path, combined_context, project_id)
+        if unused_fix_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic unused import fix applied - skipping AI")
+            return unused_fix_result
+
+        # Try package 404 fix
+        package_fix_result = await self._try_deterministic_package_fix(project_path, combined_context, project_id)
+        if package_fix_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic package fix applied - skipping AI")
+            return package_fix_result
+
+        # Try null/undefined optional chaining fix
+        null_fix_result = await self._try_deterministic_null_check_fix(project_path, combined_context, project_id)
+        if null_fix_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic null check fix applied - skipping AI")
+            return null_fix_result
+
+        # Try import extension fix
+        ext_fix_result = await self._try_deterministic_import_extension_fix(project_path, combined_context, project_id)
+        if ext_fix_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic import extension fix applied - skipping AI")
+            return ext_fix_result
 
         # =================================================================
         # BOLT.NEW STYLE: Classify error by category FIRST
@@ -2361,6 +2423,639 @@ export default App''',
             "src/index.css": '''@tailwind base;
 @tailwind components;
 @tailwind utilities;''',
+            # Component templates
+            "src/components/Button.tsx": '''import React from 'react'
+
+interface ButtonProps {
+  children: React.ReactNode
+  onClick?: () => void
+  variant?: 'primary' | 'secondary' | 'outline'
+  disabled?: boolean
+  className?: string
+}
+
+export function Button({
+  children,
+  onClick,
+  variant = 'primary',
+  disabled = false,
+  className = ''
+}: ButtonProps) {
+  const baseStyles = 'px-4 py-2 rounded-lg font-medium transition-colors'
+  const variants = {
+    primary: 'bg-blue-600 text-white hover:bg-blue-700',
+    secondary: 'bg-gray-600 text-white hover:bg-gray-700',
+    outline: 'border border-gray-300 text-gray-700 hover:bg-gray-50'
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`${baseStyles} ${variants[variant]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}
+    >
+      {children}
+    </button>
+  )
+}
+
+export default Button''',
+            "src/components/Card.tsx": '''import React from 'react'
+
+interface CardProps {
+  children: React.ReactNode
+  title?: string
+  className?: string
+}
+
+export function Card({ children, title, className = '' }: CardProps) {
+  return (
+    <div className={`bg-white rounded-lg shadow-md p-6 ${className}`}>
+      {title && <h2 className="text-xl font-semibold mb-4">{title}</h2>}
+      {children}
+    </div>
+  )
+}
+
+export default Card''',
+            "src/components/Input.tsx": '''import React from 'react'
+
+interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  label?: string
+  error?: string
+}
+
+export function Input({ label, error, className = '', ...props }: InputProps) {
+  return (
+    <div className="w-full">
+      {label && (
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          {label}
+        </label>
+      )}
+      <input
+        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+          error ? 'border-red-500' : 'border-gray-300'
+        } ${className}`}
+        {...props}
+      />
+      {error && <p className="mt-1 text-sm text-red-500">{error}</p>}
+    </div>
+  )
+}
+
+export default Input''',
+            # Hook templates
+            "src/hooks/useLocalStorage.ts": '''import { useState, useEffect } from 'react'
+
+export function useLocalStorage<T>(key: string, initialValue: T) {
+  const [storedValue, setStoredValue] = useState<T>(() => {
+    try {
+      const item = window.localStorage.getItem(key)
+      return item ? JSON.parse(item) : initialValue
+    } catch (error) {
+      console.error(error)
+      return initialValue
+    }
+  })
+
+  const setValue = (value: T | ((val: T) => T)) => {
+    try {
+      const valueToStore = value instanceof Function ? value(storedValue) : value
+      setStoredValue(valueToStore)
+      window.localStorage.setItem(key, JSON.stringify(valueToStore))
+    } catch (error) {
+      console.error(error)
+    }
+  }
+
+  return [storedValue, setValue] as const
+}
+
+export default useLocalStorage''',
+            "src/hooks/useFetch.ts": '''import { useState, useEffect } from 'react'
+
+interface UseFetchResult<T> {
+  data: T | null
+  loading: boolean
+  error: Error | null
+  refetch: () => void
+}
+
+export function useFetch<T>(url: string): UseFetchResult<T> {
+  const [data, setData] = useState<T | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<Error | null>(null)
+
+  const fetchData = async () => {
+    setLoading(true)
+    try {
+      const response = await fetch(url)
+      if (!response.ok) throw new Error('Network response was not ok')
+      const json = await response.json()
+      setData(json)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error('Unknown error'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchData()
+  }, [url])
+
+  return { data, loading, error, refetch: fetchData }
+}
+
+export default useFetch''',
+            # Utility templates
+            "src/utils/cn.ts": '''import { clsx, type ClassValue } from 'clsx'
+import { twMerge } from 'tailwind-merge'
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs))
+}''',
+            "src/utils/helpers.ts": '''// Utility helper functions
+
+export function formatDate(date: Date | string): string {
+  return new Date(date).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  })
+}
+
+export function capitalize(str: string): string {
+  return str.charAt(0).toUpperCase() + str.slice(1)
+}
+
+export function debounce<T extends (...args: unknown[]) => unknown>(
+  func: T,
+  wait: number
+): (...args: Parameters<T>) => void {
+  let timeout: NodeJS.Timeout | null = null
+  return (...args: Parameters<T>) => {
+    if (timeout) clearTimeout(timeout)
+    timeout = setTimeout(() => func(...args), wait)
+  }
+}''',
+            # Layout template
+            "src/components/Layout.tsx": '''import React from 'react'
+
+interface LayoutProps {
+  children: React.ReactNode
+}
+
+export function Layout({ children }: LayoutProps) {
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 py-4">
+          <h1 className="text-xl font-semibold text-gray-900">App</h1>
+        </div>
+      </header>
+      <main className="max-w-7xl mx-auto px-4 py-8">
+        {children}
+      </main>
+    </div>
+  )
+}
+
+export default Layout''',
+
+            # ============================================
+            # NEXT.JS TEMPLATES
+            # ============================================
+            "pages/_app.tsx": '''import type { AppProps } from 'next/app'
+import '../styles/globals.css'
+
+export default function App({ Component, pageProps }: AppProps) {
+  return <Component {...pageProps} />
+}''',
+            "pages/_document.tsx": '''import { Html, Head, Main, NextScript } from 'next/document'
+
+export default function Document() {
+  return (
+    <Html lang="en">
+      <Head />
+      <body>
+        <Main />
+        <NextScript />
+      </body>
+    </Html>
+  )
+}''',
+            "pages/index.tsx": '''export default function Home() {
+  return (
+    <main className="min-h-screen p-8">
+      <h1 className="text-3xl font-bold">Welcome to Next.js</h1>
+    </main>
+  )
+}''',
+            "pages/api/hello.ts": '''import type { NextApiRequest, NextApiResponse } from 'next'
+
+type Data = {
+  message: string
+}
+
+export default function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<Data>
+) {
+  res.status(200).json({ message: 'Hello from API!' })
+}''',
+            "next.config.js": '''/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+}
+
+module.exports = nextConfig''',
+            "next.config.mjs": '''/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+}
+
+export default nextConfig''',
+            "styles/globals.css": '''@tailwind base;
+@tailwind components;
+@tailwind utilities;''',
+
+            # ============================================
+            # VUE.JS TEMPLATES
+            # ============================================
+            "src/App.vue": '''<template>
+  <div id="app">
+    <h1>{{ message }}</h1>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue'
+
+const message = ref('Hello Vue!')
+</script>
+
+<style scoped>
+#app {
+  font-family: Arial, sans-serif;
+  text-align: center;
+  margin-top: 60px;
+}
+</style>''',
+            "src/main.ts": '''import { createApp } from 'vue'
+import App from './App.vue'
+import './style.css'
+
+createApp(App).mount('#app')''',
+            "src/components/HelloWorld.vue": '''<template>
+  <div class="hello">
+    <h1>{{ msg }}</h1>
+  </div>
+</template>
+
+<script setup lang="ts">
+defineProps<{
+  msg: string
+}>()
+</script>
+
+<style scoped>
+.hello {
+  color: #42b983;
+}
+</style>''',
+            "vite.config.ts.vue": '''import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    port: 5173,
+    host: true,
+  },
+})''',
+
+            # ============================================
+            # ANGULAR TEMPLATES
+            # ============================================
+            "src/app/app.component.ts": '''import { Component } from '@angular/core';
+
+@Component({
+  selector: 'app-root',
+  templateUrl: './app.component.html',
+  styleUrls: ['./app.component.css']
+})
+export class AppComponent {
+  title = 'my-app';
+}''',
+            "src/app/app.component.html": '''<div class="container">
+  <h1>Welcome to {{ title }}!</h1>
+</div>''',
+            "src/app/app.component.css": '''.container {
+  text-align: center;
+  margin-top: 50px;
+}''',
+            "src/app/app.module.ts": '''import { NgModule } from '@angular/core';
+import { BrowserModule } from '@angular/platform-browser';
+import { AppComponent } from './app.component';
+
+@NgModule({
+  declarations: [AppComponent],
+  imports: [BrowserModule],
+  providers: [],
+  bootstrap: [AppComponent]
+})
+export class AppModule { }''',
+            "src/main.ts.angular": '''import { platformBrowserDynamic } from '@angular/platform-browser-dynamic';
+import { AppModule } from './app/app.module';
+
+platformBrowserDynamic().bootstrapModule(AppModule)
+  .catch(err => console.error(err));''',
+            "angular.json": '''{
+  "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
+  "version": 1,
+  "newProjectRoot": "projects",
+  "projects": {
+    "app": {
+      "projectType": "application",
+      "root": "",
+      "sourceRoot": "src",
+      "architect": {
+        "build": {
+          "builder": "@angular-devkit/build-angular:browser",
+          "options": {
+            "outputPath": "dist",
+            "index": "src/index.html",
+            "main": "src/main.ts",
+            "tsConfig": "tsconfig.app.json"
+          }
+        }
+      }
+    }
+  }
+}''',
+            "tsconfig.app.json": '''{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./out-tsc/app"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.spec.ts"]
+}''',
+
+            # ============================================
+            # SVELTE TEMPLATES
+            # ============================================
+            "src/App.svelte": '''<script lang="ts">
+  let count = 0;
+
+  function increment() {
+    count += 1;
+  }
+</script>
+
+<main>
+  <h1>Hello Svelte!</h1>
+  <button on:click={increment}>
+    Count: {count}
+  </button>
+</main>
+
+<style>
+  main {
+    text-align: center;
+    padding: 1em;
+  }
+  button {
+    padding: 0.5em 1em;
+    font-size: 1.2em;
+  }
+</style>''',
+            "src/main.ts.svelte": '''import App from './App.svelte'
+
+const app = new App({
+  target: document.getElementById('app')!,
+})
+
+export default app''',
+            "svelte.config.js": '''import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
+
+export default {
+  preprocess: vitePreprocess(),
+}''',
+            "vite.config.ts.svelte": '''import { defineConfig } from 'vite'
+import { svelte } from '@sveltejs/vite-plugin-svelte'
+
+export default defineConfig({
+  plugins: [svelte()],
+  server: {
+    port: 5173,
+    host: true,
+  },
+})''',
+
+            # ============================================
+            # PYTHON TEMPLATES
+            # ============================================
+            "requirements.txt": '''fastapi>=0.100.0
+uvicorn>=0.22.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0''',
+            "main.py": '''from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(title="API", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/")
+async def root():
+    return {"message": "Hello World"}
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)''',
+            "app/__init__.py": '''# App package''',
+            "app/main.py": '''from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/")
+async def root():
+    return {"message": "Hello World"}''',
+            "manage.py": '''#!/usr/bin/env python
+import os
+import sys
+
+def main():
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+    try:
+        from django.core.management import execute_from_command_line
+    except ImportError as exc:
+        raise ImportError(
+            "Couldn't import Django. Are you sure it's installed?"
+        ) from exc
+    execute_from_command_line(sys.argv)
+
+if __name__ == '__main__':
+    main()''',
+            "wsgi.py": '''import os
+from django.core.wsgi import get_wsgi_application
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+application = get_wsgi_application()''',
+            "app.py": '''from flask import Flask, jsonify
+
+app = Flask(__name__)
+
+@app.route('/')
+def hello():
+    return jsonify(message='Hello World')
+
+@app.route('/health')
+def health():
+    return jsonify(status='healthy')
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)''',
+
+            # ============================================
+            # GO TEMPLATES
+            # ============================================
+            "main.go": '''package main
+
+import (
+    "encoding/json"
+    "log"
+    "net/http"
+)
+
+type Response struct {
+    Message string `json:"message"`
+}
+
+func main() {
+    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(Response{Message: "Hello World"})
+    })
+
+    http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+    })
+
+    log.Println("Server starting on :8080")
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}''',
+            "go.mod": '''module app
+
+go 1.21''',
+
+            # ============================================
+            # RUST TEMPLATES
+            # ============================================
+            "Cargo.toml": '''[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }''',
+            "src/main.rs": '''use actix_web::{get, web, App, HttpServer, Responder};
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct Response {
+    message: String,
+}
+
+#[get("/")]
+async fn hello() -> impl Responder {
+    web::Json(Response {
+        message: "Hello World".to_string(),
+    })
+}
+
+#[get("/health")]
+async fn health() -> impl Responder {
+    web::Json(serde_json::json!({"status": "healthy"}))
+}
+
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    HttpServer::new(|| App::new().service(hello).service(health))
+        .bind("0.0.0.0:8080")?
+        .run()
+        .await
+}''',
+
+            # ============================================
+            # COMMON CONFIG FILES
+            # ============================================
+            ".gitignore": '''node_modules/
+dist/
+build/
+.env
+.env.local
+*.log
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+venv/
+target/
+Cargo.lock''',
+            ".env.example": '''# Environment Variables
+NODE_ENV=development
+PORT=3000
+API_URL=http://localhost:8000''',
+            "Dockerfile": '''FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+
+EXPOSE 3000
+
+CMD ["npm", "run", "dev"]''',
+            "docker-compose.yml": '''version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development''',
+
+            # ============================================
+            # YARN/PNPM SUPPORT
+            # ============================================
+            ".yarnrc.yml": '''nodeLinker: node-modules''',
+            ".npmrc": '''legacy-peer-deps=true
+auto-install-peers=true''',
         }
 
         # Patterns to detect missing files
@@ -2390,6 +3085,110 @@ export default App''',
             # index.css
             (r'ENOENT.*index\.css', 'src/index.css'),
             (r'Cannot find.*index\.css', 'src/index.css'),
+            # Components
+            (r'Cannot find module.*[\'"]\.?/?components/Button[\'"]', 'src/components/Button.tsx'),
+            (r'ENOENT.*components/Button\.tsx', 'src/components/Button.tsx'),
+            (r'Cannot find module.*[\'"]\.?/?components/Card[\'"]', 'src/components/Card.tsx'),
+            (r'ENOENT.*components/Card\.tsx', 'src/components/Card.tsx'),
+            (r'Cannot find module.*[\'"]\.?/?components/Input[\'"]', 'src/components/Input.tsx'),
+            (r'ENOENT.*components/Input\.tsx', 'src/components/Input.tsx'),
+            (r'Cannot find module.*[\'"]\.?/?components/Layout[\'"]', 'src/components/Layout.tsx'),
+            (r'ENOENT.*components/Layout\.tsx', 'src/components/Layout.tsx'),
+            # Hooks
+            (r'Cannot find module.*[\'"]\.?/?hooks/useLocalStorage[\'"]', 'src/hooks/useLocalStorage.ts'),
+            (r'ENOENT.*hooks/useLocalStorage\.ts', 'src/hooks/useLocalStorage.ts'),
+            (r'Cannot find module.*[\'"]\.?/?hooks/useFetch[\'"]', 'src/hooks/useFetch.ts'),
+            (r'ENOENT.*hooks/useFetch\.ts', 'src/hooks/useFetch.ts'),
+            # Utils
+            (r'Cannot find module.*[\'"]\.?/?utils/cn[\'"]', 'src/utils/cn.ts'),
+            (r'ENOENT.*utils/cn\.ts', 'src/utils/cn.ts'),
+            (r'Cannot find module.*[\'"]\.?/?utils/helpers[\'"]', 'src/utils/helpers.ts'),
+            (r'ENOENT.*utils/helpers\.ts', 'src/utils/helpers.ts'),
+
+            # ============================================
+            # NEXT.JS PATTERNS
+            # ============================================
+            (r'ENOENT.*pages/_app', 'pages/_app.tsx'),
+            (r'Cannot find.*_app\.tsx', 'pages/_app.tsx'),
+            (r'Module not found.*_app', 'pages/_app.tsx'),
+            (r'ENOENT.*pages/_document', 'pages/_document.tsx'),
+            (r'Cannot find.*_document\.tsx', 'pages/_document.tsx'),
+            (r'ENOENT.*pages/index\.tsx', 'pages/index.tsx'),
+            (r'ENOENT.*next\.config', 'next.config.js'),
+            (r'Cannot find.*next\.config', 'next.config.js'),
+            (r'ENOENT.*styles/globals\.css', 'styles/globals.css'),
+            (r'Cannot find.*globals\.css', 'styles/globals.css'),
+
+            # ============================================
+            # VUE.JS PATTERNS
+            # ============================================
+            (r'ENOENT.*App\.vue', 'src/App.vue'),
+            (r'Cannot find module.*App\.vue', 'src/App.vue'),
+            (r'ENOENT.*HelloWorld\.vue', 'src/components/HelloWorld.vue'),
+            (r'Cannot find.*HelloWorld\.vue', 'src/components/HelloWorld.vue'),
+            (r'Cannot find module.*vue.*from', 'src/main.ts'),
+
+            # ============================================
+            # ANGULAR PATTERNS
+            # ============================================
+            (r'ENOENT.*app\.component\.ts', 'src/app/app.component.ts'),
+            (r'Cannot find.*app\.component', 'src/app/app.component.ts'),
+            (r'ENOENT.*app\.component\.html', 'src/app/app.component.html'),
+            (r'ENOENT.*app\.module\.ts', 'src/app/app.module.ts'),
+            (r'Cannot find.*app\.module', 'src/app/app.module.ts'),
+            (r'ENOENT.*angular\.json', 'angular.json'),
+            (r'Cannot find.*angular\.json', 'angular.json'),
+            (r'ENOENT.*tsconfig\.app\.json', 'tsconfig.app.json'),
+
+            # ============================================
+            # SVELTE PATTERNS
+            # ============================================
+            (r'ENOENT.*App\.svelte', 'src/App.svelte'),
+            (r'Cannot find module.*App\.svelte', 'src/App.svelte'),
+            (r'ENOENT.*svelte\.config', 'svelte.config.js'),
+            (r'Cannot find.*svelte\.config', 'svelte.config.js'),
+
+            # ============================================
+            # PYTHON PATTERNS
+            # ============================================
+            (r'ENOENT.*requirements\.txt', 'requirements.txt'),
+            (r'No such file.*requirements\.txt', 'requirements.txt'),
+            (r'FileNotFoundError.*requirements\.txt', 'requirements.txt'),
+            (r'ENOENT.*main\.py', 'main.py'),
+            (r'ModuleNotFoundError.*main', 'main.py'),
+            (r'ENOENT.*app\.py', 'app.py'),
+            (r'ENOENT.*manage\.py', 'manage.py'),
+            (r'ENOENT.*wsgi\.py', 'wsgi.py'),
+            (r'ENOENT.*__init__\.py', 'app/__init__.py'),
+
+            # ============================================
+            # GO PATTERNS
+            # ============================================
+            (r'ENOENT.*main\.go', 'main.go'),
+            (r'cannot find package.*main', 'main.go'),
+            (r'ENOENT.*go\.mod', 'go.mod'),
+            (r'go\.mod.*not found', 'go.mod'),
+            (r'missing go\.mod', 'go.mod'),
+
+            # ============================================
+            # RUST PATTERNS
+            # ============================================
+            (r'ENOENT.*Cargo\.toml', 'Cargo.toml'),
+            (r'could not find.*Cargo\.toml', 'Cargo.toml'),
+            (r'ENOENT.*main\.rs', 'src/main.rs'),
+            (r'cannot find.*main\.rs', 'src/main.rs'),
+
+            # ============================================
+            # COMMON CONFIG PATTERNS
+            # ============================================
+            (r'ENOENT.*\.gitignore', '.gitignore'),
+            (r'ENOENT.*\.env\.example', '.env.example'),
+            (r'ENOENT.*Dockerfile', 'Dockerfile'),
+            (r'Cannot find.*Dockerfile', 'Dockerfile'),
+            (r'ENOENT.*docker-compose', 'docker-compose.yml'),
+            (r'Cannot find.*docker-compose', 'docker-compose.yml'),
+            (r'ENOENT.*\.yarnrc', '.yarnrc.yml'),
+            (r'ENOENT.*\.npmrc', '.npmrc'),
         ]
 
         files_created = []
@@ -2583,6 +3382,437 @@ export default App''',
             import traceback
             logger.error(traceback.format_exc())
             return None
+
+    async def _try_deterministic_unused_import_fix(
+        self,
+        project_path: Path,
+        error_text: str,
+        project_id: Optional[str] = None
+    ) -> Optional[SimpleFixResult]:
+        """
+        Deterministically fix unused import errors (no AI needed).
+
+        Handles TypeScript/ESLint errors like:
+        - 'X' is declared but its value is never read
+        - 'X' is defined but never used
+        - imported but not used
+        """
+        # Patterns for unused imports/variables
+        unused_patterns = [
+            # TypeScript: 'useState' is declared but its value is never read
+            r"'(\w+)' is declared but its value is never read",
+            # ESLint: 'useState' is defined but never used
+            r"'(\w+)' is defined but never used",
+            # TypeScript: Module '"react"' declares 'useState' locally, but it is not exported
+            r"'(\w+)'.*imported but not used",
+            # Vite/esbuild: 'X' is imported but never used
+            r"\"(\w+)\" is imported but never used",
+        ]
+
+        # Extract unused identifiers from error
+        unused_identifiers = set()
+        for pattern in unused_patterns:
+            matches = re.findall(pattern, error_text, re.IGNORECASE)
+            unused_identifiers.update(matches)
+
+        if not unused_identifiers:
+            return None
+
+        logger.info(f"[SimpleFixer] Unused imports detected: {unused_identifiers}")
+
+        # Find source files that might contain these imports
+        files_modified = []
+        src_dirs = [
+            project_path / 'src',
+            project_path / 'frontend' / 'src',
+            project_path / 'app',
+            project_path,
+        ]
+
+        for src_dir in src_dirs:
+            if not src_dir.exists():
+                continue
+
+            # Find .tsx, .ts, .jsx, .js files
+            for ext in ['*.tsx', '*.ts', '*.jsx', '*.js']:
+                for file_path in src_dir.rglob(ext):
+                    if 'node_modules' in str(file_path):
+                        continue
+
+                    try:
+                        content = file_path.read_text(encoding='utf-8')
+                        original_content = content
+                        modified = False
+
+                        for identifier in unused_identifiers:
+                            # Pattern 1: import { X } from 'module' - remove X from named imports
+                            # Match: import { X, Y } from 'z' -> import { Y } from 'z'
+                            pattern1 = rf"import\s*\{{\s*([^}}]*\b{identifier}\b[^}}]*)\s*\}}\s*from"
+                            match = re.search(pattern1, content)
+                            if match:
+                                imports_str = match.group(1)
+                                # Remove the identifier from imports list
+                                imports_list = [i.strip() for i in imports_str.split(',')]
+                                imports_list = [i for i in imports_list if i and i != identifier and not i.startswith(f"{identifier} as") and not i.endswith(f"as {identifier}")]
+
+                                if imports_list:
+                                    # Still have other imports, just remove this one
+                                    new_imports = ', '.join(imports_list)
+                                    content = re.sub(
+                                        rf"import\s*\{{\s*{re.escape(imports_str)}\s*\}}",
+                                        f"import {{ {new_imports} }}",
+                                        content
+                                    )
+                                    modified = True
+                                else:
+                                    # No imports left, remove entire line
+                                    content = re.sub(
+                                        rf"import\s*\{{\s*{re.escape(imports_str)}\s*\}}\s*from\s*['\"][^'\"]+['\"]\s*;?\n?",
+                                        "",
+                                        content
+                                    )
+                                    modified = True
+
+                            # Pattern 2: import X from 'module' - remove entire line (default import)
+                            pattern2 = rf"^import\s+{identifier}\s+from\s+['\"][^'\"]+['\"]\s*;?\s*$"
+                            if re.search(pattern2, content, re.MULTILINE):
+                                content = re.sub(pattern2 + r"\n?", "", content, flags=re.MULTILINE)
+                                modified = True
+
+                            # Pattern 3: import * as X from 'module' - remove entire line
+                            pattern3 = rf"^import\s+\*\s+as\s+{identifier}\s+from\s+['\"][^'\"]+['\"]\s*;?\s*$"
+                            if re.search(pattern3, content, re.MULTILINE):
+                                content = re.sub(pattern3 + r"\n?", "", content, flags=re.MULTILINE)
+                                modified = True
+
+                        if modified and content != original_content:
+                            file_path.write_text(content, encoding='utf-8')
+                            rel_path = str(file_path.relative_to(project_path))
+                            files_modified.append(rel_path)
+                            logger.info(f"[SimpleFixer] ✓ Removed unused imports from: {rel_path}")
+
+                    except Exception as e:
+                        logger.warning(f"[SimpleFixer] Error processing {file_path}: {e}")
+                        continue
+
+        if files_modified:
+            return SimpleFixResult(
+                success=True,
+                files_modified=files_modified,
+                message=f"Removed unused imports: {', '.join(unused_identifiers)}",
+                patches_applied=len(files_modified)
+            )
+
+        return None
+
+    async def _try_deterministic_package_fix(
+        self,
+        project_path: Path,
+        error_text: str,
+        project_id: Optional[str] = None
+    ) -> Optional[SimpleFixResult]:
+        """
+        Deterministically fix package 404 errors (no AI needed).
+
+        Handles npm/yarn/pnpm errors like:
+        - npm ERR! 404 Not Found - GET https://registry.npmjs.org/package-name
+        - yarn: Package "pkg" could not be found
+        - pnpm: ERR_PNPM_NO_MATCHING_VERSION
+        - No matching version found for package@version
+        - Could not resolve dependency: package@version
+        """
+        import json
+
+        # Patterns for package not found errors (npm, yarn, pnpm)
+        package_patterns = [
+            # npm ERR! 404 'package-name@version' is not in this registry
+            r"404.*['\"]?(@?[\w\-/]+)@([^\s'\"]+)['\"]?\s+is not in",
+            # npm ERR! 404 Not Found - GET https://registry.npmjs.org/package-name
+            r"404\s+Not Found.*registry\.npmjs\.org/(@?[\w\-/]+)",
+            # No matching version found for package@version
+            r"No matching version found for\s+(@?[\w\-/]+)@(\S+)",
+            # Could not resolve dependency: package@version
+            r"Could not resolve dependency:\s*(@?[\w\-/]+)@?(\S*)",
+            # npm ERR! notarget No matching version found for package@version
+            r"notarget.*for\s+(@?[\w\-/]+)@(\S+)",
+            # yarn: Package "package-name" could not be found
+            r'Package\s+["\'](@?[\w\-/]+)["\'].*could not be found',
+            # yarn: Couldn't find package "package" on the "npm" registry
+            r'Couldn\'t find package\s+["\'](@?[\w\-/]+)["\']',
+            # yarn error: No version of package found
+            r'No version of\s+(@?[\w\-/]+)\s+found',
+            # pnpm: ERR_PNPM_NO_MATCHING_VERSION
+            r'ERR_PNPM_NO_MATCHING_VERSION.*(@?[\w\-/]+)@(\S+)',
+            # pnpm: Package @scope/package not found
+            r'Package\s+(@?[\w\-/]+)\s+not found',
+            # pnpm: No matching version found for package
+            r'pnpm.*No matching version found for\s+(@?[\w\-/]+)',
+        ]
+
+        # Extract problematic packages
+        bad_packages = {}
+        for pattern in package_patterns:
+            matches = re.findall(pattern, error_text, re.IGNORECASE)
+            for match in matches:
+                if isinstance(match, tuple):
+                    pkg_name = match[0]
+                    pkg_version = match[1] if len(match) > 1 else None
+                else:
+                    pkg_name = match
+                    pkg_version = None
+                if pkg_name and pkg_name not in ['npm', 'node', 'npx']:
+                    bad_packages[pkg_name] = pkg_version
+
+        if not bad_packages:
+            return None
+
+        logger.info(f"[SimpleFixer] Bad packages detected: {bad_packages}")
+
+        # Find package.json files
+        package_json_paths = [
+            project_path / 'package.json',
+            project_path / 'frontend' / 'package.json',
+        ]
+
+        files_modified = []
+        packages_removed = []
+
+        for pkg_json_path in package_json_paths:
+            if not pkg_json_path.exists():
+                continue
+
+            try:
+                content = pkg_json_path.read_text(encoding='utf-8')
+                pkg_data = json.loads(content)
+                modified = False
+
+                # Check dependencies and devDependencies
+                for dep_key in ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']:
+                    if dep_key not in pkg_data:
+                        continue
+
+                    deps = pkg_data[dep_key]
+                    for pkg_name in list(bad_packages.keys()):
+                        if pkg_name in deps:
+                            del deps[pkg_name]
+                            packages_removed.append(pkg_name)
+                            modified = True
+                            logger.info(f"[SimpleFixer] Removed {pkg_name} from {dep_key}")
+
+                if modified:
+                    # Write back with proper formatting
+                    new_content = json.dumps(pkg_data, indent=2) + "\n"
+                    pkg_json_path.write_text(new_content, encoding='utf-8')
+                    rel_path = str(pkg_json_path.relative_to(project_path))
+                    files_modified.append(rel_path)
+
+                    # Also try to clean lock files (npm, yarn, pnpm)
+                    lock_files = [
+                        ('package-lock.json', 'npm'),
+                        ('yarn.lock', 'yarn'),
+                        ('pnpm-lock.yaml', 'pnpm'),
+                    ]
+                    for lock_name, pkg_manager in lock_files:
+                        lock_path = pkg_json_path.parent / lock_name
+                        if lock_path.exists():
+                            try:
+                                lock_path.unlink()
+                                logger.info(f"[SimpleFixer] Deleted {lock_name} for clean {pkg_manager} reinstall")
+                            except Exception as e:
+                                logger.warning(f"[SimpleFixer] Could not delete {lock_name}: {e}")
+
+            except Exception as e:
+                logger.warning(f"[SimpleFixer] Error processing {pkg_json_path}: {e}")
+                continue
+
+        if files_modified:
+            return SimpleFixResult(
+                success=True,
+                files_modified=files_modified,
+                message=f"Removed bad packages: {', '.join(packages_removed)}. Run 'npm install' to reinstall.",
+                patches_applied=len(packages_removed)
+            )
+
+        return None
+
+    async def _try_deterministic_null_check_fix(
+        self,
+        project_path: Path,
+        error_text: str,
+        project_id: Optional[str] = None
+    ) -> Optional[SimpleFixResult]:
+        """
+        Deterministically fix null/undefined access errors (no AI needed).
+
+        Handles errors like:
+        - Cannot read properties of undefined (reading 'X')
+        - Cannot read properties of null (reading 'X')
+        - TypeError: X is undefined
+        """
+        # Patterns for null/undefined errors with file location
+        null_patterns = [
+            # Cannot read properties of undefined (reading 'property') at file:line
+            r"Cannot read propert(?:y|ies) of (?:undefined|null)(?: \(reading ['\"](\w+)['\"]\))?.+?(?:at |in )([^\s:]+\.(?:tsx?|jsx?)):(\d+)",
+            # TypeError: Cannot read property 'X' of undefined at file:line
+            r"TypeError:.*['\"](\w+)['\"].*(?:undefined|null).+?(?:at |in )([^\s:]+\.(?:tsx?|jsx?)):(\d+)",
+        ]
+
+        fixes_made = []
+
+        for pattern in null_patterns:
+            matches = re.findall(pattern, error_text, re.IGNORECASE | re.MULTILINE)
+            for match in matches:
+                property_name = match[0] if match[0] else None
+                file_path_str = match[1] if len(match) > 1 else None
+                line_num = int(match[2]) if len(match) > 2 and match[2] else None
+
+                if not file_path_str or not line_num:
+                    continue
+
+                # Try to find the file
+                possible_paths = [
+                    project_path / file_path_str,
+                    project_path / 'src' / file_path_str,
+                    project_path / 'frontend' / 'src' / file_path_str,
+                ]
+
+                for file_path in possible_paths:
+                    if not file_path.exists():
+                        continue
+
+                    try:
+                        content = file_path.read_text(encoding='utf-8')
+                        lines = content.split('\n')
+
+                        if line_num > len(lines):
+                            continue
+
+                        line_idx = line_num - 1
+                        line = lines[line_idx]
+                        original_line = line
+
+                        # Add optional chaining where there's property access
+                        # Pattern: obj.property -> obj?.property
+                        if property_name:
+                            # Look for patterns like: something.propertyName
+                            pattern_to_fix = rf'(\w+)\.{property_name}\b'
+                            if re.search(pattern_to_fix, line):
+                                line = re.sub(pattern_to_fix, rf'\1?.{property_name}', line)
+
+                        # Also handle array access: arr[0] -> arr?.[0]
+                        line = re.sub(r'(\w+)\[(\d+)\]', r'\1?.[\2]', line)
+
+                        if line != original_line:
+                            lines[line_idx] = line
+                            new_content = '\n'.join(lines)
+                            file_path.write_text(new_content, encoding='utf-8')
+                            rel_path = str(file_path.relative_to(project_path))
+                            fixes_made.append(rel_path)
+                            logger.info(f"[SimpleFixer] ✓ Added optional chaining in {rel_path}:{line_num}")
+                            break
+
+                    except Exception as e:
+                        logger.warning(f"[SimpleFixer] Error processing {file_path}: {e}")
+                        continue
+
+        if fixes_made:
+            return SimpleFixResult(
+                success=True,
+                files_modified=list(set(fixes_made)),
+                message=f"Added optional chaining to prevent null/undefined errors",
+                patches_applied=len(fixes_made)
+            )
+
+        return None
+
+    async def _try_deterministic_import_extension_fix(
+        self,
+        project_path: Path,
+        error_text: str,
+        project_id: Optional[str] = None
+    ) -> Optional[SimpleFixResult]:
+        """
+        Deterministically fix missing file extension in imports (no AI needed).
+
+        Handles errors like:
+        - Cannot find module './Button'
+        - Module not found: './components/Card'
+        When the file exists with .tsx/.ts extension
+        """
+        # Pattern for missing module imports
+        import_patterns = [
+            r"Cannot find module ['\"](\./[^'\"]+)['\"]",
+            r"Module not found.*['\"](\./[^'\"]+)['\"]",
+            r"Failed to resolve import ['\"](\./[^'\"]+)['\"]",
+        ]
+
+        fixes_made = []
+
+        for pattern in import_patterns:
+            matches = re.findall(pattern, error_text, re.IGNORECASE)
+            for import_path in matches:
+                # Skip if already has extension
+                if re.search(r'\.(tsx?|jsx?|css|json)$', import_path):
+                    continue
+
+                # Try to find the actual file
+                extensions = ['.tsx', '.ts', '.jsx', '.js']
+                src_dirs = [
+                    project_path / 'src',
+                    project_path / 'frontend' / 'src',
+                    project_path,
+                ]
+
+                for src_dir in src_dirs:
+                    if not src_dir.exists():
+                        continue
+
+                    # Check if file exists with any extension
+                    base_path = import_path.replace('./', '')
+                    for ext in extensions:
+                        full_path = src_dir / f"{base_path}{ext}"
+                        if full_path.exists():
+                            # File exists, now find and fix imports
+                            for source_ext in ['*.tsx', '*.ts', '*.jsx', '*.js']:
+                                for source_file in src_dir.rglob(source_ext):
+                                    if 'node_modules' in str(source_file):
+                                        continue
+
+                                    try:
+                                        content = source_file.read_text(encoding='utf-8')
+                                        original = content
+
+                                        # Fix the import
+                                        old_import = f"from '{import_path}'"
+                                        new_import = f"from '{import_path}{ext}'"
+                                        if old_import in content:
+                                            content = content.replace(old_import, new_import)
+
+                                        old_import = f'from "{import_path}"'
+                                        new_import = f'from "{import_path}{ext}"'
+                                        if old_import in content:
+                                            content = content.replace(old_import, new_import)
+
+                                        if content != original:
+                                            source_file.write_text(content, encoding='utf-8')
+                                            rel_path = str(source_file.relative_to(project_path))
+                                            fixes_made.append(rel_path)
+                                            logger.info(f"[SimpleFixer] ✓ Fixed import extension in {rel_path}")
+
+                                    except Exception as e:
+                                        logger.warning(f"[SimpleFixer] Error processing {source_file}: {e}")
+                                        continue
+                            break
+
+        if fixes_made:
+            return SimpleFixResult(
+                success=True,
+                files_modified=list(set(fixes_made)),
+                message=f"Fixed import path extensions",
+                patches_applied=len(fixes_made)
+            )
+
+        return None
 
     async def fix(
         self,
