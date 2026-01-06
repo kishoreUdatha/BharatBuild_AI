@@ -144,6 +144,16 @@ resource "aws_security_group" "sandbox" {
     security_groups = [aws_security_group.alb.id]
   }
 
+  # Nginx reverse proxy port (for ECS backend health checks)
+  # CRITICAL: ECS backend does health check to sandbox via http://{sandbox_ip}:8080/sandbox/{port}/
+  ingress {
+    description     = "Nginx proxy from ECS backend (health check)"
+    from_port       = 8080
+    to_port         = 8080
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs.id]
+  }
+
   # Allow all outbound (for npm install, pip install, etc.)
   egress {
     from_port   = 0
@@ -157,7 +167,7 @@ resource "aws_security_group" "sandbox" {
   }
 }
 
-# Allow ECS to connect to sandbox
+# Allow ECS to connect to sandbox Docker API
 resource "aws_security_group_rule" "ecs_to_sandbox" {
   type                     = "egress"
   from_port                = 2375
@@ -166,6 +176,17 @@ resource "aws_security_group_rule" "ecs_to_sandbox" {
   source_security_group_id = aws_security_group.sandbox.id
   security_group_id        = aws_security_group.ecs.id
   description              = "ECS to Sandbox Docker API"
+}
+
+# Allow ECS to connect to sandbox nginx gateway (for health checks)
+resource "aws_security_group_rule" "ecs_to_sandbox_nginx" {
+  type                     = "egress"
+  from_port                = 8080
+  to_port                  = 8080
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.sandbox.id
+  security_group_id        = aws_security_group.ecs.id
+  description              = "ECS to Sandbox nginx gateway (health check)"
 }
 
 # =============================================================================
