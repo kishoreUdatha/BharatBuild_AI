@@ -595,6 +595,12 @@ async def proxy_preview(project_id: str, path: str, request: Request):
         response_headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
         response_headers['Access-Control-Allow-Headers'] = '*'
 
+        # Allow iframe embedding for preview (CRITICAL for bharatbuild.ai frontend)
+        response_headers['Content-Security-Policy'] = 'frame-ancestors https://bharatbuild.ai https://*.bharatbuild.ai http://localhost:* http://127.0.0.1:*'
+        # Remove X-Frame-Options if present (CSP frame-ancestors takes precedence)
+        response_headers.pop('X-Frame-Options', None)
+        response_headers.pop('x-frame-options', None)
+
         # Rewrite absolute paths in HTML/JS responses to include preview prefix
         content_type = response.headers.get('content-type', '')
         content = response.content
