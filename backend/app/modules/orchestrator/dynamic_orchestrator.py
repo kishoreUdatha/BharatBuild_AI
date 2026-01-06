@@ -5332,6 +5332,7 @@ Stream code in chunks for real-time display.
         """
         Execute fixer agent - apply patches for errors
         """
+        import re
         from app.modules.agents.fixer_agent import FixerAgent
         from app.utils.response_parser import PlainTextParser
 
@@ -5341,6 +5342,98 @@ Stream code in chunks for real-time display.
                 data={"message": "No errors to fix"}
             )
             return
+
+        # =================================================================
+        # STEP 0: Handle MISSING FILE errors by regenerating with Writer
+        # This is more reliable than having Fixer guess what content to create
+        # =================================================================
+        missing_file_errors = []
+        other_errors = []
+
+        # Extract file paths from ENOENT errors
+        enoent_pattern = re.compile(r"ENOENT.*?['\"]([^'\"]+)['\"]|no such file or directory.*?['\"]([^'\"]+)['\"]|Cannot find module ['\"]([^'\"]+)['\"]", re.IGNORECASE)
+
+        for error in context.errors:
+            error_msg = error.get("message", "") + " " + error.get("stderr", "")
+            matches = enoent_pattern.findall(error_msg)
+
+            if matches:
+                # Extract file path from regex groups
+                for match in matches:
+                    file_path = next((m for m in match if m), None)
+                    if file_path:
+                        # Clean up path (remove /app/ prefix if present)
+                        clean_path = re.sub(r'^/app/', '', file_path)
+                        clean_path = re.sub(r'^\./', '', clean_path)
+
+                        # Check if this file was in the original plan
+                        planned_files = [f.get("path", "") for f in context.files_created]
+                        plan_files = getattr(context, 'plan', {})
+                        if isinstance(plan_files, dict):
+                            plan_files = [f.get("path", "") for f in plan_files.get("files", [])]
+
+                        # Check if file should exist but is empty/missing
+                        file_in_plan = any(clean_path in p or p in clean_path for p in planned_files + (plan_files if isinstance(plan_files, list) else []))
+
+                        if file_in_plan or clean_path.endswith(('.ts', '.tsx', '.js', '.jsx', '.py', '.java')):
+                            missing_file_errors.append({
+                                "error": error,
+                                "file_path": clean_path,
+                                "was_planned": file_in_plan
+                            })
+                            logger.info(f"[Fixer] Detected missing file: {clean_path} (planned={file_in_plan})")
+                        else:
+                            other_errors.append(error)
+            else:
+                other_errors.append(error)
+
+        # Regenerate missing files using Writer (more reliable than Fixer guessing)
+        if missing_file_errors:
+            yield OrchestratorEvent(
+                type=EventType.STATUS,
+                data={"message": f"Regenerating {len(missing_file_errors)} missing file(s) with Writer..."}
+            )
+
+            writer_config = self.get_agent(AgentType.WRITER)
+            for mf in missing_file_errors:
+                file_path = mf["file_path"]
+                yield OrchestratorEvent(
+                    type=EventType.STATUS,
+                    data={"message": f"Regenerating: {file_path}"}
+                )
+
+                try:
+                    # Get file description from plan if available
+                    file_desc = f"Regenerate {file_path} - this file was missing/empty"
+                    for f in context.files_created:
+                        if f.get("path") == file_path:
+                            file_desc = f.get("description", file_desc)
+                            break
+
+                    # Use Writer to regenerate with retry logic
+                    dynamic_prompt = self._build_dynamic_writer_prompt(file_path)
+                    async for event in self._execute_writer_for_single_file(
+                        writer_config, context, file_path, file_desc, dynamic_prompt
+                    ):
+                        yield event
+
+                    logger.info(f"[Fixer] Successfully regenerated missing file: {file_path}")
+
+                except Exception as regen_err:
+                    logger.error(f"[Fixer] Failed to regenerate {file_path}: {regen_err}")
+                    # Fall back to adding to other_errors for Fixer to try
+                    other_errors.append(mf["error"])
+
+        # If no other errors remain, we're done
+        if not other_errors:
+            yield OrchestratorEvent(
+                type=EventType.STATUS,
+                data={"message": "All missing files regenerated successfully"}
+            )
+            return
+
+        # Update context.errors with remaining errors
+        context.errors = other_errors
 
         yield OrchestratorEvent(
             type=EventType.STATUS,
