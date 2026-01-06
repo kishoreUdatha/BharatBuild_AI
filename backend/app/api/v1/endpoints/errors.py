@@ -479,6 +479,13 @@ async def execute_fix_with_notification(
         if result.success and result.files_modified:
             logger.info(f"[ErrorHandler:{project_id}] SimpleFixer completed: {len(result.files_modified)} files")
 
+            # File tracking lists (defined outside try block to avoid NameError)
+            config_files_modified = []
+            source_files_modified = []
+            env_files_modified = []
+            startup_critical_modified = []  # Files that require container restart
+            npm_files_modified = []  # package.json changes need npm install
+
             # Sync modified files: SOURCE files to container (HMR), CONFIG files to DB/S3 only
             # CRITICAL: Config files (vite.config.ts, package.json, etc.) should NOT be synced
             # to running containers as they cause Vite to restart and create restart loops
@@ -488,14 +495,19 @@ async def execute_fix_with_notification(
 
                 # Config files that should NOT be synced to running containers
                 # These files cause Vite/build tool restarts when changed
+                # NOTE: package.json moved to NPM_FILES - needs sync + npm install
                 CONFIG_FILES = {
                     'vite.config.ts', 'vite.config.js', 'vite.config.mjs',
-                    'package.json', 'package-lock.json',
+                    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',  # Lock files only
                     'tsconfig.json',
                     'postcss.config.js', 'postcss.config.cjs', 'postcss.config.mjs',
                     'tailwind.config.js', 'tailwind.config.ts',
                     'webpack.config.js', 'next.config.js', 'next.config.mjs',
                 }
+
+                # NPM FILES - MUST be synced + trigger npm install + restart
+                # These are critical for dependency resolution
+                NPM_FILES = {'package.json'}
 
                 # Startup-critical files that SHOULD be synced but REQUIRE container restart
                 # These are needed for Vite/build tools to start - if missing, Vite crashes
@@ -508,11 +520,6 @@ async def execute_fix_with_notification(
                 # Environment files - sync to container but require restart
                 ENV_FILES = {'.env', '.env.local', '.env.production', '.env.development'}
 
-                config_files_modified = []
-                source_files_modified = []
-                env_files_modified = []
-                startup_critical_modified = []  # Files that require container restart
-
                 for file_path in result.files_modified:
                     try:
                         full_path = project_path / file_path
@@ -524,10 +531,11 @@ async def execute_fix_with_notification(
                             is_config_file = file_name in CONFIG_FILES
                             is_env_file = file_name in ENV_FILES
                             is_startup_critical = file_name in STARTUP_CRITICAL_FILES
+                            is_npm_file = file_name in NPM_FILES
 
-                            # STEP 1: Sync SOURCE files and ENV files to RUNNING CONTAINER
-                            # SKIP config files - they cause restart loops
-                            # ENV files need restart but should be synced first
+                            # STEP 1: Sync SOURCE files, ENV files, and NPM files to RUNNING CONTAINER
+                            # SKIP config files (except package.json) - they cause restart loops
+                            # package.json MUST be synced for npm install to work
                             if IS_REMOTE_SANDBOX and user_id and not is_config_file:
                                 # Retry logic with exponential backoff (configurable via settings)
                                 max_retries = settings.CONTAINER_SYNC_MAX_RETRIES
@@ -545,7 +553,10 @@ async def execute_fix_with_notification(
                                         )
                                         if container_synced:
                                             logger.info(f"[ErrorHandler:{project_id}] ✓ Synced to CONTAINER: {file_path}")
-                                            if is_startup_critical:
+                                            if is_npm_file:
+                                                npm_files_modified.append(file_path)
+                                                logger.info(f"[ErrorHandler:{project_id}] 📦 NPM file synced: {file_path} (requires npm install)")
+                                            elif is_startup_critical:
                                                 startup_critical_modified.append(file_path)
                                                 logger.info(f"[ErrorHandler:{project_id}] ⚡ Startup-critical file synced: {file_path} (requires restart)")
                                             elif is_env_file:
@@ -595,23 +606,20 @@ async def execute_fix_with_notification(
 
                 logger.info(f"[ErrorHandler:{project_id}] Synced {len(result.files_modified)} fixed files to Container + DB + S3")
 
-                # STEP 4: If package.json was modified, run npm install in container
-                package_json_modified = any(
-                    'package.json' in f and 'package-lock.json' not in f
-                    for f in result.files_modified
-                )
-                if package_json_modified and IS_REMOTE_SANDBOX and user_id:
+                # STEP 4: If package.json was synced, run npm install in container
+                # NOTE: Only run if file was actually synced (npm_files_modified), not just modified
+                if npm_files_modified and IS_REMOTE_SANDBOX and user_id:
                     try:
                         from app.services.container_executor import container_executor
 
                         # Find the working directory (frontend/ or root)
-                        pkg_file = next((f for f in result.files_modified if 'package.json' in f), None)
+                        pkg_file = npm_files_modified[0] if npm_files_modified else None
                         work_dir = "/app"
                         if pkg_file and '/' in pkg_file:
                             # e.g., frontend/package.json -> /app/frontend
                             work_dir = f"/app/{pkg_file.rsplit('/', 1)[0]}"
 
-                        logger.info(f"[ErrorHandler:{project_id}] Running npm install in container (workdir={work_dir})")
+                        logger.info(f"[ErrorHandler:{project_id}] 📦 Running npm install after package.json sync (workdir={work_dir})")
 
                         # Find the container for this project
                         container = await container_executor._get_existing_container(project_id)
@@ -650,6 +658,12 @@ async def execute_fix_with_notification(
                 logger.info(f"[ErrorHandler:{project_id}] Container restart REQUIRED - Vite needs these files to start")
                 # Startup-critical files require restart (vite crashed, HMR won't help)
                 config_files_modified.extend(startup_critical_modified)
+
+            if npm_files_modified:
+                logger.info(f"[ErrorHandler:{project_id}] 📦 NPM files fixed: {npm_files_modified}")
+                logger.info(f"[ErrorHandler:{project_id}] Container restart REQUIRED - dev server needs new packages")
+                # NPM files require restart after npm install completes
+                config_files_modified.extend(npm_files_modified)
 
             if env_files_modified:
                 logger.info(f"[ErrorHandler:{project_id}] 🔧 ENV files fixed: {env_files_modified}")
