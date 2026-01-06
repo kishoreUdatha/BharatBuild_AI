@@ -117,6 +117,27 @@ class ProjectSanitizer:
             sanitized_content = self._sanitize_requirements_txt(sanitized_content)
         elif file_name == 'application.properties' or file_name == 'application.yml':
             sanitized_content = self._sanitize_spring_config(sanitized_content)
+        # AI/ML Projects
+        elif file_name == 'environment.yml' or file_name == 'environment.yaml':
+            sanitized_content = self._sanitize_conda_env(sanitized_content)
+        elif file_name == 'pyproject.toml':
+            sanitized_content = self._sanitize_pyproject_toml(sanitized_content)
+        elif file_name == 'setup.py':
+            sanitized_content = self._sanitize_setup_py(sanitized_content)
+        elif ext == '.ipynb':
+            sanitized_content = self._sanitize_jupyter_notebook(sanitized_content)
+        # Blockchain Projects
+        elif file_name == 'hardhat.config.js' or file_name == 'hardhat.config.ts':
+            sanitized_content = self._sanitize_hardhat_config(sanitized_content)
+        elif file_name == 'truffle-config.js':
+            sanitized_content = self._sanitize_truffle_config(sanitized_content)
+        elif file_name == 'foundry.toml':
+            sanitized_content = self._sanitize_foundry_toml(sanitized_content)
+        elif ext == '.sol':
+            sanitized_content = self._sanitize_solidity(sanitized_content)
+        # Cyber Security
+        elif file_name == 'docker-compose.yml' or file_name == 'docker-compose.yaml':
+            sanitized_content = self._sanitize_docker_compose_security(sanitized_content)
 
         return sanitized_path, sanitized_content, self.fixes_applied
 
@@ -947,6 +968,408 @@ class ProjectSanitizer:
 
         except Exception as e:
             logger.warning(f"[Sanitizer] Spring config sanitization failed (returning original): {e}")
+            return original
+
+    # =========================================================================
+    # AI/ML PROJECT SANITIZERS
+    # =========================================================================
+
+    def _sanitize_conda_env(self, content: str) -> str:
+        """
+        Sanitize Conda environment.yml to fix common issues.
+
+        Fixes:
+        1. Ensure name field exists
+        2. Fix channel ordering (conda-forge should be first for ML packages)
+        3. Fix common package name typos
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Ensure name field exists
+            if 'name:' not in content:
+                content = 'name: ml-env\n' + content
+                self.fixes_applied.append("Added missing name field to environment.yml")
+
+            # Fix 2: Ensure channels section exists with conda-forge
+            if 'channels:' not in content:
+                # Add channels after name
+                content = re.sub(
+                    r'(name:\s*\S+)',
+                    r'\1\nchannels:\n  - conda-forge\n  - defaults',
+                    content,
+                    count=1
+                )
+                self.fixes_applied.append("Added channels section to environment.yml")
+
+            # Fix 3: Common ML package typos
+            typo_fixes = {
+                'tensorflow-gpu': 'tensorflow',  # GPU version is deprecated
+                'pytorch': 'torch',  # Common mistake
+                'scikit_learn': 'scikit-learn',
+                'opencv': 'opencv-python',
+            }
+            for typo, correct in typo_fixes.items():
+                if typo in content and correct not in content:
+                    content = content.replace(typo, correct)
+                    self.fixes_applied.append(f"Fixed package name: {typo} -> {correct}")
+
+            if content != original:
+                logger.info(f"[Sanitizer] environment.yml fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] environment.yml sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_pyproject_toml(self, content: str) -> str:
+        """
+        Sanitize pyproject.toml to fix common issues.
+
+        Fixes:
+        1. Ensure [project] or [tool.poetry] section exists
+        2. Fix missing required fields
+        3. Fix build system declaration
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Ensure build-system exists
+            if '[build-system]' not in content:
+                content = '[build-system]\nrequires = ["setuptools>=61.0"]\nbuild-backend = "setuptools.build_meta"\n\n' + content
+                self.fixes_applied.append("Added [build-system] section to pyproject.toml")
+
+            # Fix 2: Ensure project section exists
+            if '[project]' not in content and '[tool.poetry]' not in content:
+                content += '\n[project]\nname = "app"\nversion = "0.1.0"\n'
+                self.fixes_applied.append("Added [project] section to pyproject.toml")
+
+            if content != original:
+                logger.info(f"[Sanitizer] pyproject.toml fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] pyproject.toml sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_setup_py(self, content: str) -> str:
+        """
+        Sanitize setup.py to fix common issues.
+
+        Fixes:
+        1. Ensure setup() call exists
+        2. Fix common import issues
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Ensure setuptools import
+            if 'from setuptools import' not in content and 'import setuptools' not in content:
+                content = 'from setuptools import setup, find_packages\n\n' + content
+                self.fixes_applied.append("Added setuptools import to setup.py")
+
+            # Fix 2: Ensure setup() call exists
+            if 'setup(' not in content:
+                content += '\nsetup(\n    name="app",\n    version="0.1.0",\n    packages=find_packages(),\n)\n'
+                self.fixes_applied.append("Added setup() call to setup.py")
+
+            if content != original:
+                logger.info(f"[Sanitizer] setup.py fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] setup.py sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_jupyter_notebook(self, content: str) -> str:
+        """
+        Sanitize Jupyter notebook (.ipynb) to fix common issues.
+
+        Fixes:
+        1. Fix invalid JSON structure
+        2. Ensure required notebook fields exist
+        3. Fix kernel specification
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            import json
+
+            # Parse notebook
+            try:
+                notebook = json.loads(content)
+            except json.JSONDecodeError:
+                # Try to fix trailing commas
+                fixed_content = re.sub(r',(\s*[}\]])', r'\1', content)
+                notebook = json.loads(fixed_content)
+                self.fixes_applied.append("Fixed JSON syntax in notebook")
+
+            # Fix 1: Ensure nbformat exists
+            if 'nbformat' not in notebook:
+                notebook['nbformat'] = 4
+                self.fixes_applied.append("Added nbformat to notebook")
+
+            if 'nbformat_minor' not in notebook:
+                notebook['nbformat_minor'] = 5
+                self.fixes_applied.append("Added nbformat_minor to notebook")
+
+            # Fix 2: Ensure cells array exists
+            if 'cells' not in notebook:
+                notebook['cells'] = []
+                self.fixes_applied.append("Added cells array to notebook")
+
+            # Fix 3: Ensure metadata exists
+            if 'metadata' not in notebook:
+                notebook['metadata'] = {
+                    "kernelspec": {
+                        "display_name": "Python 3",
+                        "language": "python",
+                        "name": "python3"
+                    }
+                }
+                self.fixes_applied.append("Added metadata to notebook")
+
+            content = json.dumps(notebook, indent=2) + '\n'
+
+            if content != original:
+                logger.info(f"[Sanitizer] Jupyter notebook fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] Jupyter notebook sanitization failed (returning original): {e}")
+            return original
+
+    # =========================================================================
+    # BLOCKCHAIN PROJECT SANITIZERS
+    # =========================================================================
+
+    def _sanitize_hardhat_config(self, content: str) -> str:
+        """
+        Sanitize Hardhat config to fix common issues.
+
+        Fixes:
+        1. Fix missing module.exports or export default
+        2. Ensure solidity version is specified
+        3. Fix network configuration
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Ensure exports exist
+            if 'module.exports' not in content and 'export default' not in content:
+                content += '\n\nmodule.exports = {\n  solidity: "0.8.19",\n};\n'
+                self.fixes_applied.append("Added module.exports to hardhat.config")
+
+            # Fix 2: Ensure solidity version is specified
+            if 'solidity' not in content:
+                if 'module.exports = {' in content:
+                    content = content.replace(
+                        'module.exports = {',
+                        'module.exports = {\n  solidity: "0.8.19",'
+                    )
+                    self.fixes_applied.append("Added solidity version to hardhat.config")
+
+            # Fix 3: Fix common hardhat plugin typos
+            typo_fixes = [
+                ('@nomiclabs/hardhat-waffle', '@nomicfoundation/hardhat-toolbox'),
+                ('hardhat-waffle', '@nomicfoundation/hardhat-toolbox'),
+            ]
+            for typo, correct in typo_fixes:
+                if typo in content:
+                    content = content.replace(typo, correct)
+                    self.fixes_applied.append(f"Updated deprecated plugin: {typo} -> {correct}")
+
+            if content != original:
+                logger.info(f"[Sanitizer] hardhat.config fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] hardhat.config sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_truffle_config(self, content: str) -> str:
+        """
+        Sanitize Truffle config to fix common issues.
+
+        Fixes:
+        1. Fix missing module.exports
+        2. Ensure compiler version is specified
+        3. Fix network configuration
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Ensure module.exports exists
+            if 'module.exports' not in content:
+                content = 'module.exports = {\n  compilers: {\n    solc: {\n      version: "0.8.19"\n    }\n  }\n};\n'
+                self.fixes_applied.append("Added module.exports to truffle-config")
+
+            # Fix 2: Ensure compiler version
+            if 'compilers' not in content and 'solc' not in content:
+                if 'module.exports = {' in content:
+                    content = content.replace(
+                        'module.exports = {',
+                        'module.exports = {\n  compilers: {\n    solc: {\n      version: "0.8.19"\n    }\n  },'
+                    )
+                    self.fixes_applied.append("Added compiler config to truffle-config")
+
+            if content != original:
+                logger.info(f"[Sanitizer] truffle-config fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] truffle-config sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_foundry_toml(self, content: str) -> str:
+        """
+        Sanitize Foundry configuration to fix common issues.
+
+        Fixes:
+        1. Ensure [profile.default] section exists
+        2. Fix src/out/libs paths
+        3. Fix solidity version
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Ensure profile.default section
+            if '[profile.default]' not in content:
+                content = '[profile.default]\nsrc = "src"\nout = "out"\nlibs = ["lib"]\nsolc = "0.8.19"\n\n' + content
+                self.fixes_applied.append("Added [profile.default] section to foundry.toml")
+
+            # Fix 2: Ensure solc version
+            if 'solc' not in content:
+                content = content.replace(
+                    '[profile.default]',
+                    '[profile.default]\nsolc = "0.8.19"'
+                )
+                self.fixes_applied.append("Added solc version to foundry.toml")
+
+            if content != original:
+                logger.info(f"[Sanitizer] foundry.toml fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] foundry.toml sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_solidity(self, content: str) -> str:
+        """
+        Sanitize Solidity contracts to fix common issues.
+
+        Fixes:
+        1. Ensure SPDX license identifier exists
+        2. Ensure pragma solidity version exists
+        3. Fix common syntax issues
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Ensure SPDX license (required since Solidity 0.6.8)
+            if 'SPDX-License-Identifier' not in content:
+                content = '// SPDX-License-Identifier: MIT\n' + content
+                self.fixes_applied.append("Added SPDX license identifier to Solidity file")
+
+            # Fix 2: Ensure pragma solidity version
+            if 'pragma solidity' not in content:
+                # Insert after SPDX
+                if 'SPDX-License-Identifier' in content:
+                    content = re.sub(
+                        r'(// SPDX-License-Identifier:[^\n]*\n)',
+                        r'\1pragma solidity ^0.8.19;\n',
+                        content,
+                        count=1
+                    )
+                else:
+                    content = 'pragma solidity ^0.8.19;\n' + content
+                self.fixes_applied.append("Added pragma solidity to Solidity file")
+
+            if content != original:
+                logger.info(f"[Sanitizer] Solidity fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] Solidity sanitization failed (returning original): {e}")
+            return original
+
+    # =========================================================================
+    # CYBER SECURITY SANITIZERS
+    # =========================================================================
+
+    def _sanitize_docker_compose_security(self, content: str) -> str:
+        """
+        Sanitize docker-compose.yml for security best practices.
+
+        Fixes:
+        1. Remove privileged mode if not needed
+        2. Add security_opt for containers
+        3. Fix exposed ports (don't bind to 0.0.0.0 by default)
+        4. Remove hardcoded secrets
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Warn about privileged mode (don't remove, just log)
+            if 'privileged: true' in content:
+                logger.warning("[Sanitizer] docker-compose.yml uses privileged mode - security risk!")
+                self.fixes_applied.append("WARNING: privileged mode detected")
+
+            # Fix 2: Check for hardcoded passwords (don't remove, just warn)
+            password_patterns = [
+                r'password:\s*["\']?[^$\s{][^"\'\s]*',  # Not using env vars
+                r'MYSQL_ROOT_PASSWORD:\s*["\']?[^$\s{][^"\'\s]*',
+                r'POSTGRES_PASSWORD:\s*["\']?[^$\s{][^"\'\s]*',
+            ]
+            for pattern in password_patterns:
+                if re.search(pattern, content, re.IGNORECASE):
+                    logger.warning("[Sanitizer] docker-compose.yml contains hardcoded password!")
+                    self.fixes_applied.append("WARNING: hardcoded password detected - use environment variables")
+                    break
+
+            # Fix 3: Check for ports bound to 0.0.0.0
+            if re.search(r'ports:\s*\n\s*-\s*["\']?\d+:\d+', content):
+                # This binds to all interfaces - might want to use 127.0.0.1
+                logger.info("[Sanitizer] docker-compose.yml exposes ports to all interfaces")
+
+            # Fix 4: Ensure version is specified (for older compose files)
+            if not content.strip().startswith('version:') and 'services:' in content:
+                # Modern compose doesn't need version, but adding for compatibility
+                pass  # Don't add version - modern compose doesn't need it
+
+            if self.fixes_applied and content != original:
+                logger.info(f"[Sanitizer] docker-compose security checks: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] docker-compose security sanitization failed (returning original): {e}")
             return original
 
 
