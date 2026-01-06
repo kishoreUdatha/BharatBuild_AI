@@ -29,13 +29,13 @@ const isProduction = (): boolean => {
 }
 
 // Helper to construct preview URL with correct base
-// In production: uses subdomain-based URL (Vercel/Netlify style)
+// In production: uses path-based URL through API proxy
 // In development: uses localhost:port
 const getPreviewUrl = (port: number | string, projectId?: string): string => {
   if (isProduction() && projectId) {
-    // Production: Use subdomain-based preview URL (Vercel/Netlify style)
-    // This allows Vite to work at root "/" without path hacks
-    return `https://${projectId}.bharatbuild.ai/`
+    // Production: Use path-based preview URL through API proxy
+    // Subdomain-based URLs require wildcard DNS which isn't configured
+    return `https://app.bharatbuild.ai/api/v1/preview/${projectId}/`
   }
   // Development: Use localhost
   const base = SANDBOX_PREVIEW_BASE.replace(/:\d+$/, '').replace(/\/$/, '')
