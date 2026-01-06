@@ -191,6 +191,9 @@ export const useProjectGeneration = (options: UseProjectGenerationOptions = {}) 
   const pendingFileSyncsRef = useRef<Array<{path: string, content: string, language: string}>>([])
   const hasRealProjectIdRef = useRef<boolean>(false)
 
+  // Track pending sync promises to ensure all files are synced before auto-run
+  const pendingSyncPromisesRef = useRef<Promise<void>[]>([])
+
   const { addFile, setCurrentProject, currentProject } = useProjectStore()
 
   const generateProject = useCallback(
@@ -199,6 +202,7 @@ export const useProjectGeneration = (options: UseProjectGenerationOptions = {}) 
       projectIdRef.current = null
       pendingFileSyncsRef.current = []
       hasRealProjectIdRef.current = false
+      pendingSyncPromisesRef.current = [] // Reset pending sync promises
 
       // Reset project store for clean slate
       useProjectStore.getState().resetProject()
@@ -304,10 +308,13 @@ export const useProjectGeneration = (options: UseProjectGenerationOptions = {}) 
             // If we have the real project ID, sync immediately
             // Otherwise, queue for syncing after project_id_updated
             if (hasRealProjectIdRef.current && projectIdRef.current) {
-              syncFileToBackend(projectIdRef.current, event.path, event.content, language)
+              // Track sync promise to ensure completion before auto-run
+              const syncPromise = syncFileToBackend(projectIdRef.current, event.path, event.content, language)
+              pendingSyncPromisesRef.current.push(syncPromise)
             } else if (event.project_id) {
               // Backend provided project_id in the event
-              syncFileToBackend(event.project_id, event.path, event.content, language)
+              const syncPromise = syncFileToBackend(event.project_id, event.path, event.content, language)
+              pendingSyncPromisesRef.current.push(syncPromise)
             } else {
               // Queue for later sync - prevents file overlap with temp IDs
               pendingFileSyncsRef.current.push({ path: event.path, content: event.content, language })
@@ -353,7 +360,9 @@ export const useProjectGeneration = (options: UseProjectGenerationOptions = {}) 
               if (pendingFileSyncsRef.current.length > 0) {
                 console.log(`[ProjectGeneration] Flushing ${pendingFileSyncsRef.current.length} queued files to project: ${newProjectId}`)
                 for (const file of pendingFileSyncsRef.current) {
-                  syncFileToBackend(newProjectId, file.path, file.content, file.language)
+                  // Track sync promise to ensure completion before auto-run
+                  const syncPromise = syncFileToBackend(newProjectId, file.path, file.content, file.language)
+                  pendingSyncPromisesRef.current.push(syncPromise)
                 }
                 pendingFileSyncsRef.current = [] // Clear the queue
               }
@@ -374,7 +383,24 @@ export const useProjectGeneration = (options: UseProjectGenerationOptions = {}) 
 
           // ============= AUTO-RUN (Like Bolt.new) =============
           // Automatically start the project after generation
+          // CRITICAL: Wait for all file syncs to complete before starting auto-run
+          // This prevents "build complete but files still creating" race condition
           if (autoRun && projectIdRef.current) {
+            console.log('[ProjectGeneration] 🚀 Waiting for file syncs to complete...')
+            setProgress((prev) => ({
+              ...prev,
+              message: '📁 Syncing files to server...',
+            }))
+
+            // Wait for all pending file syncs to complete
+            const pendingSyncs = pendingSyncPromisesRef.current
+            if (pendingSyncs.length > 0) {
+              console.log(`[ProjectGeneration] Waiting for ${pendingSyncs.length} file syncs to complete`)
+              await Promise.all(pendingSyncs)
+              console.log(`[ProjectGeneration] All ${pendingSyncs.length} file syncs completed`)
+              pendingSyncPromisesRef.current = [] // Clear completed promises
+            }
+
             console.log('[ProjectGeneration] 🚀 Starting auto-run...')
             setIsAutoRunning(true)
             setProgress((prev) => ({

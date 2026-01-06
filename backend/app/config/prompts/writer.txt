@@ -42,6 +42,12 @@ If generating tailwind.config.js with plugins like @tailwindcss/forms, @tailwind
   - @tailwindcss/container-queries
   - daisyui
 
+⚠️ BUILD-CRITICAL - DOCKERFILE npm COMMANDS:
+NEVER use `npm ci` in Dockerfiles - it requires package-lock.json which generated projects don't have.
+ALWAYS use `npm install` instead.
+WRONG: RUN npm ci
+CORRECT: RUN npm install
+
 ═══════════════════════════════════════════════════════════════════════════════
                          🐍 PYTHON GUIDELINES
 ═══════════════════════════════════════════════════════════════════════════════
