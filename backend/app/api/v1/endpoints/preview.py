@@ -90,6 +90,12 @@ async def proxy_request(
                 ]:
                     response_headers[key] = value
 
+            # Allow iframe embedding for preview (CRITICAL for bharatbuild.ai frontend)
+            response_headers['Content-Security-Policy'] = 'frame-ancestors https://bharatbuild.ai https://*.bharatbuild.ai http://localhost:* http://127.0.0.1:*'
+            # Remove X-Frame-Options if present (CSP frame-ancestors takes precedence)
+            response_headers.pop('X-Frame-Options', None)
+            response_headers.pop('x-frame-options', None)
+
             # Return proxied response
             return Response(
                 content=response.content,
