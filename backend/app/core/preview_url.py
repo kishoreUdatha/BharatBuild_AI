@@ -38,7 +38,8 @@ API_BASE_PATH = "/api/v1"
 
 # Subdomain-based preview (Vercel/Netlify style)
 # Format: https://{project_id}.bharatbuild.ai/
-USE_SUBDOMAIN_PREVIEW = os.getenv("USE_SUBDOMAIN_PREVIEW", "true").lower() == "true"
+# NOTE: Disabled by default - requires wildcard DNS (*.bharatbuild.ai) which isn't configured
+USE_SUBDOMAIN_PREVIEW = os.getenv("USE_SUBDOMAIN_PREVIEW", "false").lower() == "true"
 PREVIEW_DOMAIN = os.getenv("PREVIEW_DOMAIN", "bharatbuild.ai")
 
 # Preview path template (fallback for path-based routing)
