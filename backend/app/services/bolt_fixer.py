@@ -27,6 +27,7 @@ from app.services.patch_applier import PatchApplier
 from app.services.storage_service import storage_service
 from app.services.batch_tracker import batch_tracker
 from app.services.dependency_graph import build_dependency_graph, DependencyGraph
+from app.services.project_sanitizer import sanitize_project_file
 
 
 # =============================================================================
@@ -156,6 +157,16 @@ No explanations. Only the <file> block."""
         not directly via Python, because the sandbox filesystem is on a different host.
         """
         try:
+            # AUTO-SANITIZE: Apply technology-specific fixes before writing
+            # This handles CSS @import order, Tailwind plugins, Vite config, pom.xml, etc.
+            try:
+                relative_path = file_path.name  # Use filename for sanitizer matching
+                sanitized_path, content, fixes = sanitize_project_file(relative_path, content)
+                if fixes:
+                    logger.info(f"[BoltFixer:{project_id}] Sanitizer applied: {', '.join(fixes)}")
+            except Exception as sanitize_err:
+                logger.warning(f"[BoltFixer:{project_id}] Sanitization skipped: {sanitize_err}")
+
             if self._sandbox_file_writer:
                 # Use sandbox file writer (handles remote mode)
                 # Use str(file_path) directly - path is already absolute from project_path / relative_path

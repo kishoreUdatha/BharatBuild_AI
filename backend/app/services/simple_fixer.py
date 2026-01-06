@@ -39,6 +39,7 @@ from anthropic import AsyncAnthropic
 from app.core.logging_config import logger
 from app.core.config import settings
 from app.services.unified_file_manager import unified_file_manager
+from app.services.project_sanitizer import sanitize_project_file
 
 
 # Rate limiting to prevent infinite loops
@@ -4747,6 +4748,17 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                         except json.JSONDecodeError:
                             logger.warning(f"[SimpleFixer] Could not fix JSON on create: {path}")
 
+                # AUTO-SANITIZE: Apply technology-specific fixes before writing
+                # This handles CSS @import order, Tailwind plugins, Vite config, etc.
+                try:
+                    sanitized_path, content, fixes = sanitize_project_file(path, content)
+                    if fixes:
+                        logger.info(f"[SimpleFixer] Sanitizer applied: {', '.join(fixes)}")
+                    path = sanitized_path
+                    full_path = project_path / path
+                except Exception as sanitize_err:
+                    logger.warning(f"[SimpleFixer] Sanitization skipped: {sanitize_err}")
+
                 # LAYER 1: Write to sandbox
                 full_path.parent.mkdir(parents=True, exist_ok=True)
                 full_path.write_text(content, encoding='utf-8')
@@ -4791,6 +4803,17 @@ Please analyze the output and fix any errors. If there are no errors to fix (e.g
                         except json.JSONDecodeError:
                             # Keep original content if still fails
                             logger.warning(f"[SimpleFixer] Could not fix JSON: {path}")
+
+                # AUTO-SANITIZE: Apply technology-specific fixes after str_replace
+                # This handles CSS @import order, Tailwind plugins, Vite config, etc.
+                try:
+                    sanitized_path, new_content, fixes = sanitize_project_file(path, new_content)
+                    if fixes:
+                        logger.info(f"[SimpleFixer] Sanitizer applied after str_replace: {', '.join(fixes)}")
+                    path = sanitized_path
+                    full_path = project_path / path
+                except Exception as sanitize_err:
+                    logger.warning(f"[SimpleFixer] Sanitization skipped: {sanitize_err}")
 
                 # LAYER 1: Write to sandbox
                 full_path.write_text(new_content, encoding='utf-8')
