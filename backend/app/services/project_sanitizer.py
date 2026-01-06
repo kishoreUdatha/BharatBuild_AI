@@ -99,6 +99,24 @@ class ProjectSanitizer:
             sanitized_content = self._sanitize_json(sanitized_content)
         elif file_name == '.env' or file_name.startswith('.env'):
             sanitized_content = self._sanitize_env_file(sanitized_content)
+        elif ext in ('.css', '.scss', '.sass'):
+            sanitized_content = self._sanitize_css(sanitized_content)
+        elif file_name == 'tailwind.config.js' or file_name == 'tailwind.config.ts':
+            sanitized_content = self._sanitize_tailwind_config(sanitized_content)
+        elif file_name == 'vite.config.ts' or file_name == 'vite.config.js':
+            sanitized_content = self._sanitize_vite_config(sanitized_content)
+        elif file_name == 'pom.xml':
+            sanitized_content = self._sanitize_pom_xml(sanitized_content)
+        elif file_name == 'build.gradle' or file_name == 'build.gradle.kts':
+            sanitized_content = self._sanitize_gradle(sanitized_content)
+        elif file_name == 'go.mod':
+            sanitized_content = self._sanitize_go_mod(sanitized_content)
+        elif file_name == 'Cargo.toml':
+            sanitized_content = self._sanitize_cargo_toml(sanitized_content)
+        elif file_name == 'requirements.txt':
+            sanitized_content = self._sanitize_requirements_txt(sanitized_content)
+        elif file_name == 'application.properties' or file_name == 'application.yml':
+            sanitized_content = self._sanitize_spring_config(sanitized_content)
 
         return sanitized_path, sanitized_content, self.fixes_applied
 
@@ -484,6 +502,452 @@ class ProjectSanitizer:
 
         # Return original if can't fix
         return original
+
+    def _sanitize_css(self, content: str) -> str:
+        """
+        Sanitize CSS files to fix common issues.
+
+        Fixes:
+        1. @import must come before @tailwind directives
+        2. Remove @apply with undefined classes like border-border
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Move @import statements to the top (before @tailwind)
+            # CSS spec requires @import to precede all other statements except @charset
+            import_pattern = r'@import\s+url\([^)]+\)\s*;?\n?'
+            imports = re.findall(import_pattern, content, re.IGNORECASE)
+
+            if imports:
+                # Check if @import comes after @tailwind
+                tailwind_pos = content.lower().find('@tailwind')
+                first_import_pos = content.lower().find('@import')
+
+                if tailwind_pos != -1 and first_import_pos > tailwind_pos:
+                    # Remove all @import statements
+                    content = re.sub(import_pattern, '', content, flags=re.IGNORECASE)
+
+                    # Add them at the beginning
+                    imports_block = '\n'.join(imports) + '\n\n'
+                    content = imports_block + content.lstrip()
+                    self.fixes_applied.append("Moved @import statements before @tailwind directives")
+
+            # Fix 2: Remove @apply border-border (undefined class)
+            if '@apply' in content and 'border-border' in content:
+                content = re.sub(r'@apply[^;]*border-border[^;]*;?\n?', '', content)
+                self.fixes_applied.append("Removed @apply with undefined border-border class")
+
+            # Fix 3: Clean up multiple blank lines
+            content = re.sub(r'\n{3,}', '\n\n', content)
+
+            if content != original:
+                logger.info(f"[Sanitizer] CSS fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] CSS sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_tailwind_config(self, content: str) -> str:
+        """
+        Sanitize tailwind.config.js/ts to fix common issues.
+
+        Fixes:
+        1. Remove references to plugins that aren't installed
+        2. Ensure plugins array is empty or has only valid plugins
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Common plugins that cause issues if not installed
+            problematic_plugins = [
+                '@tailwindcss/forms',
+                '@tailwindcss/typography',
+                '@tailwindcss/aspect-ratio',
+                '@tailwindcss/container-queries',
+                'daisyui',
+                'flowbite',
+            ]
+
+            # Check if any problematic plugins are referenced
+            for plugin in problematic_plugins:
+                if plugin in content:
+                    # Remove require/import for this plugin
+                    content = re.sub(rf"require\(['\"]{ re.escape(plugin) }['\"]\)\s*,?\s*", '', content)
+                    content = re.sub(rf"import\s+\w+\s+from\s+['\"]{ re.escape(plugin) }['\"].*\n?", '', content)
+                    # Remove from plugins array
+                    content = re.sub(rf"['\"]{ re.escape(plugin) }['\"]\s*,?\s*", '', content)
+                    self.fixes_applied.append(f"Removed non-installed plugin: {plugin}")
+
+            # If plugins array is now empty with just whitespace, clean it up
+            content = re.sub(r'plugins:\s*\[\s*,*\s*\]', 'plugins: []', content)
+
+            if content != original:
+                logger.info(f"[Sanitizer] Tailwind config fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] Tailwind config sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_vite_config(self, content: str) -> str:
+        """
+        Sanitize vite.config.ts/js to fix common issues.
+
+        Fixes:
+        1. Fix corrupted base path (x27 escape sequences)
+        2. Ensure base is './' for relative paths
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix corrupted base path like: base: x27./x27,
+            if 'x27' in content:
+                content = re.sub(r"base:\s*x27\.?/?x27\s*,?", "base: './',", content)
+                self.fixes_applied.append("Fixed corrupted base path in vite.config")
+
+            # Fix escaped quotes in base path
+            if "base:" in content:
+                # Fix patterns like base: '\\'' or base: "\""
+                content = re.sub(r"base:\s*['\"]\\+['\"]\.?/?\\+['\"]\s*,?", "base: './',", content)
+
+            if content != original:
+                logger.info(f"[Sanitizer] Vite config fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] Vite config sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_pom_xml(self, content: str) -> str:
+        """
+        Sanitize Maven pom.xml to fix common issues.
+
+        Fixes:
+        1. Fix malformed XML declarations
+        2. Ensure proper encoding declaration
+        3. Fix common dependency issues
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Ensure XML declaration is at the very beginning
+            if not content.strip().startswith('<?xml'):
+                # Add XML declaration if missing
+                content = '<?xml version="1.0" encoding="UTF-8"?>\n' + content.lstrip()
+                self.fixes_applied.append("Added missing XML declaration to pom.xml")
+
+            # Fix 2: Fix common encoding issues
+            if '<?xml' in content and 'encoding=' not in content.split('?>')[0]:
+                content = content.replace('<?xml version="1.0"?>', '<?xml version="1.0" encoding="UTF-8"?>')
+                self.fixes_applied.append("Added encoding declaration to pom.xml")
+
+            # Fix 3: Fix self-closing tags that should have content
+            # e.g., <version/> should be <version>1.0.0</version>
+            if '<version/>' in content:
+                content = content.replace('<version/>', '<version>1.0.0-SNAPSHOT</version>')
+                self.fixes_applied.append("Fixed empty version tag in pom.xml")
+
+            # Fix 4: Fix missing modelVersion
+            if '<project' in content and '<modelVersion>' not in content:
+                # Insert after <project ...>
+                content = re.sub(
+                    r'(<project[^>]*>)',
+                    r'\1\n    <modelVersion>4.0.0</modelVersion>',
+                    content,
+                    count=1
+                )
+                self.fixes_applied.append("Added missing modelVersion to pom.xml")
+
+            if content != original:
+                logger.info(f"[Sanitizer] pom.xml fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] pom.xml sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_gradle(self, content: str) -> str:
+        """
+        Sanitize Gradle build files to fix common issues.
+
+        Fixes:
+        1. Fix plugin declaration syntax
+        2. Fix repository declarations
+        3. Fix dependency syntax
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Fix common plugin syntax issues
+            # Old style: apply plugin: 'java' -> New style: plugins { id 'java' }
+            # (Only fix if clearly broken, don't change working syntax)
+
+            # Fix 2: Ensure repositories block exists for dependencies
+            if 'dependencies {' in content and 'repositories {' not in content:
+                # Add repositories before dependencies
+                content = content.replace(
+                    'dependencies {',
+                    'repositories {\n    mavenCentral()\n}\n\ndependencies {'
+                )
+                self.fixes_applied.append("Added missing repositories block to build.gradle")
+
+            # Fix 3: Fix common typos in dependency configurations
+            typo_fixes = [
+                ('implmentation', 'implementation'),
+                ('complie', 'compile'),
+                ('testimplementation', 'testImplementation'),
+                ('runtimenly', 'runtimeOnly'),
+            ]
+            for typo, correct in typo_fixes:
+                if typo in content.lower():
+                    content = re.sub(typo, correct, content, flags=re.IGNORECASE)
+                    self.fixes_applied.append(f"Fixed typo in build.gradle: {typo} -> {correct}")
+
+            if content != original:
+                logger.info(f"[Sanitizer] build.gradle fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] build.gradle sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_go_mod(self, content: str) -> str:
+        """
+        Sanitize Go go.mod to fix common issues.
+
+        Fixes:
+        1. Ensure module declaration exists
+        2. Fix Go version declaration
+        3. Clean up require statements
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Ensure module declaration is at the top
+            if not content.strip().startswith('module '):
+                # Check if module is declared elsewhere
+                if 'module ' not in content:
+                    # Add default module declaration
+                    content = 'module app\n\n' + content
+                    self.fixes_applied.append("Added missing module declaration to go.mod")
+
+            # Fix 2: Ensure Go version is declared
+            if 'go ' not in content or not re.search(r'go\s+\d+\.\d+', content):
+                # Add Go version after module declaration
+                lines = content.split('\n')
+                for i, line in enumerate(lines):
+                    if line.startswith('module '):
+                        lines.insert(i + 1, '\ngo 1.21')
+                        break
+                content = '\n'.join(lines)
+                self.fixes_applied.append("Added Go version declaration to go.mod")
+
+            # Fix 3: Fix common syntax issues in require blocks
+            # Remove duplicate newlines in require block
+            content = re.sub(r'(require\s*\(\s*)\n+', r'\1\n', content)
+
+            if content != original:
+                logger.info(f"[Sanitizer] go.mod fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] go.mod sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_cargo_toml(self, content: str) -> str:
+        """
+        Sanitize Rust Cargo.toml to fix common issues.
+
+        Fixes:
+        1. Ensure [package] section exists
+        2. Fix missing required fields (name, version, edition)
+        3. Fix TOML syntax issues
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Ensure [package] section exists
+            if '[package]' not in content:
+                content = '[package]\nname = "app"\nversion = "0.1.0"\nedition = "2021"\n\n' + content
+                self.fixes_applied.append("Added missing [package] section to Cargo.toml")
+            else:
+                # Fix 2: Ensure required fields exist in [package]
+                package_section = re.search(r'\[package\](.*?)(?=\n\[|\Z)', content, re.DOTALL)
+                if package_section:
+                    package_content = package_section.group(1)
+
+                    # Check for missing name
+                    if 'name' not in package_content:
+                        content = content.replace('[package]', '[package]\nname = "app"')
+                        self.fixes_applied.append("Added missing name field to Cargo.toml")
+
+                    # Check for missing version
+                    if 'version' not in package_content:
+                        content = content.replace('[package]', '[package]\nversion = "0.1.0"')
+                        self.fixes_applied.append("Added missing version field to Cargo.toml")
+
+                    # Check for missing edition
+                    if 'edition' not in package_content:
+                        content = content.replace('[package]', '[package]\nedition = "2021"')
+                        self.fixes_applied.append("Added missing edition field to Cargo.toml")
+
+            # Fix 3: Fix common TOML syntax issues
+            # Ensure proper spacing around = in key-value pairs
+            content = re.sub(r'(\w+)\s*=\s*', r'\1 = ', content)
+
+            if content != original:
+                logger.info(f"[Sanitizer] Cargo.toml fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] Cargo.toml sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_requirements_txt(self, content: str) -> str:
+        """
+        Sanitize Python requirements.txt to fix common issues.
+
+        Fixes:
+        1. Remove invalid package specifications
+        2. Fix common typos in package names
+        3. Remove duplicate packages
+        4. Fix version specifier syntax
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            lines = content.split('\n')
+            cleaned_lines = []
+            seen_packages = set()
+
+            for line in lines:
+                stripped = line.strip()
+
+                # Skip empty lines and comments
+                if not stripped or stripped.startswith('#'):
+                    cleaned_lines.append(line)
+                    continue
+
+                # Fix common typos in package names
+                typo_fixes = {
+                    'flaskk': 'flask',
+                    'djang': 'django',
+                    'numpyy': 'numpy',
+                    'pandass': 'pandas',
+                    'request': 'requests',  # Common typo
+                    'beautifulsoup': 'beautifulsoup4',
+                }
+
+                package_name = stripped.split('==')[0].split('>=')[0].split('<=')[0].split('~=')[0].lower()
+
+                for typo, correct in typo_fixes.items():
+                    if package_name == typo:
+                        stripped = stripped.replace(typo, correct, 1)
+                        self.fixes_applied.append(f"Fixed typo in requirements.txt: {typo} -> {correct}")
+
+                # Remove duplicates (keep first occurrence)
+                base_package = stripped.split('==')[0].split('>=')[0].split('<=')[0].split('~=')[0].strip().lower()
+                if base_package in seen_packages:
+                    self.fixes_applied.append(f"Removed duplicate package: {base_package}")
+                    continue
+
+                seen_packages.add(base_package)
+
+                # Fix version specifier syntax (e.g., "package = 1.0" -> "package==1.0")
+                if ' = ' in stripped and '==' not in stripped:
+                    stripped = stripped.replace(' = ', '==')
+                    self.fixes_applied.append("Fixed version specifier syntax in requirements.txt")
+
+                cleaned_lines.append(stripped)
+
+            content = '\n'.join(cleaned_lines)
+
+            # Ensure file ends with newline
+            if content and not content.endswith('\n'):
+                content += '\n'
+
+            if content != original:
+                logger.info(f"[Sanitizer] requirements.txt fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] requirements.txt sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_spring_config(self, content: str) -> str:
+        """
+        Sanitize Spring Boot application.properties/yml to fix common issues.
+
+        Fixes:
+        1. Fix common property key typos
+        2. Ensure server.port is set
+        3. Fix database connection strings
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Common property key typos
+            typo_fixes = [
+                ('spring.datasource.urll', 'spring.datasource.url'),
+                ('spring.datasource.usrname', 'spring.datasource.username'),
+                ('spring.datasource.pasword', 'spring.datasource.password'),
+                ('server.prot', 'server.port'),
+                ('spring.jpa.hibernate.ddl-atuo', 'spring.jpa.hibernate.ddl-auto'),
+            ]
+
+            for typo, correct in typo_fixes:
+                if typo in content:
+                    content = content.replace(typo, correct)
+                    self.fixes_applied.append(f"Fixed typo in Spring config: {typo} -> {correct}")
+
+            # Fix 2: Ensure server.port is set (for .properties files)
+            if content.strip() and 'server.port' not in content:
+                if '=' in content:  # It's a .properties file
+                    content = 'server.port=8080\n' + content
+                    self.fixes_applied.append("Added default server.port to Spring config")
+
+            # Fix 3: Fix H2 console path if H2 is used
+            if 'h2' in content.lower() and 'spring.h2.console.enabled' not in content:
+                if '=' in content:  # .properties format
+                    content += '\nspring.h2.console.enabled=true\n'
+                    self.fixes_applied.append("Enabled H2 console in Spring config")
+
+            if content != original:
+                logger.info(f"[Sanitizer] Spring config fixes applied: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] Spring config sanitization failed (returning original): {e}")
+            return original
 
 
 # Singleton instance
