@@ -2340,6 +2340,10 @@ Think: Premium, Beautiful, Production-Ready - like code from Apple, Stripe, or V
                     logger.error(f"[Writer Agent] Error writing file: {e}")
                     result["errors"].append(f"File write error: {str(e)}")
 
+        # 1.5. VALIDATE: Ensure package.json has all required dependencies
+        # This catches cases where AI adds plugins to tailwind.config.js but forgets package.json
+        await self._validate_and_fix_dependencies(project_id, result["files_created"])
+
         # 2. Execute terminal commands
         if "terminal" in parsed:
             commands = parsed["terminal"]
@@ -2370,6 +2374,388 @@ Think: Premium, Beautiful, Production-Ready - like code from Apple, Stripe, or V
                     result["errors"].append(f"Command error: {str(e)}")
 
         return result
+
+    async def _validate_and_fix_dependencies(
+        self,
+        project_id: str,
+        files_created: List[Dict[str, Any]]
+    ) -> None:
+        """
+        COMPREHENSIVE validation and auto-fix for ALL common AI code generation mistakes.
+
+        Fixes:
+        1. tsconfig.node.json - Create if tsconfig.json references it
+        2. Tailwind plugins - ALL packages (not just @scoped)
+        3. Python __init__.py - Create for all Python packages
+        4. Path aliases - Ensure @/ is configured in tsconfig.json
+        5. Missing dependencies - Add to package.json
+        """
+        import json
+        import re
+        from pathlib import Path
+
+        # Known packages and their versions
+        KNOWN_PACKAGES = {
+            # Tailwind CSS plugins (scoped)
+            '@tailwindcss/forms': '^0.5.7',
+            '@tailwindcss/typography': '^0.5.10',
+            '@tailwindcss/aspect-ratio': '^0.4.2',
+            '@tailwindcss/container-queries': '^0.1.1',
+            '@tailwindcss/line-clamp': '^0.4.4',
+            # Tailwind CSS plugins (non-scoped) - CRITICAL: These were missing!
+            'daisyui': '^4.6.0',
+            'flowbite': '^2.3.0',
+            'tailwindcss-animate': '^1.0.7',
+            'tailwind-scrollbar': '^3.0.5',
+            'tailwind-scrollbar-hide': '^1.1.7',
+            # Common UI packages
+            'clsx': '^2.1.0',
+            'class-variance-authority': '^0.7.0',
+            'tailwind-merge': '^2.2.0',
+            'lucide-react': '^0.314.0',
+            '@headlessui/react': '^1.7.18',
+            '@radix-ui/react-dialog': '^1.0.5',
+            '@radix-ui/react-dropdown-menu': '^2.0.6',
+            '@radix-ui/react-slot': '^1.0.2',
+            # Animation
+            'framer-motion': '^11.0.3',
+            # Forms
+            'react-hook-form': '^7.50.0',
+            '@hookform/resolvers': '^3.3.4',
+            'zod': '^3.22.4',
+            # State management
+            'zustand': '^4.5.0',
+            '@tanstack/react-query': '^5.17.19',
+            # Utilities
+            'date-fns': '^3.3.1',
+            'lodash': '^4.17.21',
+            'axios': '^1.6.7',
+        }
+
+        try:
+            # Get project path
+            project_path = await file_manager.get_project_path(project_id)
+            if not project_path:
+                return
+
+            fixes_applied = []
+
+            # ================================================================
+            # FIX 1: tsconfig.node.json - Create if referenced but missing
+            # ================================================================
+            await self._fix_tsconfig_references(project_id, project_path, fixes_applied)
+
+            # ================================================================
+            # FIX 2: Tailwind plugins - Add ALL missing packages to package.json
+            # ================================================================
+            await self._fix_tailwind_dependencies(project_id, project_path, KNOWN_PACKAGES, fixes_applied)
+
+            # ================================================================
+            # FIX 3: Python __init__.py - Create for all Python packages
+            # ================================================================
+            await self._fix_python_init_files(project_id, project_path, fixes_applied)
+
+            # ================================================================
+            # FIX 4: Path aliases - Ensure @/ is configured in tsconfig.json
+            # ================================================================
+            await self._fix_path_aliases(project_id, project_path, fixes_applied)
+
+            if fixes_applied:
+                logger.info(f"[Writer Agent] Applied {len(fixes_applied)} auto-fixes: {fixes_applied}")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] Dependency validation failed (non-fatal): {e}")
+
+    async def _fix_tsconfig_references(
+        self,
+        project_id: str,
+        project_path: Path,
+        fixes_applied: List[str]
+    ) -> None:
+        """Fix 1: Create tsconfig.node.json if tsconfig.json references it"""
+        import json
+
+        tsconfig_path = project_path / "tsconfig.json"
+        if not tsconfig_path.exists():
+            return
+
+        try:
+            content = tsconfig_path.read_text(encoding='utf-8')
+            tsconfig_data = json.loads(content)
+
+            # Check for references
+            references = tsconfig_data.get("references", [])
+            for ref in references:
+                ref_path = ref.get("path", "")
+                if "tsconfig.node.json" in ref_path:
+                    node_config_path = project_path / "tsconfig.node.json"
+                    if not node_config_path.exists():
+                        # Create tsconfig.node.json
+                        node_config = {
+                            "compilerOptions": {
+                                "composite": True,
+                                "skipLibCheck": True,
+                                "module": "ESNext",
+                                "moduleResolution": "bundler",
+                                "allowSyntheticDefaultImports": True,
+                                "strict": True,
+                                "noEmit": True
+                            },
+                            "include": ["vite.config.ts", "vite.config.js"]
+                        }
+                        node_config_content = json.dumps(node_config, indent=2) + "\n"
+                        node_config_path.write_text(node_config_content, encoding='utf-8')
+
+                        await file_manager.create_file(
+                            project_id=project_id,
+                            file_path="tsconfig.node.json",
+                            content=node_config_content
+                        )
+                        fixes_applied.append("tsconfig.node.json")
+                        logger.info(f"[Writer Agent] Created missing tsconfig.node.json")
+
+                elif "tsconfig.app.json" in ref_path:
+                    app_config_path = project_path / "tsconfig.app.json"
+                    if not app_config_path.exists():
+                        # Create tsconfig.app.json
+                        app_config = {
+                            "compilerOptions": {
+                                "composite": True,
+                                "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+                                "target": "ES2020",
+                                "useDefineForClassFields": True,
+                                "lib": ["ES2020", "DOM", "DOM.Iterable"],
+                                "module": "ESNext",
+                                "skipLibCheck": True,
+                                "moduleResolution": "bundler",
+                                "allowImportingTsExtensions": True,
+                                "resolveJsonModule": True,
+                                "isolatedModules": True,
+                                "moduleDetection": "force",
+                                "noEmit": True,
+                                "jsx": "react-jsx",
+                                "strict": True,
+                                "noUnusedLocals": True,
+                                "noUnusedParameters": True,
+                                "noFallthroughCasesInSwitch": True
+                            },
+                            "include": ["src"]
+                        }
+                        app_config_content = json.dumps(app_config, indent=2) + "\n"
+                        app_config_path.write_text(app_config_content, encoding='utf-8')
+
+                        await file_manager.create_file(
+                            project_id=project_id,
+                            file_path="tsconfig.app.json",
+                            content=app_config_content
+                        )
+                        fixes_applied.append("tsconfig.app.json")
+                        logger.info(f"[Writer Agent] Created missing tsconfig.app.json")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] tsconfig reference fix failed: {e}")
+
+    async def _fix_tailwind_dependencies(
+        self,
+        project_id: str,
+        project_path: Path,
+        known_packages: Dict[str, str],
+        fixes_applied: List[str]
+    ) -> None:
+        """Fix 2: Add ALL missing Tailwind plugin packages to package.json"""
+        import json
+        import re
+
+        tailwind_config_path = project_path / "tailwind.config.js"
+        package_json_path = project_path / "package.json"
+
+        if not tailwind_config_path.exists() or not package_json_path.exists():
+            return
+
+        try:
+            tailwind_content = tailwind_config_path.read_text(encoding='utf-8')
+
+            # FIXED: Match ALL require() calls, not just @scoped packages
+            # This catches: require('@tailwindcss/forms'), require('daisyui'), etc.
+            require_pattern = r"require\s*\(\s*['\"]([^'\"]+)['\"]"
+            required_packages = set(re.findall(require_pattern, tailwind_content))
+
+            # Filter out relative paths like './myPlugin'
+            required_packages = {p for p in required_packages if not p.startswith('.')}
+
+            if not required_packages:
+                return
+
+            logger.info(f"[Writer Agent] Found required packages in tailwind.config.js: {required_packages}")
+
+            # Read package.json
+            package_content = package_json_path.read_text(encoding='utf-8')
+            package_data = json.loads(package_content)
+
+            # Get all existing dependencies
+            all_deps = set()
+            for dep_key in ['dependencies', 'devDependencies', 'peerDependencies']:
+                if dep_key in package_data:
+                    all_deps.update(package_data[dep_key].keys())
+
+            # Find missing packages
+            missing_packages = required_packages - all_deps
+
+            if not missing_packages:
+                return
+
+            logger.warning(f"[Writer Agent] FIXING: Missing packages in package.json: {missing_packages}")
+
+            # Add missing packages to devDependencies
+            if 'devDependencies' not in package_data:
+                package_data['devDependencies'] = {}
+
+            for pkg in missing_packages:
+                version = known_packages.get(pkg, 'latest')
+                package_data['devDependencies'][pkg] = version
+                logger.info(f"[Writer Agent] Added {pkg}@{version} to devDependencies")
+
+            # Sort devDependencies
+            package_data['devDependencies'] = dict(sorted(package_data['devDependencies'].items()))
+
+            # Write back
+            new_content = json.dumps(package_data, indent=2) + "\n"
+            package_json_path.write_text(new_content, encoding='utf-8')
+
+            await file_manager.create_file(
+                project_id=project_id,
+                file_path="package.json",
+                content=new_content
+            )
+
+            fixes_applied.append(f"package.json (+{len(missing_packages)} deps)")
+            logger.info(f"[Writer Agent] Fixed package.json - added {len(missing_packages)} missing packages")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] Tailwind dependency fix failed: {e}")
+
+    async def _fix_python_init_files(
+        self,
+        project_id: str,
+        project_path: Path,
+        fixes_applied: List[str]
+    ) -> None:
+        """Fix 3: Create __init__.py for all Python packages"""
+        import os
+
+        # Check if this is a Python project
+        has_python = any([
+            (project_path / "requirements.txt").exists(),
+            (project_path / "pyproject.toml").exists(),
+            (project_path / "setup.py").exists(),
+            (project_path / "main.py").exists(),
+            (project_path / "app").is_dir(),
+        ])
+
+        if not has_python:
+            return
+
+        try:
+            init_files_created = []
+
+            # Walk through all directories
+            for root, dirs, files in os.walk(project_path):
+                root_path = Path(root)
+
+                # Skip non-Python directories
+                if any(skip in str(root_path) for skip in ['node_modules', '.git', '__pycache__', 'venv', '.venv']):
+                    continue
+
+                # Check if this directory has .py files
+                has_py_files = any(f.endswith('.py') and f != '__init__.py' for f in files)
+
+                if has_py_files:
+                    init_path = root_path / "__init__.py"
+                    if not init_path.exists():
+                        # Create __init__.py
+                        init_path.write_text("", encoding='utf-8')
+
+                        rel_path = init_path.relative_to(project_path)
+                        await file_manager.create_file(
+                            project_id=project_id,
+                            file_path=str(rel_path),
+                            content=""
+                        )
+                        init_files_created.append(str(rel_path))
+
+            if init_files_created:
+                fixes_applied.append(f"__init__.py ({len(init_files_created)} files)")
+                logger.info(f"[Writer Agent] Created {len(init_files_created)} missing __init__.py files")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] Python __init__.py fix failed: {e}")
+
+    async def _fix_path_aliases(
+        self,
+        project_id: str,
+        project_path: Path,
+        fixes_applied: List[str]
+    ) -> None:
+        """Fix 4: Ensure @/ path alias is configured in tsconfig.json"""
+        import json
+        import re
+
+        # Check if any file uses @/ imports
+        uses_alias = False
+        for ext in ['*.tsx', '*.ts', '*.jsx', '*.js']:
+            for file_path in project_path.rglob(ext):
+                if 'node_modules' in str(file_path):
+                    continue
+                try:
+                    content = file_path.read_text(encoding='utf-8')
+                    if re.search(r"from\s+['\"]@/", content) or re.search(r"import\s+['\"]@/", content):
+                        uses_alias = True
+                        break
+                except:
+                    continue
+            if uses_alias:
+                break
+
+        if not uses_alias:
+            return
+
+        tsconfig_path = project_path / "tsconfig.json"
+        if not tsconfig_path.exists():
+            return
+
+        try:
+            content = tsconfig_path.read_text(encoding='utf-8')
+            tsconfig_data = json.loads(content)
+
+            compiler_options = tsconfig_data.get("compilerOptions", {})
+
+            # Check if paths is already configured
+            if "paths" in compiler_options and "@/*" in compiler_options["paths"]:
+                return
+
+            # Add path alias configuration
+            if "compilerOptions" not in tsconfig_data:
+                tsconfig_data["compilerOptions"] = {}
+
+            tsconfig_data["compilerOptions"]["baseUrl"] = "."
+            tsconfig_data["compilerOptions"]["paths"] = {
+                "@/*": ["./src/*"]
+            }
+
+            new_content = json.dumps(tsconfig_data, indent=2) + "\n"
+            tsconfig_path.write_text(new_content, encoding='utf-8')
+
+            await file_manager.create_file(
+                project_id=project_id,
+                file_path="tsconfig.json",
+                content=new_content
+            )
+
+            fixes_applied.append("tsconfig.json (@/ alias)")
+            logger.info(f"[Writer Agent] Added @/ path alias to tsconfig.json")
+
+        except Exception as e:
+            logger.warning(f"[Writer Agent] Path alias fix failed: {e}")
 
     async def _execute_terminal_command(
         self,
