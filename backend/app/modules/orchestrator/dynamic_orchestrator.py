@@ -4390,8 +4390,8 @@ Ensure every import in every file has a corresponding file in the plan.
                                 project_id=context.project_id,
                                 file_path=file_path,
                                 content=content,
-                                session_id=context.session_id,
-                                user_id=context.user_id
+                                session_id=getattr(context, 'session_id', None),
+                                user_id=getattr(context, 'user_id', None)
                             )
                             if save_success:
                                 context.files_created.append({
