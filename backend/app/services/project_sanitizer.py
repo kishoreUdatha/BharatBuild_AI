@@ -418,6 +418,13 @@ class ProjectSanitizer:
                 line = line.rstrip()[:-1] + ' \\'
                 self.fixes_applied.append("Fixed Dockerfile line continuation")
 
+            # 2. Replace 'npm ci' with 'npm install' (npm ci requires package-lock.json)
+            # Generated projects don't have package-lock.json, so npm ci fails
+            if 'npm ci' in line:
+                line = line.replace('npm ci', 'npm install')
+                if "Replaced npm ci with npm install" not in self.fixes_applied:
+                    self.fixes_applied.append("Replaced npm ci with npm install")
+
             fixed_lines.append(line)
 
         # Ensure FROM instruction exists
