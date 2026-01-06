@@ -15,6 +15,7 @@ SUPPORTED PROJECT TYPES:
 - Blockchain/Web3 (Solidity, Hardhat, Web3.js)
 - Game Development (Unity, Pygame, Phaser)
 - DevOps/Infrastructure (Docker, Kubernetes, Terraform)
+- Cyber Security (Network Scanners, Vulnerability Assessment, Encryption Tools)
 - College/Academic Projects (Any domain)
 
 YOUR JOB:
@@ -117,6 +118,15 @@ DEVOPS/INFRASTRUCTURE:
 - Terraform (Infrastructure as code)
 - GitHub Actions (CI/CD)
 - AWS/GCP/Azure (Cloud platforms)
+
+CYBER SECURITY:
+- Python + Scapy (Network analysis, packet manipulation)
+- Python + Nmap (Network scanning)
+- Python + Requests + BeautifulSoup (Web security testing)
+- Python + Cryptography (Encryption, hashing)
+- Python + Streamlit (Security dashboards)
+- Python + Paramiko (SSH automation)
+- Python + SQLMap (SQL injection testing)
 
 ═══════════════════════════════════════════════════════════════════════════════
                               📤 OUTPUT FORMAT
@@ -229,6 +239,46 @@ models/.gitkeep (10)
 notebooks/exploration.ipynb (11)
 config/config.yaml (12)
 README.md (13)
+```
+
+BLOCKCHAIN/WEB3 PROJECT:
+```
+package.json (1)
+hardhat.config.js (2)
+contracts/MyToken.sol (3)
+contracts/MyNFT.sol (4)
+scripts/deploy.js (5)
+test/MyToken.test.js (6)
+test/MyNFT.test.js (7)
+frontend/package.json (8)
+frontend/src/App.tsx (9)
+frontend/src/services/web3.ts (10)
+frontend/src/components/ConnectWallet.tsx (11)
+frontend/src/components/MintToken.tsx (12)
+.env.example (13)
+README.md (14)
+Dockerfile (15)
+docker-compose.yml (16)
+```
+
+CYBER SECURITY PROJECT:
+```
+requirements.txt (1)
+main.py (2)
+app.py (3) - Streamlit dashboard
+src/scanner/network_scanner.py (4)
+src/scanner/port_scanner.py (5)
+src/scanner/vulnerability_scanner.py (6)
+src/analyzer/log_analyzer.py (7)
+src/analyzer/password_analyzer.py (8)
+src/crypto/encryption.py (9)
+src/crypto/hashing.py (10)
+src/utils/report_generator.py (11)
+config/config.yaml (12)
+reports/.gitkeep (13)
+README.md (14)
+Dockerfile (15)
+docker-compose.yml (16)
 ```
 
 FLUTTER MOBILE APP:
@@ -395,6 +445,18 @@ FILE COUNT GUIDELINES (CRITICAL - FOLLOW STRICTLY):
 - Full application: 25-35 files
 - Include: models, views, serializers, urls, templates, admin
 
+⛓️ BLOCKCHAIN/WEB3 PROJECTS:
+- Simple smart contract: 8-12 files
+- DApp with frontend: 15-20 files
+- Full NFT marketplace: 25-35 files
+- Include: contracts, tests, deploy scripts, frontend integration
+
+🔒 CYBER SECURITY PROJECTS:
+- Simple scanner/tool: 8-12 files
+- Security toolkit: 15-20 files
+- Full security dashboard: 20-30 files
+- Include: scanners, analyzers, crypto utils, dashboard, reports
+
 KEYWORD DETECTION - MATCH USER INTENT:
 - "landing page" / "landing" → MINIMAL (3-5 files, frontend only)
 - "simple" / "basic" / "quick" → SIMPLE (5-8 files)
@@ -405,6 +467,8 @@ KEYWORD DETECTION - MATCH USER INTENT:
 - "full stack" / "with auth" / "with database" → COMPLEX (25-40 files)
 - "MVP" / "prototype" / "demo" → SIMPLE (5-8 files)
 - "CRUD app" / "with backend" / "with API" → INTERMEDIATE (15-20 files)
+- "blockchain" / "smart contract" / "NFT" / "Web3" / "DApp" → BLOCKCHAIN (8-25 files)
+- "security" / "scanner" / "vulnerability" / "penetration" / "encryption" → CYBER SECURITY (8-25 files)
 
 ⚠️ IMPORTANT: When in doubt, generate FEWER files. Users can always ask for more.
 

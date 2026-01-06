@@ -138,6 +138,17 @@ class ProjectSanitizer:
         # Cyber Security
         elif file_name == 'docker-compose.yml' or file_name == 'docker-compose.yaml':
             sanitized_content = self._sanitize_docker_compose_security(sanitized_content)
+        elif 'security' in file_path.lower() and file_name == 'requirements.txt':
+            sanitized_content = self._sanitize_security_requirements(sanitized_content)
+        elif 'scanner' in file_name.lower() and ext == '.py':
+            sanitized_content = self._sanitize_security_scanner_py(sanitized_content)
+        elif 'encryption' in file_name.lower() or 'crypto' in file_name.lower():
+            if ext == '.py':
+                sanitized_content = self._sanitize_encryption_py(sanitized_content)
+        elif file_name == 'security_config.yaml' or file_name == 'security_config.yml':
+            sanitized_content = self._sanitize_security_config_yaml(sanitized_content)
+        elif 'analyzer' in file_name.lower() and ext == '.py':
+            sanitized_content = self._sanitize_log_analyzer_py(sanitized_content)
 
         return sanitized_path, sanitized_content, self.fixes_applied
 
@@ -312,6 +323,34 @@ class ProjectSanitizer:
             if 'scripts' not in data:
                 data['scripts'] = {}
                 modified = True
+
+            # AUTO-INSTALL TAILWIND PLUGINS
+            # If tailwindcss is in dependencies, ensure all common plugins are in devDependencies
+            all_deps = {}
+            all_deps.update(data.get('dependencies', {}))
+            all_deps.update(data.get('devDependencies', {}))
+
+            if 'tailwindcss' in all_deps:
+                if 'devDependencies' not in data:
+                    data['devDependencies'] = {}
+
+                # Common Tailwind plugins that should always be available
+                tailwind_plugins = {
+                    '@tailwindcss/forms': '^0.5.7',
+                    '@tailwindcss/typography': '^0.5.10',
+                    '@tailwindcss/aspect-ratio': '^0.4.2',
+                    '@tailwindcss/container-queries': '^0.1.1',
+                }
+
+                added_plugins = []
+                for plugin, version in tailwind_plugins.items():
+                    if plugin not in all_deps:
+                        data['devDependencies'][plugin] = version
+                        added_plugins.append(plugin)
+                        modified = True
+
+                if added_plugins:
+                    self.fixes_applied.append(f"Added Tailwind plugins: {', '.join(added_plugins)}")
 
             # Ensure proper JSON formatting
             content = json.dumps(data, indent=2, ensure_ascii=False) + '\n'
@@ -1370,6 +1409,294 @@ class ProjectSanitizer:
 
         except Exception as e:
             logger.warning(f"[Sanitizer] docker-compose security sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_security_requirements(self, content: str) -> str:
+        """
+        Sanitize requirements.txt for security projects.
+
+        Fixes:
+        1. Ensure essential security packages have versions
+        2. Fix common package name typos
+        3. Add recommended security packages if missing
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            lines = content.split('\n')
+            new_lines = []
+            has_cryptography = False
+            has_requests = False
+
+            # Essential security packages with recommended versions
+            security_packages = {
+                'cryptography': 'cryptography>=41.0.0',
+                'paramiko': 'paramiko>=3.0.0',
+                'scapy': 'scapy>=2.5.0',
+                'python-nmap': 'python-nmap>=0.7.1',
+                'requests': 'requests>=2.31.0',
+                'beautifulsoup4': 'beautifulsoup4>=4.12.0',
+            }
+
+            # Common typos
+            typo_fixes = {
+                'cyptography': 'cryptography',
+                'crytography': 'cryptography',
+                'paramioko': 'paramiko',
+                'scappy': 'scapy',
+                'beutifulsoup': 'beautifulsoup4',
+                'beautifulsoup': 'beautifulsoup4',
+            }
+
+            for line in lines:
+                stripped = line.strip()
+                if not stripped or stripped.startswith('#'):
+                    new_lines.append(line)
+                    continue
+
+                # Fix typos
+                pkg_name = stripped.split('==')[0].split('>=')[0].split('<=')[0].lower()
+                if pkg_name in typo_fixes:
+                    corrected = typo_fixes[pkg_name]
+                    line = line.replace(stripped.split('==')[0].split('>=')[0].split('<=')[0], corrected)
+                    self.fixes_applied.append(f"Fixed typo: {pkg_name} -> {corrected}")
+
+                # Track essential packages
+                if 'cryptography' in line.lower():
+                    has_cryptography = True
+                if 'requests' in line.lower():
+                    has_requests = True
+
+                new_lines.append(line)
+
+            # Add essential packages if missing
+            if not has_cryptography:
+                new_lines.append(security_packages['cryptography'])
+                self.fixes_applied.append("Added cryptography package")
+
+            if not has_requests:
+                new_lines.append(security_packages['requests'])
+                self.fixes_applied.append("Added requests package")
+
+            content = '\n'.join(new_lines)
+
+            if self.fixes_applied:
+                logger.info(f"[Sanitizer] Security requirements.txt fixes: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] Security requirements.txt sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_security_scanner_py(self, content: str) -> str:
+        """
+        Sanitize Python security scanner scripts.
+
+        Fixes:
+        1. Add proper exception handling for network operations
+        2. Add timeout parameters to socket/request calls
+        3. Add input validation warnings
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Ensure socket operations have timeout
+            if 'socket.socket' in content and 'settimeout' not in content:
+                # Add a comment warning about timeout
+                if 'import socket' in content:
+                    content = content.replace(
+                        'import socket',
+                        'import socket  # Remember to use settimeout() for network operations'
+                    )
+                    self.fixes_applied.append("Added timeout reminder for socket operations")
+
+            # Fix 2: Ensure requests have timeout
+            if 'requests.get' in content or 'requests.post' in content:
+                if 'timeout=' not in content and 'timeout:' not in content:
+                    self.fixes_applied.append("WARNING: requests calls should include timeout parameter")
+
+            # Fix 3: Check for proper error handling
+            if 'socket.connect' in content or 'requests.get' in content:
+                if 'try:' not in content and 'except' not in content:
+                    self.fixes_applied.append("WARNING: Network operations should have try/except blocks")
+
+            # Fix 4: Ensure proper imports for type hints
+            if 'def scan' in content or 'def check' in content:
+                if 'from typing import' not in content and 'from typing' not in content:
+                    if content.startswith('import') or content.startswith('from'):
+                        content = 'from typing import List, Dict, Optional, Tuple\n' + content
+                    else:
+                        content = 'from typing import List, Dict, Optional, Tuple\n\n' + content
+                    self.fixes_applied.append("Added typing imports for type hints")
+
+            if self.fixes_applied:
+                logger.info(f"[Sanitizer] Security scanner.py fixes: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] Security scanner.py sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_encryption_py(self, content: str) -> str:
+        """
+        Sanitize Python encryption utility scripts.
+
+        Fixes:
+        1. Ensure proper cryptography imports
+        2. Add security warnings for weak algorithms
+        3. Ensure proper key handling
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Warn about weak algorithms
+            weak_algorithms = ['md5', 'sha1', 'des', 'rc4', 'blowfish']
+            for algo in weak_algorithms:
+                if algo in content.lower() and 'hashlib' in content:
+                    self.fixes_applied.append(f"WARNING: {algo.upper()} is considered weak - use SHA-256 or better")
+
+            # Fix 2: Ensure secrets module for key generation
+            if 'random' in content and 'secrets' not in content:
+                if 'import random' in content:
+                    content = content.replace(
+                        'import random',
+                        'import random\nimport secrets  # Use secrets for cryptographic randomness'
+                    )
+                    self.fixes_applied.append("Added secrets module import (use instead of random for crypto)")
+
+            # Fix 3: Add proper imports if using cryptography
+            if 'Fernet' in content and 'from cryptography.fernet import Fernet' not in content:
+                if 'import Fernet' in content:
+                    content = content.replace(
+                        'import Fernet',
+                        'from cryptography.fernet import Fernet'
+                    )
+                    self.fixes_applied.append("Fixed Fernet import")
+
+            # Fix 4: Ensure proper error handling for decryption
+            if 'decrypt' in content:
+                if 'InvalidToken' not in content and 'try:' not in content:
+                    self.fixes_applied.append("WARNING: Decryption should handle InvalidToken exception")
+
+            if self.fixes_applied:
+                logger.info(f"[Sanitizer] Encryption.py fixes: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] Encryption.py sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_security_config_yaml(self, content: str) -> str:
+        """
+        Sanitize security configuration YAML files.
+
+        Fixes:
+        1. Ensure scan targets are not hardcoded production IPs
+        2. Check for proper timeout settings
+        3. Validate port ranges
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Warn about hardcoded IPs that look like production
+            production_ip_patterns = [
+                r'\b(?:10\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.)',
+                r'\b(?:172\.(?:1[6-9]|2[0-9]|3[0-1])\.)',
+                r'\b(?:192\.168\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.)',
+            ]
+            for pattern in production_ip_patterns:
+                if re.search(pattern, content):
+                    self.fixes_applied.append("WARNING: Config contains internal IP ranges - ensure authorized for testing")
+                    break
+
+            # Fix 2: Ensure timeout is reasonable
+            if 'timeout:' in content:
+                timeout_match = re.search(r'timeout:\s*(\d+)', content)
+                if timeout_match:
+                    timeout_val = int(timeout_match.group(1))
+                    if timeout_val > 60:
+                        self.fixes_applied.append("WARNING: High timeout value may cause slow scans")
+                    elif timeout_val < 1:
+                        content = re.sub(r'timeout:\s*\d+', 'timeout: 5', content)
+                        self.fixes_applied.append("Fixed too-low timeout value (set to 5s)")
+
+            # Fix 3: Validate port ranges
+            port_match = re.search(r'ports:\s*\[([^\]]+)\]', content)
+            if port_match:
+                port_str = port_match.group(1)
+                if '65536' in port_str or '100000' in port_str:
+                    self.fixes_applied.append("WARNING: Invalid port numbers detected (max is 65535)")
+
+            if self.fixes_applied:
+                logger.info(f"[Sanitizer] security_config.yaml fixes: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] security_config.yaml sanitization failed (returning original): {e}")
+            return original
+
+    def _sanitize_log_analyzer_py(self, content: str) -> str:
+        """
+        Sanitize Python log analyzer scripts for security projects.
+
+        Fixes:
+        1. Ensure proper file handling (with statement)
+        2. Add regex import if using patterns
+        3. Ensure proper exception handling for file operations
+
+        FAIL-SAFE: Returns original content if any error occurs.
+        """
+        original = content
+
+        try:
+            # Fix 1: Ensure 're' module is imported if regex is used
+            if 're.search' in content or 're.match' in content or 're.findall' in content:
+                if 'import re' not in content:
+                    if content.startswith('import') or content.startswith('from'):
+                        content = 'import re\n' + content
+                    else:
+                        content = 'import re\n\n' + content
+                    self.fixes_applied.append("Added missing 're' module import")
+
+            # Fix 2: Ensure collections import for defaultdict
+            if 'defaultdict' in content and 'from collections' not in content:
+                if 'import re' in content:
+                    content = content.replace(
+                        'import re',
+                        'import re\nfrom collections import defaultdict'
+                    )
+                else:
+                    content = 'from collections import defaultdict\n' + content
+                self.fixes_applied.append("Added defaultdict import")
+
+            # Fix 3: Warn about file handling without 'with'
+            if 'open(' in content and 'with open' not in content:
+                self.fixes_applied.append("WARNING: Use 'with open()' for proper file handling")
+
+            # Fix 4: Ensure datetime import for timestamp parsing
+            if 'datetime' in content.lower() and 'from datetime import' not in content and 'import datetime' not in content:
+                content = 'from datetime import datetime\n' + content
+                self.fixes_applied.append("Added datetime import")
+
+            if self.fixes_applied:
+                logger.info(f"[Sanitizer] Log analyzer.py fixes: {self.fixes_applied}")
+
+            return content
+
+        except Exception as e:
+            logger.warning(f"[Sanitizer] Log analyzer.py sanitization failed (returning original): {e}")
             return original
 
 

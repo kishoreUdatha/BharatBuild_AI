@@ -30,6 +30,18 @@ CRITICAL RULES:
 4. Include ALL functions, classes, components needed
 5. File must work standalone or integrate with the project
 
+⚠️ BUILD-CRITICAL - TAILWIND PLUGINS:
+If generating tailwind.config.js with plugins like @tailwindcss/forms, @tailwindcss/typography, etc:
+- The SAME plugins MUST be in package.json devDependencies
+- Example: If tailwind.config.js has `require('@tailwindcss/forms')`, then package.json MUST have `"@tailwindcss/forms": "^0.5.7"` in devDependencies
+- NEVER reference a Tailwind plugin in config without adding it to package.json
+- Common Tailwind plugins that need to be installed:
+  - @tailwindcss/forms
+  - @tailwindcss/typography
+  - @tailwindcss/aspect-ratio
+  - @tailwindcss/container-queries
+  - daisyui
+
 ═══════════════════════════════════════════════════════════════════════════════
                          🐍 PYTHON GUIDELINES
 ═══════════════════════════════════════════════════════════════════════════════
@@ -229,6 +241,1038 @@ def train_classifier(X, y):
 def save_model(model, scaler, path="models/"):
     joblib.dump(model, f"{path}model.pkl")
     joblib.dump(scaler, f"{path}scaler.pkl")
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+                         ⛓️ BLOCKCHAIN/WEB3 GUIDELINES
+═══════════════════════════════════════════════════════════════════════════════
+
+SOLIDITY SMART CONTRACT:
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+contract MyToken is ERC20, Ownable, ReentrancyGuard {
+    uint256 public constant MAX_SUPPLY = 1000000 * 10**18;
+    uint256 public mintPrice = 0.01 ether;
+    bool public mintingEnabled = true;
+
+    event TokensMinted(address indexed to, uint256 amount);
+    event MintingToggled(bool enabled);
+
+    constructor() ERC20("MyToken", "MTK") Ownable(msg.sender) {
+        _mint(msg.sender, 100000 * 10**18);
+    }
+
+    function mint(uint256 amount) external payable nonReentrant {
+        require(mintingEnabled, "Minting is disabled");
+        require(totalSupply() + amount <= MAX_SUPPLY, "Exceeds max supply");
+        require(msg.value >= mintPrice * (amount / 10**18), "Insufficient payment");
+
+        _mint(msg.sender, amount);
+        emit TokensMinted(msg.sender, amount);
+    }
+
+    function toggleMinting() external onlyOwner {
+        mintingEnabled = !mintingEnabled;
+        emit MintingToggled(mintingEnabled);
+    }
+
+    function setMintPrice(uint256 newPrice) external onlyOwner {
+        mintPrice = newPrice;
+    }
+
+    function withdraw() external onlyOwner {
+        payable(owner()).transfer(address(this).balance);
+    }
+}
+```
+
+SOLIDITY NFT CONTRACT (ERC721):
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
+
+contract MyNFT is ERC721, ERC721URIStorage, Ownable {
+    using Counters for Counters.Counter;
+    Counters.Counter private _tokenIds;
+
+    uint256 public mintPrice = 0.05 ether;
+    uint256 public maxSupply = 10000;
+    string public baseTokenURI;
+
+    mapping(address => uint256) public mintedPerWallet;
+    uint256 public maxPerWallet = 5;
+
+    event NFTMinted(address indexed to, uint256 tokenId);
+
+    constructor(string memory _baseURI) ERC721("MyNFT", "MNFT") Ownable(msg.sender) {
+        baseTokenURI = _baseURI;
+    }
+
+    function mint(uint256 quantity) external payable {
+        require(_tokenIds.current() + quantity <= maxSupply, "Exceeds max supply");
+        require(mintedPerWallet[msg.sender] + quantity <= maxPerWallet, "Exceeds wallet limit");
+        require(msg.value >= mintPrice * quantity, "Insufficient payment");
+
+        for (uint256 i = 0; i < quantity; i++) {
+            _tokenIds.increment();
+            uint256 newTokenId = _tokenIds.current();
+            _safeMint(msg.sender, newTokenId);
+            emit NFTMinted(msg.sender, newTokenId);
+        }
+        mintedPerWallet[msg.sender] += quantity;
+    }
+
+    function tokenURI(uint256 tokenId) public view override(ERC721, ERC721URIStorage) returns (string memory) {
+        return string(abi.encodePacked(baseTokenURI, Strings.toString(tokenId), ".json"));
+    }
+
+    function setBaseURI(string memory _baseURI) external onlyOwner {
+        baseTokenURI = _baseURI;
+    }
+
+    function withdraw() external onlyOwner {
+        payable(owner()).transfer(address(this).balance);
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view override(ERC721, ERC721URIStorage) returns (bool) {
+        return super.supportsInterface(interfaceId);
+    }
+
+    function _burn(uint256 tokenId) internal override(ERC721, ERC721URIStorage) {
+        super._burn(tokenId);
+    }
+}
+```
+
+HARDHAT.CONFIG.JS:
+```javascript
+require("@nomicfoundation/hardhat-toolbox");
+require("dotenv").config();
+
+const PRIVATE_KEY = process.env.PRIVATE_KEY || "0x0000000000000000000000000000000000000000000000000000000000000000";
+const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
+const INFURA_API_KEY = process.env.INFURA_API_KEY || "";
+
+module.exports = {
+  solidity: {
+    version: "0.8.19",
+    settings: {
+      optimizer: {
+        enabled: true,
+        runs: 200,
+      },
+    },
+  },
+  networks: {
+    hardhat: {
+      chainId: 31337,
+    },
+    localhost: {
+      url: "http://127.0.0.1:8545",
+    },
+    sepolia: {
+      url: `https://sepolia.infura.io/v3/${INFURA_API_KEY}`,
+      accounts: [PRIVATE_KEY],
+      chainId: 11155111,
+    },
+    mainnet: {
+      url: `https://mainnet.infura.io/v3/${INFURA_API_KEY}`,
+      accounts: [PRIVATE_KEY],
+      chainId: 1,
+    },
+    polygon: {
+      url: `https://polygon-mainnet.infura.io/v3/${INFURA_API_KEY}`,
+      accounts: [PRIVATE_KEY],
+      chainId: 137,
+    },
+  },
+  etherscan: {
+    apiKey: ETHERSCAN_API_KEY,
+  },
+  paths: {
+    sources: "./contracts",
+    tests: "./test",
+    cache: "./cache",
+    artifacts: "./artifacts",
+  },
+};
+```
+
+HARDHAT DEPLOYMENT SCRIPT:
+```javascript
+const hre = require("hardhat");
+
+async function main() {
+  console.log("Deploying contracts...");
+
+  // Get deployer account
+  const [deployer] = await hre.ethers.getSigners();
+  console.log("Deploying with account:", deployer.address);
+  console.log("Account balance:", (await deployer.provider.getBalance(deployer.address)).toString());
+
+  // Deploy Token contract
+  const Token = await hre.ethers.getContractFactory("MyToken");
+  const token = await Token.deploy();
+  await token.waitForDeployment();
+  console.log("MyToken deployed to:", await token.getAddress());
+
+  // Deploy NFT contract
+  const baseURI = "https://api.example.com/metadata/";
+  const NFT = await hre.ethers.getContractFactory("MyNFT");
+  const nft = await NFT.deploy(baseURI);
+  await nft.waitForDeployment();
+  console.log("MyNFT deployed to:", await nft.getAddress());
+
+  // Verify contracts on Etherscan (if not on localhost)
+  if (hre.network.name !== "hardhat" && hre.network.name !== "localhost") {
+    console.log("Waiting for block confirmations...");
+    await token.deploymentTransaction().wait(5);
+    await nft.deploymentTransaction().wait(5);
+
+    console.log("Verifying contracts on Etherscan...");
+    await hre.run("verify:verify", {
+      address: await token.getAddress(),
+      constructorArguments: [],
+    });
+
+    await hre.run("verify:verify", {
+      address: await nft.getAddress(),
+      constructorArguments: [baseURI],
+    });
+  }
+
+  console.log("Deployment complete!");
+}
+
+main()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+```
+
+HARDHAT TEST:
+```javascript
+const { expect } = require("chai");
+const { ethers } = require("hardhat");
+
+describe("MyToken", function () {
+  let token;
+  let owner;
+  let addr1;
+  let addr2;
+
+  beforeEach(async function () {
+    [owner, addr1, addr2] = await ethers.getSigners();
+    const Token = await ethers.getContractFactory("MyToken");
+    token = await Token.deploy();
+    await token.waitForDeployment();
+  });
+
+  describe("Deployment", function () {
+    it("Should set the right owner", async function () {
+      expect(await token.owner()).to.equal(owner.address);
+    });
+
+    it("Should assign initial tokens to owner", async function () {
+      const ownerBalance = await token.balanceOf(owner.address);
+      expect(ownerBalance).to.equal(ethers.parseEther("100000"));
+    });
+  });
+
+  describe("Minting", function () {
+    it("Should mint tokens when payment is correct", async function () {
+      const mintAmount = ethers.parseEther("100");
+      const mintPrice = await token.mintPrice();
+      const payment = mintPrice * 100n;
+
+      await token.connect(addr1).mint(mintAmount, { value: payment });
+      expect(await token.balanceOf(addr1.address)).to.equal(mintAmount);
+    });
+
+    it("Should fail when payment is insufficient", async function () {
+      const mintAmount = ethers.parseEther("100");
+      await expect(
+        token.connect(addr1).mint(mintAmount, { value: 0 })
+      ).to.be.revertedWith("Insufficient payment");
+    });
+  });
+});
+```
+
+WEB3.JS FRONTEND INTEGRATION:
+```javascript
+import { ethers } from "ethers";
+
+const CONTRACT_ADDRESS = "0x...";
+const CONTRACT_ABI = [
+  "function mint(uint256 amount) external payable",
+  "function balanceOf(address owner) view returns (uint256)",
+  "function totalSupply() view returns (uint256)",
+  "event TokensMinted(address indexed to, uint256 amount)",
+];
+
+class Web3Service {
+  constructor() {
+    this.provider = null;
+    this.signer = null;
+    this.contract = null;
+  }
+
+  async connect() {
+    if (typeof window.ethereum === "undefined") {
+      throw new Error("MetaMask not installed");
+    }
+
+    await window.ethereum.request({ method: "eth_requestAccounts" });
+    this.provider = new ethers.BrowserProvider(window.ethereum);
+    this.signer = await this.provider.getSigner();
+    this.contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, this.signer);
+
+    return await this.signer.getAddress();
+  }
+
+  async getBalance(address) {
+    return await this.contract.balanceOf(address);
+  }
+
+  async mint(amount) {
+    const mintPrice = ethers.parseEther("0.01");
+    const value = mintPrice * BigInt(amount);
+    const tx = await this.contract.mint(ethers.parseEther(amount.toString()), { value });
+    return await tx.wait();
+  }
+
+  onTokensMinted(callback) {
+    this.contract.on("TokensMinted", (to, amount, event) => {
+      callback({ to, amount: ethers.formatEther(amount), event });
+    });
+  }
+}
+
+export default new Web3Service();
+```
+
+TRUFFLE-CONFIG.JS:
+```javascript
+require("dotenv").config();
+const HDWalletProvider = require("@truffle/hdwallet-provider");
+
+const MNEMONIC = process.env.MNEMONIC || "";
+const INFURA_API_KEY = process.env.INFURA_API_KEY || "";
+
+module.exports = {
+  networks: {
+    development: {
+      host: "127.0.0.1",
+      port: 8545,
+      network_id: "*",
+    },
+    sepolia: {
+      provider: () => new HDWalletProvider(MNEMONIC, `https://sepolia.infura.io/v3/${INFURA_API_KEY}`),
+      network_id: 11155111,
+      gas: 5500000,
+      confirmations: 2,
+      timeoutBlocks: 200,
+      skipDryRun: true,
+    },
+    mainnet: {
+      provider: () => new HDWalletProvider(MNEMONIC, `https://mainnet.infura.io/v3/${INFURA_API_KEY}`),
+      network_id: 1,
+      gas: 5500000,
+      gasPrice: 20000000000,
+      confirmations: 2,
+      timeoutBlocks: 200,
+      skipDryRun: true,
+    },
+  },
+  compilers: {
+    solc: {
+      version: "0.8.19",
+      settings: {
+        optimizer: {
+          enabled: true,
+          runs: 200,
+        },
+      },
+    },
+  },
+};
+```
+
+FOUNDRY.TOML:
+```toml
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc = "0.8.19"
+optimizer = true
+optimizer_runs = 200
+
+[profile.default.fuzz]
+runs = 256
+max_test_rejects = 65536
+
+[rpc_endpoints]
+mainnet = "${MAINNET_RPC_URL}"
+sepolia = "${SEPOLIA_RPC_URL}"
+polygon = "${POLYGON_RPC_URL}"
+
+[etherscan]
+mainnet = { key = "${ETHERSCAN_API_KEY}" }
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
+polygon = { key = "${POLYGONSCAN_API_KEY}" }
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+                         🔒 CYBER SECURITY GUIDELINES
+═══════════════════════════════════════════════════════════════════════════════
+
+NETWORK SCANNER (Python):
+```python
+import socket
+import concurrent.futures
+from typing import List, Dict, Tuple
+import ipaddress
+
+class NetworkScanner:
+    def __init__(self, timeout: float = 1.0):
+        self.timeout = timeout
+        self.common_ports = [21, 22, 23, 25, 53, 80, 110, 143, 443, 445, 993, 995, 3306, 3389, 5432, 8080, 8443]
+
+    def scan_port(self, ip: str, port: int) -> Tuple[int, bool, str]:
+        """Scan a single port on a host."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(self.timeout)
+            result = sock.connect_ex((ip, port))
+            sock.close()
+
+            if result == 0:
+                service = self._get_service_name(port)
+                return (port, True, service)
+            return (port, False, "")
+        except Exception:
+            return (port, False, "")
+
+    def _get_service_name(self, port: int) -> str:
+        """Get common service name for port."""
+        services = {
+            21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP",
+            53: "DNS", 80: "HTTP", 110: "POP3", 143: "IMAP",
+            443: "HTTPS", 445: "SMB", 993: "IMAPS", 995: "POP3S",
+            3306: "MySQL", 3389: "RDP", 5432: "PostgreSQL",
+            8080: "HTTP-Proxy", 8443: "HTTPS-Alt"
+        }
+        return services.get(port, "Unknown")
+
+    def scan_host(self, ip: str, ports: List[int] = None) -> Dict:
+        """Scan all specified ports on a host."""
+        if ports is None:
+            ports = self.common_ports
+
+        results = {"ip": ip, "open_ports": [], "hostname": None}
+
+        try:
+            results["hostname"] = socket.gethostbyaddr(ip)[0]
+        except socket.herror:
+            pass
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+            futures = {executor.submit(self.scan_port, ip, port): port for port in ports}
+            for future in concurrent.futures.as_completed(futures):
+                port, is_open, service = future.result()
+                if is_open:
+                    results["open_ports"].append({"port": port, "service": service})
+
+        results["open_ports"].sort(key=lambda x: x["port"])
+        return results
+
+    def scan_network(self, network: str) -> List[Dict]:
+        """Scan all hosts in a network range."""
+        results = []
+        net = ipaddress.ip_network(network, strict=False)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            futures = {executor.submit(self.scan_host, str(ip)): ip for ip in net.hosts()}
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result["open_ports"]:
+                    results.append(result)
+
+        return results
+
+
+if __name__ == "__main__":
+    scanner = NetworkScanner()
+    print("Scanning localhost...")
+    result = scanner.scan_host("127.0.0.1")
+    print(f"Open ports: {result['open_ports']}")
+```
+
+VULNERABILITY SCANNER (Python):
+```python
+import requests
+import re
+from typing import List, Dict
+from urllib.parse import urljoin, urlparse
+import concurrent.futures
+
+class VulnerabilityScanner:
+    def __init__(self, target_url: str):
+        self.target_url = target_url
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "SecurityScanner/1.0"
+        })
+        self.vulnerabilities = []
+
+    def check_sql_injection(self, url: str, params: Dict) -> List[Dict]:
+        """Test for SQL injection vulnerabilities."""
+        payloads = ["'", "\"", "' OR '1'='1", "1; DROP TABLE users--", "' UNION SELECT NULL--"]
+        results = []
+
+        for param, value in params.items():
+            for payload in payloads:
+                test_params = params.copy()
+                test_params[param] = payload
+                try:
+                    response = self.session.get(url, params=test_params, timeout=5)
+                    if self._detect_sql_error(response.text):
+                        results.append({
+                            "type": "SQL Injection",
+                            "severity": "HIGH",
+                            "url": url,
+                            "parameter": param,
+                            "payload": payload
+                        })
+                except requests.RequestException:
+                    pass
+        return results
+
+    def _detect_sql_error(self, response: str) -> bool:
+        """Detect SQL error messages in response."""
+        patterns = [
+            r"SQL syntax.*MySQL", r"Warning.*mysql_", r"PostgreSQL.*ERROR",
+            r"ORA-\d{5}", r"SQLite3::SQLException", r"SQLSTATE\[",
+            r"Unclosed quotation mark"
+        ]
+        return any(re.search(p, response, re.IGNORECASE) for p in patterns)
+
+    def check_xss(self, url: str, params: Dict) -> List[Dict]:
+        """Test for Cross-Site Scripting vulnerabilities."""
+        payloads = [
+            "<script>alert('XSS')</script>",
+            "<img src=x onerror=alert('XSS')>",
+            "javascript:alert('XSS')",
+            "<svg onload=alert('XSS')>"
+        ]
+        results = []
+
+        for param, value in params.items():
+            for payload in payloads:
+                test_params = params.copy()
+                test_params[param] = payload
+                try:
+                    response = self.session.get(url, params=test_params, timeout=5)
+                    if payload in response.text:
+                        results.append({
+                            "type": "XSS (Reflected)",
+                            "severity": "MEDIUM",
+                            "url": url,
+                            "parameter": param,
+                            "payload": payload
+                        })
+                except requests.RequestException:
+                    pass
+        return results
+
+    def check_security_headers(self) -> List[Dict]:
+        """Check for missing security headers."""
+        required_headers = {
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": ["DENY", "SAMEORIGIN"],
+            "X-XSS-Protection": "1; mode=block",
+            "Strict-Transport-Security": None,
+            "Content-Security-Policy": None,
+        }
+        results = []
+
+        try:
+            response = self.session.get(self.target_url, timeout=5)
+            for header, expected in required_headers.items():
+                if header not in response.headers:
+                    results.append({
+                        "type": "Missing Security Header",
+                        "severity": "LOW",
+                        "header": header,
+                        "recommendation": f"Add {header} header"
+                    })
+        except requests.RequestException:
+            pass
+
+        return results
+
+    def check_sensitive_files(self) -> List[Dict]:
+        """Check for exposed sensitive files."""
+        sensitive_paths = [
+            ".git/config", ".env", ".htaccess", "wp-config.php",
+            "config.php", "database.yml", ".DS_Store", "backup.sql",
+            "phpinfo.php", "server-status", ".svn/entries"
+        ]
+        results = []
+
+        for path in sensitive_paths:
+            url = urljoin(self.target_url, path)
+            try:
+                response = self.session.get(url, timeout=5)
+                if response.status_code == 200:
+                    results.append({
+                        "type": "Sensitive File Exposed",
+                        "severity": "HIGH",
+                        "url": url,
+                        "recommendation": "Remove or restrict access to this file"
+                    })
+            except requests.RequestException:
+                pass
+
+        return results
+
+    def run_full_scan(self) -> Dict:
+        """Run all vulnerability checks."""
+        results = {
+            "target": self.target_url,
+            "vulnerabilities": [],
+            "summary": {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        }
+
+        # Check security headers
+        results["vulnerabilities"].extend(self.check_security_headers())
+
+        # Check sensitive files
+        results["vulnerabilities"].extend(self.check_sensitive_files())
+
+        # Count by severity
+        for vuln in results["vulnerabilities"]:
+            severity = vuln.get("severity", "LOW")
+            results["summary"][severity] += 1
+
+        return results
+
+
+if __name__ == "__main__":
+    scanner = VulnerabilityScanner("http://example.com")
+    report = scanner.run_full_scan()
+    print(f"Found {len(report['vulnerabilities'])} potential issues")
+    print(f"Summary: {report['summary']}")
+```
+
+PASSWORD STRENGTH ANALYZER:
+```python
+import re
+import hashlib
+import requests
+from typing import Dict, List
+
+class PasswordAnalyzer:
+    def __init__(self):
+        self.common_passwords = self._load_common_passwords()
+
+    def _load_common_passwords(self) -> set:
+        """Load list of common passwords."""
+        common = {
+            "password", "123456", "password123", "admin", "letmein",
+            "welcome", "monkey", "dragon", "master", "qwerty",
+            "login", "abc123", "111111", "admin123", "root"
+        }
+        return common
+
+    def analyze(self, password: str) -> Dict:
+        """Analyze password strength."""
+        result = {
+            "password_length": len(password),
+            "score": 0,
+            "strength": "Very Weak",
+            "issues": [],
+            "suggestions": []
+        }
+
+        # Length check
+        if len(password) < 8:
+            result["issues"].append("Password is too short (minimum 8 characters)")
+        elif len(password) >= 12:
+            result["score"] += 2
+        elif len(password) >= 8:
+            result["score"] += 1
+
+        # Character variety
+        if re.search(r"[a-z]", password):
+            result["score"] += 1
+        else:
+            result["issues"].append("No lowercase letters")
+
+        if re.search(r"[A-Z]", password):
+            result["score"] += 1
+        else:
+            result["issues"].append("No uppercase letters")
+
+        if re.search(r"\d", password):
+            result["score"] += 1
+        else:
+            result["issues"].append("No numbers")
+
+        if re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
+            result["score"] += 2
+        else:
+            result["suggestions"].append("Add special characters (!@#$%^&*)")
+
+        # Common password check
+        if password.lower() in self.common_passwords:
+            result["score"] = 0
+            result["issues"].append("This is a commonly used password")
+
+        # Pattern detection
+        if re.search(r"(.)\1{2,}", password):
+            result["issues"].append("Contains repeated characters")
+            result["score"] -= 1
+
+        if re.search(r"(012|123|234|345|456|567|678|789|890)", password):
+            result["issues"].append("Contains sequential numbers")
+            result["score"] -= 1
+
+        # Calculate strength
+        if result["score"] >= 6:
+            result["strength"] = "Strong"
+        elif result["score"] >= 4:
+            result["strength"] = "Medium"
+        elif result["score"] >= 2:
+            result["strength"] = "Weak"
+
+        result["score"] = max(0, min(10, result["score"]))
+        return result
+
+    def check_breach(self, password: str) -> Dict:
+        """Check if password has been exposed in data breaches (using HIBP API)."""
+        sha1_hash = hashlib.sha1(password.encode()).hexdigest().upper()
+        prefix = sha1_hash[:5]
+        suffix = sha1_hash[5:]
+
+        try:
+            response = requests.get(f"https://api.pwnedpasswords.com/range/{prefix}", timeout=5)
+            if response.status_code == 200:
+                hashes = response.text.splitlines()
+                for h in hashes:
+                    hash_suffix, count = h.split(":")
+                    if hash_suffix == suffix:
+                        return {
+                            "breached": True,
+                            "count": int(count),
+                            "message": f"Password found in {count} data breaches!"
+                        }
+            return {"breached": False, "message": "Password not found in known breaches"}
+        except requests.RequestException:
+            return {"breached": None, "message": "Could not check breach database"}
+
+
+if __name__ == "__main__":
+    analyzer = PasswordAnalyzer()
+    result = analyzer.analyze("MyP@ssw0rd123!")
+    print(f"Strength: {result['strength']} (Score: {result['score']}/10)")
+    print(f"Issues: {result['issues']}")
+```
+
+LOG ANALYZER (Security Events):
+```python
+import re
+from datetime import datetime
+from typing import List, Dict, Generator
+from collections import defaultdict
+import json
+
+class SecurityLogAnalyzer:
+    def __init__(self):
+        self.patterns = {
+            "failed_login": r"Failed password for (\S+) from (\d+\.\d+\.\d+\.\d+)",
+            "successful_login": r"Accepted password for (\S+) from (\d+\.\d+\.\d+\.\d+)",
+            "ssh_bruteforce": r"Failed password for invalid user (\S+) from (\d+\.\d+\.\d+\.\d+)",
+            "port_scan": r"SRC=(\d+\.\d+\.\d+\.\d+).*DPT=(\d+)",
+            "sql_injection": r"(UNION|SELECT|INSERT|UPDATE|DELETE|DROP|EXEC).*(\"|'|;|--)",
+            "xss_attempt": r"(<script|javascript:|onerror=|onload=)",
+            "path_traversal": r"(\.\./|\.\.\\|%2e%2e%2f|%2e%2e/)",
+        }
+        self.alerts = []
+
+    def parse_log_line(self, line: str) -> Dict:
+        """Parse a single log line for security events."""
+        events = []
+
+        for event_type, pattern in self.patterns.items():
+            match = re.search(pattern, line, re.IGNORECASE)
+            if match:
+                events.append({
+                    "type": event_type,
+                    "match": match.group(0),
+                    "groups": match.groups(),
+                    "raw_line": line
+                })
+
+        return events
+
+    def analyze_file(self, filepath: str) -> Dict:
+        """Analyze a log file for security events."""
+        results = {
+            "total_lines": 0,
+            "events": defaultdict(list),
+            "ip_summary": defaultdict(int),
+            "timeline": []
+        }
+
+        with open(filepath, "r") as f:
+            for line in f:
+                results["total_lines"] += 1
+                events = self.parse_log_line(line)
+
+                for event in events:
+                    results["events"][event["type"]].append(event)
+
+                    # Track IPs for failed logins
+                    if event["type"] in ["failed_login", "ssh_bruteforce"]:
+                        ip = event["groups"][1] if len(event["groups"]) > 1 else "unknown"
+                        results["ip_summary"][ip] += 1
+
+        # Detect brute force attacks (more than 5 failed attempts from same IP)
+        for ip, count in results["ip_summary"].items():
+            if count > 5:
+                self.alerts.append({
+                    "severity": "HIGH",
+                    "type": "Brute Force Attack",
+                    "ip": ip,
+                    "attempts": count,
+                    "recommendation": f"Consider blocking IP {ip}"
+                })
+
+        results["alerts"] = self.alerts
+        return results
+
+    def generate_report(self, analysis: Dict) -> str:
+        """Generate a security report from analysis."""
+        report = []
+        report.append("=" * 60)
+        report.append("SECURITY LOG ANALYSIS REPORT")
+        report.append("=" * 60)
+        report.append(f"\nTotal lines analyzed: {analysis['total_lines']}")
+
+        report.append("\n--- Events Summary ---")
+        for event_type, events in analysis["events"].items():
+            report.append(f"{event_type}: {len(events)} occurrences")
+
+        if analysis["alerts"]:
+            report.append("\n--- ALERTS ---")
+            for alert in analysis["alerts"]:
+                report.append(f"[{alert['severity']}] {alert['type']}")
+                report.append(f"  IP: {alert['ip']} - Attempts: {alert['attempts']}")
+                report.append(f"  Recommendation: {alert['recommendation']}")
+
+        report.append("\n--- Top Suspicious IPs ---")
+        sorted_ips = sorted(analysis["ip_summary"].items(), key=lambda x: x[1], reverse=True)[:10]
+        for ip, count in sorted_ips:
+            report.append(f"  {ip}: {count} failed attempts")
+
+        return "\n".join(report)
+
+
+if __name__ == "__main__":
+    analyzer = SecurityLogAnalyzer()
+    # Example usage
+    # results = analyzer.analyze_file("/var/log/auth.log")
+    # print(analyzer.generate_report(results))
+```
+
+ENCRYPTION UTILITY:
+```python
+import os
+import base64
+import hashlib
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+import secrets
+
+class EncryptionUtil:
+    @staticmethod
+    def generate_key() -> bytes:
+        """Generate a secure random key."""
+        return Fernet.generate_key()
+
+    @staticmethod
+    def derive_key_from_password(password: str, salt: bytes = None) -> tuple:
+        """Derive encryption key from password using PBKDF2."""
+        if salt is None:
+            salt = os.urandom(16)
+
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=480000,
+            backend=default_backend()
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
+        return key, salt
+
+    @staticmethod
+    def encrypt_fernet(data: str, key: bytes) -> bytes:
+        """Encrypt data using Fernet (symmetric encryption)."""
+        f = Fernet(key)
+        return f.encrypt(data.encode())
+
+    @staticmethod
+    def decrypt_fernet(encrypted_data: bytes, key: bytes) -> str:
+        """Decrypt Fernet encrypted data."""
+        f = Fernet(key)
+        return f.decrypt(encrypted_data).decode()
+
+    @staticmethod
+    def encrypt_aes(data: str, key: bytes) -> tuple:
+        """Encrypt data using AES-256-GCM."""
+        iv = os.urandom(12)
+        cipher = Cipher(
+            algorithms.AES(key[:32]),
+            modes.GCM(iv),
+            backend=default_backend()
+        )
+        encryptor = cipher.encryptor()
+        ciphertext = encryptor.update(data.encode()) + encryptor.finalize()
+        return ciphertext, iv, encryptor.tag
+
+    @staticmethod
+    def decrypt_aes(ciphertext: bytes, key: bytes, iv: bytes, tag: bytes) -> str:
+        """Decrypt AES-256-GCM encrypted data."""
+        cipher = Cipher(
+            algorithms.AES(key[:32]),
+            modes.GCM(iv, tag),
+            backend=default_backend()
+        )
+        decryptor = cipher.decryptor()
+        return (decryptor.update(ciphertext) + decryptor.finalize()).decode()
+
+    @staticmethod
+    def hash_password(password: str) -> str:
+        """Hash password using SHA-256 with salt."""
+        salt = secrets.token_hex(16)
+        hashed = hashlib.sha256((salt + password).encode()).hexdigest()
+        return f"{salt}${hashed}"
+
+    @staticmethod
+    def verify_password(password: str, hashed: str) -> bool:
+        """Verify password against hash."""
+        salt, stored_hash = hashed.split("$")
+        computed_hash = hashlib.sha256((salt + password).encode()).hexdigest()
+        return secrets.compare_digest(computed_hash, stored_hash)
+
+
+if __name__ == "__main__":
+    # Example usage
+    util = EncryptionUtil()
+
+    # Fernet encryption
+    key = util.generate_key()
+    encrypted = util.encrypt_fernet("Secret message", key)
+    decrypted = util.decrypt_fernet(encrypted, key)
+    print(f"Decrypted: {decrypted}")
+
+    # Password hashing
+    hashed = util.hash_password("mypassword123")
+    is_valid = util.verify_password("mypassword123", hashed)
+    print(f"Password valid: {is_valid}")
+```
+
+SECURITY DASHBOARD (Streamlit):
+```python
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
+import random
+
+st.set_page_config(page_title="Security Dashboard", layout="wide")
+
+st.title("🔒 Security Monitoring Dashboard")
+
+# Sidebar filters
+st.sidebar.header("Filters")
+time_range = st.sidebar.selectbox("Time Range", ["Last 24 Hours", "Last 7 Days", "Last 30 Days"])
+severity_filter = st.sidebar.multiselect("Severity", ["Critical", "High", "Medium", "Low"], default=["Critical", "High"])
+
+# Metrics row
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    st.metric("Total Threats", "1,234", "+12%")
+with col2:
+    st.metric("Blocked Attacks", "987", "+8%")
+with col3:
+    st.metric("Active Alerts", "23", "-5%")
+with col4:
+    st.metric("System Health", "98%", "+2%")
+
+# Charts
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("Threat Types Distribution")
+    threat_data = pd.DataFrame({
+        "Type": ["Malware", "Phishing", "DDoS", "SQL Injection", "XSS", "Brute Force"],
+        "Count": [450, 320, 180, 120, 90, 74]
+    })
+    fig = px.pie(threat_data, values="Count", names="Type", hole=0.4)
+    st.plotly_chart(fig, use_container_width=True)
+
+with col2:
+    st.subheader("Attacks Over Time")
+    dates = pd.date_range(end=datetime.now(), periods=30, freq="D")
+    attacks = [random.randint(20, 100) for _ in range(30)]
+    time_data = pd.DataFrame({"Date": dates, "Attacks": attacks})
+    fig = px.line(time_data, x="Date", y="Attacks")
+    st.plotly_chart(fig, use_container_width=True)
+
+# Recent alerts table
+st.subheader("Recent Security Alerts")
+alerts_data = pd.DataFrame({
+    "Time": ["2 min ago", "15 min ago", "1 hour ago", "2 hours ago", "3 hours ago"],
+    "Severity": ["Critical", "High", "Medium", "High", "Low"],
+    "Type": ["Malware Detected", "Failed Login Attempts", "Suspicious Traffic", "Port Scan", "Policy Violation"],
+    "Source IP": ["192.168.1.100", "10.0.0.50", "172.16.0.25", "192.168.1.200", "10.0.0.75"],
+    "Status": ["Active", "Investigating", "Resolved", "Active", "Resolved"]
+})
+st.dataframe(alerts_data, use_container_width=True)
+
+# Geographic threat map
+st.subheader("Threat Origins Map")
+geo_data = pd.DataFrame({
+    "lat": [40.7128, 51.5074, 35.6762, -33.8688, 55.7558],
+    "lon": [-74.0060, -0.1278, 139.6503, 151.2093, 37.6173],
+    "city": ["New York", "London", "Tokyo", "Sydney", "Moscow"],
+    "attacks": [150, 120, 90, 60, 45]
+})
+fig = px.scatter_geo(geo_data, lat="lat", lon="lon", size="attacks", hover_name="city",
+                     projection="natural earth", title="Attack Origins")
+st.plotly_chart(fig, use_container_width=True)
 ```
 
 ═══════════════════════════════════════════════════════════════════════════════

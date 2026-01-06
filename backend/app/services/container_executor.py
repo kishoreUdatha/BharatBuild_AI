@@ -4356,15 +4356,15 @@ fi
         """
         import json
 
-        # Base timeouts by technology
+        # Base timeouts by technology (increased for health check time)
         base_timeouts = {
-            Technology.NODEJS: 60,
-            Technology.NODEJS_VITE: 60,
-            Technology.ANGULAR: 90,
+            Technology.NODEJS: 90,  # Increased from 60s for health check
+            Technology.NODEJS_VITE: 90,  # Increased from 60s for health check
+            Technology.ANGULAR: 120,  # Increased from 90s
             Technology.JAVA: 180,  # Maven is slow
-            Technology.PYTHON: 90,
+            Technology.PYTHON: 120,  # Increased from 90s
             Technology.PYTHON_ML: 180,  # ML deps are large
-            Technology.GO: 60,
+            Technology.GO: 90,  # Increased from 60s
             Technology.FLUTTER: 120,
             Technology.DOTNET: 120,
         }
