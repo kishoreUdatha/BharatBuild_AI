@@ -6,6 +6,7 @@ Understands user requests and creates detailed project plans
 from typing import Dict, List, Optional, Any
 import json
 from datetime import datetime
+from pathlib import Path
 
 from app.core.logging_config import logger
 from app.modules.agents.base_agent import BaseAgent, AgentContext
@@ -13,7 +14,7 @@ from app.modules.agents.base_agent import BaseAgent, AgentContext
 
 class PlannerAgent(BaseAgent):
     """
-    Planner / Understanding Agent
+    Planner / Understanding Agent with Dynamic Prompt Loading
 
     Responsibilities:
     - Understand vague or abstract user requests
@@ -22,8 +23,94 @@ class PlannerAgent(BaseAgent):
     - Create detailed feature lists
     - Plan implementation steps
     - Consider learning goals for students
+
+    Optimization:
+    - Detects technology from user request
+    - Loads only relevant prompt sections (~300 lines vs 2000+ lines)
+    - Reduces API costs and improves response quality
     """
 
+    # Prompt directory
+    PROMPTS_DIR = Path(__file__).parent.parent.parent / "config" / "prompts"
+
+    # Technology detection keywords
+    TECH_KEYWORDS = {
+        "react": ["react", "vite", "tsx", "frontend", "tailwind", "next.js", "nextjs", "ui", "dashboard"],
+        "python": ["fastapi", "django", "flask", "python", "uvicorn", "sqlalchemy", "backend", "api"],
+        "java": ["spring", "java", "maven", "gradle", "spring boot", "springboot"],
+        "node": ["express", "node", "nestjs", "prisma"],
+        "mobile": ["flutter", "react native", "android", "ios", "kotlin", "swift"],
+        "ai_ml": ["machine learning", "ml", "ai", "tensorflow", "pytorch", "model", "neural", "prediction"],
+    }
+
+    @classmethod
+    def _load_prompt_file(cls, filename: str) -> str:
+        """Load a prompt file from the prompts directory"""
+        filepath = cls.PROMPTS_DIR / filename
+        if filepath.exists():
+            return filepath.read_text(encoding="utf-8")
+        logger.warning(f"[PlannerAgent] Prompt file not found: {filepath}")
+        return ""
+
+    @classmethod
+    def _detect_technologies(cls, user_request: str) -> List[str]:
+        """Detect technologies mentioned in user request"""
+        request_lower = user_request.lower()
+        detected = []
+
+        for tech, keywords in cls.TECH_KEYWORDS.items():
+            if any(kw in request_lower for kw in keywords):
+                detected.append(tech)
+
+        # Default to react + python for fullstack if no specific tech mentioned
+        if not detected:
+            # Check for fullstack indicators
+            if any(word in request_lower for word in ["app", "application", "platform", "system", "dashboard", "portal", "website"]):
+                detected = ["react", "python"]
+            else:
+                detected = ["react"]  # Default to React for frontend
+
+        logger.info(f"[PlannerAgent] Detected technologies: {detected}")
+        return detected
+
+    @classmethod
+    def _build_dynamic_prompt(cls, user_request: str) -> str:
+        """Build prompt dynamically based on detected technologies - REDUCES PROMPT FROM 50k TO ~8k TOKENS"""
+        # Always load core prompt
+        core_prompt = cls._load_prompt_file("planner_core.txt")
+
+        if not core_prompt:
+            logger.warning("[PlannerAgent] Core prompt not found! Using SYSTEM_PROMPT fallback.")
+            return cls.SYSTEM_PROMPT  # Fall back to the hardcoded prompt
+
+        # Detect technologies and load relevant prompts
+        detected_techs = cls._detect_technologies(user_request)
+
+        tech_prompts = []
+        prompt_mapping = {
+            "react": "planner_react.txt",
+            "python": "planner_python.txt",
+            "java": "planner_java.txt",
+        }
+
+        for tech in detected_techs:
+            if tech in prompt_mapping:
+                tech_prompt = cls._load_prompt_file(prompt_mapping[tech])
+                if tech_prompt:
+                    tech_prompts.append(f"\n{'='*60}\n{tech.upper()} SPECIFIC RULES:\n{'='*60}\n{tech_prompt}")
+
+        # Combine prompts
+        full_prompt = core_prompt
+        if tech_prompts:
+            full_prompt += "\n" + "\n".join(tech_prompts)
+
+        # Log prompt size for debugging
+        token_estimate = len(full_prompt) // 4
+        logger.info(f"[PlannerAgent] Dynamic prompt size: ~{token_estimate} tokens (vs ~50k with old prompt)")
+
+        return full_prompt
+
+    # FALLBACK: Keep the original SYSTEM_PROMPT for backwards compatibility
     SYSTEM_PROMPT = """You are the PLANNER AGENT for a Bolt.new-style multi-purpose project generator.
 
 YOUR JOB:
@@ -2218,10 +2305,13 @@ Remember to:
 Be thorough, specific, and ensure all tasks are actionable by automation agents.
 """
 
+        # BUILD DYNAMIC PROMPT - loads only relevant tech rules (~8k tokens vs 50k)
+        dynamic_system_prompt = self._build_dynamic_prompt(context.user_request)
+
         response = await self._call_claude(
-            system_prompt=self.SYSTEM_PROMPT,
+            system_prompt=dynamic_system_prompt,
             user_prompt=prompt,
-            max_tokens=8192,
+            max_tokens=16384,  # Increased for complex plans with many files
             temperature=0.3
         )
 

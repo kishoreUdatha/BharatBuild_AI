@@ -123,7 +123,7 @@ agents:
     name: "Planner Agent"
     model: "sonnet"  # haiku, sonnet, opus
     temperature: 0.7
-    max_tokens: 8192  # Increased to handle detailed plans
+    max_tokens: 16384  # Increased from 8192 for complex plans with many files
     system_prompt_file: "prompts/planner.txt"
     capabilities:
       - planning
@@ -136,7 +136,7 @@ agents:
     name: "Writer Agent"
     model: "sonnet"
     temperature: 0.3
-    max_tokens: 8192
+    max_tokens: 16384  # Increased to prevent file truncation
     system_prompt_file: "prompts/writer.txt"
     capabilities:
       - code_generation

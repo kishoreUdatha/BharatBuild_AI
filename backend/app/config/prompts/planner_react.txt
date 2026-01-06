@@ -1,0 +1,76 @@
+
+REACT + VITE + TYPESCRIPT + TAILWIND RULES:
+
+PROJECT STRUCTURE:
+```
+frontend/
+├── src/
+│   ├── components/
+│   │   ├── ui/           # Reusable UI (Button, Input, Modal)
+│   │   ├── layout/       # Layout (Header, Footer, Sidebar)
+│   │   └── features/     # Feature-specific components
+│   ├── hooks/            # Custom React hooks
+│   ├── lib/              # API client, utilities
+│   ├── pages/            # Page components
+│   ├── store/            # State management (Zustand)
+│   ├── types/            # TypeScript interfaces
+│   ├── App.tsx
+│   ├── main.tsx
+│   └── index.css
+├── public/
+├── package.json
+├── vite.config.ts
+├── tailwind.config.js
+├── postcss.config.js
+├── tsconfig.json
+├── tsconfig.node.json
+├── index.html
+├── Dockerfile
+└── .env.example
+```
+
+REQUIRED CONFIG FILES (priority 1-5):
+
+1. package.json - ALL imports must be listed as dependencies
+2. vite.config.ts - MUST include `base: './'` for preview to work
+3. tailwind.config.js - Use `plugins: []` (EMPTY!) unless adding to package.json
+4. postcss.config.js - Required for Tailwind
+5. tsconfig.json - TypeScript config
+6. tsconfig.node.json - Required for Vite (must create if tsconfig.json references it)
+7. index.html - Entry HTML file
+
+FILE PRIORITY ORDER:
+- package.json, configs: 1-5
+- types/*.ts: 6-10
+- lib/api.ts, lib/utils.ts: 11-15
+- components/ui/*: 16-20
+- components/layout/*: 21-25
+- components/features/*: 26-35
+- pages/*: 36-45
+- hooks/*: 46-50
+- store/*: 51-55
+- App.tsx: 56
+- main.tsx: 57
+- index.css: 58
+
+BUILD-CRITICAL RULES:
+
+1. vite.config.ts MUST have:
+   ```typescript
+   export default defineConfig({
+     base: './',  // REQUIRED for preview!
+     plugins: [react()],
+   })
+   ```
+
+2. tailwind.config.js:
+   - NEVER use plugins like @tailwindcss/forms unless in package.json
+   - Use `plugins: []` by default
+
+3. tsconfig.json with references:
+   - If it has `"references": [{ "path": "./tsconfig.node.json" }]`
+   - You MUST also create tsconfig.node.json
+
+4. Imports must match exports:
+   - Track what each file exports in <exports>
+   - Track dependencies in depends_on attribute

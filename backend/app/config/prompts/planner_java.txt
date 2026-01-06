@@ -1,0 +1,128 @@
+
+JAVA / SPRING BOOT RULES:
+
+PROJECT STRUCTURE:
+```
+backend/
+├── src/
+│   ├── main/
+│   │   ├── java/com/company/project/
+│   │   │   ├── config/
+│   │   │   │   ├── SecurityConfig.java
+│   │   │   │   ├── WebConfig.java
+│   │   │   │   └── CorsConfig.java
+│   │   │   ├── controller/
+│   │   │   │   └── UserController.java
+│   │   │   ├── service/
+│   │   │   │   ├── UserService.java
+│   │   │   │   └── impl/UserServiceImpl.java
+│   │   │   ├── repository/
+│   │   │   │   └── UserRepository.java
+│   │   │   ├── model/
+│   │   │   │   ├── entity/
+│   │   │   │   │   └── User.java
+│   │   │   │   ├── dto/
+│   │   │   │   │   ├── UserRequest.java
+│   │   │   │   │   └── UserResponse.java
+│   │   │   │   └── enums/
+│   │   │   │       └── UserRole.java
+│   │   │   ├── security/
+│   │   │   │   ├── JwtUtil.java
+│   │   │   │   └── JwtAuthFilter.java
+│   │   │   ├── exception/
+│   │   │   │   └── GlobalExceptionHandler.java
+│   │   │   └── Application.java
+│   │   └── resources/
+│   │       ├── application.yml
+│   │       └── application-dev.yml
+│   └── test/
+├── pom.xml
+├── Dockerfile
+├── docker-compose.yml
+└── README.md
+```
+
+FILE PRIORITY ORDER:
+- pom.xml: 1
+- application.yml: 2
+- Enums (UserRole.java, Status.java): 3-5
+- Entities (User.java): 6-10
+- DTOs: 11-15
+- Repositories: 16-20
+- Services: 21-25
+- Security (JwtUtil, JwtAuthFilter): 26-30
+- Config (SecurityConfig, WebConfig): 31-35
+- Controllers: 36-40
+- Application.java (main): 41
+- Dockerfile: 42
+
+BUILD-CRITICAL RULES:
+
+1. ENUMS MUST BE SEPARATE FILES!
+   WRONG: Inner enum in Entity class
+   ```java
+   public class Order {
+       public enum OrderStatus { PENDING, COMPLETED }  // WRONG!
+   }
+   ```
+   CORRECT: Separate file
+   ```java
+   // enums/OrderStatus.java
+   public enum OrderStatus { PENDING, COMPLETED }
+   ```
+
+2. pom.xml MUST have all dependencies:
+   ```xml
+   <dependencies>
+       <dependency>
+           <groupId>org.springframework.boot</groupId>
+           <artifactId>spring-boot-starter-web</artifactId>
+       </dependency>
+       <dependency>
+           <groupId>org.springframework.boot</groupId>
+           <artifactId>spring-boot-starter-data-jpa</artifactId>
+       </dependency>
+       <dependency>
+           <groupId>org.springframework.boot</groupId>
+           <artifactId>spring-boot-starter-security</artifactId>
+       </dependency>
+       <dependency>
+           <groupId>org.postgresql</groupId>
+           <artifactId>postgresql</artifactId>
+           <scope>runtime</scope>
+       </dependency>
+       <dependency>
+           <groupId>org.projectlombok</groupId>
+           <artifactId>lombok</artifactId>
+           <optional>true</optional>
+       </dependency>
+       <dependency>
+           <groupId>io.jsonwebtoken</groupId>
+           <artifactId>jjwt-api</artifactId>
+           <version>0.11.5</version>
+       </dependency>
+   </dependencies>
+   ```
+
+3. application.yml MUST have:
+   ```yaml
+   server:
+     port: 8080
+   spring:
+     datasource:
+       url: jdbc:postgresql://db:5432/mydb
+       username: ${DB_USER:postgres}
+       password: ${DB_PASSWORD:postgres}
+     jpa:
+       hibernate:
+         ddl-auto: update
+       show-sql: true
+   ```
+
+4. Entity fields MUST match what Services use:
+   - If Service calls user.getEmail(), Entity MUST have email field
+   - If Service calls repo.findByEmail(), Repository MUST have that method
+
+5. Keep each file under 300 lines:
+   - Split large services into smaller ones
+   - Use separate DTOs for request/response

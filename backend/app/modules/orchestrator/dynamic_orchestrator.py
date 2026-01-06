@@ -923,7 +923,7 @@ class AgentRegistry:
                 agent_type=AgentType.PLANNER,
                 model="sonnet",
                 temperature=0.7,
-                max_tokens=4096,
+                max_tokens=16384,  # Increased from 4096 for complex plans
                 capabilities=["planning", "architecture_design", "task_breakdown"]
             ),
             AgentConfig(
@@ -931,7 +931,7 @@ class AgentRegistry:
                 agent_type=AgentType.WRITER,
                 model="sonnet",
                 temperature=0.3,
-                max_tokens=8192,
+                max_tokens=16384,  # Increased from 8192 to prevent file truncation
                 capabilities=["code_generation", "file_creation"]
             ),
             AgentConfig(
@@ -2996,11 +2996,15 @@ class DynamicOrchestrator:
                 }
 
                 try:
-                    # Generate file using writer
+                    # Generate file using writer with dynamic prompt
+                    writer_config = self.get_agent(AgentType.WRITER)
+                    dynamic_prompt = self._build_dynamic_writer_prompt(file_path)
                     async for event in self._execute_writer_for_single_file(
+                        config=writer_config,
                         context=context,
                         file_path=file_path,
-                        file_description=file_desc
+                        file_description=file_desc,
+                        system_prompt=dynamic_prompt
                     ):
                         if event.type == EventType.FILE_CREATED:
                             yield {
@@ -3991,8 +3995,10 @@ Ensure every import in every file has a corresponding file in the plan.
                     )
 
                     # Stream events to queue in REAL-TIME (not collecting!)
+                    # Use DYNAMIC prompt based on file type (~8k tokens vs ~50k)
+                    dynamic_prompt = self._build_dynamic_writer_prompt(file_path)
                     async for event in self._execute_writer_for_single_file(
-                        config, context, file_path, file_description, system_prompt
+                        config, context, file_path, file_description, dynamic_prompt
                     ):
                         await event_queue.put(("event", event))
 
@@ -4273,8 +4279,10 @@ Ensure every import in every file has a corresponding file in the plan.
                         logger.info(f"[ImportValidation] Generating missing file {idx+1}/{len(missing_files)}: {file_path}")
 
                         try:
+                            # Use dynamic prompt for this file type
+                            dynamic_prompt = self._build_dynamic_writer_prompt(file_path)
                             async for event in self._execute_writer_for_single_file(
-                                config, context, file_path, file_desc, system_prompt
+                                config, context, file_path, file_desc, dynamic_prompt
                             ):
                                 yield event
                         except Exception as gen_err:
@@ -7879,6 +7887,61 @@ htmlcov
     def _get_default_writer_prompt(self) -> str:
         """Get writer prompt from WriterAgent class (Bolt.new style)"""
         return WriterAgent.SYSTEM_PROMPT
+
+    def _build_dynamic_writer_prompt(self, file_path: str) -> str:
+        """
+        Build dynamic writer prompt based on file type - REDUCES PROMPT FROM ~50k TO ~8k TOKENS
+
+        Args:
+            file_path: Path of file being generated (e.g., "frontend/src/App.tsx")
+
+        Returns:
+            Optimized system prompt with only relevant rules for this file type
+        """
+        prompts_dir = Path(__file__).parent.parent.parent / "config" / "prompts"
+
+        def load_prompt(filename: str) -> str:
+            filepath = prompts_dir / filename
+            if filepath.exists():
+                return filepath.read_text(encoding="utf-8")
+            logger.warning(f"[Writer] Prompt file not found: {filepath}")
+            return ""
+
+        # Always load core prompt
+        core_prompt = load_prompt("writer_core.txt")
+        if not core_prompt:
+            logger.warning("[Writer] Core prompt not found, using fallback")
+            return WriterAgent.SYSTEM_PROMPT
+
+        # Detect file type from extension and path
+        file_lower = file_path.lower()
+        tech_prompt = ""
+
+        # React/TypeScript files
+        if any(ext in file_lower for ext in ['.tsx', '.jsx', '.ts', '.js']) and 'backend' not in file_lower:
+            tech_prompt = load_prompt("writer_react.txt")
+            tech_name = "REACT/TYPESCRIPT"
+        # Python files
+        elif file_lower.endswith('.py'):
+            tech_prompt = load_prompt("writer_python.txt")
+            tech_name = "PYTHON"
+        # Java files
+        elif file_lower.endswith('.java'):
+            tech_prompt = load_prompt("writer_java.txt")
+            tech_name = "JAVA"
+        else:
+            tech_name = None
+
+        # Combine prompts
+        full_prompt = core_prompt
+        if tech_prompt:
+            full_prompt += f"\n\n{'='*60}\n{tech_name} SPECIFIC RULES:\n{'='*60}\n{tech_prompt}"
+
+        # Log optimization
+        token_estimate = len(full_prompt) // 4
+        logger.info(f"[Writer] Dynamic prompt for {file_path}: ~{token_estimate} tokens (vs ~50k with old prompt)")
+
+        return full_prompt
 
     def _get_default_fixer_prompt(self) -> str:
         """Get fixer prompt from FixerAgent class (Bolt.new style)"""

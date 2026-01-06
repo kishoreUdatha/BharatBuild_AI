@@ -156,6 +156,14 @@ class ClaudeClient:
                 logger.info(f"Claude API response: id={response.id}, tokens={result['total_tokens']}, stop={response.stop_reason}")
                 logger.debug(f"Claude response preview: {content[:200]}..." if len(content) > 200 else content)
 
+                # CRITICAL: Warn if response was truncated due to token limit
+                if response.stop_reason == "max_tokens":
+                    logger.warning(
+                        f"⚠️ RESPONSE TRUNCATED: Claude hit max_tokens limit ({max_tokens}). "
+                        f"Output may be incomplete! Consider increasing max_tokens."
+                    )
+                    result["truncated"] = True
+
                 return result
 
             except Exception as e:
@@ -259,6 +267,13 @@ class ClaudeClient:
                 # Log streaming response summary
                 total_tokens = final_message.usage.input_tokens + final_message.usage.output_tokens
                 logger.info(f"Claude Streaming response: id={final_message.id}, tokens={total_tokens}, stop={final_message.stop_reason}")
+
+                # CRITICAL: Warn if response was truncated due to token limit
+                if final_message.stop_reason == "max_tokens":
+                    logger.warning(
+                        f"⚠️ STREAMING RESPONSE TRUNCATED: Claude hit max_tokens limit ({max_tokens}). "
+                        f"Output may be incomplete! Consider increasing max_tokens."
+                    )
 
                 # Yield special token usage marker at end of stream
                 # Format: __TOKEN_USAGE__:input:output:model
