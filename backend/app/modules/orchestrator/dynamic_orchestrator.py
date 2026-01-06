@@ -2634,7 +2634,7 @@ class DynamicOrchestrator:
             # LAYER 2: Upload to S3 on completion (if configured)
             # Yield progress event to keep SSE connection alive during S3 upload
             yield OrchestratorEvent(
-                type=EventType.PROGRESS,
+                type=EventType.STATUS,
                 data={"message": "Saving project to cloud storage...", "phase": "s3_upload"},
                 step=len(workflow.steps)
             )
@@ -2650,7 +2650,7 @@ class DynamicOrchestrator:
                     if s3_zip_key:
                         logger.info(f"[Layer2-S3] Uploaded project ZIP: {s3_zip_key}")
                         yield OrchestratorEvent(
-                            type=EventType.PROGRESS,
+                            type=EventType.STATUS,
                             data={"message": "Project saved to cloud", "phase": "s3_upload_complete", "s3_key": s3_zip_key},
                             step=len(workflow.steps)
                         )
@@ -2660,7 +2660,7 @@ class DynamicOrchestrator:
             # LAYER 3: Update PostgreSQL with metadata
             # Yield progress event to keep SSE connection alive during DB update
             yield OrchestratorEvent(
-                type=EventType.PROGRESS,
+                type=EventType.STATUS,
                 data={"message": "Updating project metadata...", "phase": "db_update"},
                 step=len(workflow.steps)
             )
@@ -2719,7 +2719,7 @@ class DynamicOrchestrator:
 
             # Yield progress event after DB update
             yield OrchestratorEvent(
-                type=EventType.PROGRESS,
+                type=EventType.STATUS,
                 data={"message": "Finalizing project...", "phase": "finalizing"},
                 step=len(workflow.steps)
             )
@@ -3983,48 +3983,81 @@ Ensure every import in every file has a corresponding file in the plan.
                 file_content = ""
                 error_msg = None
 
+                # RETRY CONFIG for transient errors (overloaded, rate_limit, timeout)
+                MAX_RETRIES = 3
+                RETRY_DELAYS = [5, 10, 20]  # Exponential backoff: 5s, 10s, 20s
+
                 if not file_path:
                     return {"success": False, "file_path": ""}
 
-                try:
-                    # Mark as generating
-                    await self.update_file_generation_status(
-                        project_id=context.project_id,
-                        file_path=file_path,
-                        status="generating"
-                    )
+                for attempt in range(MAX_RETRIES + 1):
+                    try:
+                        # Mark as generating
+                        await self.update_file_generation_status(
+                            project_id=context.project_id,
+                            file_path=file_path,
+                            status="generating" if attempt == 0 else f"retrying ({attempt}/{MAX_RETRIES})"
+                        )
 
-                    # Stream events to queue in REAL-TIME (not collecting!)
-                    # Use DYNAMIC prompt based on file type (~8k tokens vs ~50k)
-                    dynamic_prompt = self._build_dynamic_writer_prompt(file_path)
-                    async for event in self._execute_writer_for_single_file(
-                        config, context, file_path, file_description, dynamic_prompt
-                    ):
-                        await event_queue.put(("event", event))
+                        # Stream events to queue in REAL-TIME (not collecting!)
+                        # Use DYNAMIC prompt based on file type (~8k tokens vs ~50k)
+                        dynamic_prompt = self._build_dynamic_writer_prompt(file_path)
+                        async for event in self._execute_writer_for_single_file(
+                            config, context, file_path, file_description, dynamic_prompt
+                        ):
+                            await event_queue.put(("event", event))
 
-                    # Get file content
-                    for fc in reversed(context.files_created):
-                        if fc.get('path') == file_path:
-                            file_content = fc.get('content', '')
-                            break
+                        # Get file content
+                        for fc in reversed(context.files_created):
+                            if fc.get('path') == file_path:
+                                file_content = fc.get('content', '')
+                                break
 
-                    # Mark as completed
-                    await self.update_file_generation_status(
-                        project_id=context.project_id,
-                        file_path=file_path,
-                        status="completed",
-                        size_bytes=len(file_content.encode('utf-8')) if file_content else 0
-                    )
-                    success = True
+                        # Mark as completed
+                        await self.update_file_generation_status(
+                            project_id=context.project_id,
+                            file_path=file_path,
+                            status="completed",
+                            size_bytes=len(file_content.encode('utf-8')) if file_content else 0
+                        )
+                        success = True
+                        break  # Success - exit retry loop
 
-                except Exception as e:
-                    logger.error(f"[Writer] Error generating {file_path}: {e}")
-                    error_msg = str(e)
-                    await self.update_file_generation_status(
-                        project_id=context.project_id,
-                        file_path=file_path,
-                        status="failed"
-                    )
+                    except Exception as e:
+                        error_msg = str(e)
+                        error_lower = error_msg.lower()
+
+                        # Check if error is retryable (transient API errors)
+                        is_retryable = any(err in error_lower for err in [
+                            'overloaded', 'rate_limit', 'rate limit', 'timeout',
+                            'connection', 'temporarily', '529', '503', '502', '504'
+                        ])
+
+                        if is_retryable and attempt < MAX_RETRIES:
+                            delay = RETRY_DELAYS[attempt]
+                            logger.warning(f"[Writer] Retryable error for {file_path} (attempt {attempt + 1}/{MAX_RETRIES}): {error_msg[:100]}. Retrying in {delay}s...")
+
+                            # Emit retry status to keep connection alive
+                            await event_queue.put(("event", OrchestratorEvent(
+                                type=EventType.WARNING,
+                                data={
+                                    "message": f"API busy, retrying {file_path} in {delay}s (attempt {attempt + 1}/{MAX_RETRIES})",
+                                    "file": file_path,
+                                    "retry_attempt": attempt + 1
+                                }
+                            )))
+
+                            await asyncio.sleep(delay)
+                            continue  # Retry
+                        else:
+                            # Non-retryable error or max retries exceeded
+                            logger.error(f"[Writer] Error generating {file_path} (attempt {attempt + 1}): {error_msg}")
+                            await self.update_file_generation_status(
+                                project_id=context.project_id,
+                                file_path=file_path,
+                                status="failed"
+                            )
+                            break  # Exit retry loop
 
                 return {
                     "success": success,
@@ -7159,10 +7192,10 @@ Stream code in chunks for real-time display.
         has_package_json = any("package.json" in p for p in file_paths)
         has_requirements = any("requirements.txt" in p for p in file_paths)
         has_pom_xml = any("pom.xml" in p for p in file_paths)
-        has_vite = any("vite" in str(tech_stack).lower()) or any("vite.config" in p for p in file_paths)
-        has_next = any("next" in str(tech_stack).lower()) or any("next.config" in p for p in file_paths)
-        has_fastapi = any("fastapi" in str(tech_stack).lower())
-        has_django = any("django" in str(tech_stack).lower())
+        has_vite = ("vite" in str(tech_stack).lower()) or any("vite.config" in p for p in file_paths)
+        has_next = ("next" in str(tech_stack).lower()) or any("next.config" in p for p in file_paths)
+        has_fastapi = "fastapi" in str(tech_stack).lower()
+        has_django = "django" in str(tech_stack).lower()
 
         docs_generated = 0
 
