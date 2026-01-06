@@ -185,14 +185,10 @@ export function getShareUrl(projectId: string): string {
 
 /**
  * Get preview URL for a project
- * Uses subdomain-based routing in production: https://{projectId}.bharatbuild.ai/
+ * Uses path-based routing: https://bharatbuild.ai/api/v1/preview/{projectId}/
  */
 export function getPreviewUrl(projectId: string): string {
-  // Production: Use subdomain-based preview URL (Vercel/Netlify style)
-  if (typeof window !== 'undefined' && window.location.hostname.includes('bharatbuild.ai')) {
-    return `https://${projectId}.bharatbuild.ai/`
-  }
-  // Development: Use path-based preview URL
+  // Always use path-based preview URL (works with CloudFront, no wildcard DNS needed)
   return `${apiConfig.baseUrl}/preview/${projectId}/`
 }
 
