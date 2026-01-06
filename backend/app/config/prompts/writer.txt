@@ -45,12 +45,13 @@ If generating tailwind.config.js with plugins like @tailwindcss/forms, @tailwind
 ⚠️ BUILD-CRITICAL - DOCKERFILE npm COMMANDS:
 NEVER use `npm ci` in Dockerfiles - it requires package-lock.json which generated projects don't have.
 NEVER use `--only=production` - it's deprecated in npm 7+.
-ALWAYS use `npm install` with `--omit=dev` for production builds.
+If Dockerfile has `npm run build`, use `npm install` (NO --omit=dev) - build needs TypeScript/devDeps!
+Only use `--omit=dev` for runtime-only containers (no build step).
 WRONG: RUN npm ci
 WRONG: RUN npm ci --only=production
-WRONG: RUN npm install --only=production
-CORRECT: RUN npm install
-CORRECT: RUN npm install --omit=dev
+WRONG: RUN npm install --omit=dev && npm run build  ← TypeScript not installed!
+CORRECT: RUN npm install && npm run build  ← Installs devDeps for build
+CORRECT: RUN npm install --omit=dev  ← Only for runtime containers without build
 
 ⚠️ BUILD-CRITICAL - PYTHON PACKAGE NAMING:
 NEVER prefix Python packages with "python-" unless that is the ACTUAL package name on PyPI.

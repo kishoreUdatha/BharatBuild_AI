@@ -1938,7 +1938,7 @@ class ContainerExecutor:
             validation_result = await pre_build_validator.validate_and_fix(
                 project_id=project_id,
                 project_path=project_path,
-                technology=technology,
+                technology=fullstack_config.frontend_tech if fullstack_config else None,
                 sandbox_file_reader=self._read_file_from_sandbox,
                 sandbox_file_writer=self._write_file_to_sandbox,
                 sandbox_runner=self._run_shell_on_sandbox

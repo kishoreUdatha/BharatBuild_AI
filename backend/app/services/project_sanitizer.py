@@ -405,6 +405,9 @@ class ProjectSanitizer:
         fixed_lines = []
         has_from = False
 
+        # Check if Dockerfile has 'npm run build' - if so, we need all deps including dev
+        has_npm_build = 'npm run build' in content or 'yarn build' in content or 'pnpm build' in content
+
         for i, line in enumerate(lines):
             stripped = line.strip()
 
@@ -425,12 +428,28 @@ class ProjectSanitizer:
                 if "Replaced npm ci with npm install" not in self.fixes_applied:
                     self.fixes_applied.append("Replaced npm ci with npm install")
 
-            # 3. Replace deprecated '--only=production' with '--omit=dev'
-            # npm 7+ deprecated --only flag
-            if '--only=production' in line:
-                line = line.replace('--only=production', '--omit=dev')
-                if "Replaced --only=production with --omit=dev" not in self.fixes_applied:
-                    self.fixes_applied.append("Replaced --only=production with --omit=dev")
+            # 3. Handle --only=production and --omit=dev
+            # If we have 'npm run build', we need devDependencies (TypeScript, etc.)
+            # So remove --omit=dev or --only=production flags
+            if has_npm_build:
+                if '--only=production' in line:
+                    line = line.replace('--only=production', '')
+                    # Clean up double spaces
+                    line = ' '.join(line.split())
+                    if "Removed --only=production (build needs devDeps)" not in self.fixes_applied:
+                        self.fixes_applied.append("Removed --only=production (build needs devDeps)")
+                if '--omit=dev' in line:
+                    line = line.replace('--omit=dev', '')
+                    # Clean up double spaces
+                    line = ' '.join(line.split())
+                    if "Removed --omit=dev (build needs devDeps)" not in self.fixes_applied:
+                        self.fixes_applied.append("Removed --omit=dev (build needs devDeps)")
+            else:
+                # No build step - just modernize the flag
+                if '--only=production' in line:
+                    line = line.replace('--only=production', '--omit=dev')
+                    if "Replaced --only=production with --omit=dev" not in self.fixes_applied:
+                        self.fixes_applied.append("Replaced --only=production with --omit=dev")
 
             fixed_lines.append(line)
 
