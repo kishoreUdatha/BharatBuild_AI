@@ -485,6 +485,10 @@ async def execute_fix_with_notification(
             env_files_modified = []
             startup_critical_modified = []  # Files that require container restart
             npm_files_modified = []  # package.json changes need npm install
+            python_files_modified = []  # requirements.txt changes need pip install
+            java_files_modified = []  # pom.xml/build.gradle changes need mvn/gradle
+            go_files_modified = []  # go.mod changes need go mod download
+            rust_files_modified = []  # Cargo.toml changes need cargo build
 
             # Sync modified files: SOURCE files to container (HMR), CONFIG files to DB/S3 only
             # CRITICAL: Config files (vite.config.ts, package.json, etc.) should NOT be synced
@@ -506,8 +510,24 @@ async def execute_fix_with_notification(
                 }
 
                 # NPM FILES - MUST be synced + trigger npm install + restart
-                # These are critical for dependency resolution
+                # Covers: React, Vue, Next.js, Node.js, Blockchain (Hardhat/Truffle)
                 NPM_FILES = {'package.json'}
+
+                # PYTHON FILES - MUST be synced + trigger pip install + restart
+                # Covers: FastAPI, Django, Flask, AI/ML (TensorFlow, PyTorch, scikit-learn)
+                PYTHON_FILES = {'requirements.txt', 'pyproject.toml', 'environment.yml'}
+
+                # JAVA FILES - MUST be synced + trigger mvn/gradle install + restart
+                # Covers: Spring Boot, Java EE, Android
+                JAVA_FILES = {'pom.xml', 'build.gradle', 'build.gradle.kts'}
+
+                # GO FILES - MUST be synced + trigger go mod download + restart
+                # Covers: Go microservices, Blockchain (Cosmos SDK)
+                GO_FILES = {'go.mod', 'go.sum'}
+
+                # RUST FILES - MUST be synced + trigger cargo build + restart
+                # Covers: Rust, Blockchain (Solana, Substrate)
+                RUST_FILES = {'Cargo.toml', 'Cargo.lock'}
 
                 # Startup-critical files that SHOULD be synced but REQUIRE container restart
                 # These are needed for Vite/build tools to start - if missing, Vite crashes
@@ -532,6 +552,10 @@ async def execute_fix_with_notification(
                             is_env_file = file_name in ENV_FILES
                             is_startup_critical = file_name in STARTUP_CRITICAL_FILES
                             is_npm_file = file_name in NPM_FILES
+                            is_python_file = file_name in PYTHON_FILES
+                            is_java_file = file_name in JAVA_FILES
+                            is_go_file = file_name in GO_FILES
+                            is_rust_file = file_name in RUST_FILES
 
                             # STEP 1: Sync SOURCE files, ENV files, and NPM files to RUNNING CONTAINER
                             # SKIP config files (except package.json) - they cause restart loops
@@ -556,6 +580,18 @@ async def execute_fix_with_notification(
                                             if is_npm_file:
                                                 npm_files_modified.append(file_path)
                                                 logger.info(f"[ErrorHandler:{project_id}] 📦 NPM file synced: {file_path} (requires npm install)")
+                                            elif is_python_file:
+                                                python_files_modified.append(file_path)
+                                                logger.info(f"[ErrorHandler:{project_id}] 🐍 Python file synced: {file_path} (requires pip install)")
+                                            elif is_java_file:
+                                                java_files_modified.append(file_path)
+                                                logger.info(f"[ErrorHandler:{project_id}] ☕ Java file synced: {file_path} (requires mvn/gradle)")
+                                            elif is_go_file:
+                                                go_files_modified.append(file_path)
+                                                logger.info(f"[ErrorHandler:{project_id}] 🐹 Go file synced: {file_path} (requires go mod download)")
+                                            elif is_rust_file:
+                                                rust_files_modified.append(file_path)
+                                                logger.info(f"[ErrorHandler:{project_id}] 🦀 Rust file synced: {file_path} (requires cargo build)")
                                             elif is_startup_critical:
                                                 startup_critical_modified.append(file_path)
                                                 logger.info(f"[ErrorHandler:{project_id}] ⚡ Startup-critical file synced: {file_path} (requires restart)")
@@ -644,6 +680,128 @@ async def execute_fix_with_notification(
                     except Exception as npm_err:
                         logger.warning(f"[ErrorHandler:{project_id}] Failed to run npm install: {npm_err}")
 
+                # STEP 4b: If requirements.txt was synced, run pip install in container
+                if python_files_modified and IS_REMOTE_SANDBOX and user_id:
+                    try:
+                        from app.services.container_executor import container_executor
+
+                        # Find the working directory (backend/ or root)
+                        req_file = python_files_modified[0] if python_files_modified else None
+                        work_dir = "/app"
+                        if req_file and '/' in req_file:
+                            # e.g., backend/requirements.txt -> /app/backend
+                            work_dir = f"/app/{req_file.rsplit('/', 1)[0]}"
+
+                        logger.info(f"[ErrorHandler:{project_id}] 🐍 Running pip install after requirements.txt sync (workdir={work_dir})")
+
+                        # Find the container for this project
+                        container = await container_executor._get_existing_container(project_id)
+                        if container:
+                            # Run pip install in the container
+                            exit_code, output = container.exec_run(
+                                f"sh -c 'cd {work_dir} && pip install -r requirements.txt 2>&1'",
+                                workdir="/app",
+                                demux=True
+                            )
+                            stdout = output[0].decode('utf-8') if output[0] else ""
+                            stderr = output[1].decode('utf-8') if output[1] else ""
+                            full_output = stdout + stderr
+
+                            if exit_code == 0:
+                                logger.info(f"[ErrorHandler:{project_id}] ✓ pip install completed successfully")
+                            else:
+                                logger.warning(f"[ErrorHandler:{project_id}] pip install exit code: {exit_code}")
+                                logger.warning(f"[ErrorHandler:{project_id}] pip install output: {full_output[:500]}")
+                        else:
+                            logger.warning(f"[ErrorHandler:{project_id}] Container not found for pip install")
+                    except Exception as pip_err:
+                        logger.warning(f"[ErrorHandler:{project_id}] Failed to run pip install: {pip_err}")
+
+                # STEP 4c: If pom.xml/build.gradle was synced, run mvn/gradle in container
+                if java_files_modified and IS_REMOTE_SANDBOX and user_id:
+                    try:
+                        from app.services.container_executor import container_executor
+
+                        java_file = java_files_modified[0]
+                        work_dir = "/app"
+                        if '/' in java_file:
+                            work_dir = f"/app/{java_file.rsplit('/', 1)[0]}"
+
+                        # Determine build tool (Maven vs Gradle)
+                        is_gradle = 'gradle' in java_file.lower()
+                        build_cmd = "gradle build --no-daemon" if is_gradle else "mvn install -DskipTests"
+
+                        logger.info(f"[ErrorHandler:{project_id}] ☕ Running {build_cmd} (workdir={work_dir})")
+
+                        container = await container_executor._get_existing_container(project_id)
+                        if container:
+                            exit_code, output = container.exec_run(
+                                f"sh -c 'cd {work_dir} && {build_cmd} 2>&1'",
+                                workdir="/app",
+                                demux=True
+                            )
+                            stdout = output[0].decode('utf-8') if output[0] else ""
+                            if exit_code == 0:
+                                logger.info(f"[ErrorHandler:{project_id}] ✓ Java build completed successfully")
+                            else:
+                                logger.warning(f"[ErrorHandler:{project_id}] Java build exit code: {exit_code}")
+                    except Exception as java_err:
+                        logger.warning(f"[ErrorHandler:{project_id}] Failed to run Java build: {java_err}")
+
+                # STEP 4d: If go.mod was synced, run go mod download in container
+                if go_files_modified and IS_REMOTE_SANDBOX and user_id:
+                    try:
+                        from app.services.container_executor import container_executor
+
+                        go_file = go_files_modified[0]
+                        work_dir = "/app"
+                        if '/' in go_file:
+                            work_dir = f"/app/{go_file.rsplit('/', 1)[0]}"
+
+                        logger.info(f"[ErrorHandler:{project_id}] 🐹 Running go mod download (workdir={work_dir})")
+
+                        container = await container_executor._get_existing_container(project_id)
+                        if container:
+                            exit_code, output = container.exec_run(
+                                f"sh -c 'cd {work_dir} && go mod download 2>&1'",
+                                workdir="/app",
+                                demux=True
+                            )
+                            stdout = output[0].decode('utf-8') if output[0] else ""
+                            if exit_code == 0:
+                                logger.info(f"[ErrorHandler:{project_id}] ✓ Go mod download completed successfully")
+                            else:
+                                logger.warning(f"[ErrorHandler:{project_id}] Go mod download exit code: {exit_code}")
+                    except Exception as go_err:
+                        logger.warning(f"[ErrorHandler:{project_id}] Failed to run go mod download: {go_err}")
+
+                # STEP 4e: If Cargo.toml was synced, run cargo build in container
+                if rust_files_modified and IS_REMOTE_SANDBOX and user_id:
+                    try:
+                        from app.services.container_executor import container_executor
+
+                        rust_file = rust_files_modified[0]
+                        work_dir = "/app"
+                        if '/' in rust_file:
+                            work_dir = f"/app/{rust_file.rsplit('/', 1)[0]}"
+
+                        logger.info(f"[ErrorHandler:{project_id}] 🦀 Running cargo build (workdir={work_dir})")
+
+                        container = await container_executor._get_existing_container(project_id)
+                        if container:
+                            exit_code, output = container.exec_run(
+                                f"sh -c 'cd {work_dir} && cargo build 2>&1'",
+                                workdir="/app",
+                                demux=True
+                            )
+                            stdout = output[0].decode('utf-8') if output[0] else ""
+                            if exit_code == 0:
+                                logger.info(f"[ErrorHandler:{project_id}] ✓ Cargo build completed successfully")
+                            else:
+                                logger.warning(f"[ErrorHandler:{project_id}] Cargo build exit code: {exit_code}")
+                    except Exception as rust_err:
+                        logger.warning(f"[ErrorHandler:{project_id}] Failed to run cargo build: {rust_err}")
+
             except Exception as storage_err:
                 logger.warning(f"[ErrorHandler:{project_id}] Storage sync error: {storage_err}")
 
@@ -664,6 +822,27 @@ async def execute_fix_with_notification(
                 logger.info(f"[ErrorHandler:{project_id}] Container restart REQUIRED - dev server needs new packages")
                 # NPM files require restart after npm install completes
                 config_files_modified.extend(npm_files_modified)
+
+            if python_files_modified:
+                logger.info(f"[ErrorHandler:{project_id}] 🐍 Python files fixed: {python_files_modified}")
+                logger.info(f"[ErrorHandler:{project_id}] Container restart REQUIRED - Python needs new packages")
+                # Python files require restart after pip install completes
+                config_files_modified.extend(python_files_modified)
+
+            if java_files_modified:
+                logger.info(f"[ErrorHandler:{project_id}] ☕ Java files fixed: {java_files_modified}")
+                logger.info(f"[ErrorHandler:{project_id}] Container restart REQUIRED - Java needs rebuild")
+                config_files_modified.extend(java_files_modified)
+
+            if go_files_modified:
+                logger.info(f"[ErrorHandler:{project_id}] 🐹 Go files fixed: {go_files_modified}")
+                logger.info(f"[ErrorHandler:{project_id}] Container restart REQUIRED - Go needs new modules")
+                config_files_modified.extend(go_files_modified)
+
+            if rust_files_modified:
+                logger.info(f"[ErrorHandler:{project_id}] 🦀 Rust files fixed: {rust_files_modified}")
+                logger.info(f"[ErrorHandler:{project_id}] Container restart REQUIRED - Rust needs rebuild")
+                config_files_modified.extend(rust_files_modified)
 
             if env_files_modified:
                 logger.info(f"[ErrorHandler:{project_id}] 🔧 ENV files fixed: {env_files_modified}")
