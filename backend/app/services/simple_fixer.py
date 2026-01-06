@@ -886,11 +886,17 @@ class SimpleFixer:
             logger.info(f"[SimpleFixer:{project_id}] Deterministic unused import fix applied - skipping AI")
             return unused_fix_result
 
-        # Try package 404 fix
+        # Try package 404 fix (remove non-existent packages)
         package_fix_result = await self._try_deterministic_package_fix(project_path, error_text, project_id)
         if package_fix_result:
             logger.info(f"[SimpleFixer:{project_id}] Deterministic package fix applied - skipping AI")
             return package_fix_result
+
+        # Try missing module fix (add missing npm packages like @tailwindcss/forms)
+        missing_module_result = await self._try_deterministic_missing_module_fix(project_path, error_text, project_id)
+        if missing_module_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic missing module fix applied - skipping AI")
+            return missing_module_result
 
         # Try null/undefined optional chaining fix
         null_fix_result = await self._try_deterministic_null_check_fix(project_path, error_text, project_id)
@@ -1027,11 +1033,17 @@ class SimpleFixer:
             logger.info(f"[SimpleFixer:{project_id}] Deterministic unused import fix applied - skipping AI")
             return unused_fix_result
 
-        # Try package 404 fix
+        # Try package 404 fix (remove non-existent packages)
         package_fix_result = await self._try_deterministic_package_fix(project_path, combined_context, project_id)
         if package_fix_result:
             logger.info(f"[SimpleFixer:{project_id}] Deterministic package fix applied - skipping AI")
             return package_fix_result
+
+        # Try missing module fix (add missing npm packages like @tailwindcss/forms)
+        missing_module_result = await self._try_deterministic_missing_module_fix(project_path, combined_context, project_id)
+        if missing_module_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic missing module fix applied - skipping AI")
+            return missing_module_result
 
         # Try null/undefined optional chaining fix
         null_fix_result = await self._try_deterministic_null_check_fix(project_path, combined_context, project_id)
@@ -3631,6 +3643,157 @@ auto-install-peers=true''',
                 files_modified=files_modified,
                 message=f"Removed bad packages: {', '.join(packages_removed)}. Run 'npm install' to reinstall.",
                 patches_applied=len(packages_removed)
+            )
+
+        return None
+
+    async def _try_deterministic_missing_module_fix(
+        self,
+        project_path: Path,
+        error_text: str,
+        project_id: Optional[str] = None
+    ) -> Optional[SimpleFixResult]:
+        """
+        Deterministically fix missing npm module errors (no AI needed).
+
+        Handles errors like:
+        - Cannot find module '@tailwindcss/forms'
+        - Cannot find module 'clsx'
+        - Module not found: Error: Can't resolve '@headlessui/react'
+
+        These are npm packages that exist but are not installed.
+        Fix: Add to package.json and trigger npm install.
+        """
+        import json
+
+        # Common packages that are often missing and their typical versions
+        KNOWN_PACKAGES = {
+            # Tailwind CSS plugins
+            '@tailwindcss/forms': '^0.5.7',
+            '@tailwindcss/typography': '^0.5.10',
+            '@tailwindcss/aspect-ratio': '^0.4.2',
+            '@tailwindcss/container-queries': '^0.1.1',
+            # UI Libraries
+            '@headlessui/react': '^1.7.18',
+            '@radix-ui/react-dialog': '^1.0.5',
+            '@radix-ui/react-dropdown-menu': '^2.0.6',
+            '@radix-ui/react-slot': '^1.0.2',
+            'clsx': '^2.1.0',
+            'class-variance-authority': '^0.7.0',
+            'tailwind-merge': '^2.2.0',
+            'lucide-react': '^0.314.0',
+            # Animation
+            'framer-motion': '^11.0.3',
+            # Forms
+            'react-hook-form': '^7.50.0',
+            '@hookform/resolvers': '^3.3.4',
+            'zod': '^3.22.4',
+            # State management
+            'zustand': '^4.5.0',
+            '@tanstack/react-query': '^5.17.19',
+            # Utilities
+            'date-fns': '^3.3.1',
+            'lodash': '^4.17.21',
+            'axios': '^1.6.7',
+        }
+
+        # Patterns for missing module errors (NOT 404 errors - these packages exist)
+        missing_patterns = [
+            # Cannot find module '@scope/package' or 'package'
+            r"Cannot find module ['\"](@?[\w\-/.]+)['\"]",
+            # Module not found: Error: Can't resolve '@scope/package'
+            r"Module not found.*Can't resolve ['\"](@?[\w\-/.]+)['\"]",
+            # Error: Cannot resolve module '@scope/package'
+            r"Cannot resolve module ['\"](@?[\w\-/.]+)['\"]",
+        ]
+
+        # Extract missing packages (only npm packages, not local files)
+        missing_packages = set()
+        for pattern in missing_patterns:
+            matches = re.findall(pattern, error_text, re.IGNORECASE)
+            for match in matches:
+                pkg_name = match
+                # Filter: only npm packages (starts with @ or is a known package name)
+                # Exclude local paths like './Button' or '../utils'
+                if pkg_name.startswith('.') or pkg_name.startswith('/'):
+                    continue
+                # Only include scoped packages (@scope/pkg) or known packages
+                if pkg_name.startswith('@') or pkg_name in KNOWN_PACKAGES:
+                    missing_packages.add(pkg_name)
+
+        if not missing_packages:
+            return None
+
+        logger.info(f"[SimpleFixer] Missing npm packages detected: {missing_packages}")
+
+        # Find package.json
+        package_json_paths = [
+            project_path / 'package.json',
+            project_path / 'frontend' / 'package.json',
+        ]
+
+        files_modified = []
+        packages_added = []
+
+        for pkg_json_path in package_json_paths:
+            if not pkg_json_path.exists():
+                continue
+
+            try:
+                content = pkg_json_path.read_text(encoding='utf-8')
+                pkg_data = json.loads(content)
+                modified = False
+
+                # Ensure dependencies section exists
+                if 'dependencies' not in pkg_data:
+                    pkg_data['dependencies'] = {}
+
+                deps = pkg_data['dependencies']
+                dev_deps = pkg_data.get('devDependencies', {})
+
+                for pkg_name in missing_packages:
+                    # Skip if already in dependencies or devDependencies
+                    if pkg_name in deps or pkg_name in dev_deps:
+                        continue
+
+                    # Get version from known packages or use latest
+                    version = KNOWN_PACKAGES.get(pkg_name, 'latest')
+                    deps[pkg_name] = version
+                    packages_added.append(pkg_name)
+                    modified = True
+                    logger.info(f"[SimpleFixer] Added {pkg_name}@{version} to dependencies")
+
+                if modified:
+                    # Sort dependencies alphabetically
+                    pkg_data['dependencies'] = dict(sorted(deps.items()))
+
+                    # Write back with proper formatting
+                    new_content = json.dumps(pkg_data, indent=2) + "\n"
+                    pkg_json_path.write_text(new_content, encoding='utf-8')
+                    rel_path = str(pkg_json_path.relative_to(project_path))
+                    files_modified.append(rel_path)
+
+                    # Delete lock file to force clean reinstall
+                    lock_files = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml']
+                    for lock_name in lock_files:
+                        lock_path = pkg_json_path.parent / lock_name
+                        if lock_path.exists():
+                            try:
+                                lock_path.unlink()
+                                logger.info(f"[SimpleFixer] Deleted {lock_name} for clean reinstall")
+                            except Exception as e:
+                                logger.warning(f"[SimpleFixer] Could not delete {lock_name}: {e}")
+
+            except Exception as e:
+                logger.warning(f"[SimpleFixer] Error processing {pkg_json_path}: {e}")
+                continue
+
+        if files_modified:
+            return SimpleFixResult(
+                success=True,
+                files_modified=files_modified,
+                message=f"Added missing packages: {', '.join(packages_added)}. Container restart will run npm install.",
+                patches_applied=len(packages_added)
             )
 
         return None
