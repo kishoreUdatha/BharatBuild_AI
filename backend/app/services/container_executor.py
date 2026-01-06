@@ -208,14 +208,17 @@ class Technology(Enum):
     ANGULAR = "angular"
 
     # Backend Frameworks
-    JAVA = "java"  # Spring Boot
+    JAVA = "java"  # Spring Boot (Maven)
+    JAVA_GRADLE = "java_gradle"  # Spring Boot (Gradle)
     PYTHON = "python"  # FastAPI, Django, Flask
     PYTHON_ML = "python_ml"  # AI/ML/DL with Jupyter
     GO = "go"
+    RUST = "rust"  # Rust (Actix, Rocket, Axum)
     DOTNET = "dotnet"  # ASP.NET Core
 
     # Blockchain
     BLOCKCHAIN = "blockchain"  # Solidity, Hardhat, Truffle
+    BLOCKCHAIN_RUST = "blockchain_rust"  # Solana (Anchor), Substrate
 
     # Databases (with web UI)
     POSTGRESQL = "postgresql"
@@ -461,6 +464,22 @@ TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
         port=8080,
         memory_limit="256m"
     ),
+    Technology.RUST: ContainerConfig(
+        image="rust:1.75-slim",
+        build_command="cargo build --release",
+        run_command="./target/release/$(ls target/release/ | grep -v '\\.' | head -1)",
+        port=8080,
+        memory_limit="1g",
+        cpu_limit=1.0
+    ),
+    Technology.JAVA_GRADLE: ContainerConfig(
+        image="gradle:8.5-jdk17",
+        build_command="gradle build -x test --no-daemon",
+        run_command="java -jar build/libs/*.jar",
+        port=8080,
+        memory_limit="1g",
+        cpu_limit=1.0
+    ),
     Technology.DOTNET: ContainerConfig(
         image="mcr.microsoft.com/dotnet/sdk:8.0",
         build_command="dotnet restore && dotnet build",
@@ -503,6 +522,15 @@ TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
         run_command="npx hardhat node",  # Local Ethereum node
         port=8545,
         memory_limit="1g"
+    ),
+    Technology.BLOCKCHAIN_RUST: ContainerConfig(
+        image="rust:1.75-slim",
+        # Solana/Anchor blockchain development
+        build_command="cargo build-bpf || cargo build --release",
+        run_command="solana-test-validator",
+        port=8899,  # Solana RPC port
+        memory_limit="2g",
+        cpu_limit=2.0
     ),
 
     # ==================== DATABASES (with Web UI) ====================
