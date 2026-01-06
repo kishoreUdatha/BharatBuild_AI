@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BharatBuild AI - Presentation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e;
+            color: #fff;
+        }
+
+        .slide {
+            width: 100%;
+            min-height: 100vh;
+            padding: 60px 80px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            border-bottom: 3px solid #4a4a6a;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            page-break-after: always;
+        }
+
+        .slide-number {
+            position: absolute;
+            bottom: 20px;
+            right: 40px;
+            font-size: 14px;
+            color: #888;
+        }
+
+        h1 {
+            font-size: 3.5em;
+            margin-bottom: 20px;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        h2 {
+            font-size: 2.5em;
+            margin-bottom: 40px;
+            color: #00d4ff;
+            border-bottom: 3px solid #7b2cbf;
+            padding-bottom: 15px;
+            display: inline-block;
+        }
+
+        h3 {
+            font-size: 1.8em;
+            margin: 30px 0 20px 0;
+            color: #ff6b6b;
+        }
+
+        p, li {
+            font-size: 1.4em;
+            line-height: 1.8;
+            margin-bottom: 15px;
+        }
+
+        .subtitle {
+            font-size: 1.8em;
+            color: #aaa;
+            margin-bottom: 40px;
+        }
+
+        ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        li {
+            padding: 10px 0;
+            padding-left: 40px;
+            position: relative;
+        }
+
+        li::before {
+            content: "▸";
+            position: absolute;
+            left: 0;
+            color: #00d4ff;
+            font-size: 1.2em;
+        }
+
+        .highlight {
+            background: linear-gradient(90deg, #7b2cbf, #00d4ff);
+            padding: 3px 15px;
+            border-radius: 5px;
+            color: #fff;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 30px 0;
+            font-size: 1.2em;
+        }
+
+        th, td {
+            padding: 20px;
+            text-align: left;
+            border: 1px solid #4a4a6a;
+        }
+
+        th {
+            background: linear-gradient(90deg, #7b2cbf, #5a189a);
+            color: #fff;
+            font-size: 1.1em;
+        }
+
+        tr:nth-child(even) {
+            background: rgba(255,255,255,0.05);
+        }
+
+        .code-block {
+            background: #0d1117;
+            padding: 25px;
+            border-radius: 10px;
+            font-family: 'Consolas', monospace;
+            font-size: 1.2em;
+            margin: 20px 0;
+            border-left: 4px solid #00d4ff;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 30px;
+            margin-top: 30px;
+        }
+
+        .feature-card {
+            background: rgba(255,255,255,0.05);
+            padding: 30px;
+            border-radius: 15px;
+            border: 1px solid #4a4a6a;
+        }
+
+        .feature-card h4 {
+            font-size: 1.4em;
+            color: #00d4ff;
+            margin-bottom: 15px;
+        }
+
+        .emoji {
+            font-size: 1.5em;
+            margin-right: 10px;
+        }
+
+        .center {
+            text-align: center;
+        }
+
+        .title-slide {
+            text-align: center;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .title-slide h1 {
+            font-size: 5em;
+            margin-bottom: 30px;
+        }
+
+        .logo {
+            font-size: 8em;
+            margin-bottom: 30px;
+        }
+
+        .cta-button {
+            display: inline-block;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            color: #fff;
+            padding: 20px 60px;
+            font-size: 1.5em;
+            border-radius: 50px;
+            text-decoration: none;
+            margin-top: 40px;
+            font-weight: bold;
+        }
+
+        .comparison-good {
+            color: #4ade80;
+        }
+
+        .comparison-bad {
+            color: #f87171;
+        }
+
+        .steps {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 40px;
+        }
+
+        .step {
+            text-align: center;
+            flex: 1;
+            padding: 20px;
+        }
+
+        .step-number {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.8em;
+            font-weight: bold;
+            margin: 0 auto 20px auto;
+        }
+
+        .arrow {
+            font-size: 2em;
+            color: #00d4ff;
+            display: flex;
+            align-items: center;
+        }
+
+        @media print {
+            .slide {
+                page-break-after: always;
+                height: 100vh;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Slide 1: Title -->
+<div class="slide title-slide">
+    <div class="logo">🚀</div>
+    <h1>BharatBuild AI</h1>
+    <p class="subtitle">Build Full-Stack Applications with AI in Minutes</p>
+    <p style="font-size: 1.2em; color: #888; margin-top: 60px;">Your AI-Powered Development Partner</p>
+</div>
+
+<!-- Slide 2: What is BharatBuild AI -->
+<div class="slide">
+    <h2>What is BharatBuild AI?</h2>
+    <ul>
+        <li><span class="emoji">🤖</span> AI-powered web application builder</li>
+        <li><span class="emoji">💬</span> Describe your idea in plain English → Get working code instantly</li>
+        <li><span class="emoji">🛠️</span> Supports: React, Python, Java, Node.js, Go, and more</li>
+        <li><span class="emoji">👁️</span> Live preview in browser - no local setup needed</li>
+        <li><span class="emoji">🔧</span> Auto-fixes errors automatically</li>
+    </ul>
+    <div class="code-block">
+        "Build a todo app with React frontend and Python backend"<br>
+        ↓<br>
+        Complete working application in 2-5 minutes!
+    </div>
+</div>
+
+<!-- Slide 3: Who Should Use It -->
+<div class="slide">
+    <h2>Who Should Use BharatBuild AI?</h2>
+    <table>
+        <tr>
+            <th>User Type</th>
+            <th>Use Case</th>
+        </tr>
+        <tr>
+            <td><span class="emoji">🎓</span> Students</td>
+            <td>Build projects for assignments, hackathons, portfolios</td>
+        </tr>
+        <tr>
+            <td><span class="emoji">🌱</span> Beginners</td>
+            <td>Learn coding by seeing AI-generated examples</td>
+        </tr>
+        <tr>
+            <td><span class="emoji">👨‍💻</span> Developers</td>
+            <td>Rapid prototyping, skip boilerplate code</td>
+        </tr>
+        <tr>
+            <td><span class="emoji">💼</span> Entrepreneurs</td>
+            <td>Create MVPs without hiring developers</td>
+        </tr>
+        <tr>
+            <td><span class="emoji">👩‍🏫</span> Educators</td>
+            <td>Demonstrate concepts with live examples</td>
+        </tr>
+    </table>
+</div>
+
+<!-- Slide 4: Problems It Solves -->
+<div class="slide">
+    <h2>Problems We Solve</h2>
+    <div class="feature-grid">
+        <div class="feature-card">
+            <h4><span class="comparison-bad">❌</span> "I don't know how to start"</h4>
+            <p><span class="comparison-good">✅</span> Just describe what you want</p>
+        </div>
+        <div class="feature-card">
+            <h4><span class="comparison-bad">❌</span> "Setup takes hours"</h4>
+            <p><span class="comparison-good">✅</span> Zero setup - runs in browser</p>
+        </div>
+        <div class="feature-card">
+            <h4><span class="comparison-bad">❌</span> "Writing boilerplate is boring"</h4>
+            <p><span class="comparison-good">✅</span> AI writes all the code</p>
+        </div>
+        <div class="feature-card">
+            <h4><span class="comparison-bad">❌</span> "I can't afford developers"</h4>
+            <p><span class="comparison-good">✅</span> Build your own MVP for free</p>
+        </div>
+    </div>
+</div>
+
+<!-- Slide 5: Key Features -->
+<div class="slide">
+    <h2>Key Features</h2>
+    <table>
+        <tr>
+            <th>Feature</th>
+            <th>Benefit</th>
+        </tr>
+        <tr>
+            <td><span class="emoji">🤖</span> AI Code Generation</td>
+            <td>Writes complete, production-ready code</td>
+        </tr>
+        <tr>
+            <td><span class="emoji">🚀</span> Auto-Run</td>
+            <td>Automatically installs dependencies & starts server</td>
+        </tr>
+        <tr>
+            <td><span class="emoji">👁️</span> Live Preview</td>
+            <td>See your app running instantly in browser</td>
+        </tr>
+        <tr>
+            <td><span class="emoji">🔧</span> Auto-Fixer</td>
+            <td>AI automatically fixes build errors</td>
+        </tr>
+        <tr>
+            <td><span class="emoji">📁</span> Full-Stack Support</td>
+            <td>Frontend + Backend + Database in one go</td>
+        </tr>
+        <tr>
+            <td><span class="emoji">🐳</span> Docker Ready</td>
+            <td>Containerized for easy deployment</td>
+        </tr>
+    </table>
+</div>
+
+<!-- Slide 6: How It Works -->
+<div class="slide">
+    <h2>How It Works</h2>
+    <div class="steps">
+        <div class="step">
+            <div class="step-number">1</div>
+            <h3>Describe</h3>
+            <p>Enter your app idea in plain English</p>
+        </div>
+        <div class="arrow">→</div>
+        <div class="step">
+            <div class="step-number">2</div>
+            <h3>Generate</h3>
+            <p>AI creates all files & code</p>
+        </div>
+        <div class="arrow">→</div>
+        <div class="step">
+            <div class="step-number">3</div>
+            <h3>Auto-Run</h3>
+            <p>Server starts automatically</p>
+        </div>
+        <div class="arrow">→</div>
+        <div class="step">
+            <div class="step-number">4</div>
+            <h3>Preview</h3>
+            <p>See live app in browser!</p>
+        </div>
+    </div>
+    <div class="code-block" style="margin-top: 50px;">
+        Example Prompt: "Create a student management system with login, CRUD operations for students, and a dashboard showing statistics"
+    </div>
+</div>
+
+<!-- Slide 7: Technologies -->
+<div class="slide">
+    <h2>Technologies Supported</h2>
+    <div class="feature-grid">
+        <div class="feature-card">
+            <h4>🎨 Frontend</h4>
+            <ul style="font-size: 1em;">
+                <li>React, Vue, Angular</li>
+                <li>Next.js, Vite</li>
+                <li>Tailwind CSS, Bootstrap</li>
+            </ul>
+        </div>
+        <div class="feature-card">
+            <h4>⚙️ Backend</h4>
+            <ul style="font-size: 1em;">
+                <li>Python (FastAPI, Django, Flask)</li>
+                <li>Node.js (Express)</li>
+                <li>Java (Spring Boot)</li>
+                <li>Go (Golang)</li>
+            </ul>
+        </div>
+        <div class="feature-card">
+            <h4>🗄️ Database</h4>
+            <ul style="font-size: 1em;">
+                <li>PostgreSQL, MySQL</li>
+                <li>MongoDB, SQLite</li>
+                <li>Redis</li>
+            </ul>
+        </div>
+        <div class="feature-card">
+            <h4>🐳 DevOps</h4>
+            <ul style="font-size: 1em;">
+                <li>Docker & Docker Compose</li>
+                <li>Auto-deployment</li>
+                <li>Cloud-ready containers</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<!-- Slide 8: Comparison -->
+<div class="slide">
+    <h2>BharatBuild AI vs Traditional Development</h2>
+    <table>
+        <tr>
+            <th>Aspect</th>
+            <th><span class="comparison-bad">Traditional</span></th>
+            <th><span class="comparison-good">BharatBuild AI</span></th>
+        </tr>
+        <tr>
+            <td>Environment Setup</td>
+            <td class="comparison-bad">2-4 hours</td>
+            <td class="comparison-good">0 minutes</td>
+        </tr>
+        <tr>
+            <td>First Working Code</td>
+            <td class="comparison-bad">Days to weeks</td>
+            <td class="comparison-good">2-5 minutes</td>
+        </tr>
+        <tr>
+            <td>Error Handling</td>
+            <td class="comparison-bad">Manual debugging</td>
+            <td class="comparison-good">Auto-Fix AI</td>
+        </tr>
+        <tr>
+            <td>Learning Curve</td>
+            <td class="comparison-bad">Steep</td>
+            <td class="comparison-good">Minimal</td>
+        </tr>
+        <tr>
+            <td>Cost</td>
+            <td class="comparison-bad">Developer salary</td>
+            <td class="comparison-good">Free / Affordable</td>
+        </tr>
+    </table>
+</div>
+
+<!-- Slide 9: Benefits for Students -->
+<div class="slide">
+    <h2>Benefits for Students</h2>
+    <div class="feature-grid">
+        <div class="feature-card">
+            <h4><span class="emoji">⏰</span> Save Time</h4>
+            <p>Build projects in hours, not weeks. Focus on learning, not setup.</p>
+        </div>
+        <div class="feature-card">
+            <h4><span class="emoji">📚</span> Learn by Example</h4>
+            <p>See best practices in AI-generated code. Learn modern patterns.</p>
+        </div>
+        <div class="feature-card">
+            <h4><span class="emoji">💼</span> Portfolio Ready</h4>
+            <p>Create impressive projects for job applications & interviews.</p>
+        </div>
+        <div class="feature-card">
+            <h4><span class="emoji">🏆</span> Win Hackathons</h4>
+            <p>Rapid prototyping gives you competitive advantage.</p>
+        </div>
+        <div class="feature-card">
+            <h4><span class="emoji">🎓</span> Complete Assignments</h4>
+            <p>Focus on logic and concepts, not boilerplate code.</p>
+        </div>
+        <div class="feature-card">
+            <h4><span class="emoji">💡</span> Bring Ideas to Life</h4>
+            <p>No coding barrier for innovation. Just describe & build!</p>
+        </div>
+    </div>
+</div>
+
+<!-- Slide 10: Use Case Examples -->
+<div class="slide">
+    <h2>Example Projects You Can Build</h2>
+    <ul>
+        <li><span class="emoji">🛒</span> <strong>E-commerce Website</strong> - Product catalog, cart, checkout</li>
+        <li><span class="emoji">💬</span> <strong>Real-time Chat App</strong> - WebSocket messaging, rooms</li>
+        <li><span class="emoji">📊</span> <strong>Dashboard & Analytics</strong> - Charts, reports, data visualization</li>
+        <li><span class="emoji">🎓</span> <strong>Student Management System</strong> - CRUD, authentication, grades</li>
+        <li><span class="emoji">🍔</span> <strong>Food Delivery App</strong> - Orders, tracking, payments</li>
+        <li><span class="emoji">📝</span> <strong>Blog Platform</strong> - Posts, comments, user profiles</li>
+        <li><span class="emoji">🏥</span> <strong>Hospital Management</strong> - Appointments, records, billing</li>
+        <li><span class="emoji">📚</span> <strong>Library System</strong> - Books, borrowing, fines</li>
+    </ul>
+</div>
+
+<!-- Slide 11: Demo Screenshot Placeholder -->
+<div class="slide center">
+    <h2>Live Demo</h2>
+    <div style="background: #0d1117; padding: 60px; border-radius: 20px; margin: 40px 0; border: 2px solid #4a4a6a;">
+        <p style="font-size: 2em; color: #00d4ff;">🎬 Live Demonstration</p>
+        <p style="margin-top: 30px; color: #888;">Show actual app generation in BharatBuild AI</p>
+        <p style="margin-top: 20px; color: #666;">Prompt: "Build a task manager with drag-and-drop"</p>
+    </div>
+</div>
+
+<!-- Slide 12: Call to Action -->
+<div class="slide title-slide">
+    <div class="logo">🚀</div>
+    <h1>Get Started Today!</h1>
+    <p class="subtitle">From Idea to App in Minutes</p>
+    <div style="margin-top: 50px;">
+        <p style="font-size: 1.8em; color: #00d4ff;">bharatbuild.ai</p>
+        <p style="margin-top: 20px; font-size: 1.3em; color: #888;">Free to start • No credit card required</p>
+    </div>
+    <a href="#" class="cta-button">Try BharatBuild AI</a>
+    <p style="margin-top: 60px; font-size: 1.2em; color: #666;">Questions? Let's discuss!</p>
+</div>
+
+</body>
+</html>
