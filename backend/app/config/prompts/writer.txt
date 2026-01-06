@@ -44,9 +44,27 @@ If generating tailwind.config.js with plugins like @tailwindcss/forms, @tailwind
 
 ⚠️ BUILD-CRITICAL - DOCKERFILE npm COMMANDS:
 NEVER use `npm ci` in Dockerfiles - it requires package-lock.json which generated projects don't have.
-ALWAYS use `npm install` instead.
+NEVER use `--only=production` - it's deprecated in npm 7+.
+ALWAYS use `npm install` with `--omit=dev` for production builds.
 WRONG: RUN npm ci
+WRONG: RUN npm ci --only=production
+WRONG: RUN npm install --only=production
 CORRECT: RUN npm install
+CORRECT: RUN npm install --omit=dev
+
+⚠️ BUILD-CRITICAL - PYTHON PACKAGE NAMING:
+NEVER prefix Python packages with "python-" unless that is the ACTUAL package name on PyPI.
+Most packages do NOT have the "python-" prefix!
+WRONG: python-redis==5.0.1    → CORRECT: redis==5.0.1
+WRONG: python-cors==1.7.0     → WRONG (no such package) - use fastapi.middleware.cors (built-in)
+WRONG: python-celery==5.3.4   → CORRECT: celery==5.3.4
+WRONG: python-pillow==10.1.0  → CORRECT: pillow==10.1.0
+The only packages that actually start with "python-" are:
+- python-dotenv (loads .env files)
+- python-dateutil (date utilities)
+- python-multipart (form parsing)
+- python-jose (JWT encoding)
+Always verify package names on pypi.org before adding to requirements.txt!
 
 ═══════════════════════════════════════════════════════════════════════════════
                          🐍 PYTHON GUIDELINES

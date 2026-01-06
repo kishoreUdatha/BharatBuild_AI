@@ -425,6 +425,13 @@ class ProjectSanitizer:
                 if "Replaced npm ci with npm install" not in self.fixes_applied:
                     self.fixes_applied.append("Replaced npm ci with npm install")
 
+            # 3. Replace deprecated '--only=production' with '--omit=dev'
+            # npm 7+ deprecated --only flag
+            if '--only=production' in line:
+                line = line.replace('--only=production', '--omit=dev')
+                if "Replaced --only=production with --omit=dev" not in self.fixes_applied:
+                    self.fixes_applied.append("Replaced --only=production with --omit=dev")
+
             fixed_lines.append(line)
 
         # Ensure FROM instruction exists
