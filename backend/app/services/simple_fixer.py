@@ -898,6 +898,12 @@ class SimpleFixer:
             logger.info(f"[SimpleFixer:{project_id}] Deterministic missing module fix applied - skipping AI")
             return missing_module_result
 
+        # Try missing Python module fix (add missing pip packages like pandas, numpy)
+        python_module_result = await self._try_deterministic_missing_python_module_fix(project_path, error_text, project_id)
+        if python_module_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic Python module fix applied - skipping AI")
+            return python_module_result
+
         # Try null/undefined optional chaining fix
         null_fix_result = await self._try_deterministic_null_check_fix(project_path, error_text, project_id)
         if null_fix_result:
@@ -1044,6 +1050,12 @@ class SimpleFixer:
         if missing_module_result:
             logger.info(f"[SimpleFixer:{project_id}] Deterministic missing module fix applied - skipping AI")
             return missing_module_result
+
+        # Try missing Python module fix (add missing pip packages like pandas, numpy)
+        python_module_result = await self._try_deterministic_missing_python_module_fix(project_path, combined_context, project_id)
+        if python_module_result:
+            logger.info(f"[SimpleFixer:{project_id}] Deterministic Python module fix applied - skipping AI")
+            return python_module_result
 
         # Try null/undefined optional chaining fix
         null_fix_result = await self._try_deterministic_null_check_fix(project_path, combined_context, project_id)
@@ -3793,6 +3805,128 @@ auto-install-peers=true''',
                 success=True,
                 files_modified=files_modified,
                 message=f"Added missing packages: {', '.join(packages_added)}. Container restart will run npm install.",
+                patches_applied=len(packages_added)
+            )
+
+        return None
+
+    async def _try_deterministic_missing_python_module_fix(
+        self,
+        project_path: Path,
+        error_text: str,
+        project_id: Optional[str] = None
+    ) -> Optional[SimpleFixResult]:
+        """
+        Deterministically fix missing Python module errors (no AI needed).
+
+        Handles errors like:
+        - ModuleNotFoundError: No module named 'pandas'
+        - ImportError: cannot import name 'xyz' from 'package'
+
+        Fix: Add to requirements.txt and trigger pip install.
+        """
+        # Common Python packages and their pip names
+        KNOWN_PYTHON_PACKAGES = {
+            # Data Science / AI / ML
+            'pandas': 'pandas',
+            'numpy': 'numpy',
+            'scipy': 'scipy',
+            'sklearn': 'scikit-learn',
+            'tensorflow': 'tensorflow',
+            'torch': 'torch',
+            'keras': 'keras',
+            'matplotlib': 'matplotlib',
+            'seaborn': 'seaborn',
+            'plotly': 'plotly',
+            # Web Frameworks
+            'fastapi': 'fastapi',
+            'uvicorn': 'uvicorn',
+            'flask': 'flask',
+            'django': 'django',
+            'starlette': 'starlette',
+            # Utilities
+            'requests': 'requests',
+            'httpx': 'httpx',
+            'aiohttp': 'aiohttp',
+            'pydantic': 'pydantic',
+            'sqlalchemy': 'sqlalchemy',
+            'alembic': 'alembic',
+            'celery': 'celery',
+            'redis': 'redis',
+            'pymongo': 'pymongo',
+            'psycopg2': 'psycopg2-binary',
+            'dotenv': 'python-dotenv',
+            'jwt': 'PyJWT',
+            'PIL': 'Pillow',
+            'cv2': 'opencv-python',
+            'yaml': 'pyyaml',
+            'bs4': 'beautifulsoup4',
+            'lxml': 'lxml',
+        }
+
+        # Patterns for Python missing module errors
+        missing_patterns = [
+            r"ModuleNotFoundError: No module named ['\"](\w+)['\"]",
+            r"ImportError: No module named ['\"](\w+)['\"]",
+            r"ModuleNotFoundError: No module named '(\w+)'",
+        ]
+
+        # Extract missing packages
+        missing_packages = set()
+        for pattern in missing_patterns:
+            matches = re.findall(pattern, error_text, re.IGNORECASE)
+            for match in matches:
+                pkg_name = match.split('.')[0]  # Get root package name
+                if pkg_name in KNOWN_PYTHON_PACKAGES:
+                    missing_packages.add(pkg_name)
+
+        if not missing_packages:
+            return None
+
+        logger.info(f"[SimpleFixer] Missing Python packages detected: {missing_packages}")
+
+        # Find requirements.txt
+        req_paths = [
+            project_path / 'requirements.txt',
+            project_path / 'backend' / 'requirements.txt',
+        ]
+
+        files_modified = []
+        packages_added = []
+
+        for req_path in req_paths:
+            if not req_path.exists():
+                continue
+
+            try:
+                content = req_path.read_text(encoding='utf-8')
+                lines = content.strip().split('\n') if content.strip() else []
+                existing_packages = {line.split('==')[0].split('>=')[0].split('<=')[0].strip().lower() for line in lines if line.strip() and not line.startswith('#')}
+
+                modified = False
+                for pkg_name in missing_packages:
+                    pip_name = KNOWN_PYTHON_PACKAGES.get(pkg_name, pkg_name)
+                    if pip_name.lower() not in existing_packages:
+                        lines.append(pip_name)
+                        packages_added.append(pip_name)
+                        modified = True
+                        logger.info(f"[SimpleFixer] Added {pip_name} to requirements.txt")
+
+                if modified:
+                    new_content = '\n'.join(lines) + '\n'
+                    req_path.write_text(new_content, encoding='utf-8')
+                    rel_path = str(req_path.relative_to(project_path))
+                    files_modified.append(rel_path)
+
+            except Exception as e:
+                logger.warning(f"[SimpleFixer] Error processing {req_path}: {e}")
+                continue
+
+        if files_modified:
+            return SimpleFixResult(
+                success=True,
+                files_modified=files_modified,
+                message=f"Added missing Python packages: {', '.join(packages_added)}. Container restart will run pip install.",
                 patches_applied=len(packages_added)
             )
 
