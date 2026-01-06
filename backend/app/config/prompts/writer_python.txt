@@ -1,0 +1,133 @@
+
+PYTHON/FASTAPI/DJANGO RULES:
+
+PACKAGE NAMING - NEVER use "python-" prefix!
+❌ WRONG: python-redis, python-cors, python-celery
+✅ CORRECT: redis, celery, pillow
+
+Only these have "python-" prefix:
+- python-dotenv
+- python-dateutil
+- python-multipart
+- python-jose
+
+MODULE PATH FROM FILE:
+- File: app/services/user_service.py
+- Module: app.services.user_service
+- Import: from app.services.user_service import UserService
+
+IMPORTS - DERIVE FROM CONTEXT:
+1. Read "FILES ALREADY CREATED"
+2. Find file containing needed class/function
+3. Convert path to import statement
+4. Use relative imports within same package: from .models import User
+
+PYDANTIC V2 (FastAPI):
+```python
+from pydantic import BaseModel, Field, ConfigDict
+
+class UserCreate(BaseModel):
+    email: str = Field(..., description="User email")
+    password: str = Field(..., min_length=8)
+
+class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    created_at: datetime
+```
+
+SQLALCHEMY 2.0:
+```python
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import String, Integer, DateTime
+
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+```
+
+FASTAPI ENDPOINTS:
+```python
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+router = APIRouter(prefix="/users", tags=["users"])
+
+@router.get("/", response_model=list[UserResponse])
+async def get_users(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User))
+    return result.scalars().all()
+
+@router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def create_user(user: UserCreate, db: AsyncSession = Depends(get_db)):
+    db_user = User(**user.model_dump())
+    db.add(db_user)
+    await db.commit()
+    await db.refresh(db_user)
+    return db_user
+
+@router.get("/{user_id}", response_model=UserResponse)
+async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+```
+
+MAIN.PY CORS SETUP:
+```python
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(title="API", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+TYPE HINTS - REQUIRED:
+- All function parameters: def func(name: str, age: int)
+- All return types: def func() -> User
+- Use Optional for nullable: Optional[str] = None
+- Use List, Dict from typing: List[User], Dict[str, Any]
+
+ASYNC/AWAIT:
+- async def for async functions
+- await for all async calls
+- AsyncSession for SQLAlchemy async
+- Don't mix sync/async
+
+ERROR HANDLING:
+```python
+from fastapi import HTTPException, status
+
+# Not found
+raise HTTPException(status_code=404, detail="Not found")
+
+# Bad request
+raise HTTPException(status_code=400, detail="Invalid data")
+
+# Unauthorized
+raise HTTPException(status_code=401, detail="Not authenticated")
+```
+
+VERIFICATION CHECKLIST:
+[ ] All imports present and paths correct
+[ ] Type hints on all functions
+[ ] Pydantic models have all fields
+[ ] SQLAlchemy relationships defined
+[ ] Async/await used correctly
+[ ] Error handling present

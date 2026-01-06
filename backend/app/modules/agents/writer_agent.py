@@ -2254,10 +2254,11 @@ Think: Premium, Beautiful, Production-Ready - like code from Apple, Stripe, or V
             )
 
             # Call Claude with Bolt.new format
+            # Use higher max_tokens to prevent file truncation
             response = await self._call_claude(
                 system_prompt=self.SYSTEM_PROMPT,
                 user_prompt=step_prompt,
-                max_tokens=4096,
+                max_tokens=16384,  # Increased from 4096 to prevent truncation
                 temperature=0.3  # Lower temperature for consistent code
             )
 

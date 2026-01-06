@@ -1,0 +1,183 @@
+
+JAVA/SPRING BOOT RULES:
+
+PACKAGE FROM FILE PATH:
+- File: src/main/java/com/app/service/UserService.java
+- Remove: src/main/java/
+- Replace / with .
+- Remove filename
+- Result: package com.app.service;
+
+IMPORTS - DERIVE FROM CONTEXT:
+1. Read "FILES ALREADY CREATED"
+2. Find file containing needed class
+3. Convert path to package + class name
+4. Add import statement
+
+ENUMS MUST BE SEPARATE FILES!
+❌ WRONG: Inner enum in Entity class
+✅ CORRECT: Separate file in model/enums/
+
+ENTITY CLASS:
+```java
+package com.app.model.entity;
+
+import jakarta.persistence.*;
+import lombok.*;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "users")
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class User {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, unique = true)
+    private String email;
+
+    @Column(nullable = false)
+    private String password;
+
+    @Enumerated(EnumType.STRING)
+    private UserRole role;
+
+    @Column(name = "created_at")
+    private LocalDateTime createdAt;
+
+    @PrePersist
+    protected void onCreate() {
+        createdAt = LocalDateTime.now();
+    }
+}
+```
+
+DTO CLASSES:
+```java
+package com.app.model.dto;
+
+import lombok.*;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class UserRequest {
+    private String email;
+    private String password;
+}
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class UserResponse {
+    private Long id;
+    private String email;
+    private LocalDateTime createdAt;
+}
+```
+
+REPOSITORY:
+```java
+package com.app.repository;
+
+import com.app.model.entity.User;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+import java.util.Optional;
+
+@Repository
+public interface UserRepository extends JpaRepository<User, Long> {
+    Optional<User> findByEmail(String email);
+    boolean existsByEmail(String email);
+}
+```
+
+SERVICE:
+```java
+package com.app.service;
+
+import com.app.model.entity.User;
+import com.app.model.dto.*;
+import com.app.repository.UserRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+public class UserService {
+    private final UserRepository userRepository;
+
+    public List<User> getAllUsers() {
+        return userRepository.findAll();
+    }
+
+    public User getUserById(Long id) {
+        return userRepository.findById(id)
+            .orElseThrow(() -> new RuntimeException("User not found"));
+    }
+
+    public User createUser(UserRequest request) {
+        User user = User.builder()
+            .email(request.getEmail())
+            .password(request.getPassword())
+            .build();
+        return userRepository.save(user);
+    }
+}
+```
+
+CONTROLLER:
+```java
+package com.app.controller;
+
+import com.app.model.dto.*;
+import com.app.service.UserService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/users")
+@RequiredArgsConstructor
+public class UserController {
+    private final UserService userService;
+
+    @GetMapping
+    public ResponseEntity<List<UserResponse>> getAllUsers() {
+        return ResponseEntity.ok(userService.getAllUsers());
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<UserResponse> getUserById(@PathVariable Long id) {
+        return ResponseEntity.ok(userService.getUserById(id));
+    }
+
+    @PostMapping
+    public ResponseEntity<UserResponse> createUser(@RequestBody UserRequest request) {
+        return ResponseEntity.ok(userService.createUser(request));
+    }
+}
+```
+
+TYPE CONSISTENCY:
+- Money: BigDecimal everywhere
+- ID: Long or UUID everywhere
+- Date: LocalDateTime everywhere
+- Enum: Reference separate enum file
+
+VERIFICATION CHECKLIST:
+[ ] Package declaration matches file path
+[ ] All imports present
+[ ] Entity has @Entity, @Table, @Id
+[ ] Repository extends JpaRepository
+[ ] Service has @Service, @RequiredArgsConstructor
+[ ] Controller has @RestController, @RequestMapping
+[ ] Types match across Entity, DTO, Service

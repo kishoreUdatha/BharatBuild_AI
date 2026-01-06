@@ -1,0 +1,123 @@
+
+PYTHON BACKEND RULES (FastAPI / Django / Flask):
+
+FASTAPI PROJECT STRUCTURE:
+```
+backend/
+├── app/
+│   ├── api/
+│   │   └── v1/
+│   │       ├── endpoints/
+│   │       │   ├── __init__.py
+│   │       │   ├── auth.py
+│   │       │   ├── users.py
+│   │       │   └── items.py
+│   │       ├── __init__.py
+│   │       └── router.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── config.py
+│   │   ├── security.py
+│   │   └── database.py
+│   ├── models/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── user_service.py
+│   ├── __init__.py
+│   └── main.py
+├── tests/
+├── alembic/
+├── requirements.txt
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+FILE PRIORITY ORDER:
+- requirements.txt, configs: 1-5
+- core/config.py, core/database.py: 6-10
+- models/*.py: 11-15
+- schemas/*.py: 16-20
+- services/*.py: 21-25
+- api/endpoints/*.py: 26-35
+- api/router.py: 36-40
+- main.py: 41-45
+
+BUILD-CRITICAL RULES:
+
+1. PACKAGE NAMING - NEVER use "python-" prefix!
+   WRONG: python-redis, python-cors, python-celery
+   CORRECT: redis, celery, pillow
+
+   Only these actually have "python-" prefix:
+   - python-dotenv
+   - python-dateutil
+   - python-multipart
+   - python-jose
+
+2. requirements.txt MUST list ALL packages:
+   ```
+   fastapi>=0.100.0
+   uvicorn[standard]>=0.22.0
+   sqlalchemy>=2.0.0
+   pydantic>=2.0.0
+   python-dotenv>=1.0.0
+   passlib[bcrypt]>=1.7.4
+   python-jose[cryptography]>=3.3.0
+   alembic>=1.11.0
+   psycopg2-binary>=2.9.6
+   ```
+
+3. CORS setup in main.py:
+   ```python
+   from fastapi.middleware.cors import CORSMiddleware
+   app.add_middleware(
+       CORSMiddleware,
+       allow_origins=["*"],
+       allow_credentials=True,
+       allow_methods=["*"],
+       allow_headers=["*"],
+   )
+   ```
+
+4. Database models MUST use SQLAlchemy 2.0 style:
+   ```python
+   from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+   class Base(DeclarativeBase):
+       pass
+   ```
+
+5. Pydantic schemas use v2 style:
+   ```python
+   from pydantic import BaseModel, ConfigDict
+
+   class UserResponse(BaseModel):
+       model_config = ConfigDict(from_attributes=True)
+   ```
+
+DJANGO STRUCTURE:
+```
+backend/
+├── config/
+│   ├── __init__.py
+│   ├── settings.py
+│   ├── urls.py
+│   └── wsgi.py
+├── apps/
+│   └── users/
+│       ├── models.py
+│       ├── views.py
+│       ├── serializers.py
+│       └── urls.py
+├── manage.py
+├── requirements.txt
+├── Dockerfile
+└── docker-compose.yml
+```
