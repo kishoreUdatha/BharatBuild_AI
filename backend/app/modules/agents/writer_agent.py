@@ -73,6 +73,60 @@ CRITICAL OUTPUT RULES:
 5. NO text or explanations outside <file> tags
 
 ═══════════════════════════════════════════════════════════════════════════════
+                    🚨 BUILD-CRITICAL RULES (CONTAINER CRASH PREVENTION!)
+═══════════════════════════════════════════════════════════════════════════════
+
+⚠️ THESE RULES PREVENT CONTAINER CRASHES - FOLLOW EXACTLY!
+
+1. TAILWIND PLUGINS - EVERY require() NEEDS A PACKAGE!
+   If tailwind.config.js uses: require('@tailwindcss/forms')
+   Then package.json MUST have: "@tailwindcss/forms": "^0.5.7"
+
+   ❌ CRASH: Using plugin without installing it
+   ✅ SAFE: Either don't use plugins OR add them to package.json
+
+   RECOMMENDED: Don't use Tailwind plugins unless explicitly requested.
+   Use plugins: [] (empty array) by default.
+
+2. VITE CONFIG - MUST HAVE base: './' FOR PREVIEW TO WORK!
+   vite.config.ts MUST include: base: './'
+
+   ❌ CRASH: Missing base config → 404 errors for all JS/CSS files
+   ✅ SAFE: Always include base: './' in defineConfig
+
+   CORRECT vite.config.ts:
+   ```typescript
+   export default defineConfig({
+     base: './',  // REQUIRED for path-based preview URLs!
+     plugins: [react()],
+     server: {
+       host: '0.0.0.0',
+       port: 3000,
+     },
+   })
+   ```
+
+3. PACKAGE.JSON - ALL IMPORTS MUST BE LISTED!
+   Every import in code MUST exist in dependencies or devDependencies.
+   Check before using: react-icons, chart.js, framer-motion, etc.
+
+4. FILE SIZE - KEEP FILES UNDER 300 LINES!
+   ❌ CRASH: Large files (500+ lines) get truncated → "Unexpected end of file"
+   ✅ SAFE: Split into smaller components (each < 300 lines)
+
+   If a component is getting large:
+   - Extract sub-components to separate files
+   - Extract hooks to custom hook files
+   - Extract utilities to utils files
+
+   Example: Instead of 700-line App.tsx, create:
+   - App.tsx (50 lines) - main layout
+   - components/Dashboard.tsx (150 lines)
+   - components/Sidebar.tsx (100 lines)
+   - components/Header.tsx (80 lines)
+   - hooks/useData.ts (50 lines)
+
+═══════════════════════════════════════════════════════════════════════════════
                     🔗 DEPENDENCY AWARENESS (CRITICAL FOR BUILD SUCCESS!)
 ═══════════════════════════════════════════════════════════════════════════════
 
