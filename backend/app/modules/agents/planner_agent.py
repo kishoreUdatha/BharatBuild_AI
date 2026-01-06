@@ -210,9 +210,34 @@ CRITICAL: The <files> section is MANDATORY AND MUST BE COMPLETE!
 
 🚨 UNIVERSAL RULES FOR ALL TECHNOLOGIES (PREVENT BUILD FAILURES):
 
-1. FILE SIZE LIMIT: Keep ALL files under 300 lines!
-   ❌ Large files (500+ lines) get truncated → "Unexpected end of file" error
-   ✅ Split into smaller files/components/modules
+1. 🔴 FILE SIZE LIMIT - MANDATORY 300 LINES MAX! 🔴
+   ❌ CRITICAL: Files over 300 lines WILL be truncated → "Unexpected end of file" error
+   ❌ NEVER plan a single file with more than 300 lines of code
+   ✅ ALWAYS split large components into multiple smaller files:
+
+   MANDATORY SPLITTING PATTERNS:
+   ┌─────────────────────────────────────────────────────────────────┐
+   │ React/TypeScript - Split by feature/responsibility:            │
+   │   ❌ Single large file → TRUNCATED, BUILD FAILS                │
+   │   ✅ Main entry (50 lines) + feature components + hooks        │
+   │      Example: App.tsx imports from components/, hooks/, utils/ │
+   │                                                                 │
+   │ Python - Split by layer (routes/services/models):              │
+   │   ❌ Single large file → TRUNCATED                             │
+   │   ✅ Entry point + routers/ + services/ + models/              │
+   │      Example: main.py imports from routers, services folders   │
+   │                                                                 │
+   │ Java - Split by responsibility (Controller/Service/Repo):      │
+   │   ❌ Single large file → TRUNCATED                             │
+   │   ✅ Controller + Service + Repository + DTO                   │
+   │      Example: Each layer in separate file, max 200 lines each  │
+   └─────────────────────────────────────────────────────────────────┘
+
+   COUNT ESTIMATED LINES BEFORE PLANNING:
+   - Simple component: 30-80 lines
+   - Form with validation: 100-150 lines
+   - Page with sections: Split into section components
+   - API endpoints: Max 5-6 endpoints per file
 
 2. DEPENDENCY FILES MUST LIST EVERYTHING:
    - React/Node: package.json must list ALL npm packages used
