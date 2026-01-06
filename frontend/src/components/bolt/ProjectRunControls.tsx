@@ -314,7 +314,8 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     ]
 
     // Try to extract port from output
-    // In production, use API proxy URL with project ID; in development, use localhost:port
+    // In production: DON'T set preview URL from these patterns - wait for __PREVIEW_READY__
+    // In development: OK to set preview URL directly (no health check markers)
     for (const pattern of serverPatterns) {
       const match = cleanOutput.match(pattern)
       if (match && match[1]) {
@@ -323,9 +324,18 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         const url = getPreviewUrl(port, currentProject?.id)
         console.log('[DetectServer] MATCHED serverPattern:', pattern, '-> port:', port, '-> url:', url)
         serverStartedRef.current = true // Gap #3: Mark server as started
-        setPreviewUrl(url)
         setStatus('running')
-        onPreviewUrlChange?.(url)
+
+        // IMPORTANT: Only call onPreviewUrlChange in DEVELOPMENT mode
+        // In production, wait for __PREVIEW_READY__ health check marker
+        if (!isProduction()) {
+          setPreviewUrl(url)
+          onPreviewUrlChange?.(url)
+          console.log('[DetectServer] Development mode - showing preview immediately')
+        } else {
+          // Production: Just mark server as started, preview URL will be set by __PREVIEW_READY__
+          console.log('[DetectServer] Production mode - waiting for __PREVIEW_READY__ marker')
+        }
         return true
       }
     }
@@ -1035,9 +1045,11 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       }) || null
 
       if (containerPreviewUrl) {
-        setPreviewUrl(containerPreviewUrl)
-        onPreviewUrlChange?.(containerPreviewUrl)
-        onOutput?.(`📍 Preview: ${containerPreviewUrl}`)
+        // NOTE: Do NOT set preview URL or call onPreviewUrlChange here!
+        // Preview should only be shown AFTER health check passes (__PREVIEW_READY__ marker)
+        // Setting URL here causes iframe to refresh multiple times
+        console.log('[RunWithDocker] Preview URL prepared (will show after health check):', containerPreviewUrl)
+        onOutput?.(`📍 Preview URL: ${containerPreviewUrl} (waiting for server...)`)
       } else {
         console.warn('[RunWithDocker] No valid preview URL found in:', container.preview_urls)
         onOutput?.('⚠️ Warning: Could not determine preview URL')
@@ -1150,13 +1162,19 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         }
 
         // For dev servers: mark as running after timeout if no errors
+        // NOTE: Preview URL is only set when __PREVIEW_READY__ marker is received
+        // This prevents iframe from refreshing before server is confirmed ready
         if (isDevServer) {
           setStatus('running')
-          if (containerPreviewUrl) {
-            setPreviewUrl(containerPreviewUrl)
-            onPreviewUrlChange?.(containerPreviewUrl)
+          // Don't set preview URL here - wait for __PREVIEW_READY__ health check marker
+          // The URL will be set by detectServerStart() when __PREVIEW_READY__ is received
+          if (!serverStartedRef.current && containerPreviewUrl) {
+            // Server didn't confirm ready via marker, but timeout passed without errors
+            // This is a fallback - give the user a hint but don't force preview
+            onOutput?.(`⏳ Waiting for server health check... (preview at ${containerPreviewUrl})`)
+          } else if (serverStartedRef.current) {
+            onOutput?.(`✅ Server is running!`)
           }
-          onOutput?.(`✅ Server is running! Preview: ${containerPreviewUrl || 'Check terminal'}`)
           return { success: true }
         }
       }
