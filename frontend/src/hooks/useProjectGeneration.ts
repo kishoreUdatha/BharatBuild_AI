@@ -386,51 +386,54 @@ export const useProjectGeneration = (options: UseProjectGenerationOptions = {}) 
           // CRITICAL: Wait for all file syncs to complete before starting auto-run
           // This prevents "build complete but files still creating" race condition
           if (autoRun && projectIdRef.current) {
-            console.log('[ProjectGeneration] 🚀 Waiting for file syncs to complete...')
-            setProgress((prev) => ({
-              ...prev,
-              message: '📁 Syncing files to server...',
-            }))
+            // Use IIFE to handle async logic in non-async callback
+            (async () => {
+              console.log('[ProjectGeneration] 🚀 Waiting for file syncs to complete...')
+              setProgress((prev) => ({
+                ...prev,
+                message: '📁 Syncing files to server...',
+              }))
 
-            // Wait for all pending file syncs to complete
-            const pendingSyncs = pendingSyncPromisesRef.current
-            if (pendingSyncs.length > 0) {
-              console.log(`[ProjectGeneration] Waiting for ${pendingSyncs.length} file syncs to complete`)
-              await Promise.all(pendingSyncs)
-              console.log(`[ProjectGeneration] All ${pendingSyncs.length} file syncs completed`)
-              pendingSyncPromisesRef.current = [] // Clear completed promises
-            }
+              // Wait for all pending file syncs to complete
+              const pendingSyncs = pendingSyncPromisesRef.current
+              if (pendingSyncs.length > 0) {
+                console.log(`[ProjectGeneration] Waiting for ${pendingSyncs.length} file syncs to complete`)
+                await Promise.all(pendingSyncs)
+                console.log(`[ProjectGeneration] All ${pendingSyncs.length} file syncs completed`)
+                pendingSyncPromisesRef.current = [] // Clear completed promises
+              }
 
-            console.log('[ProjectGeneration] 🚀 Starting auto-run...')
-            setIsAutoRunning(true)
-            setProgress((prev) => ({
-              ...prev,
-              message: '🚀 Starting project...',
-            }))
+              console.log('[ProjectGeneration] 🚀 Starting auto-run...')
+              setIsAutoRunning(true)
+              setProgress((prev) => ({
+                ...prev,
+                message: '🚀 Starting project...',
+              }))
 
-            autoRunProject(projectIdRef.current, {
-              onServerStart: (url) => {
-                setServerUrl(url)
-                setIsAutoRunning(false)
-                setProgress((prev) => ({
-                  ...prev,
-                  message: `🎉 Server running at ${url}`,
-                }))
-                onServerStart?.(url)
-              },
-              onOutput: (line) => {
-                console.log('[AutoRun]', line)
-                onAutoRunOutput?.(line)
-              },
-              onError: (err) => {
-                console.error('[AutoRun Error]', err)
-                setIsAutoRunning(false)
-                setProgress((prev) => ({
-                  ...prev,
-                  message: `Auto-run failed: ${err}`,
-                }))
-              },
-            })
+              autoRunProject(projectIdRef.current!, {
+                onServerStart: (url) => {
+                  setServerUrl(url)
+                  setIsAutoRunning(false)
+                  setProgress((prev) => ({
+                    ...prev,
+                    message: `🎉 Server running at ${url}`,
+                  }))
+                  onServerStart?.(url)
+                },
+                onOutput: (line) => {
+                  console.log('[AutoRun]', line)
+                  onAutoRunOutput?.(line)
+                },
+                onError: (err) => {
+                  console.error('[AutoRun Error]', err)
+                  setIsAutoRunning(false)
+                  setProgress((prev) => ({
+                    ...prev,
+                    message: `Auto-run failed: ${err}`,
+                  }))
+                },
+              })
+            })()
           }
           break
 
