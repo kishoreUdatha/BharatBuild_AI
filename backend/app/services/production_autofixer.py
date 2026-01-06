@@ -35,6 +35,7 @@ import threading
 from functools import lru_cache
 
 from app.core.logging_config import logger
+from app.services.project_sanitizer import sanitize_project_file
 
 
 # =============================================================================
@@ -1201,8 +1202,15 @@ class DeterministicFixer:
         if new_content == original_content:
             return None
 
-        # Write new config
+        # Write new config (with sanitization)
         try:
+            # AUTO-SANITIZE before writing
+            try:
+                _, new_content, fixes = sanitize_project_file(config_path.name, new_content)
+                if fixes:
+                    logger.info(f"[ProductionFixer] Sanitizer applied: {', '.join(fixes)}")
+            except Exception:
+                pass  # Continue with original content if sanitization fails
             config_path.write_text(new_content, encoding='utf-8')
         except Exception:
             return None
@@ -1252,6 +1260,13 @@ class DeterministicFixer:
                     content = re.sub(pattern, repl, content)
 
                 if content != original_content:
+                    # AUTO-SANITIZE CSS before writing
+                    try:
+                        _, content, fixes = sanitize_project_file(css_path.name, content)
+                        if fixes:
+                            logger.info(f"[DeterministicFixer] Sanitizer applied: {', '.join(fixes)}")
+                    except Exception:
+                        pass  # Continue with original content if sanitization fails
                     css_path.write_text(content, encoding='utf-8')
                     modified_files.append(str(css_path))
                     logger.info(f"[DeterministicFixer] Fixed {shadcn_class} in {css_path}")
