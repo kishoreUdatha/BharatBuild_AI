@@ -74,3 +74,21 @@ BUILD-CRITICAL RULES:
 4. Imports must match exports:
    - Track what each file exports in <exports>
    - Track dependencies in depends_on attribute
+
+5. ALWAYS CREATE vite-env.d.ts (priority 3):
+   - Required for import.meta.env to work
+   - Path: frontend/src/vite-env.d.ts
+
+6. CAMELCASE IN ALL TYPES - No snake_case!
+   ❌ WRONG: { departure_time: string; total_seats: number }
+   ✅ CORRECT: { departureTime: string; totalSeats: number }
+
+7. USE DEFAULT EXPORTS for pages/components:
+   ❌ WRONG: export const Dashboard = ...
+   ✅ CORRECT: export default function Dashboard() { }
+
+8. NO "import React" - React 17+ JSX transform!
+
+REQUIRED FILES (add to plan):
+- frontend/src/vite-env.d.ts (priority 3)
+- frontend/src/types/index.ts (priority 6) - ALL types in camelCase

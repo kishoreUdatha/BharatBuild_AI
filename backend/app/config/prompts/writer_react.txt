@@ -1,43 +1,75 @@
 
 REACT/TYPESCRIPT/VITE RULES:
 
-TAILWIND PLUGINS - NEVER USE BY DEFAULT!
-❌ CRASH: require('@tailwindcss/forms') → "Cannot find module"
-✅ SAFE: plugins: []  // EMPTY array always!
+BUILD-CRITICAL - THESE CAUSE 90% OF FAILURES:
 
-VITE CONFIG - MUST HAVE base: './'
+1. NO "import React" - React 17+ doesn't need it!
+   ❌ WRONG: import React from 'react';
+   ✅ CORRECT: (no React import needed for JSX)
+   ✅ ONLY IF NEEDED: import { useState, useEffect } from 'react';
+
+2. CONSISTENT EXPORTS - Pick ONE style per project:
+   ❌ WRONG: export const Component (then import default)
+   ✅ CORRECT: export default Component (match import style)
+   ✅ OR: export const Component (then import { Component })
+
+3. CAMELCASE EVERYWHERE - No snake_case in TypeScript!
+   ❌ WRONG: departure_time, total_seats, booking_date
+   ✅ CORRECT: departureTime, totalSeats, bookingDate
+   - API responses: Convert snake_case → camelCase
+   - Types/Interfaces: Always camelCase
+   - Variables: Always camelCase
+
+4. VITE ENV TYPES - Create vite-env.d.ts:
+   ```typescript
+   /// <reference types="vite/client" />
+   interface ImportMetaEnv {
+     readonly VITE_API_URL: string;
+   }
+   interface ImportMeta {
+     readonly env: ImportMetaEnv;
+   }
+   ```
+
+5. ONLY IMPORT WHAT YOU USE!
+   ❌ WRONG: import { Home, Settings, User } // but only use Home
+   ✅ CORRECT: import { Home } // only what's used
+
+6. PACKAGE.JSON - Every import MUST exist!
+   If you use: import { QueryClient } from '@tanstack/react-query'
+   Then package.json MUST have: "@tanstack/react-query": "^5.0.0"
+
+TAILWIND - NO PLUGINS!
+❌ CRASH: require('@tailwindcss/forms')
+✅ SAFE: plugins: []
+
+VITE CONFIG:
 ```typescript
 export default defineConfig({
-  base: './',  // REQUIRED for preview!
+  base: './',
   plugins: [react()],
 })
 ```
 
-PACKAGE.JSON - ALL IMPORTS MUST BE LISTED!
-Every import must exist in dependencies/devDependencies.
-
-COMPONENT STRUCTURE:
+COMPONENT STRUCTURE (React 17+):
 ```typescript
-import React from 'react';
-import { IconName } from 'lucide-react';  // Icons
+import { useState } from 'react';  // NO "import React"!
+import { IconName } from 'lucide-react';
 
 interface Props {
-  // Define all props with types
+  title: string;  // camelCase!
+  onClick: () => void;
 }
 
-export const ComponentName: React.FC<Props> = ({ prop1, prop2 }) => {
-  // Hooks at top
-  const [state, setState] = useState<Type>(initial);
-
-  // Event handlers
-  const handleClick = () => { };
+export default function ComponentName({ title, onClick }: Props) {
+  const [state, setState] = useState<string>('');
 
   return (
     <div className="...">
-      {/* JSX */}
+      {title}
     </div>
   );
-};
+}
 ```
 
 IMPORTS - DERIVE FROM CONTEXT:
