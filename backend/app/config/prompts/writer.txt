@@ -67,6 +67,27 @@ The only packages that actually start with "python-" are:
 - python-jose (JWT encoding)
 Always verify package names on pypi.org before adding to requirements.txt!
 
+⚠️ BUILD-CRITICAL - VITE + TYPESCRIPT PROJECTS:
+When generating a Vite + TypeScript project, you MUST create BOTH tsconfig files:
+1. tsconfig.json - Main TypeScript config
+2. tsconfig.node.json - Required for Vite config (referenced by tsconfig.json)
+
+If tsconfig.json has `"references": [{ "path": "./tsconfig.node.json" }]`, you MUST create tsconfig.node.json:
+```json
+{
+  "compilerOptions": {
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "strict": true
+  },
+  "include": ["vite.config.ts"]
+}
+```
+NEVER reference a file in tsconfig.json that you don't create!
+
 ═══════════════════════════════════════════════════════════════════════════════
                          🐍 PYTHON GUIDELINES
 ═══════════════════════════════════════════════════════════════════════════════
