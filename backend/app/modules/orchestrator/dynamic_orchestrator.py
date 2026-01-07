@@ -1542,6 +1542,43 @@ class DynamicOrchestrator:
         ml_kw = tech_keywords.get('ai_ml', ["machine learning", "ml", "ai", "deep learning", "tensorflow", "pytorch"])
         is_ml = any(kw in request_lower for kw in ml_kw)
 
+        # Cyber Security
+        security_kw = tech_keywords.get('cyber_security', [
+            "cyber security", "security scanner", "vulnerability", "penetration test",
+            "network scanner", "port scanner", "encryption tool", "password analyzer",
+            "security audit", "malware", "firewall", "intrusion detection"
+        ])
+        is_security = any(kw in request_lower for kw in security_kw)
+
+        # Blockchain/Web3
+        blockchain_kw = tech_keywords.get('blockchain', [
+            "blockchain", "smart contract", "solidity", "nft", "web3", "dapp",
+            "ethereum", "defi", "token", "cryptocurrency", "hardhat", "truffle"
+        ])
+        is_blockchain = any(kw in request_lower for kw in blockchain_kw)
+
+        # IoT/Embedded
+        iot_kw = tech_keywords.get('iot', [
+            "iot", "arduino", "esp32", "esp8266", "raspberry pi", "embedded",
+            "microcontroller", "sensor", "mqtt", "platformio", "home automation",
+            "wearable", "smart device"
+        ])
+        is_iot = any(kw in request_lower for kw in iot_kw)
+
+        # Networking
+        networking_kw = tech_keywords.get('networking', [
+            "network protocol", "packet analyzer", "tcp/ip", "socket programming",
+            "network monitor", "protocol simulator", "dns", "routing"
+        ])
+        is_networking = any(kw in request_lower for kw in networking_kw)
+
+        # Game Development
+        game_kw = tech_keywords.get('game', [
+            "game", "pygame", "unity", "phaser", "godot", "2d game", "3d game",
+            "platformer", "shooter", "puzzle game", "multiplayer game"
+        ])
+        is_game = any(kw in request_lower for kw in game_kw)
+
         # ============== COMPLEXITY KEYWORDS ==============
         minimal_keywords = keywords.get('minimal', ["landing page", "landing", "single page"])
         simple_keywords = keywords.get('simple', ["simple", "basic", "quick", "portfolio", "mvp"])
@@ -1677,6 +1714,88 @@ class DynamicOrchestrator:
                 "include_backend": False,
                 "include_docker": False,
                 "hint": "AI/ML project. Include model, preprocessing, training, inference, notebooks, Streamlit/Gradio interface."
+            }
+
+        # ============== CYBER SECURITY ==============
+        if is_security:
+            security_limits = tech_limits.get('cyber_security', {'default': 20})
+            max_files = security_limits.get('default', 20)
+            logger.info(f"[ComplexityDetection] Detected Cyber Security project")
+            return {
+                "complexity": "intermediate",
+                "max_files": max_files,
+                "recommended_stack": stacks.get('cyber_security', "Python + Streamlit + Cryptography + Scapy"),
+                "include_frontend": True,  # Streamlit dashboard
+                "include_backend": False,  # No traditional backend
+                "include_docker": True,
+                "hint": "Cyber Security project. Structure: Python CLI tools with optional Streamlit dashboard. Include scanners/, analyzers/, crypto/, reports/ folders. NO traditional frontend/backend folders."
+            }
+
+        # ============== BLOCKCHAIN/WEB3 ==============
+        if is_blockchain:
+            blockchain_limits = tech_limits.get('blockchain', {'default': 25})
+            max_files = blockchain_limits.get('default', 25)
+            logger.info(f"[ComplexityDetection] Detected Blockchain/Web3 project")
+            # Check if it needs a frontend DApp
+            wants_dapp = any(kw in request_lower for kw in ["dapp", "frontend", "ui", "interface", "website"])
+            return {
+                "complexity": "intermediate",
+                "max_files": max_files,
+                "recommended_stack": stacks.get('blockchain', "Hardhat + Solidity + Ethers.js + React"),
+                "include_frontend": wants_dapp,  # Only if DApp requested
+                "include_backend": False,  # Smart contracts are the backend
+                "include_docker": False,
+                "hint": "Blockchain project. Structure: contracts/*.sol, scripts/, test/. Include Hardhat config. Add frontend/ with React ONLY if DApp requested."
+            }
+
+        # ============== IOT/EMBEDDED ==============
+        if is_iot:
+            iot_limits = tech_limits.get('iot', {'default': 15})
+            max_files = iot_limits.get('default', 15)
+            logger.info(f"[ComplexityDetection] Detected IoT/Embedded project")
+            # Check if dashboard needed
+            wants_dashboard = any(kw in request_lower for kw in ["dashboard", "monitor", "web interface", "ui"])
+            return {
+                "complexity": "intermediate",
+                "max_files": max_files,
+                "recommended_stack": stacks.get('iot', "PlatformIO + C++ + MQTT + Python Dashboard"),
+                "include_frontend": wants_dashboard,  # Dashboard if requested
+                "include_backend": False,
+                "include_docker": False,
+                "hint": "IoT/Embedded project. Structure: src/main.cpp, include/*.h, lib/, platformio.ini. Add Python/Streamlit dashboard ONLY if monitoring UI requested."
+            }
+
+        # ============== NETWORKING ==============
+        if is_networking:
+            network_limits = tech_limits.get('networking', {'default': 15})
+            max_files = network_limits.get('default', 15)
+            logger.info(f"[ComplexityDetection] Detected Networking project")
+            return {
+                "complexity": "intermediate",
+                "max_files": max_files,
+                "recommended_stack": stacks.get('networking', "Python + Scapy + Socket + Asyncio"),
+                "include_frontend": False,  # CLI tools only
+                "include_backend": False,
+                "include_docker": True,
+                "hint": "Networking project. Structure: Python/Go CLI tools. Include src/, protocols/, utils/. NO traditional frontend/backend folders."
+            }
+
+        # ============== GAME DEVELOPMENT ==============
+        if is_game:
+            game_limits = tech_limits.get('game', {'default': 20})
+            max_files = game_limits.get('default', 20)
+            logger.info(f"[ComplexityDetection] Detected Game Development project")
+            # Detect game engine
+            is_pygame = "pygame" in request_lower
+            is_phaser = "phaser" in request_lower or "javascript game" in request_lower
+            return {
+                "complexity": "intermediate",
+                "max_files": max_files,
+                "recommended_stack": stacks.get('game', "Pygame + Python" if is_pygame else "Phaser + JavaScript"),
+                "include_frontend": is_phaser,  # Phaser is web-based
+                "include_backend": False,
+                "include_docker": False,
+                "hint": "Game Development project. Structure: src/, assets/, scenes/, scripts/. NO traditional frontend/backend folders."
             }
 
         # ============== WEB APPS (React/Next.js/Vue) ==============
