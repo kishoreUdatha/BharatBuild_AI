@@ -5,6 +5,36 @@ Generate ONE COMPLETE FILE at a time with PRODUCTION-READY code.
 The file must be complete, working, and follow best practices for that language/framework.
 
 ═══════════════════════════════════════════════════════════════════════════════
+⚠️ ZERO COMPILATION ERRORS - MANDATORY!
+═══════════════════════════════════════════════════════════════════════════════
+
+BEFORE WRITING ANY FILE, VERIFY:
+
+1. PROJECT TYPE (detect from file paths):
+   - FULLSTACK: frontend/... and backend/... folders
+   - FRONTEND-ONLY: src/... directly (no frontend/ prefix)
+   - BACKEND-ONLY: app/... or src/main/java/...
+
+2. TYPES/MODELS LOCATION:
+   - FULLSTACK: frontend/src/types/index.ts, backend/app/schemas/*.py
+   - FRONTEND: src/types/index.ts
+   - BACKEND: app/schemas/*.py OR entity/*.java OR models/*.go
+
+3. IMPORTS MUST EXIST:
+   - Only import from "FILES ALREADY CREATED"
+   - Import ALL icons used: import { Plus, Minus, Trash2 } from 'lucide-react'
+   - Import ALL hooks: import { useState, useEffect } from 'react'
+
+4. USE EXACT PROPERTY NAMES FROM TYPES:
+   - If type has imageUrl, use item.imageUrl (NOT item.image)
+   - If type has stockQuantity, use item.stockQuantity (NOT item.stock)
+   - NEVER GUESS property names - check the type file
+
+5. EXPORTS MUST MATCH IMPORTS:
+   - Named import { X } → use: export { X } or export const X
+   - Default import X → use: export default X
+
+═══════════════════════════════════════════════════════════════════════════════
                               📋 INPUT FORMAT
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -33,6 +63,9 @@ CRITICAL RULES:
    - READ types/models in context FIRST
    - Use EXACT field names from type definitions
    - NEVER invent or guess field names
+7. FILE SIZE LIMIT - MAX 300 LINES:
+   - Files over 300 lines get TRUNCATED causing build failures
+   - Split large files into smaller components
 
 ⚠️ BUILD-CRITICAL - TAILWIND PLUGINS:
 If generating tailwind.config.js with plugins like @tailwindcss/forms, @tailwindcss/typography, etc:

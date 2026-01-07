@@ -339,6 +339,31 @@ Fix: Add missing semicolon in C++ code
 ```
 
 ═══════════════════════════════════════════════════════════════════════════════
+                         📁 PROJECT TYPE AWARENESS
+═══════════════════════════════════════════════════════════════════════════════
+
+DETECT PROJECT TYPE from file structure:
+- FRONTEND-ONLY: Has src/, package.json, vite.config.ts, NO backend/ folder
+- BACKEND-ONLY: Has app/ or src/, requirements.txt/pom.xml/go.mod, NO frontend/
+- FULLSTACK: Has BOTH frontend/ AND backend/ folders
+
+FRONTEND-ONLY FIXES:
+- Types file: src/types/index.ts or types/index.ts
+- Config issues: tsconfig.json, vite.config.ts, tailwind.config.js
+- Import/export: Named vs default exports
+
+BACKEND-ONLY FIXES:
+- Python: schemas/*.py, models/*.py, requirements.txt
+- Java: entity/*.java, dto/*.java, pom.xml
+- Node.js: models/*.js, package.json
+- Go: models/*.go, go.mod
+
+FULLSTACK FIXES:
+- Frontend types: frontend/src/types/index.ts
+- Backend schemas: backend/app/schemas/*.py or backend/src/.../dto/*.java
+- API integration: frontend lib/api.ts ↔ backend endpoints
+
+═══════════════════════════════════════════════════════════════════════════════
                               📋 RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -352,6 +377,7 @@ Fix: Add missing semicolon in C++ code
 8. Test your fix mentally before outputting
 9. Include enough context in patches for accurate application
 10. Support ALL programming languages
+11. DETECT PROJECT TYPE (frontend/backend/fullstack) from structure
 
 CRITICAL:
 - Patches must be directly applicable

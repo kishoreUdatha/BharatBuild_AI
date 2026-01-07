@@ -38,6 +38,40 @@ OUTPUT FORMAT (MANDATORY):
   <notes>Any important notes</notes>
 </plan>
 
+═══════════════════════════════════════════════════════════════════════════════
+⚠️ ZERO COMPILATION ERRORS - MANDATORY FOR ALL PROJECT TYPES
+═══════════════════════════════════════════════════════════════════════════════
+
+THE GENERATED PROJECT MUST COMPILE AND RUN WITHOUT ANY ERRORS!
+
+PREVENT ERRORS BY:
+
+1. TYPES FILE MUST BE COMPLETE:
+   - List ALL properties that ANY component/service will use
+   - Include: id, name, description, price, imageUrl, createdAt, updatedAt
+   - Include: ALL context methods (addToCart, removeFromCart, getTotalItems)
+   - Include: ALL form fields for registration/login forms
+   - Use OPTIONAL (?) for properties that may be null
+
+2. ALL EXPORTS MUST BE DECLARED:
+   - Named export: export { ComponentName }
+   - Default export: export default ComponentName
+   - Re-export: export { User, Product } from './types'
+
+3. ALL ICONS MUST BE IMPORTED:
+   - React: import { Plus, Minus, Trash2, Edit, X } from 'lucide-react'
+   - List ALL icons used in component
+
+4. API SERVICE FUNCTIONS MUST EXIST:
+   - If component calls api.getProducts() → api.ts must export getProducts
+   - If component calls createOrder() → orders service must export it
+
+5. CONTEXT PROVIDERS MUST HAVE ALL METHODS:
+   - AuthContext: user, login, logout, register, loading
+   - CartContext: items, addToCart, removeFromCart, updateQuantity, getTotalItems, clearCart
+
+═══════════════════════════════════════════════════════════════════════════════
+
 CRITICAL RULES:
 
 1. FILE SIZE LIMIT - MAX 300 LINES PER FILE!
@@ -71,43 +105,146 @@ CRITICAL RULES:
    - Plan types FIRST with ALL fields any component will need
    - NEVER let components invent field names
 
-6. FULLSTACK DEFAULT:
-   - When user says "app", "application", "platform", "system", "dashboard", "portal"
-   - ALWAYS include BOTH frontend AND backend
-   - Use frontend/ and backend/ folders
+6. PROJECT SCOPE DETECTION:
 
-   FULLSTACK STRUCTURE (React + FastAPI):
+   FRONTEND-ONLY triggers:
+   - Keywords: "landing page", "static site", "UI only", "website", "portfolio"
+   - No data storage, authentication, or API needed
+
+   BACKEND-ONLY triggers:
+   - Keywords: "API", "REST API", "microservice", "backend only", "server"
+   - No UI needed, just endpoints
+
+   FULLSTACK triggers:
+   - Keywords: "app", "application", "platform", "system", "dashboard", "portal"
+   - Features like: login, authentication, CRUD, database, user management
+
+   ⚠️ DEFAULT BEHAVIOR (when user doesn't specify):
+   - If request mentions: users, login, data, dashboard, CRUD → FULLSTACK
+   - If request is purely visual: landing page, portfolio → FRONTEND-ONLY
+   - If request is API/service focused → BACKEND-ONLY
+   - When in doubt → DEFAULT TO FULLSTACK (most complete)
+
+   ═══════════════════════════════════════════════════════════════════════════
+   FRONTEND-ONLY STRUCTURE (React/Vue/Angular):
+   ═══════════════════════════════════════════════════════════════════════════
+   ```
+   project/
+   ├── src/
+   │   ├── components/
+   │   ├── pages/
+   │   ├── hooks/
+   │   ├── lib/
+   │   ├── types/index.ts      # ALL types here
+   │   ├── App.tsx
+   │   └── main.tsx
+   ├── package.json
+   ├── vite.config.ts
+   ├── tailwind.config.js
+   ├── postcss.config.js
+   ├── tsconfig.json
+   ├── index.html
+   ├── Dockerfile
+   └── docker-compose.yml
+   ```
+
+   ═══════════════════════════════════════════════════════════════════════════
+   BACKEND-ONLY STRUCTURES:
+   ═══════════════════════════════════════════════════════════════════════════
+
+   Python/FastAPI:
+   ```
+   project/
+   ├── app/
+   │   ├── api/endpoints/
+   │   ├── core/config.py
+   │   ├── models/             # SQLAlchemy models
+   │   ├── schemas/            # Pydantic schemas
+   │   ├── services/
+   │   └── main.py
+   ├── requirements.txt
+   ├── Dockerfile
+   └── docker-compose.yml
+   ```
+
+   Java/Spring Boot:
+   ```
+   project/
+   ├── src/main/java/com/app/
+   │   ├── controller/
+   │   ├── service/
+   │   ├── repository/
+   │   ├── entity/             # JPA entities
+   │   ├── dto/                # Data Transfer Objects
+   │   └── Application.java
+   ├── src/main/resources/application.yml
+   ├── pom.xml
+   ├── Dockerfile
+   └── docker-compose.yml
+   ```
+
+   Node.js/Express:
+   ```
+   project/
+   ├── src/
+   │   ├── routes/
+   │   ├── controllers/
+   │   ├── models/
+   │   ├── middleware/
+   │   └── index.js
+   ├── package.json
+   ├── Dockerfile
+   └── docker-compose.yml
+   ```
+
+   Go/Gin:
+   ```
+   project/
+   ├── cmd/main.go
+   ├── internal/
+   │   ├── handlers/
+   │   ├── models/
+   │   ├── services/
+   │   └── routes/
+   ├── go.mod
+   ├── Dockerfile
+   └── docker-compose.yml
+   ```
+
+   ═══════════════════════════════════════════════════════════════════════════
+   FULLSTACK STRUCTURES:
+   ═══════════════════════════════════════════════════════════════════════════
+
+   React + FastAPI:
    ```
    project/
    ├── frontend/
    │   ├── src/
    │   │   ├── components/
    │   │   ├── pages/
-   │   │   ├── hooks/
-   │   │   ├── lib/api.ts       # API client to call backend
-   │   │   ├── types/
+   │   │   ├── types/index.ts
+   │   │   ├── lib/api.ts
    │   │   ├── App.tsx
    │   │   └── main.tsx
    │   ├── package.json
    │   ├── vite.config.ts
    │   ├── tailwind.config.js
+   │   ├── postcss.config.js
    │   ├── tsconfig.json
    │   └── Dockerfile
    ├── backend/
    │   ├── app/
    │   │   ├── api/endpoints/
-   │   │   ├── core/
    │   │   ├── models/
    │   │   ├── schemas/
-   │   │   ├── services/
    │   │   └── main.py
    │   ├── requirements.txt
    │   └── Dockerfile
-   ├── docker-compose.yml      # Runs both frontend and backend
+   ├── docker-compose.yml
    └── README.md
    ```
 
-   FULLSTACK STRUCTURE (React + Spring Boot):
+   React + Spring Boot:
    ```
    project/
    ├── frontend/               # Same as above
@@ -116,10 +253,10 @@ CRITICAL RULES:
    │   │   ├── controller/
    │   │   ├── service/
    │   │   ├── repository/
-   │   │   ├── model/
+   │   │   ├── entity/
+   │   │   ├── dto/
    │   │   └── Application.java
-   │   ├── src/main/resources/
-   │   │   └── application.yml
+   │   ├── src/main/resources/application.yml
    │   ├── pom.xml
    │   └── Dockerfile
    ├── docker-compose.yml
