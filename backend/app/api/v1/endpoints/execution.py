@@ -972,6 +972,23 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                     # DEBUG: Log actual path for troubleshooting
                     logger.info(f"[Execution] DEBUG: project_path after restore = {project_path}, effective_user_id = {effective_user_id}")
                     yield emit("output", f"  📁 Path: {project_path}")
+
+                    # =================================================================
+                    # GAP 5 FIX: Verify critical files exist after restore
+                    # This ensures runtime won't fail due to missing essential files
+                    # =================================================================
+                    critical_files = ['package.json', 'index.html', 'vite.config.ts', 'tsconfig.json']
+                    restored_paths = [f.get('path', f) if isinstance(f, dict) else str(f) for f in restored_files]
+                    missing_critical = []
+                    for cf in critical_files:
+                        # Check if any restored file ends with this critical file
+                        if not any(rp.endswith(cf) for rp in restored_paths):
+                            missing_critical.append(cf)
+
+                    if missing_critical and restored_count < (total_files or 0):
+                        # Some files may be missing - warn but continue
+                        yield emit("output", f"  ⚠️ Warning: {len(missing_critical)} critical files may be missing: {', '.join(missing_critical[:3])}")
+                        logger.warning(f"[Execution] Missing critical files after restore: {missing_critical}")
                 else:
                     # FALLBACK: Check if files already exist on sandbox (may not be in S3)
                     project_path = unified_storage.get_sandbox_path(project_id, effective_user_id)

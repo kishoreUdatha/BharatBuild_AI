@@ -2561,7 +2561,26 @@ class ContainerExecutor:
         yield f"  🔧 Backend: http://localhost:{backend_port}\n"
         yield f"\n🚀 Preview URL: {preview_url}\n"
         yield f"_PREVIEW_URL_:{preview_url}\n"
-        yield f"__PREVIEW_READY__:{preview_url}\n"
+
+        # GAP 10 FIX: Health check before emitting __PREVIEW_READY__
+        yield f"🔍 Verifying preview accessibility...\n"
+        health_passed = False
+        for attempt in range(5):
+            try:
+                await asyncio.sleep(1.0 + attempt * 0.5)
+                health_ok = await check_preview_health(f"http://localhost:{frontend_port}", timeout=5.0)
+                if health_ok:
+                    health_passed = True
+                    break
+            except Exception:
+                pass
+
+        if health_passed:
+            yield f"✅ Preview verified and ready!\n"
+            yield f"__PREVIEW_READY__:{preview_url}\n"
+        else:
+            yield f"⏳ Preview may still be initializing...\n"
+            yield f"__PREVIEW_READY__:{preview_url}\n"  # Still emit for frontend, but with warning
 
     async def _run_fullstack_legacy(
         self,
@@ -2851,6 +2870,24 @@ class ContainerExecutor:
                 yield f"  📡 Network: {network_name}\n"
             yield f"\n🚀 Preview URL: {preview_url}\n"
             yield f"_PREVIEW_URL_:{preview_url}\n"
+
+            # GAP 10 FIX: Health check before emitting __PREVIEW_READY__
+            yield f"🔍 Verifying preview accessibility...\n"
+            health_passed = False
+            for attempt in range(5):
+                try:
+                    await asyncio.sleep(1.0 + attempt * 0.5)
+                    health_ok = await check_preview_health(f"http://localhost:{backend_host_port}", timeout=5.0)
+                    if health_ok:
+                        health_passed = True
+                        break
+                except Exception:
+                    pass
+
+            if health_passed:
+                yield f"✅ Preview verified and ready!\n"
+            else:
+                yield f"⏳ Preview may still be initializing...\n"
             yield f"__PREVIEW_READY__:{preview_url}\n"
 
         except Exception as e:
@@ -5872,16 +5909,32 @@ echo "Done"
             for f in fix_result.files_modified:
                 yield f"   📝 {f}\n"
 
-            # Step 3: Sync files to container
+            # Step 3: Sync files to container (GAP 6 FIX: Retry on failure)
             yield f"📦 Syncing fixes to container...\n"
-            sync_success = await self._sync_files_to_container(
-                container=container,
-                project_path=project_path,
-                files_modified=fix_result.files_modified
-            )
+            sync_success = False
+            max_sync_retries = 3
+
+            for sync_attempt in range(max_sync_retries):
+                sync_success = await self._sync_files_to_container(
+                    container=container,
+                    project_path=project_path,
+                    files_modified=fix_result.files_modified
+                )
+                if sync_success:
+                    yield f"  ✅ Files synced successfully\n"
+                    break
+                else:
+                    if sync_attempt < max_sync_retries - 1:
+                        yield f"  ⚠️ Sync attempt {sync_attempt + 1} failed, retrying...\n"
+                        await asyncio.sleep(1.0 * (sync_attempt + 1))
+                    else:
+                        yield f"  ❌ Sync failed after {max_sync_retries} attempts\n"
 
             if not sync_success:
-                yield f"⚠️ Failed to sync files, but fixes are saved locally.\n"
+                yield f"⚠️ Failed to sync fixes to container - fix may not take effect.\n"
+                yield f"__FIX_FAILED__:Sync to container failed\n"
+                # GAP 6 FIX: Don't continue with broken sync - try next fix attempt
+                continue
 
             # Step 4: Kill existing dev server
             yield f"🔄 Restarting dev server...\n"

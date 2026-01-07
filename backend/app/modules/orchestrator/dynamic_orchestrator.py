@@ -1369,7 +1369,7 @@ class DynamicOrchestrator:
 
         return False
 
-    async def save_file(self, project_id: str, file_path: str, content: str, session_id: str = None, user_id: str = None, component: str = None) -> bool:
+    async def save_file(self, project_id: str, file_path: str, content: str, session_id: str = None, user_id: str = None, component: str = None, critical: bool = False) -> bool:
         """
         Save file - routes to all configured storage layers with retry logic.
 
@@ -1386,9 +1386,13 @@ class DynamicOrchestrator:
             session_id: Temp session ID (for ephemeral mode)
             user_id: User identifier for user-scoped storage (like Bolt.new)
             component: Optional hint ("frontend" or "backend") for path normalization
+            critical: If True, raise exception on sandbox failure (GAP 3 FIX)
 
         Returns:
             True if saved successfully to all critical layers
+
+        Raises:
+            RuntimeError: If critical=True and sandbox write fails
         """
         import asyncio
 
@@ -1431,6 +1435,17 @@ class DynamicOrchestrator:
 
         if not layer1_success:
             logger.error(f"[Layer1-Sandbox] ✗ FAILED after {max_retries} attempts: {file_path}")
+            # GAP 3 FIX: Track failed files for later sync and optionally raise
+            if not hasattr(self, '_failed_sandbox_files'):
+                self._failed_sandbox_files = []
+            self._failed_sandbox_files.append({
+                'project_id': project_id,
+                'file_path': file_path,
+                'content': content,
+                'user_id': user_id
+            })
+            if critical:
+                raise RuntimeError(f"Critical sandbox write failed for {file_path}")
 
         # LAYER 2: Write to permanent storage or temp session
         try:
@@ -2513,13 +2528,20 @@ class DynamicOrchestrator:
             }
         )
 
-        # Get user_id for user-scoped paths (Bolt.new structure: {user_id}/{project_id}/)
-        user_id = metadata.get("user_id") if metadata else None
-        logger.info(f"[UserID Debug] From metadata: user_id={user_id}, metadata keys={list(metadata.keys()) if metadata else 'None'}")
+        # =================================================================
+        # GAP 1 & 9 FIX: Standardized user_id resolution
+        # CRITICAL: Use consistent "anonymous" string (never None/empty)
+        # This ensures sandbox paths match across generation and execution
+        # =================================================================
+        ANONYMOUS_USER_ID = "anonymous"  # Standard anonymous user ID
 
-        # FALLBACK: If user_id not in metadata, try to get from database
+        # Step 1: Get user_id from metadata
+        user_id = metadata.get("user_id") if metadata else None
+        logger.info(f"[UserID] Step 1 - From metadata: user_id={user_id}")
+
+        # Step 2: FALLBACK - If user_id not in metadata, try database lookup
         if not user_id:
-            logger.warning(f"[UserID Debug] No user_id in metadata, attempting database lookup for project {project_id}")
+            logger.info(f"[UserID] Step 2 - No user_id in metadata, trying database lookup")
             try:
                 from app.core.database import AsyncSessionLocal
                 from app.models.project import Project
@@ -2534,11 +2556,21 @@ class DynamicOrchestrator:
                     db_user_id = result.scalar_one_or_none()
                     if db_user_id:
                         user_id = str(db_user_id)
-                        logger.info(f"[UserID Debug] Got user_id from database: {user_id}")
-                    else:
-                        logger.warning(f"[UserID Debug] Project {project_id} not found in database or has no user_id")
+                        logger.info(f"[UserID] Step 2 - Got from database: {user_id}")
             except Exception as e:
-                logger.warning(f"[UserID Debug] Database lookup failed: {e}")
+                logger.warning(f"[UserID] Step 2 - Database lookup failed: {e}")
+
+        # Step 3: FINAL FALLBACK - Use standardized anonymous ID (NEVER None)
+        if not user_id:
+            user_id = ANONYMOUS_USER_ID
+            logger.info(f"[UserID] Step 3 - Using anonymous: {user_id}")
+
+        # Store resolved user_id in context for downstream use
+        context.user_id = user_id
+        if metadata:
+            metadata["resolved_user_id"] = user_id  # For other components
+
+        logger.info(f"[UserID] RESOLVED: user_id={user_id} for project {project_id}")
 
         # Create sandbox workspace (Layer 1 of 3-Layer Storage)
         # Path: C:/tmp/sandbox/workspace/{user_id}/{project_id}/
@@ -6364,35 +6396,80 @@ Stream code in chunks for real-time display.
 
     def _parse_errors_from_output(self, terminal_output: str, command: str) -> List[Dict[str, Any]]:
         """
-        Parse errors from terminal output
+        Parse errors from terminal output (GAP 4 FIX: Enhanced error context)
         """
         errors = []
+        seen_messages = set()  # Deduplicate errors
 
-        # Common error patterns
+        # =====================================================
+        # GAP 4 FIX: Comprehensive error patterns for all technologies
+        # =====================================================
         error_patterns = [
-            r"Error: (.+)",
-            r"ERROR: (.+)",
-            r"TypeError: (.+)",
-            r"ModuleNotFoundError: (.+)",
-            r"SyntaxError: (.+)",
-            r"Failed to compile",
-            r"Command failed with exit code (\d+)"
+            # JavaScript/TypeScript
+            (r"Error: (.+)", "runtime_error"),
+            (r"ERROR: (.+)", "runtime_error"),
+            (r"TypeError: (.+)", "type_error"),
+            (r"SyntaxError: (.+)", "syntax_error"),
+            (r"ReferenceError: (.+)", "reference_error"),
+            (r"Module not found: (.+)", "import_error"),
+            (r"Cannot find module (.+)", "import_error"),
+            (r"TS\d+: (.+)", "typescript_error"),
+            (r"Property '(\w+)' does not exist", "type_error"),
+            # Python
+            (r"ModuleNotFoundError: (.+)", "import_error"),
+            (r"ImportError: (.+)", "import_error"),
+            (r"NameError: (.+)", "reference_error"),
+            (r"AttributeError: (.+)", "attribute_error"),
+            (r"IndentationError: (.+)", "syntax_error"),
+            # Java
+            (r"error: (.+)", "compile_error"),
+            (r"cannot find symbol (.+)", "reference_error"),
+            (r"incompatible types: (.+)", "type_error"),
+            # General
+            (r"Failed to compile", "compile_error"),
+            (r"Build failed", "compile_error"),
+            (r"Command failed with exit code (\d+)", "runtime_error"),
+            (r"npm ERR! (.+)", "npm_error"),
+            (r"ENOENT: (.+)", "file_error"),
         ]
 
-        for pattern in error_patterns:
-            matches = re.findall(pattern, terminal_output, re.MULTILINE)
+        for pattern, error_type in error_patterns:
+            matches = re.findall(pattern, terminal_output, re.MULTILINE | re.IGNORECASE)
             for match in matches:
-                # Try to extract file path and line number
-                file_match = re.search(r'File "([^"]+)", line (\d+)', terminal_output)
-                file_path = file_match.group(1) if file_match else "unknown"
-                line_number = int(file_match.group(2)) if file_match else 0
+                message = match if isinstance(match, str) else str(match)
+                if message in seen_messages:
+                    continue
+                seen_messages.add(message)
+
+                # GAP 4 FIX: Better file/line extraction for multiple languages
+                file_path = "unknown"
+                line_number = 0
+
+                # Python: File "path", line N
+                py_match = re.search(r'File "([^"]+)", line (\d+)', terminal_output)
+                if py_match:
+                    file_path = py_match.group(1)
+                    line_number = int(py_match.group(2))
+                else:
+                    # TypeScript/JavaScript: path:line:col
+                    ts_match = re.search(r'([^\s:]+\.(tsx?|jsx?|vue)):(\d+)(?::(\d+))?', terminal_output)
+                    if ts_match:
+                        file_path = ts_match.group(1)
+                        line_number = int(ts_match.group(3))
+                    else:
+                        # Java: path:line: error
+                        java_match = re.search(r'([^\s:]+\.java):(\d+):', terminal_output)
+                        if java_match:
+                            file_path = java_match.group(1)
+                            line_number = int(java_match.group(2))
 
                 errors.append({
-                    "type": "runtime_error",
-                    "message": match if isinstance(match, str) else match,
+                    "type": error_type,
+                    "message": message,
                     "file": file_path,
                     "line": line_number,
-                    "command": command
+                    "command": command,
+                    "full_output": terminal_output[-500:] if len(terminal_output) > 500 else terminal_output  # GAP 4: Include context
                 })
 
         return errors

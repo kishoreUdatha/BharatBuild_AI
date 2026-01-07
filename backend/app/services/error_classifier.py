@@ -542,16 +542,39 @@ class ErrorClassifier:
         # STEP 2: Fallback to general patterns for non-Java errors
         # =====================================================================
         for pattern in cls.FILE_PATTERNS:
-            match = re.search(pattern, text)
-            if match:
+            for match in re.finditer(pattern, text):
                 file_path = match.group(1)
                 line_number = int(match.group(2)) if match.lastindex >= 2 else None
                 # Normalize path
                 file_path = file_path.replace('\\', '/')
                 # Strip container path prefixes (Docker containers use /app as workdir)
                 file_path = cls._normalize_container_path(file_path)
+                # Skip excluded paths (node_modules, vendor, etc.) - find next match
+                if cls._is_excluded_path(file_path):
+                    continue
                 return file_path, line_number
         return None, None
+
+    # Paths that should NEVER be extracted as error files (these are library/framework files)
+    EXCLUDED_PATH_PATTERNS = [
+        'node_modules/',
+        'vendor/',
+        '.npm/',
+        '.yarn/',
+        'site-packages/',
+        '__pycache__/',
+        '.cargo/',
+        'target/debug/',
+        'target/release/',
+    ]
+
+    @classmethod
+    def _is_excluded_path(cls, file_path: str) -> bool:
+        """Check if a file path should be excluded (library/framework files)."""
+        for pattern in cls.EXCLUDED_PATH_PATTERNS:
+            if pattern in file_path:
+                return True
+        return False
 
     @classmethod
     def extract_all_error_files(cls, text: str) -> List[Tuple[str, int]]:
@@ -572,6 +595,10 @@ class ErrorClassifier:
             file_path = file_path.replace('\\', '/')
             file_path = cls._normalize_container_path(file_path)
 
+            # Skip excluded paths (node_modules, vendor, etc.)
+            if cls._is_excluded_path(file_path):
+                continue
+
             if file_path not in seen_files:
                 error_files.append((file_path, line_number))
                 seen_files.add(file_path)
@@ -583,6 +610,10 @@ class ErrorClassifier:
                 line_number = int(match.group(2)) if match.lastindex >= 2 else 0
                 file_path = file_path.replace('\\', '/')
                 file_path = cls._normalize_container_path(file_path)
+
+                # Skip excluded paths (node_modules, vendor, etc.)
+                if cls._is_excluded_path(file_path):
+                    continue
 
                 if file_path not in seen_files:
                     error_files.append((file_path, line_number))
