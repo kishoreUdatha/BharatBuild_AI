@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from app.core.logging_config import logger
 from app.modules.agents.base_agent import BaseAgent, AgentContext
+from app.services.unified_file_manager import unified_file_manager
 
 
 @dataclass
@@ -165,7 +166,7 @@ Your job is to analyze errors and generate precise fixes that work the FIRST tim
 ### 1. SYNTAX ERRORS
 - Missing brackets, semicolons, quotes
 - Invalid syntax for language
-- JSX/TSX errors
+- JSX/TSX errors (including SVG data URL quote issues)
 - YAML/JSON formatting
 
 ### 2. IMPORT/MODULE ERRORS
@@ -923,7 +924,8 @@ Be surgical. Fix only what's broken. Output valid JSON only.
         context: AgentContext
     ) -> Dict[str, str]:
         """
-        Get current contents of files to be fixed
+        Get current contents of files to be fixed.
+        Reads from sandbox using unified_file_manager if not in metadata.
         """
         contents = {}
 
@@ -931,12 +933,120 @@ Be surgical. Fix only what's broken. Output valid JSON only.
         metadata = context.metadata or {}
         file_contents = metadata.get("file_contents", {})
 
+        # Get project_id and user_id from context (direct attributes, not metadata)
+        project_id = context.project_id or ""
+        user_id = context.user_id or ""
+
+        # Try to extract user_id from project_path if not available
+        # Path format: /efs/sandbox/workspace/{user_id}/{project_id}
+        if not user_id:
+            project_path = metadata.get("project_path", "")
+            if project_path and "/workspace/" in project_path:
+                try:
+                    parts = project_path.split("/workspace/")[1].split("/")
+                    if len(parts) >= 1:
+                        user_id = parts[0]
+                        logger.info(f"[ProductionFixerAgent] Extracted user_id from path: {user_id}")
+                except Exception as e:
+                    logger.warning(f"[ProductionFixerAgent] Failed to extract user_id from path: {e}")
+
         for path in file_paths:
+            # Direct match first
             if path in file_contents:
                 contents[path] = file_contents[path]
-            else:
-                logger.warning(f"[ProductionFixerAgent] File content not provided for {path}")
-                contents[path] = "# File content not available"
+                continue
+
+            # Try fuzzy matching for path variants (DYNAMIC - no hardcoded paths)
+            found = False
+            normalized_path = path.lstrip('./')
+            filename = normalized_path.split('/')[-1]  # Get just the filename
+
+            for fc_path, fc_content in file_contents.items():
+                normalized_fc = fc_path.lstrip('./')
+
+                # Check if paths end the same way (handles ANY prefix dynamically)
+                if normalized_fc.endswith(normalized_path) or normalized_path.endswith(normalized_fc):
+                    contents[path] = fc_content
+                    logger.info(f"[ProductionFixerAgent] Suffix matched {path} -> {fc_path}")
+                    found = True
+                    break
+
+                # Check if just the filename matches (last resort)
+                fc_filename = normalized_fc.split('/')[-1]
+                if fc_filename == filename:
+                    contents[path] = fc_content
+                    logger.info(f"[ProductionFixerAgent] Filename matched {path} -> {fc_path}")
+                    found = True
+                    break
+
+            if not found:
+                # CRITICAL: Read from sandbox if not in metadata
+                # This allows AI to see actual file content and fix it
+                if project_id and user_id:
+                    content = None
+                    clean_path = path.lstrip('./')
+                    filename = clean_path.split('/')[-1]  # Get just the filename
+
+                    # Step 1: Try the exact path first
+                    try:
+                        content = await unified_file_manager.read_file(
+                            project_id=project_id,
+                            user_id=user_id,
+                            file_path=clean_path
+                        )
+                        if content:
+                            contents[path] = content
+                            logger.info(f"[ProductionFixerAgent] Read file from sandbox (exact): {clean_path}")
+                    except Exception:
+                        pass
+
+                    # Step 2: If not found, dynamically search project files
+                    if not content:
+                        try:
+                            # Get all files in the project
+                            project_files = await unified_file_manager.list_files(
+                                project_id=project_id,
+                                user_id=user_id
+                            )
+
+                            # Find matching file by suffix or filename
+                            for project_file in project_files:
+                                normalized_project = project_file.lstrip('./')
+                                # Check suffix match (handles any prefix like frontend/, backend/, etc.)
+                                if normalized_project.endswith(clean_path):
+                                    content = await unified_file_manager.read_file(
+                                        project_id=project_id,
+                                        user_id=user_id,
+                                        file_path=project_file
+                                    )
+                                    if content:
+                                        contents[path] = content
+                                        logger.info(f"[ProductionFixerAgent] Found by suffix: {path} -> {project_file}")
+                                        break
+
+                            # If still not found, try filename match
+                            if not content:
+                                for project_file in project_files:
+                                    if project_file.endswith(f"/{filename}") or project_file == filename:
+                                        content = await unified_file_manager.read_file(
+                                            project_id=project_id,
+                                            user_id=user_id,
+                                            file_path=project_file
+                                        )
+                                        if content:
+                                            contents[path] = content
+                                            logger.info(f"[ProductionFixerAgent] Found by filename: {path} -> {project_file}")
+                                            break
+
+                        except Exception as e:
+                            logger.warning(f"[ProductionFixerAgent] Failed to search project files: {e}")
+
+                    if not content:
+                        logger.warning(f"[ProductionFixerAgent] File not found in sandbox: {path}")
+                        contents[path] = "# File content not available"
+                else:
+                    logger.warning(f"[ProductionFixerAgent] No project_id/user_id to read: {path}")
+                    contents[path] = "# File content not available"
 
         return contents
 

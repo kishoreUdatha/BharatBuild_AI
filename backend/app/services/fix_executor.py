@@ -336,6 +336,7 @@ async def execute_fix_internal(project_id: str, log_payload: Dict[str, Any]) -> 
         # Create AgentContext for ProductionFixerAgent
         agent_context = AgentContext(
             project_id=project_id,
+            user_id=user_id,  # CRITICAL: Pass user_id for sandbox file reading
             user_request=f"Fix error: {error_description}",
             metadata={
                 "error_message": error_description,
@@ -348,6 +349,7 @@ async def execute_fix_internal(project_id: str, log_payload: Dict[str, Any]) -> 
                 # Bolt.new-style context for Claude
                 "file_tree": frontend_file_tree if frontend_file_tree else list(all_files.keys()),
                 "recently_modified": recently_modified,
+                "project_path": str(project_path),  # For user_id extraction fallback
                 "environment": {
                     "framework": context_payload.tech_stack,
                     "project_type": "auto-detected",
