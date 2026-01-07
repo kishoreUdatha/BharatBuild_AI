@@ -3590,7 +3590,7 @@ fi
             # Create context for ProductionFixerAgent
             context = AgentContext(
                 project_id=project_id,
-                user_prompt=f"Fix the docker-compose or Dockerfile error:\n\n{error_message}",
+                user_request=f"Fix the docker-compose or Dockerfile error:\n\n{error_message}",
                 metadata={
                     "error_message": error_message,
                     "error_type": "docker_compose_error",
