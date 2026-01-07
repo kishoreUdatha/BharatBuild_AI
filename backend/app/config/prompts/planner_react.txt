@@ -67,7 +67,9 @@ BUILD-CRITICAL RULES:
    - NEVER use plugins like @tailwindcss/forms unless in package.json
    - Use `plugins: []` by default
 
-3. tsconfig.json with references:
+3. tsconfig.json CRITICAL RULES:
+   - "include" MUST be ["src"] only - NEVER include vite.config.ts!
+   - "noEmit": true - Vite handles compilation
    - If it has `"references": [{ "path": "./tsconfig.node.json" }]`
    - You MUST also create tsconfig.node.json
 
