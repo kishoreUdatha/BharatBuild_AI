@@ -299,20 +299,25 @@ No explanations. Only the <file> block."""
         total_error_count = len(all_error_files)
         logger.info(f"[BoltFixer:{project_id}] Found {total_error_count} files with errors: {[f[0] for f in all_error_files]}")
 
-        # BUILD DEPENDENCY GRAPH for intelligent prioritization
-        try:
-            self._dependency_graph = build_dependency_graph(
-                project_path,
-                file_reader=self._sandbox_file_reader,
-                file_lister=self._sandbox_file_lister
-            )
-            graph_stats = self._dependency_graph.get_stats()
-            logger.info(f"[BoltFixer:{project_id}] Dependency graph: {graph_stats}")
-        except Exception as e:
-            logger.warning(f"[BoltFixer:{project_id}] Could not build dependency graph: {e}")
-            self._dependency_graph = None
+        # OPTIMIZATION: Only build dependency graph for multi-file errors
+        # Single file errors don't need graph - just fix the file directly
+        if total_error_count <= 1:
+            logger.info(f"[BoltFixer:{project_id}] Single file error - skipping dependency graph")
 
         if total_error_count > 1:
+            # BUILD DEPENDENCY GRAPH (only for multi-file errors)
+            try:
+                self._dependency_graph = build_dependency_graph(
+                    project_path,
+                    file_reader=self._sandbox_file_reader,
+                    file_lister=self._sandbox_file_lister
+                )
+                graph_stats = self._dependency_graph.get_stats()
+                logger.info(f"[BoltFixer:{project_id}] Dependency graph: {graph_stats}")
+            except Exception as e:
+                logger.warning(f"[BoltFixer:{project_id}] Could not build dependency graph: {e}")
+                self._dependency_graph = None
+
             # USE DEPENDENCY GRAPH for smarter prioritization
             if self._dependency_graph:
                 # Get fix order from dependency graph

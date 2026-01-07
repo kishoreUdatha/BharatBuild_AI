@@ -92,9 +92,14 @@ BUILD-CRITICAL RULES:
    - NEVER invent or guess field names
    - If type has 'fieldName', use item.fieldName (not item.field)
 
-6. SVG/IMAGE HANDLING (REACT/TSX):
-   - Avoid inline SVG data URLs in JSX - they cause parsing issues
-   - BEST: Use CSS gradients, import SVGs as components, or reference from public/
+6. SVG/IMAGE HANDLING (REACT/TSX) - BUILD WILL FAIL IF VIOLATED:
+   - NEVER use inline SVG data URLs in JSX (data:image/svg+xml,...)
+   - This BREAKS esbuild and causes "Expected > but found" errors
+   - Instead use:
+     * CSS gradients: background: 'linear-gradient(...)'
+     * Lucide icons: import { Icon } from 'lucide-react'
+     * Simple shapes with CSS: div with rounded corners, borders
+     * Placeholder images: https://via.placeholder.com/60
 
    FRONTEND (React/Vue/Angular TypeScript):
    - Check types/index.ts for interfaces
