@@ -130,11 +130,14 @@ class PreBuildValidator:
         logger.info(f"[PreBuildValidator:{project_id}] Starting validation for {technology} project")
 
         # Determine validation strategy based on technology
-        if technology.lower() in ['java', 'spring', 'springboot', 'spring-boot', 'maven', 'gradle']:
+        # Convert technology to string in case it's an enum
+        tech_str = str(technology).lower() if technology else ''
+
+        if tech_str in ['java', 'spring', 'springboot', 'spring-boot', 'maven', 'gradle']:
             return await self._validate_java_project(project_id)
-        elif technology.lower() in ['node', 'nodejs', 'javascript', 'typescript', 'react', 'vue', 'angular', 'nextjs']:
+        elif tech_str in ['node', 'nodejs', 'javascript', 'typescript', 'react', 'vue', 'angular', 'nextjs']:
             return await self._validate_node_project(project_id)
-        elif technology.lower() in ['python', 'fastapi', 'django', 'flask']:
+        elif tech_str in ['python', 'fastapi', 'django', 'flask']:
             return await self._validate_python_project(project_id)
         else:
             logger.info(f"[PreBuildValidator:{project_id}] No specific validator for {technology}, skipping")

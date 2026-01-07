@@ -153,6 +153,46 @@ RULES FOR TS2339:
 - ALWAYS use the property names from the actual type definition
 - If types file is provided, READ IT FIRST before fixing
 
+⚠️ TYPESCRIPT CONFIG ERRORS (TS6305 - VITE PROJECTS):
+```
+Error: TS6305: Output file '/app/vite.config.d.ts' has not been built from source file '/app/vite.config.ts'
+```
+
+FIX: The tsconfig.json is incorrectly including vite.config.ts in compilation.
+
+<file path="tsconfig.json">
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["src"],
+  "exclude": ["node_modules"]
+}
+</file>
+
+CRITICAL POINTS:
+- "include" MUST be ["src"] ONLY - never include vite.config.ts
+- "noEmit": true - Vite handles compilation, not tsc
+- Remove any "references" that point to vite.config.ts
+
 ═══════════════════════════════════════════════════════════════════════════════
                          📱 FLUTTER/DART ERRORS
 ═══════════════════════════════════════════════════════════════════════════════
