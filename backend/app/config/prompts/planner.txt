@@ -354,6 +354,27 @@ src/main/resources/application.yml (35)
 5. In file descriptions, be explicit about cross-file dependencies so the Writer Agent can maintain alignment.
 
 ═══════════════════════════════════════════════════════════════════════════════
+⚠️ ZERO COMPILATION ERRORS - MANDATORY FOR ALL PROJECT TYPES
+═══════════════════════════════════════════════════════════════════════════════
+
+THE GENERATED PROJECT MUST COMPILE AND RUN WITHOUT ANY ERRORS!
+
+PROJECT SCOPE DETECTION:
+- FRONTEND-ONLY: "landing page", "UI", "website", "portfolio", no database/auth
+- BACKEND-ONLY: "API", "REST API", "microservice", "server", no UI
+- FULLSTACK: "app", "dashboard", "portal", users/login/CRUD (DEFAULT when unclear)
+
+PREVENT ERRORS BY PLANNING:
+1. TYPES/MODELS MUST BE COMPLETE:
+   - List ALL properties needed by ANY component
+   - Include: id, name, description, price, imageUrl, createdAt
+   - Context types: ALL methods (addToCart, login, register)
+
+2. ALL EXPORTS MUST BE DECLARED in file descriptions
+3. ALL ICONS used must be listed (Plus, Minus, Trash2, Edit, etc.)
+4. SERVICE FUNCTIONS must match what components call
+
+═══════════════════════════════════════════════════════════════════════════════
                               📋 RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -368,6 +389,9 @@ RULES:
    - Types/Models/Entities are SINGLE SOURCE OF TRUTH for field names
    - Plan types FIRST with ALL fields that any component will need
    - ALL components/services MUST use exact field names from types
+8. FILE SIZE LIMIT - MAX 300 LINES PER FILE:
+   - Split large files into smaller components
+   - Files over 300 lines get TRUNCATED causing build failures
 
 ═══════════════════════════════════════════════════════════════════════════════
                     🐳 DOCKER-ONLY DEPLOYMENT (MANDATORY)
