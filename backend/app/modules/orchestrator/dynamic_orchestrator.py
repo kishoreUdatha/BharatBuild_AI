@@ -3988,7 +3988,35 @@ Ensure every import in every file has a corresponding file in the plan.
         # PARALLEL FILE GENERATION MODE (FAST - generates 3 files at a time)
         PARALLEL_BATCH_SIZE = 3  # Generate 3 files concurrently
 
+        # CRITICAL FIX: Sort files to generate types FIRST
+        # This ensures components have access to type definitions when being generated
+        def get_file_priority(file_info: dict) -> int:
+            path = file_info.get('path', '').lower()
+            # Priority 1: Types and interfaces (MUST be first for TypeScript)
+            if 'types' in path or 'interfaces' in path or 'models' in path:
+                return 1
+            # Priority 2: Config files (vite, tsconfig, tailwind, etc.)
+            if any(cfg in path for cfg in ['config', 'vite.', 'tsconfig', 'tailwind', 'postcss', '.env']):
+                return 2
+            # Priority 3: Utilities, lib, helpers
+            if any(util in path for util in ['/lib/', '/utils/', '/helpers/', '/hooks/']):
+                return 3
+            # Priority 4: Contexts, stores, services
+            if any(svc in path for svc in ['/contexts/', '/stores/', '/services/', '/api/']):
+                return 4
+            # Priority 5: Components
+            if '/components/' in path:
+                return 5
+            # Priority 6: Pages/routes
+            if any(pg in path for pg in ['/pages/', '/routes/', '/views/']):
+                return 6
+            # Priority 7: Everything else
+            return 7
+
         if files_to_generate:
+            # Sort by priority (types first, then configs, then utils, then components)
+            files_to_generate = sorted(files_to_generate, key=get_file_priority)
+            logger.info(f"[Writer] Sorted files by dependency order (types first)")
             logger.info(f"[Writer] ⚡ Parallel mode: generating {len(files_to_generate)} files ({PARALLEL_BATCH_SIZE} at a time)")
 
             yield OrchestratorEvent(
@@ -4555,10 +4583,36 @@ Ensure every import in every file has a corresponding file in the plan.
 
         # Build context about available dependencies (what can be imported)
         available_exports = []
+        types_content = ""  # Critical: Include actual type definitions for components
+
         if context.files_created:
-            for created_file in context.files_created[-20:]:  # Last 20 files
+            # First pass: Find types files in ALL files (types are generated early)
+            for created_file in context.files_created:
+                created_path = created_file.get('path', '')
+                created_content = created_file.get('content', '')
+
+                # CRITICAL FIX: Include actual content of types files
+                # This prevents type mismatch errors like using product.stock instead of product.stockQuantity
+                if ('types' in created_path.lower() or 'interfaces' in created_path.lower()) and created_content:
+                    if '.ts' in created_path or '.tsx' in created_path:
+                        # Limit types content to prevent token overflow (first 5000 chars)
+                        truncated_content = created_content[:5000] if len(created_content) > 5000 else created_content
+                        types_content = f"""
+⚠️ CRITICAL - TYPE DEFINITIONS (use EXACTLY these property names):
+```typescript
+{truncated_content}
+```
+DO NOT invent property names. ONLY use properties defined above.
+Example: If interface has 'stockQuantity', use product.stockQuantity NOT product.stock
+Example: If interface has 'imageUrl', use product.imageUrl NOT product.image
+"""
+                        break  # Use first types file found
+
+            # Second pass: Build exports list from last 20 files for import context
+            for created_file in context.files_created[-20:]:
                 created_path = created_file.get('path', '')
                 created_exports = created_file.get('exports', [])
+
                 if created_exports:
                     available_exports.append(f"  - {created_path}: exports {', '.join(created_exports)}")
                 else:
@@ -4589,7 +4643,7 @@ PROJECT CONTEXT:
 User Request: {context.user_request}
 Project Type: {context.project_type or 'Web Application'}
 Tech Stack: {json.dumps(context.tech_stack) if context.tech_stack else 'React + TypeScript + Tailwind'}
-
+{types_content}
 FILES ALREADY CREATED (you can import from these):
 {chr(10).join(available_exports) if available_exports else "None yet - this may be a leaf file with no dependencies"}
 {dependency_context}
