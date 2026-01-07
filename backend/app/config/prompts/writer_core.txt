@@ -101,6 +101,20 @@ BUILD-CRITICAL RULES:
      * Simple shapes with CSS: div with rounded corners, borders
      * Placeholder images: https://via.placeholder.com/60
 
+7. VITE CONFIG FOR PREVIEW MODE - REQUIRED FOR ALL VITE PROJECTS:
+   vite.config.ts MUST include server config with HMR disabled:
+   ```
+   export default defineConfig({
+     plugins: [react()],
+     server: {
+       host: '0.0.0.0',
+       port: 3000,
+       hmr: false
+     }
+   })
+   ```
+   Without this, preview will show white page with WebSocket errors.
+
    FRONTEND (React/Vue/Angular TypeScript):
    - Check types/index.ts for interfaces
    - Use EXACT property names: imageUrl NOT image, stockQuantity NOT stock

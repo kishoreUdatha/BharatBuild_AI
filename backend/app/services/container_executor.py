@@ -5830,14 +5830,39 @@ echo "Done"
         The actual server readiness is checked by log streaming.
         """
         try:
-            # Start the dev server in background
-            exec_result = container.exec_run(
-                f"sh -c 'cd {working_dir} && {run_command}'",
-                detach=True,
-                workdir=working_dir
-            )
-            logger.info(f"[ContainerExecutor] Restarted dev server: {run_command}")
-            return True
+            # Check if container is still running
+            container.reload()
+
+            if container.status == "exited":
+                # Container crashed - restart it (entrypoint will run npm run dev automatically)
+                logger.warning(f"[ContainerExecutor] Container exited, restarting it (entrypoint will run)")
+                try:
+                    container.start()
+                    await asyncio.sleep(2.0)  # Give container time to start
+                    container.reload()
+                    if container.status == "running":
+                        logger.info(f"[ContainerExecutor] Container restarted successfully")
+                        return True
+                    else:
+                        logger.error(f"[ContainerExecutor] Container still not running: {container.status}")
+                        return False
+                except Exception as start_err:
+                    logger.error(f"[ContainerExecutor] Failed to start container: {start_err}")
+                    return False
+
+            elif container.status == "running":
+                # Container is running - exec the dev server command
+                exec_result = container.exec_run(
+                    f"sh -c 'cd {working_dir} && {run_command}'",
+                    detach=True,
+                    workdir=working_dir
+                )
+                logger.info(f"[ContainerExecutor] Restarted dev server via exec: {run_command}")
+                return True
+
+            else:
+                logger.error(f"[ContainerExecutor] Container in unexpected state: {container.status}")
+                return False
 
         except Exception as e:
             logger.error(f"[ContainerExecutor] Failed to restart dev server: {e}")
