@@ -3583,17 +3583,59 @@ fi
                     except Exception as e:
                         logger.warning(f"[ContainerExecutor] Could not read {df_path}: {e}")
 
+            # Detect TypeScript/build errors and read additional config files
+            # Error patterns that indicate build issues (not Docker issues)
+            build_error_patterns = [
+                'error TS',        # TypeScript errors
+                'tsc &&',          # TypeScript compilation
+                'npm run build',   # Build command
+                'vite build',      # Vite build
+                'webpack',         # Webpack
+                'tsconfig',        # TypeScript config reference
+            ]
+            is_build_error = any(p in error_message for p in build_error_patterns)
+
+            if is_build_error:
+                logger.info("[ContainerExecutor] Detected build error, reading config files...")
+                # Additional config files for build errors
+                build_config_paths = [
+                    Path(project_path) / "frontend" / "tsconfig.json",
+                    Path(project_path) / "frontend" / "tsconfig.node.json",
+                    Path(project_path) / "frontend" / "vite.config.ts",
+                    Path(project_path) / "frontend" / "package.json",
+                    Path(project_path) / "tsconfig.json",
+                    Path(project_path) / "tsconfig.node.json",
+                    Path(project_path) / "vite.config.ts",
+                    Path(project_path) / "package.json",
+                ]
+                for config_path in build_config_paths:
+                    if config_path.exists():
+                        try:
+                            relative_path = str(config_path.relative_to(project_path))
+                            file_contents[relative_path] = config_path.read_text()
+                            logger.info(f"[ContainerExecutor] Read config file: {relative_path}")
+                        except Exception as e:
+                            logger.warning(f"[ContainerExecutor] Could not read {config_path}: {e}")
+
             if not file_contents:
                 logger.warning("[ContainerExecutor] No docker files found to fix")
                 return False
 
             # Create context for ProductionFixerAgent
+            # Determine error type for better AI understanding
+            error_type = "typescript_build_error" if is_build_error else "docker_compose_error"
+            request_msg = (
+                f"Fix the TypeScript/build configuration error:\n\n{error_message}"
+                if is_build_error
+                else f"Fix the docker-compose or Dockerfile error:\n\n{error_message}"
+            )
+
             context = AgentContext(
                 project_id=project_id,
-                user_request=f"Fix the docker-compose or Dockerfile error:\n\n{error_message}",
+                user_request=request_msg,
                 metadata={
                     "error_message": error_message,
-                    "error_type": "docker_compose_error",
+                    "error_type": error_type,
                     "stack_trace": error_message,
                     "file_contents": file_contents,
                     "affected_files": list(file_contents.keys()),

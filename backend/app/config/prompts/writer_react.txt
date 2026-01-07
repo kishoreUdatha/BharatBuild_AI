@@ -51,6 +51,39 @@ export default defineConfig({
 })
 ```
 
+TSCONFIG.JSON - CRITICAL FOR BUILD:
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["src"],
+  "exclude": ["node_modules"]
+}
+```
+⚠️ CRITICAL:
+- "include" MUST be ["src"] only - NOT ["vite.config.ts"]!
+- "noEmit": true - Vite handles compilation, not tsc
+- DO NOT include vite.config.ts in the tsconfig
+
 COMPONENT STRUCTURE (React 17+):
 ```typescript
 import { useState } from 'react';  // NO "import React"!
