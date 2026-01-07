@@ -27,6 +27,23 @@ _ssm_cache = {
 _SSM_CACHE_TTL = 300  # 5 minutes
 
 
+def _invalidate_cache(cache_key: str = None):
+    """
+    Invalidate SSM cache on connection failure.
+
+    This ensures we fetch fresh IP from SSM on next call,
+    reducing stale window from 5 minutes to 1 failed request.
+    """
+    if cache_key:
+        _ssm_cache[cache_key] = {"value": None, "expires": 0}
+        logger.info(f"[DockerHelper] Invalidated cache for {cache_key}")
+    else:
+        # Invalidate all
+        for key in _ssm_cache:
+            _ssm_cache[key] = {"value": None, "expires": 0}
+        logger.info("[DockerHelper] Invalidated all SSM cache (connection failed)")
+
+
 def _get_ssm_param_cached(param_name: str, cache_key: str) -> Optional[str]:
     """
     Get SSM parameter with TTL caching.
@@ -104,6 +121,9 @@ def get_docker_client(timeout: int = 30) -> Optional[docker.DockerClient]:
         return client
     except Exception as e:
         logger.error(f"[DockerHelper] Docker connection failed: {e}")
+        # Invalidate cache so next call fetches fresh IP from SSM
+        # This reduces stale window from 5 min to 1 failed request
+        _invalidate_cache("docker_host")
         return None
 
 
@@ -144,6 +164,8 @@ def _try_tls_connection(docker_host: str, timeout: int) -> Optional[docker.Docke
 
     except Exception as e:
         logger.warning(f"[DockerHelper] TLS connection failed: {e}")
+        # Invalidate cache so next call fetches fresh IP from SSM
+        _invalidate_cache("docker_host")
         return None
 
 
