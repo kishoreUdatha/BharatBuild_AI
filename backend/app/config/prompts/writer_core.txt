@@ -92,6 +92,10 @@ BUILD-CRITICAL RULES:
    - NEVER invent or guess field names
    - If type has 'fieldName', use item.fieldName (not item.field)
 
+6. SVG/IMAGE HANDLING (REACT/TSX):
+   - Avoid inline SVG data URLs in JSX - they cause parsing issues
+   - BEST: Use CSS gradients, import SVGs as components, or reference from public/
+
    FRONTEND (React/Vue/Angular TypeScript):
    - Check types/index.ts for interfaces
    - Use EXACT property names: imageUrl NOT image, stockQuantity NOT stock

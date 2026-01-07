@@ -483,6 +483,7 @@ async def fix_runtime_error(
         # Prepare context for fixer agent (Bolt.new style)
         context = AgentContext(
             project_id=project_id,
+            user_id=user_id,  # CRITICAL: Pass user_id for sandbox file reading
             user_request=f"Fix this error: {request.error_message}",
             metadata={
                 "error_message": request.error_message,

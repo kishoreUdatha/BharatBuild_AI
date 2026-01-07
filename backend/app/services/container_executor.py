@@ -2070,70 +2070,48 @@ class ContainerExecutor:
                                 yield f"  💡 The platform helper container image is missing. Please try again.\n"
                                 break  # Don't retry with AI fixer
 
-                            # Step 2: Try ProductionFixer (AI-powered) for code/config issues
-                            yield f"  🤖 Step 2: Trying AI-powered fixes...\n"
+                            # Step 2: Use BoltFixer for ALL errors (batch, cascade, dependency graph)
+                            # BoltFixer handles: syntax, import, type, config, dependency, build errors
+                            yield f"  🔧 Step 2: Trying BoltFixer (batch + cascade)...\n"
                             try:
-                                ai_fix_applied = await self._apply_ai_fix_for_compose(
+                                from app.services.bolt_fixer import BoltFixer
+                                bolt_fixer_instance = BoltFixer()
+
+                                # Build payload for BoltFixer
+                                bolt_payload = {
+                                    "stderr": output,
+                                    "stdout": "",
+                                    "exit_code": exit_code,
+                                }
+
+                                fix_result = await bolt_fixer_instance.fix_from_backend(
                                     project_id=project_id,
-                                    project_path=str(project_path),
-                                    error_message=output
+                                    project_path=Path(project_path),
+                                    payload=bolt_payload,
+                                    sandbox_file_writer=self._write_file_to_sandbox,
+                                    sandbox_file_reader=self._read_file_from_sandbox,
+                                    sandbox_file_lister=self._list_files_from_sandbox
                                 )
-                                if ai_fix_applied:
-                                    yield f"  ✅ AI fix applied to docker-compose.yml\n"
+
+                                if fix_result.success and fix_result.files_modified:
+                                    yield f"  ✅ BoltFixer fixed {len(fix_result.files_modified)} files:\n"
+                                    for f in fix_result.files_modified:
+                                        yield f"     📝 {f}\n"
+
+                                    # Track files for S3 sync
+                                    all_files_modified.extend(fix_result.files_modified)
+
+                                    # Check if more passes needed (cascading errors)
+                                    if fix_result.needs_another_pass:
+                                        yield f"  🔄 Pass {fix_result.current_pass} complete, {fix_result.remaining_errors} errors remaining...\n"
+
                                     yield f"  🔄 Retrying docker-compose...\n"
                                     continue  # Retry
                                 else:
-                                    yield f"  ❌ AI could not fix the issue\n"
-                            except Exception as ai_err:
-                                logger.warning(f"[ContainerExecutor] AI fixer error: {ai_err}")
-                                yield f"  ❌ AI fixer error: {ai_err}\n"
-
-                            # Step 3: Try BoltFixer for build-time compilation errors (Java/Maven/Gradle)
-                            build_error_patterns = [
-                                'BUILD FAILURE', 'COMPILATION ERROR', 'cannot find symbol',
-                                'package does not exist', 'error: cannot find symbol',
-                                'error: package .* does not exist', 'class .* not found',
-                                'error: cannot access', 'non-existing', 'does not exist'
-                            ]
-                            if any(pattern in output for pattern in build_error_patterns):
-                                yield f"  🔧 Step 3: Trying BoltFixer for compilation errors...\n"
-                                try:
-                                    from app.services.bolt_fixer import BoltFixer
-                                    bolt_fixer_instance = BoltFixer()
-
-                                    # Build payload for BoltFixer with build error context
-                                    bolt_payload = {
-                                        "stderr": output,
-                                        "stdout": "",
-                                        "exit_code": exit_code,
-                                        "primary_error_type": "build_failure"
-                                    }
-
-                                    fix_result = await bolt_fixer_instance.fix_from_backend(
-                                        project_id=project_id,
-                                        project_path=Path(project_path),
-                                        payload=bolt_payload,
-                                        sandbox_file_writer=self._write_file_to_sandbox,
-                                        sandbox_file_reader=self._read_file_from_sandbox,
-                                        sandbox_file_lister=self._list_files_from_sandbox
-                                    )
-
-                                    if fix_result.success and fix_result.files_modified:
-                                        yield f"  ✅ BoltFixer created/modified {len(fix_result.files_modified)} files:\n"
-                                        for f in fix_result.files_modified:
-                                            yield f"     📝 {f}\n"
-
-                                        # Track files for S3 sync AFTER build succeeds
-                                        # NOTE: S3 sync is DEFERRED - see final sync after health checks pass
-                                        all_files_modified.extend(fix_result.files_modified)
-
-                                        yield f"  🔄 Retrying docker-compose build...\n"
-                                        continue  # Retry the build
-                                    else:
-                                        yield f"  ⚠️ BoltFixer could not fix: {fix_result.message if hasattr(fix_result, 'message') else 'No fix generated'}\n"
-                                except Exception as bolt_err:
-                                    logger.warning(f"[ContainerExecutor] BoltFixer build error: {bolt_err}")
-                                    yield f"  ⚠️ BoltFixer error: {bolt_err}\n"
+                                    yield f"  ⚠️ BoltFixer: {fix_result.message if hasattr(fix_result, 'message') else 'No fix generated'}\n"
+                            except Exception as bolt_err:
+                                logger.warning(f"[ContainerExecutor] BoltFixer error: {bolt_err}")
+                                yield f"  ⚠️ BoltFixer error: {bolt_err}\n"
 
                     yield f"\n❌ Docker Compose failed with exit code {exit_code}\n"
                     return
@@ -3787,6 +3765,7 @@ fi
                     "file_contents": file_contents,
                     "affected_files": list(file_contents.keys()),
                     "project_files": file_contents,
+                    "project_path": project_path,  # For extracting user_id
                 }
             )
 
