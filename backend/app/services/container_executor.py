@@ -3714,6 +3714,56 @@ fi
                         if content and len(content) < 50000:
                             file_contents[ef_clean] = content
 
+                # CRITICAL FIX: For type/model errors, include relevant type definition files
+                # Supports ALL common technologies students use
+                type_error_patterns = [
+                    # TypeScript/JavaScript
+                    'TS2339', 'does not exist on type', 'Property',
+                    # Java
+                    'cannot find symbol', 'incompatible types', 'cannot resolve',
+                    # Python
+                    'has no attribute', 'missing required argument', 'TypeError', 'NameError',
+                    # Go
+                    'undefined:', 'has no field or method',
+                    # C#/.NET
+                    'does not contain a definition', 'CS0117',
+                    # Ruby
+                    'undefined method', 'NoMethodError',
+                    # PHP
+                    'Undefined property', 'Call to undefined method',
+                ]
+                is_type_error = any(err in error_message for err in type_error_patterns)
+
+                if is_type_error:
+                    # Try to find type definition files for ALL technologies
+                    # These must be actual FILES, not directories
+                    types_paths = [
+                        # TypeScript/React/Vue/Angular
+                        'src/types/index.ts', 'src/types.ts', 'src/interfaces/index.ts',
+                        'frontend/src/types/index.ts', 'frontend/src/types.ts',
+                        # Python (FastAPI/Django)
+                        'app/models.py', 'app/schemas.py', 'models.py', 'schemas.py',
+                        'backend/app/models.py', 'backend/app/schemas.py',
+                        # Go
+                        'models/models.go', 'internal/models/models.go',
+                        # Node.js/Express
+                        'src/models/index.js', 'models/index.js', 'src/models/index.ts',
+                    ]
+                    types_found = False
+                    for types_path in types_paths:
+                        if types_path not in file_contents:
+                            content = read_file(types_path)
+                            if content:
+                                file_contents[types_path] = content
+                                logger.info(f"[ContainerExecutor] Included types/model file: {types_path}")
+                                types_found = True
+                                break
+
+                    # If no types file found, try to find from error message paths
+                    # Java/C#/Ruby/PHP models are often in the error path itself
+                    if not types_found:
+                        logger.debug("[ContainerExecutor] No standard types file found, relying on error file extraction")
+
             if not file_contents:
                 logger.warning("[ContainerExecutor] No docker files found to fix")
                 return False

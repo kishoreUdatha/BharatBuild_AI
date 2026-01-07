@@ -94,3 +94,28 @@ BUILD-CRITICAL RULES:
 REQUIRED FILES (add to plan):
 - frontend/src/vite-env.d.ts (priority 3)
 - frontend/src/types/index.ts (priority 6) - ALL types in camelCase
+
+⚠️ FULL-STACK TYPE CONSISTENCY (CRITICAL - Prevents 90% of TS errors):
+
+1. TYPES MUST BE COMPREHENSIVE:
+   - List ALL properties that ANY component will use
+   - Think: What will components display? Add those properties!
+   - Use optional (?) for properties not always present
+
+2. PROPERTY NAMING RULES:
+   - Use FULL descriptive names (not abbreviations)
+   - camelCase always (firstName NOT first_name)
+   - Be SPECIFIC: imageUrl NOT image, totalAmount NOT total
+   - CONSISTENCY: Once you name a property, use SAME name everywhere
+
+3. PLAN THE TYPES FIRST:
+   - Before planning components, decide ALL type properties
+   - Write property names in the plan description
+   - Components will use EXACTLY these property names
+
+4. FULLSTACK COORDINATION:
+   - Backend API may return snake_case → Frontend uses camelCase
+   - types/index.ts is SINGLE SOURCE OF TRUTH
+   - ALL components import from types/index.ts
+   - NEVER define types inside components
+   - NEVER invent property names in components
