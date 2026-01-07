@@ -360,9 +360,19 @@ src/main/resources/application.yml (35)
 THE GENERATED PROJECT MUST COMPILE AND RUN WITHOUT ANY ERRORS!
 
 PROJECT SCOPE DETECTION:
-- FRONTEND-ONLY: "landing page", "UI", "website", "portfolio", no database/auth
-- BACKEND-ONLY: "API", "REST API", "microservice", "server", no UI
-- FULLSTACK: "app", "dashboard", "portal", users/login/CRUD (DEFAULT when unclear)
+
+STANDARD WEB:
+- FRONTEND-ONLY: "landing page", "UI", "website", "portfolio"
+- BACKEND-ONLY: "API", "REST API", "microservice", "server"
+- FULLSTACK: "app", "dashboard", "portal", users/login/CRUD
+
+SPECIALIZED DOMAINS (NOT frontend/backend/fullstack):
+- 🔒 CYBER SECURITY → Python CLI + Streamlit (scanners/, analyzers/, crypto/)
+- ⛓️ BLOCKCHAIN → Hardhat contracts + optional DApp (contracts/*.sol)
+- 🌐 NETWORKING → Python/Go CLI tools (protocols/, utils/)
+- 🤖 AI/ML → Python + Streamlit/Gradio (src/model.py, app.py, notebooks/)
+- 📡 IoT/EMBEDDED → PlatformIO C++ (src/main.cpp, include/*.h)
+- 🎮 GAME DEV → Game engine structure (assets/, scenes/, scripts/)
 
 PREVENT ERRORS BY PLANNING:
 1. TYPES/MODELS MUST BE COMPLETE:

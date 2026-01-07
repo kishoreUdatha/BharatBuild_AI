@@ -107,6 +107,10 @@ CRITICAL RULES:
 
 6. PROJECT SCOPE DETECTION:
 
+   ═══════════════════════════════════════════════════════════════════════════
+   STANDARD WEB PROJECTS:
+   ═══════════════════════════════════════════════════════════════════════════
+
    FRONTEND-ONLY triggers:
    - Keywords: "landing page", "static site", "UI only", "website", "portfolio"
    - No data storage, authentication, or API needed
@@ -119,11 +123,56 @@ CRITICAL RULES:
    - Keywords: "app", "application", "platform", "system", "dashboard", "portal"
    - Features like: login, authentication, CRUD, database, user management
 
+   ═══════════════════════════════════════════════════════════════════════════
+   SPECIALIZED DOMAIN PROJECTS (NOT frontend/backend/fullstack):
+   ═══════════════════════════════════════════════════════════════════════════
+
+   🔒 CYBER SECURITY:
+   - Structure: Python CLI tools + optional Streamlit dashboard
+   - Files: scanners/, analyzers/, crypto/, reports/
+   - NO frontend/backend folders - use flat Python structure
+   - Example: Network scanner, vulnerability assessment, encryption tool
+
+   ⛓️ BLOCKCHAIN/WEB3:
+   - Structure: Smart contracts + optional React DApp
+   - Files: contracts/*.sol, scripts/, test/, frontend/ (if DApp)
+   - Use Hardhat/Truffle for contracts
+   - Example: NFT marketplace, DeFi protocol, token contract
+
+   🌐 NETWORKING:
+   - Structure: Python/Go CLI tools
+   - Files: src/, protocols/, utils/
+   - NO frontend - pure backend/CLI tools
+   - Example: Packet analyzer, network monitor, protocol simulator
+
+   🤖 AI/ML:
+   - Structure: Python + Streamlit/Gradio UI
+   - Files: src/model.py, src/training.py, app.py (Streamlit), notebooks/
+   - NO traditional frontend/backend - use Streamlit for UI
+   - Example: Image classifier, chatbot, prediction model
+
+   📡 IoT/EMBEDDED:
+   - Structure: C++/Python for device + optional dashboard
+   - Files: src/main.cpp, include/*.h, lib/, platformio.ini
+   - Use PlatformIO for Arduino/ESP32
+   - Example: Sensor system, home automation, wearable device
+
+   🎮 GAME DEVELOPMENT:
+   - Structure: Game engine specific (Unity/Pygame/Phaser)
+   - Files: src/, assets/, scenes/, scripts/
+   - NO frontend/backend folders
+   - Example: 2D platformer, puzzle game, multiplayer game
+
+   ═══════════════════════════════════════════════════════════════════════════
+
    ⚠️ DEFAULT BEHAVIOR (when user doesn't specify):
-   - If request mentions: users, login, data, dashboard, CRUD → FULLSTACK
-   - If request is purely visual: landing page, portfolio → FRONTEND-ONLY
-   - If request is API/service focused → BACKEND-ONLY
-   - When in doubt → DEFAULT TO FULLSTACK (most complete)
+   - Cyber security, networking, AI/ML → Python CLI/Streamlit (NO frontend/backend)
+   - Blockchain → Hardhat + optional React DApp
+   - IoT → PlatformIO C++ (NO frontend/backend)
+   - Game → Game engine structure
+   - Web app with users/login/data → FULLSTACK
+   - Purely visual → FRONTEND-ONLY
+   - When in doubt for web → DEFAULT TO FULLSTACK
 
    ═══════════════════════════════════════════════════════════════════════════
    FRONTEND-ONLY STRUCTURE (React/Vue/Angular):
