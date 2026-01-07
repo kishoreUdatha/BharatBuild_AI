@@ -60,6 +60,11 @@ BUILD-CRITICAL RULES:
    export default defineConfig({
      base: './',  // REQUIRED for preview!
      plugins: [react()],
+     server: {
+       host: '0.0.0.0',
+       port: 3000,
+       hmr: false  // REQUIRED - prevents WebSocket errors in preview
+     }
    })
    ```
 
