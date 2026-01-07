@@ -33,6 +33,12 @@ BUILD-CRITICAL RULES:
    - Export exactly what's listed in "This file should export"
    - Match names precisely
 
+5. TYPE/MODEL CONSISTENCY (CRITICAL):
+   - READ types/models definitions in context FIRST
+   - Use EXACT field/property names from type definitions
+   - NEVER invent or guess field names
+   - If type has 'fieldName', use item.fieldName (not item.field)
+
 DESIGN THEME (from Planner):
 - Use colors from context: primary_color, secondary_color, accent
 - If primary_color="emerald" → use bg-emerald-500, text-emerald-400, etc.

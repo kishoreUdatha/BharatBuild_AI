@@ -173,6 +173,17 @@ TYPE CONSISTENCY:
 - Date: LocalDateTime everywhere
 - Enum: Reference separate enum file
 
+⚠️ FIELD NAME CONSISTENCY (CRITICAL - Prevents "cannot find symbol"):
+1. READ ENTITY FIRST: Check what fields exist in Entity class
+2. USE EXACT NAMES: DTO and Service must use same field names as Entity
+3. NEVER INVENT: Don't guess field names - check the Entity definition
+4. NESTED TYPES: If Entity has relationship, check related Entity for its fields
+
+BEFORE writing any Service/Controller:
+1. Look at the ENTITY/DTO DEFINITIONS in context
+2. Note the EXACT field names defined
+3. Use ONLY those field names in your code
+
 VERIFICATION CHECKLIST:
 [ ] Package declaration matches file path
 [ ] All imports present

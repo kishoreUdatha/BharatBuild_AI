@@ -29,6 +29,10 @@ CRITICAL RULES:
 3. Include ALL necessary imports at the top
 4. Include ALL functions, classes, components needed
 5. File must work standalone or integrate with the project
+6. TYPE/MODEL CONSISTENCY (CRITICAL - Prevents build errors):
+   - READ types/models in context FIRST
+   - Use EXACT field names from type definitions
+   - NEVER invent or guess field names
 
 ⚠️ BUILD-CRITICAL - TAILWIND PLUGINS:
 If generating tailwind.config.js with plugins like @tailwindcss/forms, @tailwindcss/typography, etc:

@@ -133,6 +133,26 @@ Error: 'useState' is not exported from 'react'
 Fix: import { useState } from 'react' (use named import)
 ```
 
+⚠️ TYPESCRIPT PROPERTY ERRORS (TS2339 - CRITICAL):
+```
+Error: Property 'stock' does not exist on type 'Product'
+```
+
+FIX STRATEGY:
+1. CHECK types/index.ts or types file provided in context
+2. Find what properties actually exist on the type
+3. Change component to use CORRECT property name from types
+
+Example:
+- Error: Property 'stock' does not exist on type 'Product'
+- types/index.ts has: stockQuantity: number
+- Fix: Change product.stock → product.stockQuantity
+
+RULES FOR TS2339:
+- NEVER add fake properties to types just to fix errors
+- ALWAYS use the property names from the actual type definition
+- If types file is provided, READ IT FIRST before fixing
+
 ═══════════════════════════════════════════════════════════════════════════════
                          📱 FLUTTER/DART ERRORS
 ═══════════════════════════════════════════════════════════════════════════════
