@@ -3583,33 +3583,128 @@ fi
                     except Exception as e:
                         logger.warning(f"[ContainerExecutor] Could not read {df_path}: {e}")
 
-            # Detect TypeScript/build errors and read additional config files
-            # Error patterns that indicate build issues (not Docker issues)
+            # Detect build errors across ALL technologies and read relevant config files
+            # This enables AI fixer to see and fix build configuration issues
+
+            # Build error patterns for ALL supported technologies
             build_error_patterns = [
-                'error TS',        # TypeScript errors
-                'tsc &&',          # TypeScript compilation
-                'npm run build',   # Build command
-                'vite build',      # Vite build
-                'webpack',         # Webpack
-                'tsconfig',        # TypeScript config reference
+                # JavaScript/TypeScript
+                'error TS', 'tsc &&', 'npm run build', 'vite build', 'webpack',
+                'tsconfig', 'Cannot find module', 'Module not found',
+                # Java/Kotlin
+                'BUILD FAILURE', 'COMPILATION ERROR', 'cannot find symbol',
+                'package does not exist', 'mvn ', 'gradle', 'pom.xml',
+                'java.lang.', 'ClassNotFoundException', 'NoClassDefFoundError',
+                # Python
+                'ModuleNotFoundError', 'ImportError', 'SyntaxError', 'pip install',
+                'requirements.txt', 'setup.py', 'pyproject.toml',
+                # Go
+                'go build', 'go.mod', 'go.sum', 'undefined:', 'cannot find package',
+                # Rust
+                'cargo build', 'Cargo.toml', 'error[E', 'cannot find',
+                # Ruby
+                'Gemfile', 'bundle install', 'LoadError',
+                # PHP
+                'composer', 'Fatal error:', 'Class .* not found',
+                # .NET/C#
+                'dotnet build', 'MSBuild', 'error CS', '.csproj',
+                # AI/ML (Python-based)
+                'tensorflow', 'torch', 'keras', 'sklearn', 'numpy', 'pandas',
+                'CUDA', 'cudnn', 'GPU', 'environment.yml', 'conda',
+                'model', 'training', 'inference',
+                # Blockchain/Web3
+                'solidity', 'hardhat', 'truffle', 'foundry', 'ethers',
+                'web3', 'contract', 'deploy', 'compile',
+                'ParserError', 'DeclarationError', 'TypeError',
+                # Cybersecurity tools
+                'cryptography', 'ssl', 'certificate', 'authentication',
+                'authorization', 'jwt', 'oauth',
+                # Mobile (Flutter/React Native)
+                'flutter', 'dart', 'pubspec.yaml', 'react-native', 'expo',
+                'android', 'ios', 'xcode', 'gradle',
             ]
             is_build_error = any(p in error_message for p in build_error_patterns)
 
             if is_build_error:
-                logger.info("[ContainerExecutor] Detected build error, reading config files...")
-                # Additional config files for build errors
+                logger.info("[ContainerExecutor] Detected build error, reading config files for all technologies...")
+
+                # Config files for ALL technologies
                 build_config_paths = [
+                    # JavaScript/TypeScript (frontend and root)
                     Path(project_path) / "frontend" / "tsconfig.json",
                     Path(project_path) / "frontend" / "tsconfig.node.json",
                     Path(project_path) / "frontend" / "vite.config.ts",
                     Path(project_path) / "frontend" / "package.json",
+                    Path(project_path) / "frontend" / "webpack.config.js",
                     Path(project_path) / "tsconfig.json",
                     Path(project_path) / "tsconfig.node.json",
                     Path(project_path) / "vite.config.ts",
                     Path(project_path) / "package.json",
+                    Path(project_path) / "webpack.config.js",
+                    # Java/Maven/Gradle (backend)
+                    Path(project_path) / "backend" / "pom.xml",
+                    Path(project_path) / "backend" / "build.gradle",
+                    Path(project_path) / "backend" / "build.gradle.kts",
+                    Path(project_path) / "pom.xml",
+                    Path(project_path) / "build.gradle",
+                    # Python
+                    Path(project_path) / "backend" / "requirements.txt",
+                    Path(project_path) / "backend" / "pyproject.toml",
+                    Path(project_path) / "backend" / "setup.py",
+                    Path(project_path) / "requirements.txt",
+                    Path(project_path) / "pyproject.toml",
+                    # Go
+                    Path(project_path) / "backend" / "go.mod",
+                    Path(project_path) / "backend" / "go.sum",
+                    Path(project_path) / "go.mod",
+                    # Rust
+                    Path(project_path) / "backend" / "Cargo.toml",
+                    Path(project_path) / "Cargo.toml",
+                    # Ruby
+                    Path(project_path) / "Gemfile",
+                    Path(project_path) / "backend" / "Gemfile",
+                    # PHP
+                    Path(project_path) / "composer.json",
+                    Path(project_path) / "backend" / "composer.json",
+                    # .NET
+                    Path(project_path) / "backend" / "*.csproj",
+                    # AI/ML (Python + Conda)
+                    Path(project_path) / "environment.yml",
+                    Path(project_path) / "conda.yaml",
+                    Path(project_path) / "model" / "config.yaml",
+                    Path(project_path) / "model" / "config.json",
+                    Path(project_path) / "config" / "model.yaml",
+                    Path(project_path) / "training" / "config.yaml",
+                    # Blockchain/Web3
+                    Path(project_path) / "hardhat.config.js",
+                    Path(project_path) / "hardhat.config.ts",
+                    Path(project_path) / "truffle-config.js",
+                    Path(project_path) / "foundry.toml",
+                    Path(project_path) / "brownie-config.yaml",
+                    Path(project_path) / "contracts" / "*.sol",
+                    # Mobile (Flutter)
+                    Path(project_path) / "pubspec.yaml",
+                    Path(project_path) / "pubspec.lock",
+                    Path(project_path) / "android" / "build.gradle",
+                    Path(project_path) / "ios" / "Podfile",
+                    # Mobile (React Native)
+                    Path(project_path) / "app.json",
+                    Path(project_path) / "metro.config.js",
+                    Path(project_path) / "babel.config.js",
                 ]
+
                 for config_path in build_config_paths:
-                    if config_path.exists():
+                    # Handle glob patterns (like *.csproj)
+                    if '*' in str(config_path):
+                        for match in config_path.parent.glob(config_path.name):
+                            if match.exists():
+                                try:
+                                    relative_path = str(match.relative_to(project_path))
+                                    file_contents[relative_path] = match.read_text()
+                                    logger.info(f"[ContainerExecutor] Read config file: {relative_path}")
+                                except Exception as e:
+                                    logger.warning(f"[ContainerExecutor] Could not read {match}: {e}")
+                    elif config_path.exists():
                         try:
                             relative_path = str(config_path.relative_to(project_path))
                             file_contents[relative_path] = config_path.read_text()
@@ -3623,9 +3718,9 @@ fi
 
             # Create context for ProductionFixerAgent
             # Determine error type for better AI understanding
-            error_type = "typescript_build_error" if is_build_error else "docker_compose_error"
+            error_type = "build_error" if is_build_error else "docker_compose_error"
             request_msg = (
-                f"Fix the TypeScript/build configuration error:\n\n{error_message}"
+                f"Fix the build/compilation error. Check config files (tsconfig.json, pom.xml, requirements.txt, etc):\n\n{error_message}"
                 if is_build_error
                 else f"Fix the docker-compose or Dockerfile error:\n\n{error_message}"
             )
