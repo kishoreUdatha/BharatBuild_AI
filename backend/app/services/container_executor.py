@@ -3546,12 +3546,20 @@ fi
         try:
             logger.info(f"[ContainerExecutor] Attempting AI fix for compose error")
 
+            # Use sandbox file reader for remote sandbox support
+            # This works both locally and on remote EC2 sandbox
+            def read_file(rel_path: str) -> Optional[str]:
+                abs_path = f"{project_path}/{rel_path}"
+                content = self._read_file_from_sandbox(abs_path)
+                if content:
+                    logger.info(f"[ContainerExecutor] Read file from sandbox: {rel_path}")
+                return content
+
             # Read docker-compose.yml and Dockerfile(s)
-            compose_file = Path(project_path) / "docker-compose.yml"
-            dockerfile_paths = [
-                Path(project_path) / "Dockerfile",
-                Path(project_path) / "frontend" / "Dockerfile",
-                Path(project_path) / "backend" / "Dockerfile",
+            dockerfile_rel_paths = [
+                "Dockerfile",
+                "frontend/Dockerfile",
+                "backend/Dockerfile",
             ]
 
             file_contents = {}
@@ -3559,29 +3567,23 @@ fi
             original_compose_services = set()
 
             # Read docker-compose.yml and create backup
-            if compose_file.exists():
+            original_compose_content = read_file("docker-compose.yml")
+            if original_compose_content:
+                file_contents["docker-compose.yml"] = original_compose_content
+                # Parse to get original service names for validation
                 try:
-                    original_compose_content = compose_file.read_text()
-                    file_contents["docker-compose.yml"] = original_compose_content
-                    # Parse to get original service names for validation
-                    try:
-                        original_data = yaml.safe_load(original_compose_content)
-                        if original_data and 'services' in original_data:
-                            original_compose_services = set(original_data['services'].keys())
-                            logger.info(f"[ContainerExecutor] Original compose has {len(original_compose_services)} services: {original_compose_services}")
-                    except yaml.YAMLError:
-                        pass
-                except Exception as e:
-                    logger.warning(f"[ContainerExecutor] Could not read compose file: {e}")
+                    original_data = yaml.safe_load(original_compose_content)
+                    if original_data and 'services' in original_data:
+                        original_compose_services = set(original_data['services'].keys())
+                        logger.info(f"[ContainerExecutor] Original compose has {len(original_compose_services)} services: {original_compose_services}")
+                except yaml.YAMLError:
+                    pass
 
             # Read Dockerfiles
-            for df_path in dockerfile_paths:
-                if df_path.exists():
-                    try:
-                        relative_path = str(df_path.relative_to(project_path))
-                        file_contents[relative_path] = df_path.read_text()
-                    except Exception as e:
-                        logger.warning(f"[ContainerExecutor] Could not read {df_path}: {e}")
+            for df_rel_path in dockerfile_rel_paths:
+                content = read_file(df_rel_path)
+                if content:
+                    file_contents[df_rel_path] = content
 
             # Detect build errors across ALL technologies and read relevant config files
             # This enables AI fixer to see and fix build configuration issues
@@ -3628,89 +3630,74 @@ fi
             if is_build_error:
                 logger.info("[ContainerExecutor] Detected build error, reading config files for all technologies...")
 
-                # Config files for ALL technologies
-                build_config_paths = [
+                # Config files for ALL technologies (relative paths)
+                build_config_rel_paths = [
                     # JavaScript/TypeScript (frontend and root)
-                    Path(project_path) / "frontend" / "tsconfig.json",
-                    Path(project_path) / "frontend" / "tsconfig.node.json",
-                    Path(project_path) / "frontend" / "vite.config.ts",
-                    Path(project_path) / "frontend" / "package.json",
-                    Path(project_path) / "frontend" / "webpack.config.js",
-                    Path(project_path) / "tsconfig.json",
-                    Path(project_path) / "tsconfig.node.json",
-                    Path(project_path) / "vite.config.ts",
-                    Path(project_path) / "package.json",
-                    Path(project_path) / "webpack.config.js",
+                    "frontend/tsconfig.json",
+                    "frontend/tsconfig.node.json",
+                    "frontend/vite.config.ts",
+                    "frontend/package.json",
+                    "frontend/webpack.config.js",
+                    "tsconfig.json",
+                    "tsconfig.node.json",
+                    "vite.config.ts",
+                    "package.json",
+                    "webpack.config.js",
                     # Java/Maven/Gradle (backend)
-                    Path(project_path) / "backend" / "pom.xml",
-                    Path(project_path) / "backend" / "build.gradle",
-                    Path(project_path) / "backend" / "build.gradle.kts",
-                    Path(project_path) / "pom.xml",
-                    Path(project_path) / "build.gradle",
+                    "backend/pom.xml",
+                    "backend/build.gradle",
+                    "backend/build.gradle.kts",
+                    "pom.xml",
+                    "build.gradle",
                     # Python
-                    Path(project_path) / "backend" / "requirements.txt",
-                    Path(project_path) / "backend" / "pyproject.toml",
-                    Path(project_path) / "backend" / "setup.py",
-                    Path(project_path) / "requirements.txt",
-                    Path(project_path) / "pyproject.toml",
+                    "backend/requirements.txt",
+                    "backend/pyproject.toml",
+                    "backend/setup.py",
+                    "requirements.txt",
+                    "pyproject.toml",
                     # Go
-                    Path(project_path) / "backend" / "go.mod",
-                    Path(project_path) / "backend" / "go.sum",
-                    Path(project_path) / "go.mod",
+                    "backend/go.mod",
+                    "backend/go.sum",
+                    "go.mod",
                     # Rust
-                    Path(project_path) / "backend" / "Cargo.toml",
-                    Path(project_path) / "Cargo.toml",
+                    "backend/Cargo.toml",
+                    "Cargo.toml",
                     # Ruby
-                    Path(project_path) / "Gemfile",
-                    Path(project_path) / "backend" / "Gemfile",
+                    "Gemfile",
+                    "backend/Gemfile",
                     # PHP
-                    Path(project_path) / "composer.json",
-                    Path(project_path) / "backend" / "composer.json",
-                    # .NET
-                    Path(project_path) / "backend" / "*.csproj",
+                    "composer.json",
+                    "backend/composer.json",
                     # AI/ML (Python + Conda)
-                    Path(project_path) / "environment.yml",
-                    Path(project_path) / "conda.yaml",
-                    Path(project_path) / "model" / "config.yaml",
-                    Path(project_path) / "model" / "config.json",
-                    Path(project_path) / "config" / "model.yaml",
-                    Path(project_path) / "training" / "config.yaml",
+                    "environment.yml",
+                    "conda.yaml",
+                    "model/config.yaml",
+                    "model/config.json",
+                    "config/model.yaml",
+                    "training/config.yaml",
                     # Blockchain/Web3
-                    Path(project_path) / "hardhat.config.js",
-                    Path(project_path) / "hardhat.config.ts",
-                    Path(project_path) / "truffle-config.js",
-                    Path(project_path) / "foundry.toml",
-                    Path(project_path) / "brownie-config.yaml",
-                    Path(project_path) / "contracts" / "*.sol",
+                    "hardhat.config.js",
+                    "hardhat.config.ts",
+                    "truffle-config.js",
+                    "foundry.toml",
+                    "brownie-config.yaml",
                     # Mobile (Flutter)
-                    Path(project_path) / "pubspec.yaml",
-                    Path(project_path) / "pubspec.lock",
-                    Path(project_path) / "android" / "build.gradle",
-                    Path(project_path) / "ios" / "Podfile",
+                    "pubspec.yaml",
+                    "pubspec.lock",
+                    "android/build.gradle",
+                    "ios/Podfile",
                     # Mobile (React Native)
-                    Path(project_path) / "app.json",
-                    Path(project_path) / "metro.config.js",
-                    Path(project_path) / "babel.config.js",
+                    "app.json",
+                    "metro.config.js",
+                    "babel.config.js",
                 ]
 
-                for config_path in build_config_paths:
-                    # Handle glob patterns (like *.csproj)
-                    if '*' in str(config_path):
-                        for match in config_path.parent.glob(config_path.name):
-                            if match.exists():
-                                try:
-                                    relative_path = str(match.relative_to(project_path))
-                                    file_contents[relative_path] = match.read_text()
-                                    logger.info(f"[ContainerExecutor] Read config file: {relative_path}")
-                                except Exception as e:
-                                    logger.warning(f"[ContainerExecutor] Could not read {match}: {e}")
-                    elif config_path.exists():
-                        try:
-                            relative_path = str(config_path.relative_to(project_path))
-                            file_contents[relative_path] = config_path.read_text()
-                            logger.info(f"[ContainerExecutor] Read config file: {relative_path}")
-                        except Exception as e:
-                            logger.warning(f"[ContainerExecutor] Could not read {config_path}: {e}")
+                # Read config files using sandbox reader
+                for rel_path in build_config_rel_paths:
+                    if rel_path not in file_contents:  # Avoid duplicates
+                        content = read_file(rel_path)
+                        if content:
+                            file_contents[rel_path] = content
 
                 # Also extract and read files mentioned directly in error message
                 # e.g., "src/App.tsx:15:3: error TS..." -> read src/App.tsx
@@ -3721,16 +3708,11 @@ fi
                     ef_clean = ef.strip().replace('\\', '/')
                     if ef_clean.startswith('./'):
                         ef_clean = ef_clean[2:]
-                    ef_path = Path(project_path) / ef_clean
-                    if ef_path.exists() and ef_clean not in file_contents:
-                        try:
-                            content = ef_path.read_text()
-                            # Limit file size to prevent token overflow
-                            if len(content) < 50000:
-                                file_contents[ef_clean] = content
-                                logger.info(f"[ContainerExecutor] Read error-mentioned file: {ef_clean}")
-                        except Exception as e:
-                            logger.warning(f"[ContainerExecutor] Could not read {ef_clean}: {e}")
+                    if ef_clean not in file_contents:
+                        content = read_file(ef_clean)
+                        # Limit file size to prevent token overflow
+                        if content and len(content) < 50000:
+                            file_contents[ef_clean] = content
 
             if not file_contents:
                 logger.warning("[ContainerExecutor] No docker files found to fix")
@@ -3877,13 +3859,13 @@ fi
                         logger.warning(f"[ContainerExecutor] AI returned invalid YAML for docker-compose.yml - REJECTING: {yaml_err}")
                         continue
 
-                try:
-                    abs_path.parent.mkdir(parents=True, exist_ok=True)
-                    abs_path.write_text(content)
-                    logger.info(f"[ContainerExecutor] AI fix applied to: {file_path}")
+                # Write fix to sandbox using sandbox file writer
+                abs_path_str = f"{project_path}/{file_path}" if not file_path.startswith("/") else file_path
+                if self._write_file_to_sandbox(abs_path_str, content):
+                    logger.info(f"[ContainerExecutor] AI fix applied to sandbox: {file_path}")
                     applied_any = True
-                except Exception as e:
-                    logger.error(f"[ContainerExecutor] Failed to write AI fix to {file_path}: {e}")
+                else:
+                    logger.error(f"[ContainerExecutor] Failed to write AI fix to sandbox: {file_path}")
 
             # Apply patches (unified diff format)
             for patch_info in patches:
@@ -3893,25 +3875,24 @@ fi
                 if not file_path or not patch_content:
                     continue
 
-                # Determine absolute path
-                if file_path.startswith("/") or file_path.startswith("\\"):
-                    abs_path = Path(file_path)
-                else:
-                    abs_path = Path(project_path) / file_path
+                # Determine absolute path for sandbox
+                abs_path_str = f"{project_path}/{file_path}" if not file_path.startswith("/") else file_path
 
                 try:
-                    # Apply unified diff patch
-                    if abs_path.exists():
-                        original_content = abs_path.read_text()
+                    # Read original content from sandbox
+                    original_content = self._read_file_from_sandbox(abs_path_str)
+                    if original_content:
                         patched_content = self._apply_unified_diff(original_content, patch_content)
                         if patched_content and patched_content != original_content:
-                            abs_path.write_text(patched_content)
-                            logger.info(f"[ContainerExecutor] Applied patch to: {file_path}")
-                            applied_any = True
+                            if self._write_file_to_sandbox(abs_path_str, patched_content):
+                                logger.info(f"[ContainerExecutor] Applied patch to sandbox: {file_path}")
+                                applied_any = True
+                            else:
+                                logger.error(f"[ContainerExecutor] Failed to write patch to sandbox: {file_path}")
                         else:
                             logger.warning(f"[ContainerExecutor] Patch produced no changes for {file_path}")
                     else:
-                        logger.warning(f"[ContainerExecutor] Cannot patch non-existent file: {file_path}")
+                        logger.warning(f"[ContainerExecutor] Cannot patch - file not found on sandbox: {file_path}")
                 except Exception as e:
                     logger.error(f"[ContainerExecutor] Failed to apply patch to {file_path}: {e}")
 
