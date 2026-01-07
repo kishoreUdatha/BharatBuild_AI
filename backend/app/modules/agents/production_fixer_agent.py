@@ -1029,6 +1029,31 @@ Has Docker: {env_info.get('has_docker', False)}
 
 For these missing config files, use these templates:
 
+tsconfig.json (CRITICAL - fixes TS6305 error):
+```json
+{{
+  "compilerOptions": {{
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  }},
+  "include": ["src"],
+  "exclude": ["node_modules"]
+}}
+```
+⚠️ CRITICAL: "include" must be ["src"] only - NEVER include vite.config.ts!
+
 tsconfig.node.json:
 ```json
 {{

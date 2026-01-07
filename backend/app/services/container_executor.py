@@ -3712,6 +3712,26 @@ fi
                         except Exception as e:
                             logger.warning(f"[ContainerExecutor] Could not read {config_path}: {e}")
 
+                # Also extract and read files mentioned directly in error message
+                # e.g., "src/App.tsx:15:3: error TS..." -> read src/App.tsx
+                error_file_pattern = r'([a-zA-Z0-9_\-./\\]+\.(?:tsx?|jsx?|py|java|go|rs|rb|php|cs|vue|svelte))(?::\d+|[\(\[])'
+                import re
+                error_files = re.findall(error_file_pattern, error_message)
+                for ef in error_files:
+                    ef_clean = ef.strip().replace('\\', '/')
+                    if ef_clean.startswith('./'):
+                        ef_clean = ef_clean[2:]
+                    ef_path = Path(project_path) / ef_clean
+                    if ef_path.exists() and ef_clean not in file_contents:
+                        try:
+                            content = ef_path.read_text()
+                            # Limit file size to prevent token overflow
+                            if len(content) < 50000:
+                                file_contents[ef_clean] = content
+                                logger.info(f"[ContainerExecutor] Read error-mentioned file: {ef_clean}")
+                        except Exception as e:
+                            logger.warning(f"[ContainerExecutor] Could not read {ef_clean}: {e}")
+
             if not file_contents:
                 logger.warning("[ContainerExecutor] No docker files found to fix")
                 return False
@@ -3865,7 +3885,7 @@ fi
                 except Exception as e:
                     logger.error(f"[ContainerExecutor] Failed to write AI fix to {file_path}: {e}")
 
-            # Apply patches (if any)
+            # Apply patches (unified diff format)
             for patch_info in patches:
                 file_path = patch_info.get("path", "")
                 patch_content = patch_info.get("patch", "")
@@ -3873,15 +3893,105 @@ fi
                 if not file_path or not patch_content:
                     continue
 
-                # For simplicity, we'll skip patch application and rely on full file fixes
-                # Patches require unified diff parsing which is complex
-                logger.info(f"[ContainerExecutor] Skipping patch for {file_path} (use full file fix)")
+                # Determine absolute path
+                if file_path.startswith("/") or file_path.startswith("\\"):
+                    abs_path = Path(file_path)
+                else:
+                    abs_path = Path(project_path) / file_path
+
+                try:
+                    # Apply unified diff patch
+                    if abs_path.exists():
+                        original_content = abs_path.read_text()
+                        patched_content = self._apply_unified_diff(original_content, patch_content)
+                        if patched_content and patched_content != original_content:
+                            abs_path.write_text(patched_content)
+                            logger.info(f"[ContainerExecutor] Applied patch to: {file_path}")
+                            applied_any = True
+                        else:
+                            logger.warning(f"[ContainerExecutor] Patch produced no changes for {file_path}")
+                    else:
+                        logger.warning(f"[ContainerExecutor] Cannot patch non-existent file: {file_path}")
+                except Exception as e:
+                    logger.error(f"[ContainerExecutor] Failed to apply patch to {file_path}: {e}")
 
             return applied_any
 
         except Exception as e:
             logger.error(f"[ContainerExecutor] AI fix error: {e}", exc_info=True)
             return False
+
+    def _apply_unified_diff(self, original: str, patch: str) -> Optional[str]:
+        """
+        Apply a unified diff patch to original content.
+
+        Args:
+            original: Original file content
+            patch: Unified diff patch content
+
+        Returns:
+            Patched content or None if patch failed
+        """
+        import re
+
+        try:
+            lines = original.splitlines(keepends=True)
+            # Ensure last line has newline for consistent handling
+            if lines and not lines[-1].endswith('\n'):
+                lines[-1] += '\n'
+
+            # Parse unified diff hunks
+            # Format: @@ -start,count +start,count @@
+            hunk_pattern = r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@'
+            hunks = list(re.finditer(hunk_pattern, patch))
+
+            if not hunks:
+                # No hunks found - try simple line replacement
+                logger.warning("[ContainerExecutor] No unified diff hunks found in patch")
+                return None
+
+            # Apply hunks in reverse order to preserve line numbers
+            patch_lines = patch.splitlines(keepends=True)
+            result_lines = lines.copy()
+            offset = 0
+
+            for hunk_match in hunks:
+                old_start = int(hunk_match.group(1)) - 1  # Convert to 0-indexed
+                old_count = int(hunk_match.group(2)) if hunk_match.group(2) else 1
+                new_start = int(hunk_match.group(3)) - 1
+                new_count = int(hunk_match.group(4)) if hunk_match.group(4) else 1
+
+                # Find hunk content (lines after @@ header until next @@ or end)
+                hunk_start_pos = patch.find(hunk_match.group(0))
+                next_hunk_pos = len(patch)
+                for next_hunk in hunks:
+                    next_pos = patch.find(next_hunk.group(0))
+                    if next_pos > hunk_start_pos:
+                        next_hunk_pos = min(next_hunk_pos, next_pos)
+                        break
+
+                hunk_content = patch[hunk_start_pos:next_hunk_pos]
+                hunk_lines = hunk_content.splitlines(keepends=True)[1:]  # Skip @@ line
+
+                # Extract additions and removals
+                new_lines = []
+                for line in hunk_lines:
+                    if line.startswith('+') and not line.startswith('+++'):
+                        new_lines.append(line[1:])  # Remove + prefix
+                    elif line.startswith(' '):
+                        new_lines.append(line[1:])  # Context line, remove space prefix
+                    # Lines starting with - are removed (not added to new_lines)
+
+                # Apply the hunk
+                adjusted_start = old_start + offset
+                result_lines[adjusted_start:adjusted_start + old_count] = new_lines
+                offset += len(new_lines) - old_count
+
+            return ''.join(result_lines)
+
+        except Exception as e:
+            logger.error(f"[ContainerExecutor] Failed to apply unified diff: {e}")
+            return None
 
     def _file_exists_on_sandbox(self, file_path: str) -> bool:
         """
