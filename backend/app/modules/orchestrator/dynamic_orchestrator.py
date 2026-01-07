@@ -3988,27 +3988,53 @@ Ensure every import in every file has a corresponding file in the plan.
         # PARALLEL FILE GENERATION MODE (FAST - generates 3 files at a time)
         PARALLEL_BATCH_SIZE = 3  # Generate 3 files concurrently
 
-        # CRITICAL FIX: Sort files to generate types FIRST
+        # CRITICAL FIX: Sort files to generate types/models FIRST
         # This ensures components have access to type definitions when being generated
         def get_file_priority(file_info: dict) -> int:
             path = file_info.get('path', '').lower()
-            # Priority 1: Types and interfaces (MUST be first for TypeScript)
-            if 'types' in path or 'interfaces' in path or 'models' in path:
+            # Priority 1: Types, interfaces, models, entities, DTOs (ALL languages)
+            # NOTE: All patterns must be lowercase since path is lowercased
+            type_patterns = [
+                # TypeScript/React/Vue/Angular
+                '/types/', '/interfaces/', '/models/', 'types.ts', 'types.d.ts',
+                # Java/Spring Boot
+                '/entity/', '/entities/', '/dto/', '/dtos/',
+                # Python/FastAPI/Django
+                '/schemas/', 'models.py', 'schemas.py',
+                # Go
+                '/structs/',
+                # .NET/C# (lowercase for matching)
+                '/viewmodels/',
+                # Ruby/Rails
+                '/app/models/',
+                # Node.js/Express (already covered by /models/)
+            ]
+            if any(t in path for t in type_patterns):
                 return 1
-            # Priority 2: Config files (vite, tsconfig, tailwind, etc.)
-            if any(cfg in path for cfg in ['config', 'vite.', 'tsconfig', 'tailwind', 'postcss', '.env']):
+            # Priority 2: Config files (all technologies)
+            config_patterns = [
+                'config', 'vite.', 'tsconfig', 'tailwind', 'postcss', '.env',
+                'pom.xml', 'build.gradle', 'requirements.txt', 'package.json',
+                'go.mod', 'Cargo.toml', 'Gemfile', 'composer.json', '.csproj',
+                'nuxt.config', 'next.config', 'angular.json', 'vue.config'
+            ]
+            if any(cfg in path for cfg in config_patterns):
                 return 2
-            # Priority 3: Utilities, lib, helpers
-            if any(util in path for util in ['/lib/', '/utils/', '/helpers/', '/hooks/']):
+            # Priority 3: Utilities, lib, helpers, composables
+            util_patterns = ['/lib/', '/utils/', '/helpers/', '/hooks/', '/common/', '/composables/', '/shared/']
+            if any(util in path for util in util_patterns):
                 return 3
-            # Priority 4: Contexts, stores, services
-            if any(svc in path for svc in ['/contexts/', '/stores/', '/services/', '/api/']):
+            # Priority 4: Contexts, stores, services, repositories
+            svc_patterns = ['/contexts/', '/stores/', '/services/', '/api/', '/repository/', '/repositories/', '/providers/']
+            if any(svc in path for svc in svc_patterns):
                 return 4
-            # Priority 5: Components
-            if '/components/' in path:
+            # Priority 5: Components, controllers, handlers
+            comp_patterns = ['/components/', '/controller/', '/controllers/', '/handlers/', '/widgets/']
+            if any(comp in path for comp in comp_patterns):
                 return 5
-            # Priority 6: Pages/routes
-            if any(pg in path for pg in ['/pages/', '/routes/', '/views/']):
+            # Priority 6: Pages/routes/views/screens
+            page_patterns = ['/pages/', '/routes/', '/views/', '/screens/', '/app/']
+            if any(pg in path for pg in page_patterns):
                 return 6
             # Priority 7: Everything else
             return 7
@@ -4591,22 +4617,31 @@ Ensure every import in every file has a corresponding file in the plan.
                 created_path = created_file.get('path', '')
                 created_content = created_file.get('content', '')
 
-                # CRITICAL FIX: Include actual content of types files
-                # This prevents type mismatch errors like using product.stock instead of product.stockQuantity
-                if ('types' in created_path.lower() or 'interfaces' in created_path.lower()) and created_content:
-                    if '.ts' in created_path or '.tsx' in created_path:
-                        # Limit types content to prevent token overflow (first 5000 chars)
-                        truncated_content = created_content[:5000] if len(created_content) > 5000 else created_content
-                        types_content = f"""
-⚠️ CRITICAL - TYPE DEFINITIONS (use EXACTLY these property names):
-```typescript
+                # CRITICAL FIX: Include actual content of types/models files
+                # This prevents type mismatch errors across ALL technologies
+                # NOTE: All patterns lowercase since we compare with .lower()
+                type_folders = [
+                    '/types/', '/interfaces/', '/models/', '/entity/', '/entities/',
+                    '/dto/', '/dtos/', '/schemas/', '/structs/', '/viewmodels/',
+                ]
+                is_type_file = any(t in created_path.lower() for t in type_folders)
+                # Support all common programming language extensions
+                valid_extensions = ['.ts', '.tsx', '.java', '.py', '.go', '.cs', '.rb', '.php', '.rs', '.kt']
+                is_valid_ext = any(ext in created_path for ext in valid_extensions)
+                if is_type_file and created_content and is_valid_ext:
+                    # Limit types content to prevent token overflow (first 5000 chars)
+                    truncated_content = created_content[:5000] if len(created_content) > 5000 else created_content
+                    types_content = f"""
+⚠️ CRITICAL - TYPE/MODEL DEFINITIONS (use EXACTLY these property/field names):
+```
 {truncated_content}
 ```
-DO NOT invent property names. ONLY use properties defined above.
-Example: If interface has 'stockQuantity', use product.stockQuantity NOT product.stock
-Example: If interface has 'imageUrl', use product.imageUrl NOT product.image
+RULES:
+- Use ONLY the property/field names defined above
+- Do NOT invent or abbreviate names
+- Check nested types/relationships
 """
-                        break  # Use first types file found
+                    break  # Use first types file found
 
             # Second pass: Build exports list from last 20 files for import context
             for created_file in context.files_created[-20:]:

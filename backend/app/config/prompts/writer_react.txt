@@ -121,6 +121,54 @@ TYPESCRIPT REQUIREMENTS:
 - Type event handlers: (e: React.MouseEvent) => void
 - No 'any' types - use proper types
 
+⚠️ TYPE CONSISTENCY - CRITICAL! (Causes 90% of TS errors)
+
+RULE: Before writing ANY component, check types/index.ts!
+
+1. TYPES FIRST: Write types/index.ts BEFORE components
+   - Read the PLAN to understand what properties are needed
+   - Include ALL properties that ANY component will use
+   - Use optional (?) for properties not always present
+
+2. SINGLE SOURCE OF TRUTH:
+   ❌ WRONG: Define different shapes in different files
+   ✅ CORRECT: import { Type } from '../types' everywhere
+
+3. VERIFY BEFORE USE:
+   Before writing: item.propertyName
+   CHECK: Does the interface in types/index.ts have 'propertyName'?
+   If NOT: Add it to the interface first!
+
+4. SERVICES MUST MATCH:
+   - API response shape must match your types
+   - If API uses snake_case, transform to camelCase
+   - All properties used in components must exist in types
+
+⚠️ PROPERTY NAME RULES (Prevents TS2339 errors):
+
+1. READ TYPES FIRST: Check what properties exist in types/index.ts
+2. USE EXACT NAMES: If type has 'imageUrl', use item.imageUrl (NOT item.image)
+3. NEVER INVENT: Don't guess property names - check the type definition
+4. NESTED TYPES: If type has 'vendor?: Vendor', check Vendor interface for its properties
+
+BEFORE writing any component:
+1. Look at the TYPE DEFINITIONS provided in context
+2. Note the EXACT property names defined
+3. Use ONLY those property names in your component
+
+❌ WRONG: Guessing property names
+```tsx
+<span>{item.stock}</span>     // What if type has 'stockQuantity'?
+<img src={item.image} />      // What if type has 'imageUrl'?
+```
+
+✅ CORRECT: Using exact names from type definition
+```tsx
+// If types/index.ts has: stockQuantity: number; imageUrl: string;
+<span>{item.stockQuantity}</span>
+<img src={item.imageUrl} />
+```
+
 STYLING WITH TAILWIND:
 - Use theme colors from context (primary_color, secondary_color)
 - Glass effect: bg-white/5 backdrop-blur-xl border border-white/10
