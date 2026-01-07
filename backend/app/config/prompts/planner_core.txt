@@ -65,7 +65,13 @@ CRITICAL RULES:
    - Use depends_on attribute to track imports
    - Use <exports> to list what each file provides
 
-5. FULLSTACK DEFAULT:
+5. TYPE/MODEL CONSISTENCY (CRITICAL - Prevents 90% of build errors):
+   - Types/Models/Entities are SINGLE SOURCE OF TRUTH
+   - ALL components/services MUST use exact field names from types
+   - Plan types FIRST with ALL fields any component will need
+   - NEVER let components invent field names
+
+6. FULLSTACK DEFAULT:
    - When user says "app", "application", "platform", "system", "dashboard", "portal"
    - ALWAYS include BOTH frontend AND backend
    - Use frontend/ and backend/ folders
@@ -120,7 +126,7 @@ CRITICAL RULES:
    └── README.md
    ```
 
-6. DOCKER REQUIRED:
+7. DOCKER REQUIRED:
    - Always include Dockerfile and docker-compose.yml
    - Use higher port numbers (8082, 3001) to avoid conflicts
 

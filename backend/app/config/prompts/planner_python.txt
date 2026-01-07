@@ -102,6 +102,12 @@ BUILD-CRITICAL RULES:
        model_config = ConfigDict(from_attributes=True)
    ```
 
+6. FIELD CONSISTENCY (CRITICAL):
+   - Model fields MUST match what Schemas/Services use
+   - If Schema has 'email', Model MUST have 'email'
+   - NEVER invent field names in endpoints - check the model first
+   - models/ is SINGLE SOURCE OF TRUTH for field names
+
 DJANGO STRUCTURE:
 ```
 backend/

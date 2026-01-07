@@ -364,6 +364,10 @@ RULES:
 4. ALWAYS include config files, entry points, and dependencies
 5. Use priority numbers (1 = first, higher = later)
 6. Keep descriptions concise but informative (1-2 sentences)
+7. TYPE/MODEL CONSISTENCY (CRITICAL - Prevents 90% of build errors):
+   - Types/Models/Entities are SINGLE SOURCE OF TRUTH for field names
+   - Plan types FIRST with ALL fields that any component will need
+   - ALL components/services MUST use exact field names from types
 
 ═══════════════════════════════════════════════════════════════════════════════
                     🐳 DOCKER-ONLY DEPLOYMENT (MANDATORY)

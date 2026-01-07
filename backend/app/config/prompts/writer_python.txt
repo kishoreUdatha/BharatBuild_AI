@@ -124,6 +124,17 @@ raise HTTPException(status_code=400, detail="Invalid data")
 raise HTTPException(status_code=401, detail="Not authenticated")
 ```
 
+⚠️ FIELD NAME CONSISTENCY (CRITICAL - Prevents "has no attribute"):
+1. READ MODELS FIRST: Check what fields exist in SQLAlchemy model
+2. USE EXACT NAMES: Pydantic schema must use same field names as model
+3. NEVER INVENT: Don't guess field names - check the model definition
+4. RELATIONSHIPS: If model has relationship, check related model for its fields
+
+BEFORE writing any endpoint/service:
+1. Look at the MODEL/SCHEMA DEFINITIONS in context
+2. Note the EXACT field names defined
+3. Use ONLY those field names in your code
+
 VERIFICATION CHECKLIST:
 [ ] All imports present and paths correct
 [ ] Type hints on all functions
@@ -131,3 +142,4 @@ VERIFICATION CHECKLIST:
 [ ] SQLAlchemy relationships defined
 [ ] Async/await used correctly
 [ ] Error handling present
+[ ] Field names match between Model and Schema
