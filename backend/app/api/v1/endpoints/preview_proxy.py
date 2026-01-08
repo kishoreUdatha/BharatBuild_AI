@@ -138,17 +138,23 @@ def get_error_capture_script(project_id: str) -> str:
       userAgent: navigator.userAgent
     }};
 
-    // Use sendBeacon for reliability (works even on page unload)
-    if (navigator.sendBeacon) {{
-      navigator.sendBeacon(ENDPOINT, JSON.stringify(payload));
-    }} else {{
-      fetch(ENDPOINT, {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify(payload),
-        keepalive: true
-      }}).catch(function() {{}});
-    }}
+    // Use fetch with keepalive for reliability
+    // sendBeacon doesn't support Content-Type header, causing 403
+    var jsonBody = JSON.stringify(payload);
+    fetch(ENDPOINT, {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json" }},
+      body: jsonBody,
+      keepalive: true,
+      mode: "same-origin",
+      credentials: "same-origin"
+    }}).catch(function(err) {{
+      // Fallback to sendBeacon with Blob for page unload scenarios
+      if (navigator.sendBeacon) {{
+        var blob = new Blob([jsonBody], {{ type: "application/json" }});
+        navigator.sendBeacon(ENDPOINT, blob);
+      }}
+    }});
 
     // Log to console for debugging
     console.log("[BharatBuild] Captured " + errorsToSend.length + " errors, sending to auto-fixer");
