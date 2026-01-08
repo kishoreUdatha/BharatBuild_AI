@@ -35,6 +35,12 @@ from app.core.config import settings
 from app.core.logging_config import logger
 from pathlib import Path
 
+# Import log stream manager for broadcasting errors to terminal
+try:
+    from app.api.v1.endpoints.log_stream import log_stream_manager
+except ImportError:
+    log_stream_manager = None
+
 # Check if we're in remote Docker mode
 IS_REMOTE_SANDBOX = bool(os.environ.get("SANDBOX_DOCKER_HOST"))
 
@@ -1457,6 +1463,39 @@ async def report_browser_errors(
             rule_fixable_errors.append(normalized)
         else:
             ai_required_errors.append(normalized)
+
+    # BROADCAST ERRORS TO TERMINAL: Send errors to connected WebSocket clients
+    # This makes browser errors visible in the execution terminal
+    if log_stream_manager and normalized_errors:
+        try:
+            for err in normalized_errors[:10]:  # Limit to first 10 to avoid spam
+                # Format error message for terminal display
+                error_msg = f"[BROWSER] [{err['category']}] {err['message']}"
+                if err["file"]:
+                    error_msg = f"[BROWSER] {err['file']}"
+                    if err["line"]:
+                        error_msg += f":{err['line']}"
+                    error_msg += f" - [{err['category']}] {err['message']}"
+
+                # Broadcast to terminal
+                await log_stream_manager.broadcast_to_project(project_id, {
+                    "type": "browser_error",
+                    "source": "browser",
+                    "category": err["category"],
+                    "message": err["message"],
+                    "file": err["file"],
+                    "line": err["line"],
+                    "column": err["column"],
+                    "stack": err.get("stack"),
+                    "timestamp": datetime.utcnow().timestamp() * 1000,
+                    # Also send as terminal-compatible format
+                    "output": error_msg,
+                    "stream": "stderr"
+                })
+
+            logger.debug(f"[BrowserErrors:{project_id}] Broadcasted {len(normalized_errors[:10])} errors to terminal")
+        except Exception as broadcast_err:
+            logger.warning(f"[BrowserErrors:{project_id}] Failed to broadcast to terminal: {broadcast_err}")
 
     logger.info(
         f"[BrowserErrors:{project_id}] Normalized {len(normalized_errors)} errors: "

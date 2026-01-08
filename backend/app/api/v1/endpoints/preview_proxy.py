@@ -46,6 +46,244 @@ router = APIRouter(prefix="/preview", tags=["Preview Proxy"])
 # RESPONSE REWRITING - Fix absolute paths in HTML/JS for path-based proxying
 # =============================================================================
 
+def get_error_capture_script(project_id: str) -> str:
+    """
+    Generate the browser error capture script to inject into HTML responses.
+
+    This script captures:
+    - window.onerror (JS runtime errors)
+    - window.onunhandledrejection (Promise rejections)
+    - console.error (logged errors)
+    - Resource load failures (img, script, css 404s)
+    - Network errors (fetch failures)
+    - React error boundaries (if React is detected)
+
+    All errors are batched and sent to /api/v1/errors/browser for auto-fixing.
+    """
+    return f'''<script data-bb-error-capture="true">
+(function() {{
+  // Prevent double-injection
+  if (window.__bbErrorCaptureLoaded) return;
+  window.__bbErrorCaptureLoaded = true;
+
+  var projectId = "{project_id}";
+  var errorQueue = [];
+  var flushTimer = null;
+  var FLUSH_INTERVAL = 2000; // Send errors every 2 seconds
+  var MAX_QUEUE_SIZE = 20;
+  var ENDPOINT = "/api/v1/errors/browser";
+
+  // Categorize error by message
+  function categorizeError(message, type) {{
+    var msg = (message || "").toLowerCase();
+
+    if (type === "NETWORK_ERROR") return "NETWORK_ERROR";
+    if (type === "RESOURCE_ERROR") return "RESOURCE_ERROR";
+
+    if (msg.includes("is not defined") || msg.includes("is not a function")) return "REFERENCE_ERROR";
+    if (msg.includes("cannot read") || msg.includes("null") || msg.includes("undefined")) return "TYPE_ERROR";
+    if (msg.includes("unexpected token") || msg.includes("syntax")) return "SYNTAX_ERROR";
+    if (msg.includes("cors") || msg.includes("cross-origin")) return "CORS_ERROR";
+    if (msg.includes("chunk") || msg.includes("loading")) return "CHUNK_LOAD_ERROR";
+    if (msg.includes("hook") || msg.includes("rendered more hooks")) return "HOOK_ERROR";
+    if (msg.includes("hydrat")) return "HYDRATION_ERROR";
+    if (msg.includes("module") || msg.includes("import")) return "MODULE_ERROR";
+
+    return "RUNTIME_ERROR";
+  }}
+
+  // Add error to queue
+  function queueError(error) {{
+    // Skip error-capture script errors
+    if (error.file && error.file.includes("error-capture")) return;
+    if (error.message && error.message.includes("error-capture")) return;
+
+    // Skip WebSocket errors (expected in preview mode)
+    if (error.message && (error.message.includes("WebSocket") || error.message.includes("ws://"))) return;
+
+    // Skip duplicate errors
+    var isDupe = errorQueue.some(function(e) {{
+      return e.message === error.message && e.file === error.file && e.line === error.line;
+    }});
+    if (isDupe) return;
+
+    error.timestamp = Date.now();
+    errorQueue.push(error);
+
+    // Flush immediately if queue is full
+    if (errorQueue.length >= MAX_QUEUE_SIZE) {{
+      flushErrors();
+    }} else if (!flushTimer) {{
+      flushTimer = setTimeout(flushErrors, FLUSH_INTERVAL);
+    }}
+  }}
+
+  // Send errors to backend
+  function flushErrors() {{
+    if (flushTimer) {{
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }}
+
+    if (errorQueue.length === 0) return;
+
+    var errorsToSend = errorQueue.splice(0, MAX_QUEUE_SIZE);
+
+    var payload = {{
+      project_id: projectId,
+      source: "browser",
+      errors: errorsToSend,
+      timestamp: Date.now(),
+      url: window.location.href,
+      userAgent: navigator.userAgent
+    }};
+
+    // Use sendBeacon for reliability (works even on page unload)
+    if (navigator.sendBeacon) {{
+      navigator.sendBeacon(ENDPOINT, JSON.stringify(payload));
+    }} else {{
+      fetch(ENDPOINT, {{
+        method: "POST",
+        headers: {{ "Content-Type": "application/json" }},
+        body: JSON.stringify(payload),
+        keepalive: true
+      }}).catch(function() {{}});
+    }}
+
+    // Log to console for debugging
+    console.log("[BharatBuild] Captured " + errorsToSend.length + " errors, sending to auto-fixer");
+  }}
+
+  // 1. window.onerror - JS runtime errors
+  var originalOnError = window.onerror;
+  window.onerror = function(message, source, lineno, colno, error) {{
+    queueError({{
+      type: "JS_RUNTIME",
+      category: categorizeError(message, "JS_RUNTIME"),
+      message: String(message),
+      file: source,
+      line: lineno,
+      column: colno,
+      stack: error ? error.stack : null,
+      framework: detectFramework()
+    }});
+
+    if (originalOnError) {{
+      return originalOnError.apply(window, arguments);
+    }}
+    return false;
+  }};
+
+  // 2. Unhandled promise rejections
+  window.addEventListener("unhandledrejection", function(event) {{
+    var message = event.reason ? (event.reason.message || String(event.reason)) : "Unhandled Promise Rejection";
+    var stack = event.reason ? event.reason.stack : null;
+
+    queueError({{
+      type: "PROMISE_REJECTION",
+      category: categorizeError(message, "PROMISE_REJECTION"),
+      message: message,
+      stack: stack,
+      framework: detectFramework()
+    }});
+  }});
+
+  // 3. Console.error capture
+  var originalConsoleError = console.error;
+  console.error = function() {{
+    var args = Array.prototype.slice.call(arguments);
+    var message = args.map(function(a) {{
+      if (a instanceof Error) return a.message;
+      if (typeof a === "object") try {{ return JSON.stringify(a); }} catch(e) {{ return String(a); }}
+      return String(a);
+    }}).join(" ");
+
+    // Skip certain noise
+    if (!message.includes("Warning:") && !message.includes("[HMR]") && !message.includes("WebSocket")) {{
+      queueError({{
+        type: "CONSOLE_ERROR",
+        category: categorizeError(message, "CONSOLE_ERROR"),
+        message: message.substring(0, 1000),
+        framework: detectFramework()
+      }});
+    }}
+
+    return originalConsoleError.apply(console, arguments);
+  }};
+
+  // 4. Resource load errors (img, script, css 404s)
+  window.addEventListener("error", function(event) {{
+    var target = event.target;
+    if (target && target !== window && (target.tagName === "SCRIPT" || target.tagName === "LINK" || target.tagName === "IMG")) {{
+      var resource = target.src || target.href || "";
+
+      // Skip WebSocket and HMR resources
+      if (resource.includes("/@vite") || resource.includes("ws://")) return;
+
+      queueError({{
+        type: "RESOURCE_ERROR",
+        category: "RESOURCE_ERROR",
+        message: "Failed to load " + target.tagName.toLowerCase() + ": " + resource,
+        file: resource,
+        tagName: target.tagName,
+        resource: resource
+      }});
+    }}
+  }}, true);
+
+  // 5. Fetch/XHR network errors
+  var originalFetch = window.fetch;
+  window.fetch = function(url, options) {{
+    return originalFetch.apply(window, arguments).then(function(response) {{
+      if (!response.ok && response.status >= 400) {{
+        // Skip certain endpoints
+        var urlStr = typeof url === "string" ? url : url.url;
+        if (!urlStr.includes("/api/v1/errors") && !urlStr.includes("/@vite")) {{
+          queueError({{
+            type: "NETWORK_ERROR",
+            category: "NETWORK_ERROR",
+            message: "HTTP " + response.status + ": " + urlStr,
+            url: urlStr,
+            method: (options && options.method) || "GET",
+            status: response.status,
+            statusText: response.statusText
+          }});
+        }}
+      }}
+      return response;
+    }}).catch(function(error) {{
+      var urlStr = typeof url === "string" ? url : (url && url.url) || "";
+      if (!urlStr.includes("/api/v1/errors") && !urlStr.includes("/@vite")) {{
+        queueError({{
+          type: "NETWORK_ERROR",
+          category: categorizeError(error.message, "NETWORK_ERROR"),
+          message: error.message || "Network request failed",
+          url: urlStr,
+          method: (options && options.method) || "GET"
+        }});
+      }}
+      throw error;
+    }});
+  }};
+
+  // Detect framework
+  function detectFramework() {{
+    if (window.React || document.querySelector("[data-reactroot]")) return "react";
+    if (window.Vue || document.querySelector("[data-v-]")) return "vue";
+    if (window.angular || document.querySelector("[ng-version]")) return "angular";
+    if (window.Svelte) return "svelte";
+    return "unknown";
+  }}
+
+  // Flush on page unload
+  window.addEventListener("beforeunload", flushErrors);
+  window.addEventListener("pagehide", flushErrors);
+
+  console.log("[BharatBuild] Error capture active for project: " + projectId);
+}})();
+</script>'''
+
+
 def rewrite_absolute_paths(content: bytes, project_id: str, content_type: str) -> bytes:
     """
     Rewrite absolute paths in HTML/JS responses to include the preview prefix.
@@ -128,6 +366,26 @@ def rewrite_absolute_paths(content: bytes, project_id: str, content_type: str) -
             lambda m: f"{m.group(1)}='{prefix}{m.group(2)}'" if not m.group(2).startswith(prefix) else m.group(0),
             text
         )
+
+        # BROWSER ERROR CAPTURE: Inject error capture script into HTML responses
+        # This captures JS errors, 404s, network errors and sends them to the auto-fixer
+        # Only inject if not already present (check for data-bb-error-capture attribute)
+        if 'data-bb-error-capture' not in text:
+            error_script = get_error_capture_script(project_id)
+            # Inject at the end of <head> or beginning of <body>
+            if '</head>' in text:
+                text = text.replace('</head>', f'{error_script}</head>')
+            elif '<body' in text:
+                # Find the end of the body tag
+                body_match = re.search(r'<body[^>]*>', text)
+                if body_match:
+                    insert_pos = body_match.end()
+                    text = text[:insert_pos] + error_script + text[insert_pos:]
+            else:
+                # No head or body, prepend to content
+                text = error_script + text
+
+            logger.debug(f"[Preview] Injected error capture script for {project_id}")
 
     return text.encode('utf-8')
 
