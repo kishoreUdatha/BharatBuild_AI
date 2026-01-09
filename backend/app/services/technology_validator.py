@@ -928,6 +928,8 @@ export default defineConfig({
             # Remove COPY mvnw lines
             dockerfile_content = re.sub(r'^COPY\s+mvnw\s+.*$\n?', '', dockerfile_content, flags=re.MULTILINE)
             dockerfile_content = re.sub(r'^COPY\s+\.mvn\s+.*$\n?', '', dockerfile_content, flags=re.MULTILINE)
+            # Remove chmod +x mvnw lines (mvn is a system command, no chmod needed)
+            dockerfile_content = re.sub(r'^RUN\s+chmod\s+\+x\s+\.?/?mvnw?\s*$\n?', '', dockerfile_content, flags=re.MULTILINE)
             # Replace ./mvnw with mvn
             dockerfile_content = re.sub(r'\./mvnw\b', 'mvn', dockerfile_content)
             dockerfile_content = re.sub(r'mvnw\b', 'mvn', dockerfile_content)
@@ -952,6 +954,8 @@ export default defineConfig({
             # Remove COPY gradlew lines
             dockerfile_content = re.sub(r'^COPY\s+gradlew\s+.*$\n?', '', dockerfile_content, flags=re.MULTILINE)
             dockerfile_content = re.sub(r'^COPY\s+gradle\s+.*$\n?', '', dockerfile_content, flags=re.MULTILINE)
+            # Remove chmod +x gradlew lines (gradle is a system command, no chmod needed)
+            dockerfile_content = re.sub(r'^RUN\s+chmod\s+\+x\s+\.?/?gradlew?\s*$\n?', '', dockerfile_content, flags=re.MULTILINE)
             # Replace ./gradlew with gradle
             dockerfile_content = re.sub(r'\./gradlew\b', 'gradle', dockerfile_content)
             dockerfile_content = re.sub(r'gradlew\b', 'gradle', dockerfile_content)
