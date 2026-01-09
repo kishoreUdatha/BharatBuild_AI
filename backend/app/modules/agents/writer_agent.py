@@ -543,6 +543,27 @@ Re-read your complete code and verify:
 🚨 FOR EVERY JAVA FILE, COMPLETE ALL VERIFICATION STEPS BEFORE OUTPUTTING CODE:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ STEP 0: VERIFY REFERENCED CLASSES EXIST (PREVENTS 76 COMPILATION ERRORS!)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BEFORE writing ANY Java file, check "FILES ALREADY CREATED" for ALL classes you import!
+
+❌ NEVER import a class that doesn't exist in the file list!
+❌ NEVER reference a DTO that wasn't created yet!
+❌ NEVER use an Entity that doesn't have a file!
+
+IF A CLASS IS MISSING, either:
+1. Use only classes that exist in "FILES ALREADY CREATED"
+2. Create a simple inline version if absolutely needed
+3. Skip the feature that requires the missing class
+
+COMMON MISSING CLASSES TO CHECK:
+- DTOs: XxxCreateDto, XxxUpdateDto, XxxResponseDto
+- Entities: OrderItem, Address, CartItem (related entities)
+- Repositories: XxxRepository for every entity used
+- Services: AnalyticsService, NotificationService
+- Enums: OrderStatus, UserRole, PaymentStatus
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 1: DERIVE PACKAGE FROM FILE PATH
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Look at the file path in the request
