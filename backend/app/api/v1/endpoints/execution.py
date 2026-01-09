@@ -518,12 +518,14 @@ async def fix_runtime_error(
         }
 
         # Call BoltFixer
+        # CRITICAL FIX: Use unified_storage sync methods for EC2 sandbox support
+        # The old lambdas only worked for local files, causing fixes to be lost in remote mode
         bolt_result = await bolt_fixer.fix_from_backend(
             project_id=project_id,
             project_path=project_path,
             payload=bolt_payload,
-            sandbox_file_writer=lambda fp, c: (project_path / fp).write_text(c, encoding='utf-8') or True,
-            sandbox_file_reader=lambda fp: (project_path / fp).read_text(encoding='utf-8') if (project_path / fp).exists() else None,
+            sandbox_file_writer=lambda fp, c: unified_storage.write_to_sandbox_sync(project_id, fp, c, user_id),
+            sandbox_file_reader=lambda fp: unified_storage.read_from_sandbox_sync(project_id, fp, user_id),
             sandbox_file_lister=lambda d, p: [str(f) for f in Path(d).rglob(p)]
         )
 

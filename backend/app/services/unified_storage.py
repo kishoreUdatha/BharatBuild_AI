@@ -412,6 +412,240 @@ class UnifiedStorageService:
             logger.error(f"[Sandbox] ✗ Failed to write {file_path}: {e}", exc_info=True)
             return False
 
+    def write_to_sandbox_sync(
+        self,
+        project_id: str,
+        file_path: str,
+        content: str,
+        user_id: Optional[str] = None
+    ) -> bool:
+        """
+        SYNCHRONOUS version of write_to_sandbox for use by BoltFixer callbacks.
+
+        - If SANDBOX_DOCKER_HOST is set: Writes to remote EC2 sandbox via Docker (sync)
+        - Otherwise: Writes to local sandbox path
+
+        This method is needed because BoltFixer's _write_file() calls the sandbox_file_writer
+        callback synchronously, but we need to write to EC2 in remote mode.
+
+        Args:
+            project_id: Project UUID
+            file_path: Relative file path
+            content: File content
+            user_id: User ID for path scoping
+
+        Returns:
+            True if file was written successfully
+        """
+        import time
+
+        try:
+            # Prevent path traversal
+            if '..' in file_path:
+                logger.error(f"[SandboxSync] Path traversal detected: {file_path}")
+                raise ValueError("Path traversal detected")
+
+            # SANITIZE XML FILES: Ensure <?xml declaration is on line 1
+            if file_path.endswith('.xml') or file_path.endswith('.pom'):
+                content = self._sanitize_xml_content(content)
+            else:
+                # SANITIZE ALL SOURCE FILES: Remove leading empty lines
+                content = self._sanitize_source_content(content, file_path)
+
+            # Check if using remote EC2 sandbox
+            sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+            if sandbox_docker_host:
+                # Write to REMOTE EC2 sandbox using Docker (SYNC version)
+                logger.debug(f"[SandboxSync] Using remote EC2 sandbox: {sandbox_docker_host}")
+                return self._write_to_remote_sandbox_sync(project_id, file_path, content, user_id)
+
+            # Local sandbox (ECS or development)
+            sandbox = self.get_sandbox_path(project_id, user_id)
+            full_path = sandbox / file_path
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(full_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            logger.info(f"[SandboxSync] ✓ Wrote to local sandbox: {user_id or 'anon'}/{project_id}/{file_path} ({len(content)} bytes)")
+            return True
+
+        except Exception as e:
+            logger.error(f"[SandboxSync] ✗ Failed to write {file_path}: {e}", exc_info=True)
+            return False
+
+    def _write_to_remote_sandbox_sync(
+        self,
+        project_id: str,
+        file_path: str,
+        content: str,
+        user_id: Optional[str] = None,
+        max_retries: int = 3
+    ) -> bool:
+        """
+        SYNCHRONOUS version of _write_to_remote_sandbox for BoltFixer callbacks.
+
+        Uses time.sleep() instead of asyncio.sleep() for retry backoff.
+        """
+        import docker
+        import base64
+        import time
+
+        # SECURITY: Validate file path to prevent traversal attacks
+        if not self._validate_sandbox_path(file_path):
+            logger.error(f"[RemoteWriteSync] ✗ Invalid file path rejected: {file_path}")
+            return False
+
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+
+        # Build workspace path based on SANDBOX_PATH setting (supports EFS mount)
+        sandbox_base = settings.SANDBOX_PATH
+        if user_id:
+            workspace_path = f"{sandbox_base}/{user_id}/{project_id}"
+        else:
+            workspace_path = f"{sandbox_base}/{project_id}"
+
+        full_path = f"{workspace_path}/{file_path}"
+        dir_path = "/".join(full_path.rsplit("/", 1)[:-1]) if "/" in file_path else workspace_path
+
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                # Connect to remote Docker on EC2 with TLS support
+                from app.services.docker_client_helper import get_docker_client
+                docker_client = get_docker_client()
+                if not docker_client:
+                    docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+
+                # Encode content as base64 to handle special characters safely
+                content_b64 = base64.b64encode(content.encode('utf-8')).decode('ascii')
+
+                # Create directory and write file using alpine container
+                # Using printf instead of echo for better compatibility
+                write_script = f"mkdir -p {dir_path} && printf '%s' '{content_b64}' | base64 -d > {full_path}"
+
+                try:
+                    docker_client.containers.run(
+                        image="alpine:latest",
+                        command=f"sh -c \"{write_script}\"",
+                        volumes={sandbox_base: {"bind": sandbox_base, "mode": "rw"}},
+                        remove=True,
+                        detach=False,
+                    )
+                except docker.errors.ImageNotFound:
+                    logger.warning("[RemoteWriteSync] Alpine image not found, pulling...")
+                    docker_client.images.pull("alpine:latest")
+                    # Retry after pulling
+                    docker_client.containers.run(
+                        image="alpine:latest",
+                        command=f"sh -c \"{write_script}\"",
+                        volumes={sandbox_base: {"bind": sandbox_base, "mode": "rw"}},
+                        remove=True,
+                        detach=False,
+                    )
+
+                logger.info(f"[RemoteWriteSync] ✓ Wrote to EC2 sandbox: {user_id or 'anon'}/{project_id}/{file_path} ({len(content)} bytes)")
+                return True
+
+            except docker.errors.ContainerError as ce:
+                last_exception = ce
+                error_msg = ce.stderr.decode() if ce.stderr else str(ce)
+                if attempt < max_retries - 1:
+                    delay = 1.0 * (2 ** attempt)
+                    logger.warning(f"[RemoteWriteSync] Attempt {attempt + 1}/{max_retries} failed for {file_path}: {error_msg}. Retrying in {delay:.1f}s...")
+                    time.sleep(delay)  # SYNC sleep
+                else:
+                    logger.error(f"[RemoteWriteSync] ✗ All {max_retries} attempts failed for {file_path}: {error_msg}")
+
+            except docker.errors.APIError as ae:
+                last_exception = ae
+                if attempt < max_retries - 1:
+                    delay = 1.0 * (2 ** attempt)
+                    logger.warning(f"[RemoteWriteSync] Attempt {attempt + 1}/{max_retries} Docker API error for {file_path}: {ae}. Retrying in {delay:.1f}s...")
+                    time.sleep(delay)  # SYNC sleep
+                else:
+                    logger.error(f"[RemoteWriteSync] ✗ All {max_retries} attempts failed for {file_path}: {ae}")
+
+            except (ConnectionError, TimeoutError) as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    delay = 1.0 * (2 ** attempt)
+                    logger.warning(f"[RemoteWriteSync] Attempt {attempt + 1}/{max_retries} connection error for {file_path}: {e}. Retrying in {delay:.1f}s...")
+                    time.sleep(delay)  # SYNC sleep
+                else:
+                    logger.error(f"[RemoteWriteSync] ✗ All {max_retries} attempts failed for {file_path}: {e}")
+
+            except Exception as e:
+                logger.error(f"[RemoteWriteSync] ✗ Unexpected error for {file_path}: {e}", exc_info=True)
+                return False
+
+        # All retries exhausted
+        logger.error(f"[RemoteWriteSync] ✗ Failed to write to EC2 sandbox after {max_retries} attempts: {file_path}")
+        return False
+
+    def read_from_sandbox_sync(
+        self,
+        project_id: str,
+        file_path: str,
+        user_id: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        SYNCHRONOUS read from sandbox - works for both local and remote EC2.
+
+        Args:
+            project_id: Project UUID
+            file_path: Relative file path
+            user_id: User ID for path scoping
+
+        Returns:
+            File content if found, None otherwise
+        """
+        import docker
+
+        try:
+            sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+
+            if sandbox_docker_host:
+                # Read from REMOTE EC2 sandbox using Docker
+                sandbox_base = settings.SANDBOX_PATH
+                if user_id:
+                    workspace_path = f"{sandbox_base}/{user_id}/{project_id}"
+                else:
+                    workspace_path = f"{sandbox_base}/{project_id}"
+
+                full_path = f"{workspace_path}/{file_path}"
+
+                from app.services.docker_client_helper import get_docker_client
+                docker_client = get_docker_client()
+                if not docker_client:
+                    docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+
+                # Read file and return content (base64 encoded for safety)
+                result = docker_client.containers.run(
+                    image="alpine:latest",
+                    command=f"sh -c \"cat '{full_path}' 2>/dev/null || echo ''\"",
+                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},
+                    remove=True,
+                    detach=False,
+                )
+                content = result.decode('utf-8') if result else None
+                return content if content else None
+
+            # Local sandbox
+            sandbox = self.get_sandbox_path(project_id, user_id)
+            full_path = sandbox / file_path
+
+            if not full_path.exists():
+                return None
+
+            with open(full_path, 'r', encoding='utf-8') as f:
+                return f.read()
+
+        except Exception as e:
+            logger.warning(f"[SandboxSync] Failed to read {file_path}: {e}")
+            return None
+
     def _validate_sandbox_path(self, file_path: str) -> bool:
         """
         Validate file path to prevent path traversal attacks.
