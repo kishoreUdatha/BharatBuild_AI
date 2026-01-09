@@ -1337,6 +1337,31 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
             yield emit("error", f"Execution failed: {docker_error}")
         elif server_started and preview_url:
             yield emit("output", "✅ Server running successfully!")
+
+            # =================================================================
+            # SYNC EC2 → S3 AFTER BUILD SUCCESS
+            #
+            # This is the correct place to sync files to S3:
+            # - BoltFixer fixes files on EC2 only (no S3 upload during fix)
+            # - On retry, dir exists → skip S3 restore → use EC2 files
+            # - After BUILD SUCCESS → sync ALL EC2 files to S3
+            #
+            # This ensures fixes are persisted ONLY after build succeeds,
+            # and prevents S3 restore from overwriting EC2 fixes on retry.
+            # =================================================================
+            try:
+                yield emit("output", "☁️ Syncing to S3...")
+                synced_count = await unified_storage.sync_sandbox_to_s3(project_id, effective_user_id)
+                if synced_count > 0:
+                    yield emit("output", f"  ✅ Synced {synced_count} files to S3")
+                    logger.info(f"[Execution] BUILD SUCCESS: Synced {synced_count} files to S3 for {project_id}")
+                else:
+                    yield emit("output", f"  ✅ S3 already up to date")
+                    logger.info(f"[Execution] BUILD SUCCESS: S3 already up to date for {project_id}")
+            except Exception as sync_err:
+                # S3 sync failure is non-fatal - files are still on EC2
+                logger.warning(f"[Execution] S3 sync after BUILD SUCCESS failed: {sync_err}")
+                yield emit("output", f"  ⚠️ S3 sync skipped (non-fatal): {str(sync_err)[:50]}")
         else:
             yield emit("output", "✅ Build completed")
 

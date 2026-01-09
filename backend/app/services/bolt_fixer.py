@@ -789,14 +789,17 @@ No explanations. Only the <file> block."""
         content: str
     ) -> bool:
         """
-        Persist a SINGLE fix to S3/database IMMEDIATELY after fixing.
+        Track a SINGLE fix after writing to EC2 sandbox.
 
-        This is called after EACH file is fixed, not at the end.
-        Benefits:
-        - No fixes lost if process crashes
-        - Partial progress saved even if retry limit reached
-        - User can continue from where they left off
-        - NEW FILES are also persisted (creates DB record if missing)
+        IMPORTANT: This function NO LONGER uploads to S3 during fixes.
+
+        The correct flow is:
+        1. BoltFixer fixes file on EC2 sandbox (via _write_file)
+        2. This function just tracks that a fix was applied (logs only)
+        3. On retry, dir exists → skip S3 restore → use EC2 files
+        4. After BUILD SUCCESS → execution.py syncs EC2 to S3
+
+        This prevents the issue where S3 restore would overwrite EC2 fixes on retry.
 
         Args:
             project_id: Project ID
@@ -805,19 +808,10 @@ No explanations. Only the <file> block."""
             content: Fixed file content
 
         Returns:
-            True if BOTH S3 and DB succeed, False otherwise
+            True (fix is already on EC2 sandbox via _write_file)
         """
-        from uuid import UUID
-        from sqlalchemy import select
-        from app.core.database import AsyncSessionLocal
-        from app.models.project_file import ProjectFile
-        import hashlib
-        import os
-
         # =================================================================
         # VALIDATION: file_path should already be normalized by caller
-        # We trust that _normalize_file_path() was called before this
-        # Just do basic empty check here
         # =================================================================
         if not file_path or not file_path.strip():
             logger.error(f"[BoltFixer:{project_id}] Invalid empty file path")
@@ -826,110 +820,25 @@ No explanations. Only the <file> block."""
         # Basic cleanup only (caller should have normalized)
         file_path = file_path.strip()
 
-        try:
-            content_bytes = content.encode('utf-8')
-            content_hash = hashlib.sha256(content_bytes).hexdigest()
-            size_bytes = len(content_bytes)
+        # =================================================================
+        # NO S3 UPLOAD DURING FIX
+        #
+        # Previously, this function uploaded to S3 immediately after each fix.
+        # This caused issues because on retry:
+        # - S3 restore would fetch from S3 (overwriting EC2 files)
+        # - Fixes were lost because EC2 files were replaced
+        #
+        # NEW FLOW:
+        # 1. Fix is written to EC2 sandbox (already done by _write_file)
+        # 2. On retry, dir exists on EC2 → skip S3 restore
+        # 3. After BUILD SUCCESS → sync EC2 to S3 (in execution.py)
+        # =================================================================
 
-            # =================================================================
-            # GAP #6 FIX: Use storage_service for consistent S3 key generation
-            # =================================================================
-            s3_key = storage_service.generate_s3_key(project_id, file_path)
+        logger.info(f"[BoltFixer:{project_id}] ✓ Fixed on EC2: {file_path} (S3 sync deferred to BUILD SUCCESS)")
 
-            # =================================================================
-            # Step 1: Upload to S3 (REQUIRED for restore to work)
-            # WITH RETRY LOGIC for network errors
-            # =================================================================
-            s3_success = False
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    await storage_service.upload_file(
-                        project_id=project_id,
-                        file_path=file_path,
-                        content=content_bytes,
-                        content_type="text/plain"
-                    )
-                    s3_success = True
-                    logger.info(f"[BoltFixer:{project_id}] ✓ S3: {file_path}")
-                    break  # Success - exit retry loop
-                except Exception as s3_err:
-                    if attempt < max_retries - 1:
-                        wait_time = (attempt + 1) * 2  # 2, 4 seconds
-                        logger.warning(f"[BoltFixer:{project_id}] S3 retry {attempt + 1}/{max_retries} for {file_path}: {s3_err}")
-                        import asyncio
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error(f"[BoltFixer:{project_id}] S3 failed after {max_retries} retries: {file_path} - {s3_err}")
-                        # ISSUE #1 FIX: S3 is REQUIRED for restore - if it fails, persistence fails
-                        # Without S3 content, the file can't be restored on next run
-                        return False
-
-            # =================================================================
-            # Step 2: Update or CREATE database record
-            # ISSUE #1 FIX: Only reach here if S3 succeeded
-            # WITH RETRY LOGIC for network errors
-            # =================================================================
-            db_success = False
-            for db_attempt in range(max_retries):
-                try:
-                    async with AsyncSessionLocal() as session:
-                        # Try to find existing record
-                        stmt = select(ProjectFile).where(
-                            ProjectFile.project_id == UUID(project_id),
-                            ProjectFile.path == file_path
-                        )
-                        db_result = await session.execute(stmt)
-                        file_record = db_result.scalar_one_or_none()
-
-                        if file_record:
-                            # UPDATE existing record
-                            file_record.content_hash = content_hash
-                            file_record.size_bytes = size_bytes
-                            file_record.s3_key = s3_key  # S3 succeeded, so always set
-                            await session.commit()
-                            db_success = True
-                            logger.info(f"[BoltFixer:{project_id}] ✓ DB updated: {file_path}")
-                        else:
-                            # CREATE new record for new files
-                            new_file = ProjectFile(
-                                project_id=UUID(project_id),
-                                path=file_path,
-                                name=os.path.basename(file_path),
-                                content_hash=content_hash,
-                                size_bytes=size_bytes,
-                                s3_key=s3_key,  # S3 succeeded, so always set
-                                is_folder=False,
-                                generation_status="completed"
-                            )
-                            session.add(new_file)
-                            await session.commit()
-                            db_success = True
-                            logger.info(f"[BoltFixer:{project_id}] ✓ DB created: {file_path}")
-                        break  # Success - exit retry loop
-
-                except Exception as db_err:
-                    if db_attempt < max_retries - 1:
-                        wait_time = (db_attempt + 1) * 2  # 2, 4 seconds
-                        logger.warning(f"[BoltFixer:{project_id}] DB retry {db_attempt + 1}/{max_retries} for {file_path}: {db_err}")
-                        import asyncio
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error(f"[BoltFixer:{project_id}] DB failed after {max_retries} retries: {file_path} - {db_err}")
-                        # DB failed but S3 has the file - this is inconsistent state
-                        # Return False so caller knows persistence didn't fully succeed
-                        # The file is in S3 but won't be restored without DB record
-                        logger.warning(f"[BoltFixer:{project_id}] S3 has file but DB failed - returning False")
-                        return False  # Consistent: BOTH must succeed
-
-            # =================================================================
-            # Return True ONLY if BOTH S3 and DB succeeded
-            # =================================================================
-            return s3_success and db_success
-
-        except Exception as e:
-            logger.error(f"[BoltFixer:{project_id}] Persist failed: {file_path} - {e}")
-            return False
+        # The file is already written to EC2 sandbox by _write_file()
+        # S3 upload will happen after BUILD SUCCESS in execution.py
+        return True
 
     # ==========================================================================
     # ISSUE #9 FIX: Removed dead code _persist_fix_to_storage()
