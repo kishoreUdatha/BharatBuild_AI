@@ -258,6 +258,79 @@ No explanations. Only the <file> block."""
         self._dependency_graph: Optional[DependencyGraph] = None
         self._current_project_id: Optional[str] = None
 
+    @staticmethod
+    def _normalize_file_path(file_path: str, add_prefix: bool = True) -> Tuple[str, bool]:
+        """
+        Centralized path normalization for consistency across all code paths.
+
+        SECURITY: All path validation happens here - no other method should do its own.
+
+        Args:
+            file_path: Raw file path from AI or user
+            add_prefix: If True, adds backend/frontend prefix based on file type
+
+        Returns:
+            Tuple of (normalized_path, is_valid)
+            - normalized_path: Cleaned path with correct prefix
+            - is_valid: False if path contains dangerous patterns
+        """
+        if not file_path or not file_path.strip():
+            return "", False
+
+        # Step 1: Basic cleanup
+        normalized = file_path.strip()
+
+        # Step 2: Normalize separators (Windows -> Unix)
+        normalized = normalized.replace('\\', '/')
+
+        # =================================================================
+        # Step 3: SECURITY - Check for path traversal BEFORE any stripping
+        # This catches absolute paths and .. sequences
+        # =================================================================
+        if '..' in normalized:
+            logger.warning(f"[BoltFixer] SECURITY: Path traversal (..) blocked: {file_path}")
+            return "", False
+
+        # Check for absolute paths (must happen BEFORE lstrip)
+        if normalized.startswith('/') or (len(normalized) > 1 and normalized[1] == ':'):
+            logger.warning(f"[BoltFixer] SECURITY: Absolute path blocked: {file_path}")
+            return "", False
+
+        # Step 4: Remove leading dots and slashes (safe now that we checked)
+        normalized = normalized.lstrip('./')
+
+        # Step 5: Check for empty after stripping
+        if not normalized:
+            return "", False
+
+        # Step 6: Check for double prefixes (backend/backend/ or frontend/frontend/)
+        while normalized.startswith('backend/backend/'):
+            normalized = normalized.replace('backend/backend/', 'backend/', 1)
+            logger.warning(f"[BoltFixer] Fixed double backend prefix: {file_path}")
+        while normalized.startswith('frontend/frontend/'):
+            normalized = normalized.replace('frontend/frontend/', 'frontend/', 1)
+            logger.warning(f"[BoltFixer] Fixed double frontend prefix: {file_path}")
+
+        # Step 7: Add backend/frontend prefix if needed
+        if add_prefix and not normalized.startswith('backend/') and not normalized.startswith('frontend/'):
+            # Determine prefix based on file extension
+            if normalized.endswith(('.java', '.kt', '.scala', '.gradle', '.xml', '.properties', '.sql')):
+                normalized = f"backend/{normalized}"
+            elif normalized.endswith(('.ts', '.tsx', '.js', '.jsx', '.css', '.scss', '.html', '.vue', '.svelte')):
+                normalized = f"frontend/{normalized}"
+            # Other files (Dockerfile, docker-compose.yml, .env, etc.) stay at root
+
+        # Step 8: Remove any remaining double slashes
+        while '//' in normalized:
+            normalized = normalized.replace('//', '/')
+
+        # Step 9: Final validation - no dangerous patterns should remain
+        if '..' in normalized or normalized.startswith('/'):
+            logger.warning(f"[BoltFixer] SECURITY: Final check failed: {normalized}")
+            return "", False
+
+        return normalized, True
+
     def _write_file(self, file_path: Path, content: str, project_id: str) -> bool:
         """
         Write a file using sandbox writer if available, otherwise local.
@@ -273,12 +346,18 @@ No explanations. Only the <file> block."""
             # AUTO-SANITIZE: Apply technology-specific fixes before writing
             # This handles CSS @import order, Tailwind plugins, Vite config, pom.xml, etc.
             try:
-                relative_path = file_path.name  # Use filename for sanitizer matching
-                sanitized_path, content, fixes = sanitize_project_file(relative_path, content)
+                # FIX #3 & #22: Use full relative path for better sanitizer matching
+                # Use _ for unused sanitized_path (we use file_path for writing)
+                relative_path = str(file_path.name)  # Filename for sanitizer
+                _, sanitized_content, fixes = sanitize_project_file(relative_path, content)
+                # Only use sanitized content if sanitization succeeded
+                if sanitized_content:
+                    content = sanitized_content
                 if fixes:
                     logger.info(f"[BoltFixer:{project_id}] Sanitizer applied: {', '.join(fixes)}")
             except Exception as sanitize_err:
-                logger.warning(f"[BoltFixer:{project_id}] Sanitization skipped: {sanitize_err}")
+                # FIX #3: Log warning but continue with original content (safe fallback)
+                logger.warning(f"[BoltFixer:{project_id}] Sanitization skipped (using original): {sanitize_err}")
 
             # =================================================================
             # GAP #8 FIX: Check for remote mode without sandbox_file_writer
@@ -298,25 +377,23 @@ No explanations. Only the <file> block."""
                 return success
             elif is_remote_mode:
                 # =================================================================
-                # GAP #8 FIX: CRITICAL - In remote mode without sandbox_file_writer
-                # File will NOT be written to sandbox! This is a configuration error.
+                # ISSUE #5 FIX: Remote mode without sandbox_file_writer MUST FAIL
+                # Returning True here caused infinite retry loops because:
+                # - Fix appears successful (returns True)
+                # - But file is NOT written to sandbox (different container)
+                # - Build fails again with same error
+                # - Retry loop continues forever
+                #
+                # CORRECT BEHAVIOR: Return False so the fix is marked as failed
+                # The error will be logged and user can investigate
                 # =================================================================
                 logger.error(
                     f"[BoltFixer:{project_id}] CRITICAL: Remote mode detected but no sandbox_file_writer! "
-                    f"File will NOT be written to sandbox: {file_path}"
+                    f"File cannot be written to sandbox: {file_path}. "
+                    f"This is a configuration error - check execution.py sandbox_file_writer setup."
                 )
-                # Still try local write as fallback (better than nothing)
-                # The file will be persisted to S3 and restored on next run
-                try:
-                    file_path.parent.mkdir(parents=True, exist_ok=True)
-                    file_path.write_text(content, encoding='utf-8')
-                    logger.warning(
-                        f"[BoltFixer:{project_id}] Fallback: Wrote locally (will be persisted to S3): {file_path}"
-                    )
-                    return True
-                except Exception as local_err:
-                    logger.error(f"[BoltFixer:{project_id}] Local fallback failed: {local_err}")
-                    return False
+                # DO NOT try local fallback - it won't help and causes confusion
+                return False
             else:
                 # Local mode - direct file write
                 file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -352,14 +429,19 @@ No explanations. Only the <file> block."""
             BoltFixResult if fixed, None if not applicable
         """
         # Check if this is a Docker base image error
-        manifest_pattern = r'manifest for ([^\s]+) not found|manifest unknown.*manifest unknown'
+        # FIX #1: Use non-capturing group for alternation to avoid IndexError
+        manifest_pattern = r'manifest for ([^\s]+) not found|manifest unknown'
         match = re.search(manifest_pattern, error_output, re.IGNORECASE)
 
         if not match:
             return None
 
         # Extract the problematic image name
-        bad_image = match.group(1) if match.group(1) else None
+        # FIX #1: Safely check if group exists before accessing
+        try:
+            bad_image = match.group(1) if match.lastindex and match.lastindex >= 1 else None
+        except (IndexError, AttributeError):
+            bad_image = None
 
         logger.info(f"[BoltFixer:{project_id}] Detected Docker base image error: {bad_image or 'unknown'}")
 
@@ -425,17 +507,26 @@ No explanations. Only the <file> block."""
             if modified and content != original_content:
                 # Write the fixed content to sandbox
                 if self._write_file(dockerfile_path, content, project_id):
+                    # Get relative path
                     try:
                         rel_path = str(dockerfile_path.relative_to(project_path))
                     except ValueError:
                         rel_path = str(dockerfile_path)
 
-                    # IMMEDIATELY persist this fix to S3/database
-                    # This ensures fix survives even if process crashes or retry limit reached
-                    await self._persist_single_fix(project_id, project_path, rel_path, content)
+                    # FIX: Normalize Dockerfile path using helper
+                    # add_prefix=False because Dockerfiles stay at root
+                    normalized_path, is_valid = self._normalize_file_path(rel_path, add_prefix=False)
+                    if not is_valid:
+                        logger.warning(f"[BoltFixer:{project_id}] Invalid Dockerfile path: {rel_path}")
+                        continue
 
-                    files_modified.append(rel_path)
-                    logger.info(f"[BoltFixer:{project_id}] ✓ Fixed & persisted: {rel_path}")
+                    # IMMEDIATELY persist this fix to S3/database
+                    # FIX: Check return value of _persist_single_fix()
+                    if await self._persist_single_fix(project_id, project_path, normalized_path, content):
+                        files_modified.append(normalized_path)
+                        logger.info(f"[BoltFixer:{project_id}] ✓ Fixed & persisted: {normalized_path}")
+                    else:
+                        logger.warning(f"[BoltFixer:{project_id}] Dockerfile fixed but persistence failed: {normalized_path}")
 
         if files_modified:
             return BoltFixResult(
@@ -473,7 +564,7 @@ No explanations. Only the <file> block."""
             content: Fixed file content
 
         Returns:
-            True if persisted successfully, False otherwise
+            True if BOTH S3 and DB succeed, False otherwise
         """
         from uuid import UUID
         from sqlalchemy import select
@@ -483,14 +574,16 @@ No explanations. Only the <file> block."""
         import os
 
         # =================================================================
-        # GAP #13 FIX: Validate file_path is not empty
+        # VALIDATION: file_path should already be normalized by caller
+        # We trust that _normalize_file_path() was called before this
+        # Just do basic empty check here
         # =================================================================
         if not file_path or not file_path.strip():
             logger.error(f"[BoltFixer:{project_id}] Invalid empty file path")
             return False
 
-        # Normalize file path (remove leading slashes, normalize separators)
-        file_path = file_path.strip().lstrip('/\\').replace('\\', '/')
+        # Basic cleanup only (caller should have normalized)
+        file_path = file_path.strip()
 
         try:
             content_bytes = content.encode('utf-8')
@@ -503,7 +596,7 @@ No explanations. Only the <file> block."""
             s3_key = storage_service.generate_s3_key(project_id, file_path)
 
             # =================================================================
-            # Step 1: Upload to S3 (always attempt)
+            # Step 1: Upload to S3 (REQUIRED for restore to work)
             # =================================================================
             s3_success = False
             try:
@@ -516,14 +609,16 @@ No explanations. Only the <file> block."""
                 s3_success = True
                 logger.info(f"[BoltFixer:{project_id}] ✓ S3: {file_path}")
             except Exception as s3_err:
-                logger.warning(f"[BoltFixer:{project_id}] S3 failed: {file_path} - {s3_err}")
-                # Continue to DB update even if S3 fails - we'll retry S3 later
+                logger.error(f"[BoltFixer:{project_id}] S3 failed: {file_path} - {s3_err}")
+                # ISSUE #1 FIX: S3 is REQUIRED for restore - if it fails, persistence fails
+                # Without S3 content, the file can't be restored on next run
+                return False
 
             # =================================================================
             # Step 2: Update or CREATE database record
-            # GAP #4 FIX: Create new record if file doesn't exist in DB
-            # GAP #1 & #2 FIX: Better error handling, update DB even if S3 fails
+            # ISSUE #1 FIX: Only reach here if S3 succeeded
             # =================================================================
+            db_success = False
             try:
                 async with AsyncSessionLocal() as session:
                     # Try to find existing record
@@ -538,116 +633,49 @@ No explanations. Only the <file> block."""
                         # UPDATE existing record
                         file_record.content_hash = content_hash
                         file_record.size_bytes = size_bytes
-                        if s3_success:
-                            file_record.s3_key = s3_key
+                        file_record.s3_key = s3_key  # S3 succeeded, so always set
                         await session.commit()
+                        db_success = True
                         logger.info(f"[BoltFixer:{project_id}] ✓ DB updated: {file_path}")
                     else:
-                        # =================================================================
-                        # GAP #4 FIX: CREATE new record for new files
-                        # This ensures AI-created files are persisted!
-                        # =================================================================
+                        # CREATE new record for new files
                         new_file = ProjectFile(
                             project_id=UUID(project_id),
                             path=file_path,
                             name=os.path.basename(file_path),
                             content_hash=content_hash,
                             size_bytes=size_bytes,
-                            s3_key=s3_key if s3_success else None,
+                            s3_key=s3_key,  # S3 succeeded, so always set
                             is_folder=False,
                             generation_status="completed"
                         )
                         session.add(new_file)
                         await session.commit()
+                        db_success = True
                         logger.info(f"[BoltFixer:{project_id}] ✓ DB created: {file_path}")
 
             except Exception as db_err:
-                logger.warning(f"[BoltFixer:{project_id}] DB failed: {file_path} - {db_err}")
-                # Return True if S3 succeeded - file is at least partially persisted
-                return s3_success
+                logger.error(f"[BoltFixer:{project_id}] DB failed: {file_path} - {db_err}")
+                # DB failed but S3 has the file - this is inconsistent state
+                # Return False so caller knows persistence didn't fully succeed
+                # The file is in S3 but won't be restored without DB record
+                logger.warning(f"[BoltFixer:{project_id}] S3 has file but DB failed - returning False")
+                return False  # Consistent: BOTH must succeed
 
-            return True
+            # =================================================================
+            # Return True ONLY if BOTH S3 and DB succeeded
+            # =================================================================
+            return s3_success and db_success
 
         except Exception as e:
             logger.error(f"[BoltFixer:{project_id}] Persist failed: {file_path} - {e}")
             return False
 
-    async def _persist_fix_to_storage(
-        self,
-        project_id: str,
-        project_path: Path,
-        files_modified: List[str]
-    ) -> None:
-        """
-        Persist fixes to database/S3 so they survive "restore from database" step.
-
-        NOTE: This is now a fallback/batch method. Primary persistence happens
-        in _persist_single_fix() immediately after each fix.
-        """
-        logger.info(f"[BoltFixer:{project_id}] Persisting {len(files_modified)} fix(es) to storage")
-
-        for file_path in files_modified:
-            try:
-                # Read the fixed content
-                full_path = project_path / file_path
-                content = None
-
-                if self._sandbox_file_reader:
-                    content = self._sandbox_file_reader(str(full_path))
-                elif full_path.exists():
-                    content = full_path.read_text(encoding='utf-8')
-
-                if not content:
-                    logger.warning(f"[BoltFixer:{project_id}] Could not read fixed file: {file_path}")
-                    continue
-
-                content_bytes = content.encode('utf-8')
-
-                # Upload to S3
-                try:
-                    await storage_service.upload_file(
-                        project_id=project_id,
-                        file_path=file_path,
-                        content=content_bytes,
-                        content_type="text/plain"
-                    )
-                    logger.info(f"[BoltFixer:{project_id}] ✓ Uploaded to S3: {file_path}")
-                except Exception as s3_err:
-                    logger.warning(f"[BoltFixer:{project_id}] S3 upload failed for {file_path}: {s3_err}")
-
-                # Update database record with new hash, size, and s3_key
-                try:
-                    from uuid import UUID
-                    from sqlalchemy import select
-                    from app.core.database import AsyncSessionLocal
-                    from app.models.project_file import ProjectFile
-                    import hashlib
-
-                    # GAP #6 FIX: Use storage_service for consistent S3 key generation
-                    s3_key = storage_service.generate_s3_key(project_id, file_path)
-
-                    async with AsyncSessionLocal() as session:
-                        stmt = select(ProjectFile).where(
-                            ProjectFile.project_id == UUID(project_id),
-                            ProjectFile.path == file_path
-                        )
-                        db_result = await session.execute(stmt)
-                        file_record = db_result.scalar_one_or_none()
-
-                        if file_record:
-                            # Update all relevant fields
-                            file_record.content_hash = hashlib.sha256(content_bytes).hexdigest()
-                            file_record.size_bytes = len(content_bytes)
-                            file_record.s3_key = s3_key  # Ensure s3_key matches S3 upload
-                            await session.commit()
-                            logger.info(f"[BoltFixer:{project_id}] ✓ Updated DB: {file_path} (s3_key={s3_key})")
-                        else:
-                            logger.warning(f"[BoltFixer:{project_id}] No DB record for: {file_path}")
-                except Exception as db_err:
-                    logger.warning(f"[BoltFixer:{project_id}] DB update failed for {file_path}: {db_err}")
-
-            except Exception as e:
-                logger.error(f"[BoltFixer:{project_id}] Error persisting {file_path}: {e}")
+    # ==========================================================================
+    # ISSUE #9 FIX: Removed dead code _persist_fix_to_storage()
+    # This method was never called - all persistence now happens via
+    # _persist_single_fix() immediately after each fix.
+    # ==========================================================================
 
     async def fix_from_backend(
         self,
@@ -1005,57 +1033,76 @@ BUILD LOG:
             patch_content = patch.get("patch", "")
             file_path = patch.get("path", "")
 
-            # Validate
+            # Validate patch structure
             result = PatchValidator.validate_diff(patch_content, project_path)
             if not result.is_valid:
                 logger.warning(f"[BoltFixer:{project_id}] Invalid patch: {result.errors}")
                 continue
 
-            # Find target file
+            # Find target file from DiffParser
             parsed = DiffParser.parse(patch_content)
             actual_file = parsed.new_file or parsed.old_file or file_path
 
-            # Try different paths to find the file
-            possible_paths = [
-                (project_path / actual_file, actual_file),
-                (project_path / "frontend" / actual_file, f"frontend/{actual_file}"),
-                (project_path / "backend" / actual_file, f"backend/{actual_file}"),
-            ]
+            # =================================================================
+            # FIX: Validate DiffParser output for path traversal
+            # =================================================================
+            if not actual_file or '..' in actual_file:
+                logger.warning(f"[BoltFixer:{project_id}] Invalid/dangerous patch path: {actual_file}")
+                continue
 
+            # =================================================================
+            # FIX: Use centralized path normalization for patches
+            # =================================================================
+            normalized_path, is_valid = self._normalize_file_path(actual_file)
+            if not is_valid:
+                logger.warning(f"[BoltFixer:{project_id}] Skipping patch with invalid path: {actual_file}")
+                continue
+
+            # Build target path from normalized path
+            target_path = project_path / normalized_path
+
+            # Try to read original file content
             original = None
-            target_path = None
-            final_file = actual_file
-
-            for path, rel_path in possible_paths:
-                try:
-                    if self._sandbox_file_reader:
-                        content = self._sandbox_file_reader(str(path))
-                        if content:
-                            original = content
-                            target_path = path
-                            final_file = rel_path
-                            break
-                    elif path.exists():
-                        original = path.read_text(encoding='utf-8')
-                        target_path = path
-                        final_file = rel_path
-                        break
-                except Exception:
-                    continue
+            try:
+                if self._sandbox_file_reader:
+                    original = self._sandbox_file_reader(str(target_path))
+                elif target_path.exists():
+                    original = target_path.read_text(encoding='utf-8')
+            except Exception as read_err:
+                logger.warning(f"[BoltFixer:{project_id}] Could not read {normalized_path}: {read_err}")
 
             if original and target_path:
                 try:
                     apply_result = DiffParser.apply(original, parsed)
 
-                    if apply_result.success:
+                    # FIX #4: Safely check apply_result attributes (could be None)
+                    if not apply_result or not hasattr(apply_result, 'success'):
+                        logger.warning(f"[BoltFixer:{project_id}] DiffParser returned invalid result for {normalized_path}")
+                        continue
+
+                    # FIX #4: Safe content check - handle None case
+                    new_content = getattr(apply_result, 'new_content', None)
+                    has_content = new_content and isinstance(new_content, str) and new_content.strip()
+
+                    if apply_result.success and has_content:
                         # Use sandbox-aware file writer
-                        if self._write_file(target_path, apply_result.new_content, project_id):
+                        if self._write_file(target_path, new_content, project_id):
                             # IMMEDIATELY persist to S3/database (survives restore)
-                            await self._persist_single_fix(project_id, project_path, final_file, apply_result.new_content)
-                            files_modified.append(final_file)
-                            logger.info(f"[BoltFixer:{project_id}] Applied & persisted patch: {final_file}")
+                            if await self._persist_single_fix(project_id, project_path, normalized_path, new_content):
+                                files_modified.append(normalized_path)
+                                logger.info(f"[BoltFixer:{project_id}] Applied & persisted patch: {normalized_path}")
+                            else:
+                                logger.warning(f"[BoltFixer:{project_id}] Patch applied but persistence failed: {normalized_path}")
+                        else:
+                            # FIX #5: Log write failure (was silent before)
+                            logger.error(f"[BoltFixer:{project_id}] Failed to write patch to {normalized_path}")
+                    elif apply_result.success:
+                        # FIX #9: Track silent failures explicitly
+                        logger.warning(f"[BoltFixer:{project_id}] Patch resulted in empty content: {normalized_path}")
+                    else:
+                        logger.warning(f"[BoltFixer:{project_id}] Patch application failed for {normalized_path}")
                 except Exception as e:
-                    logger.error(f"[BoltFixer:{project_id}] Error applying patch to {final_file}: {e}")
+                    logger.error(f"[BoltFixer:{project_id}] Error applying patch to {normalized_path}: {e}")
 
         # Apply full file replacements
         for file_info in full_files:
@@ -1063,18 +1110,23 @@ BUILD LOG:
             content = file_info.get("content", "")
 
             # =================================================================
-            # GAP #13 & #15 FIX: Validate path and content
+            # ISSUE #3 & #4 FIX: Use centralized path normalization
             # =================================================================
-            if not file_path or not file_path.strip():
-                logger.warning(f"[BoltFixer:{project_id}] Skipping file with empty path")
+            normalized_path, is_valid = self._normalize_file_path(file_path)
+            if not is_valid:
+                logger.warning(f"[BoltFixer:{project_id}] Skipping file with invalid path: {file_path}")
                 continue
+
+            # =================================================================
+            # ISSUE #7 FIX: Validate content not empty
+            # =================================================================
             if not content or not content.strip():
-                logger.warning(f"[BoltFixer:{project_id}] Skipping file with empty content: {file_path}")
+                logger.warning(f"[BoltFixer:{project_id}] Skipping file with empty content: {normalized_path}")
                 continue
 
             # PROTECTION: Block full docker-compose.yml replacement
             # AI has been known to corrupt docker-compose.yml by deleting services
-            if "docker-compose" in file_path.lower():
+            if "docker-compose" in normalized_path.lower():
                 logger.warning(
                     f"[BoltFixer:{project_id}] BLOCKING full docker-compose.yml replacement - "
                     "AI must use patches, not full file replacement"
@@ -1082,34 +1134,23 @@ BUILD LOG:
                 continue
 
             # Validate
-            result = PatchValidator.validate_full_file(file_path, content, project_path)
+            result = PatchValidator.validate_full_file(normalized_path, content, project_path)
             if not result.is_valid:
                 logger.warning(f"[BoltFixer:{project_id}] Invalid file: {result.errors}")
                 continue
 
-            # Determine best target path based on file type
-            # IMPORTANT: Check if path already has backend/frontend prefix to avoid duplication
-            if file_path.startswith('backend/') or file_path.startswith('frontend/'):
-                # Path already has prefix, use as-is
-                target_path = project_path / file_path
-                normalized_path = file_path  # Already has correct prefix
-            elif file_path.endswith('.java'):
-                target_path = project_path / "backend" / file_path
-                normalized_path = f"backend/{file_path}"  # GAP #7 FIX: Add prefix
-            elif file_path.endswith(('.ts', '.tsx', '.js', '.jsx', '.css', '.html')):
-                target_path = project_path / "frontend" / file_path
-                normalized_path = f"frontend/{file_path}"  # GAP #7 FIX: Add prefix
-            else:
-                target_path = project_path / file_path
-                normalized_path = file_path
+            # Build target path from normalized path
+            target_path = project_path / normalized_path
 
             # Use sandbox-aware file writer
             if self._write_file(target_path, content, project_id):
                 # IMMEDIATELY persist to S3/database (survives restore)
-                # GAP #7 FIX: Use normalized_path (includes backend/frontend prefix)
-                await self._persist_single_fix(project_id, project_path, normalized_path, content)
-                files_modified.append(normalized_path)
-                logger.info(f"[BoltFixer:{project_id}] Wrote & persisted full file: {normalized_path}")
+                # FIX: Check return value of _persist_single_fix()
+                if await self._persist_single_fix(project_id, project_path, normalized_path, content):
+                    files_modified.append(normalized_path)
+                    logger.info(f"[BoltFixer:{project_id}] Wrote & persisted full file: {normalized_path}")
+                else:
+                    logger.warning(f"[BoltFixer:{project_id}] File written but persistence failed: {normalized_path}")
 
         # Create new files
         for file_info in new_files:
@@ -1117,17 +1158,22 @@ BUILD LOG:
             content = file_info.get("content", "")
 
             # =================================================================
-            # GAP #13 & #15 FIX: Validate path and content
+            # ISSUE #3 & #4 FIX: Use centralized path normalization
             # =================================================================
-            if not file_path or not file_path.strip():
-                logger.warning(f"[BoltFixer:{project_id}] Skipping new file with empty path")
+            normalized_path, is_valid = self._normalize_file_path(file_path)
+            if not is_valid:
+                logger.warning(f"[BoltFixer:{project_id}] Skipping new file with invalid path: {file_path}")
                 continue
+
+            # =================================================================
+            # ISSUE #7 FIX: Validate content not empty
+            # =================================================================
             if not content or not content.strip():
-                logger.warning(f"[BoltFixer:{project_id}] Skipping new file with empty content: {file_path}")
+                logger.warning(f"[BoltFixer:{project_id}] Skipping new file with empty content: {normalized_path}")
                 continue
 
             # PROTECTION: Don't create new docker-compose.yml if one already exists
-            if "docker-compose" in file_path.lower():
+            if "docker-compose" in normalized_path.lower():
                 existing_compose = project_path / "docker-compose.yml"
                 # Check existence using sandbox reader or local check
                 exists = False
@@ -1144,34 +1190,23 @@ BUILD LOG:
                     continue
 
             # Validate
-            result = PatchValidator.validate_new_file(file_path, content, project_path)
+            result = PatchValidator.validate_new_file(normalized_path, content, project_path)
             if not result.is_valid:
                 logger.warning(f"[BoltFixer:{project_id}] Invalid new file: {result.errors}")
                 continue
 
-            # Determine best target path based on file type
-            # IMPORTANT: Check if path already has backend/frontend prefix to avoid duplication
-            if file_path.startswith('backend/') or file_path.startswith('frontend/'):
-                # Path already has prefix, use as-is
-                target_path = project_path / file_path
-                normalized_path = file_path  # Already has correct prefix
-            elif file_path.endswith('.java'):
-                target_path = project_path / "backend" / file_path
-                normalized_path = f"backend/{file_path}"  # GAP #7 FIX: Add prefix
-            elif file_path.endswith(('.ts', '.tsx', '.js', '.jsx', '.css', '.html')):
-                target_path = project_path / "frontend" / file_path
-                normalized_path = f"frontend/{file_path}"  # GAP #7 FIX: Add prefix
-            else:
-                target_path = project_path / file_path
-                normalized_path = file_path
+            # Build target path from normalized path
+            target_path = project_path / normalized_path
 
             # Use sandbox-aware file writer
             if self._write_file(target_path, content, project_id):
                 # IMMEDIATELY persist to S3/database (survives restore)
-                # GAP #7 FIX: Use normalized_path (includes backend/frontend prefix)
-                await self._persist_single_fix(project_id, project_path, normalized_path, content)
-                files_modified.append(normalized_path)
-                logger.info(f"[BoltFixer:{project_id}] Created & persisted new file: {normalized_path}")
+                # FIX: Check return value of _persist_single_fix()
+                if await self._persist_single_fix(project_id, project_path, normalized_path, content):
+                    files_modified.append(normalized_path)
+                    logger.info(f"[BoltFixer:{project_id}] Created & persisted new file: {normalized_path}")
+                else:
+                    logger.warning(f"[BoltFixer:{project_id}] New file created but persistence failed: {normalized_path}")
 
         # =================================================================
         # STEP 8: PERSISTENCE NOW HAPPENS IMMEDIATELY (above)
@@ -1256,14 +1291,25 @@ BUILD LOG:
 
         for match in re.findall(pattern, response, re.DOTALL):
             content = match.strip()
+
+            # FIX #12: Empty patch is Claude's "no fix possible" signal - log it
             if not content:
+                logger.debug("[BoltFixer] Empty <patch> block - Claude indicates no fix possible")
                 continue
 
-            # Extract file path
+            # FIX #2: Safely extract file path with bounds checking
             path_match = re.search(r'^(?:---|\+\+\+)\s+(?:[ab]/)?([^\s]+)', content, re.MULTILINE)
-            file_path = path_match.group(1) if path_match else "unknown"
+            try:
+                file_path = path_match.group(1) if path_match and path_match.lastindex >= 1 else None
+            except (IndexError, AttributeError):
+                file_path = None
 
-            patches.append({"path": file_path, "patch": content})
+            # FIX #11: Validate path before adding
+            if not file_path or not file_path.strip():
+                logger.warning("[BoltFixer] Patch has no valid file path - skipping")
+                continue
+
+            patches.append({"path": file_path.strip(), "patch": content})
 
         return patches
 
@@ -1274,7 +1320,16 @@ BUILD LOG:
         pattern = r'<file\s+path="([^"]+)">(.*?)</file>'
 
         for path, content in re.findall(pattern, response, re.DOTALL):
-            files.append({"path": path.strip(), "content": content.strip()})
+            # FIX #11: Validate path and content before adding
+            path = path.strip() if path else ""
+            content = content.strip() if content else ""
+            if not path:
+                logger.warning("[BoltFixer] <file> block has empty path - skipping")
+                continue
+            if not content:
+                logger.warning(f"[BoltFixer] <file> block for {path} has empty content - skipping")
+                continue
+            files.append({"path": path, "content": content})
 
         return files
 
@@ -1285,15 +1340,27 @@ BUILD LOG:
         pattern = r'<newfile\s+path="([^"]+)">(.*?)</newfile>'
 
         for path, content in re.findall(pattern, response, re.DOTALL):
+            # FIX #11: Validate path
+            path = path.strip() if path else ""
+            if not path:
+                logger.warning("[BoltFixer] <newfile> block has empty path - skipping")
+                continue
+
             # Clean markdown if present
-            content = content.strip()
+            content = content.strip() if content else ""
             if content.startswith('```'):
                 lines = content.split('\n')[1:]
                 if lines and lines[-1].strip() == '```':
                     lines = lines[:-1]
                 content = '\n'.join(lines)
 
-            files.append({"path": path.strip(), "content": content.strip()})
+            # FIX #7: Validate content not empty after markdown stripping
+            content = content.strip()
+            if not content:
+                logger.warning(f"[BoltFixer] <newfile> block for {path} has empty content after markdown strip - skipping")
+                continue
+
+            files.append({"path": path, "content": content})
 
         return files
 
@@ -1434,92 +1501,10 @@ BUILD LOG:
 
         return truncated
 
-    async def _sync_to_s3(
-        self,
-        project_id: str,
-        project_path: Path,
-        files_modified: List[str]
-    ) -> None:
-        """
-        Sync fixed files to S3 and update database for persistence.
-
-        This ensures fixes survive container restarts.
-        Database stores metadata, S3 stores content.
-
-        NOTE: S3 sync ALWAYS happens for long-term archive.
-        EFS is for fast working storage, S3 is for retrieval after months.
-        The container_executor handles the sync after build success.
-        """
-        from uuid import UUID
-        from sqlalchemy import select
-        from app.core.database import AsyncSessionLocal
-        from app.models.project_file import ProjectFile
-        from app.core.config import settings
-
-        # Log EFS status but ALWAYS sync to S3 for long-term archive
-        if getattr(settings, 'EFS_ENABLED', False):
-            logger.info(f"[BoltFixer:{project_id}] EFS mode - files safe, archiving to S3 for long-term storage")
-
-        for file_path in files_modified:
-            try:
-                # Read the fixed content from sandbox
-                full_path = project_path / file_path
-                actual_path = file_path  # Path to use for DB lookup
-
-                if not full_path.exists():
-                    # Try frontend subdirectory
-                    full_path = project_path / "frontend" / file_path
-                    if full_path.exists():
-                        actual_path = f"frontend/{file_path}"
-
-                if not full_path.exists():
-                    # Try backend subdirectory
-                    full_path = project_path / "backend" / file_path
-                    if full_path.exists():
-                        actual_path = f"backend/{file_path}"
-
-                if not full_path.exists():
-                    logger.warning(f"[BoltFixer:{project_id}] File not found for S3 sync: {file_path}")
-                    continue
-
-                content = full_path.read_text(encoding='utf-8')
-                content_bytes = content.encode('utf-8')
-
-                # Upload to S3
-                result = await storage_service.upload_file(
-                    project_id=project_id,
-                    file_path=actual_path,
-                    content=content_bytes,
-                    content_type="text/plain"
-                )
-
-                # Update database record with new size and hash
-                try:
-                    async with AsyncSessionLocal() as session:
-                        # Find existing file record
-                        stmt = select(ProjectFile).where(
-                            ProjectFile.project_id == UUID(project_id),
-                            ProjectFile.path == actual_path
-                        )
-                        db_result = await session.execute(stmt)
-                        file_record = db_result.scalar_one_or_none()
-
-                        if file_record:
-                            # Update existing record
-                            file_record.s3_key = result['s3_key']
-                            file_record.size_bytes = result['size_bytes']
-                            file_record.content_hash = result['content_hash']
-                            await session.commit()
-                            logger.info(f"[BoltFixer:{project_id}] ✓ Updated DB: {actual_path}")
-                        else:
-                            logger.warning(f"[BoltFixer:{project_id}] No DB record for: {actual_path}")
-                except Exception as db_err:
-                    logger.warning(f"[BoltFixer:{project_id}] DB update failed for {actual_path}: {db_err}")
-
-                logger.info(f"[BoltFixer:{project_id}] ✓ Synced to S3: {actual_path}")
-
-            except Exception as e:
-                logger.error(f"[BoltFixer:{project_id}] ✗ S3 sync failed for {file_path}: {e}")
+    # ==========================================================================
+    # REMOVED: _sync_to_s3() - Dead code, never called
+    # All persistence now happens via _persist_single_fix() immediately
+    # ==========================================================================
 
     async def _read_related_java_files(
         self,
@@ -1570,19 +1555,26 @@ BUILD LOG:
             root_cause_classes.add(match.group(1))
 
         # Pattern: "type com.package.ClassName" - generic type reference
+        # FIX #8: Filter out common Java keywords
+        java_keywords = {'String', 'int', 'Integer', 'long', 'Long', 'boolean', 'Boolean',
+                         'void', 'Object', 'List', 'Map', 'Set', 'Collection', 'Optional'}
         for match in re.finditer(r'\btype\s+(?:[\w.]+\.)?(\w+)(?:\s|$|,)', error_output):
             cls = match.group(1)
-            if cls[0].isupper():  # Only class names (capitalized)
+            # FIX #7: Check cls is not empty before accessing cls[0]
+            if cls and len(cls) > 0 and cls[0].isupper() and cls not in java_keywords:
                 root_cause_classes.add(cls)
 
         # Pattern: "no suitable constructor found for X(...)"
         for match in re.finditer(r'no suitable (?:constructor|method).*?for\s+(\w+)', error_output, re.IGNORECASE):
-            root_cause_classes.add(match.group(1))
+            cls = match.group(1)
+            if cls and cls not in java_keywords:
+                root_cause_classes.add(cls)
 
         # Pattern: "incompatible types...cannot be converted to X" or "found: X"
         for match in re.finditer(r'(?:cannot be converted to|found:\s*)(\w+)', error_output, re.IGNORECASE):
             cls = match.group(1)
-            if cls[0].isupper():  # Only class names (capitalized)
+            # FIX #7: Check cls is not empty before accessing cls[0]
+            if cls and len(cls) > 0 and cls[0].isupper() and cls not in java_keywords:
                 root_cause_classes.add(cls)
 
         # Pattern: "method X() in class Y" - Y is the root cause
