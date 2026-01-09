@@ -923,6 +923,54 @@ export default defineConfig({
                 dockerfile_content = dockerfile_content.replace("--only=production", "--omit=dev")
                 fixes.append("--only=production → --omit=dev")
 
+        # 3. Fix Maven wrapper (mvnw) - wrapper files don't exist, use mvn directly
+        if "mvnw" in dockerfile_content:
+            # Remove COPY mvnw lines
+            dockerfile_content = re.sub(r'^COPY\s+mvnw\s+.*$\n?', '', dockerfile_content, flags=re.MULTILINE)
+            dockerfile_content = re.sub(r'^COPY\s+\.mvn\s+.*$\n?', '', dockerfile_content, flags=re.MULTILINE)
+            # Replace ./mvnw with mvn
+            dockerfile_content = re.sub(r'\./mvnw\b', 'mvn', dockerfile_content)
+            dockerfile_content = re.sub(r'mvnw\b', 'mvn', dockerfile_content)
+            # Update base image to maven if using eclipse-temurin
+            dockerfile_content = re.sub(
+                r'^(FROM\s+)eclipse-temurin:(\d+)-jdk-alpine(.*)$',
+                r'\1maven:3.9-eclipse-temurin-\2-alpine\3',
+                dockerfile_content,
+                flags=re.MULTILINE | re.IGNORECASE
+            )
+            # Also fix openjdk
+            dockerfile_content = re.sub(
+                r'^(FROM\s+)openjdk:(\d+)[^\s]*(.*)$',
+                r'\1maven:3.9-eclipse-temurin-\2-alpine\3',
+                dockerfile_content,
+                flags=re.MULTILINE | re.IGNORECASE
+            )
+            fixes.append("mvnw → mvn")
+
+        # 4. Fix Gradle wrapper (gradlew) - wrapper files don't exist, use gradle directly
+        if "gradlew" in dockerfile_content:
+            # Remove COPY gradlew lines
+            dockerfile_content = re.sub(r'^COPY\s+gradlew\s+.*$\n?', '', dockerfile_content, flags=re.MULTILINE)
+            dockerfile_content = re.sub(r'^COPY\s+gradle\s+.*$\n?', '', dockerfile_content, flags=re.MULTILINE)
+            # Replace ./gradlew with gradle
+            dockerfile_content = re.sub(r'\./gradlew\b', 'gradle', dockerfile_content)
+            dockerfile_content = re.sub(r'gradlew\b', 'gradle', dockerfile_content)
+            # Update base image to gradle if using eclipse-temurin
+            dockerfile_content = re.sub(
+                r'^(FROM\s+)eclipse-temurin:(\d+)-jdk-alpine(.*)$',
+                r'\1gradle:8-jdk\2-alpine\3',
+                dockerfile_content,
+                flags=re.MULTILINE | re.IGNORECASE
+            )
+            # Also fix openjdk
+            dockerfile_content = re.sub(
+                r'^(FROM\s+)openjdk:(\d+)[^\s]*(.*)$',
+                r'\1gradle:8-jdk\2-alpine\3',
+                dockerfile_content,
+                flags=re.MULTILINE | re.IGNORECASE
+            )
+            fixes.append("gradlew → gradle")
+
         # Write back if changed
         if dockerfile_content != original_content:
             if self._write_file(base_path, "Dockerfile", dockerfile_content):
