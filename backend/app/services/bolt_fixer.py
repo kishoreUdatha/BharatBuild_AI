@@ -13,13 +13,235 @@ This replaces SimpleFixer with the proper Bolt.new pattern:
 Claude is a tool, not a controller.
 """
 
-from typing import Dict, Any, List, Optional, Tuple, Callable
+from typing import Dict, Any, List, Optional, Tuple, Callable, Set
 from dataclasses import dataclass
 from pathlib import Path
-import json
 import re
 
 from app.core.logging_config import logger
+
+
+# =============================================================================
+# TECHNOLOGY DETECTION - Maps file extensions to languages
+# =============================================================================
+EXTENSION_TO_LANGUAGE = {
+    # Java/JVM
+    '.java': 'java',
+    '.kt': 'kotlin',
+    '.scala': 'scala',
+    '.groovy': 'groovy',
+    # Python
+    '.py': 'python',
+    '.pyx': 'python',
+    '.pyi': 'python',
+    # JavaScript/TypeScript
+    '.js': 'javascript',
+    '.jsx': 'javascript',
+    '.ts': 'typescript',
+    '.tsx': 'typescript',
+    '.mjs': 'javascript',
+    '.cjs': 'javascript',
+    # Go
+    '.go': 'go',
+    # Rust
+    '.rs': 'rust',
+    # C/C++
+    '.c': 'c',
+    '.h': 'c',
+    '.cpp': 'cpp',
+    '.hpp': 'cpp',
+    '.cc': 'cpp',
+    '.cxx': 'cpp',
+    # C#
+    '.cs': 'csharp',
+    # Ruby
+    '.rb': 'ruby',
+    '.rake': 'ruby',
+    # PHP
+    '.php': 'php',
+    # Swift
+    '.swift': 'swift',
+    # Dart/Flutter
+    '.dart': 'dart',
+    # Web
+    '.html': 'html',
+    '.css': 'css',
+    '.scss': 'scss',
+    '.sass': 'sass',
+    '.less': 'less',
+    '.vue': 'vue',
+    '.svelte': 'svelte',
+    # Config/Data
+    '.json': 'json',
+    '.yaml': 'yaml',
+    '.yml': 'yaml',
+    '.xml': 'xml',
+    '.toml': 'toml',
+    # Shell
+    '.sh': 'bash',
+    '.bash': 'bash',
+    '.zsh': 'zsh',
+    # Docker
+    'Dockerfile': 'dockerfile',
+    # SQL
+    '.sql': 'sql',
+}
+
+# Language-specific keywords to filter out when extracting class/module names
+LANGUAGE_KEYWORDS = {
+    'java': {'String', 'int', 'Integer', 'long', 'Long', 'boolean', 'Boolean',
+             'void', 'Object', 'List', 'Map', 'Set', 'Collection', 'Optional',
+             'Class', 'Exception', 'Error', 'Throwable', 'Double', 'Float'},
+    'python': {'str', 'int', 'float', 'bool', 'list', 'dict', 'set', 'tuple',
+               'None', 'True', 'False', 'object', 'type', 'Exception', 'self',
+               'cls', 'async', 'await', 'def', 'class', 'import', 'from'},
+    'typescript': {'string', 'number', 'boolean', 'any', 'void', 'null',
+                   'undefined', 'never', 'unknown', 'object', 'Array', 'Promise',
+                   'Record', 'Partial', 'Required', 'Pick', 'Omit', 'Exclude'},
+    'javascript': {'string', 'number', 'boolean', 'null', 'undefined', 'object',
+                   'Array', 'Promise', 'function', 'class', 'const', 'let', 'var'},
+    'go': {'string', 'int', 'int8', 'int16', 'int32', 'int64', 'uint', 'float32',
+           'float64', 'bool', 'byte', 'rune', 'error', 'nil', 'interface', 'struct',
+           'map', 'chan', 'func', 'package', 'import', 'type'},
+    'rust': {'str', 'String', 'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64',
+             'f32', 'f64', 'bool', 'char', 'Option', 'Result', 'Vec', 'Box', 'Rc',
+             'Arc', 'Self', 'self', 'pub', 'mod', 'use', 'fn', 'struct', 'enum'},
+    'csharp': {'string', 'int', 'long', 'float', 'double', 'bool', 'void', 'object',
+               'var', 'dynamic', 'Task', 'List', 'Dictionary', 'IEnumerable'},
+    'ruby': {'String', 'Integer', 'Float', 'Array', 'Hash', 'Symbol', 'nil',
+             'true', 'false', 'self', 'class', 'module', 'def', 'end'},
+    'php': {'string', 'int', 'float', 'bool', 'array', 'object', 'null', 'void',
+            'mixed', 'callable', 'iterable', 'self', 'static', 'parent'},
+}
+
+# File patterns for related file detection by language
+RELATED_FILE_PATTERNS = {
+    'java': {
+        'suffixes': ['Service', 'ServiceImpl', 'Repository', 'Controller', 'Dto', 'DTO', 'Entity', 'Model', 'Mapper'],
+        'extensions': ['.java'],
+    },
+    'python': {
+        'suffixes': ['_service', '_repository', '_controller', '_model', '_schema', '_dto', '_api', '_views', '_serializer'],
+        'extensions': ['.py'],
+    },
+    'typescript': {
+        'suffixes': ['.service', '.component', '.module', '.controller', '.dto', '.entity', '.model', '.interface', '.type', '.hook', '.context', '.store'],
+        'extensions': ['.ts', '.tsx'],
+    },
+    'javascript': {
+        'suffixes': ['.service', '.component', '.module', '.controller', '.model', '.hook', '.context', '.store', '.util'],
+        'extensions': ['.js', '.jsx'],
+    },
+    'go': {
+        'suffixes': ['_service', '_repository', '_handler', '_controller', '_model', '_dto', '_test'],
+        'extensions': ['.go'],
+    },
+    'rust': {
+        'suffixes': ['_service', '_repository', '_handler', '_controller', '_model', '_dto'],
+        'extensions': ['.rs'],
+    },
+    'csharp': {
+        'suffixes': ['Service', 'Repository', 'Controller', 'Dto', 'DTO', 'Entity', 'Model', 'Interface'],
+        'extensions': ['.cs'],
+    },
+    'ruby': {
+        'suffixes': ['_controller', '_model', '_service', '_serializer', '_job', '_mailer', '_helper'],
+        'extensions': ['.rb'],
+    },
+    'php': {
+        'suffixes': ['Service', 'Repository', 'Controller', 'Entity', 'Model', 'DTO', 'Interface'],
+        'extensions': ['.php'],
+    },
+}
+
+
+def detect_language(file_path: str) -> str:
+    """
+    Detect programming language from file path.
+
+    Args:
+        file_path: File path or name
+
+    Returns:
+        Language identifier (e.g., 'java', 'python', 'typescript')
+    """
+    if not file_path:
+        return 'unknown'
+
+    path = Path(file_path)
+    name = path.name
+    suffix = path.suffix.lower()
+
+    # Check for special files (Dockerfile, etc.)
+    if name in EXTENSION_TO_LANGUAGE:
+        return EXTENSION_TO_LANGUAGE[name]
+
+    # Check by extension
+    if suffix in EXTENSION_TO_LANGUAGE:
+        return EXTENSION_TO_LANGUAGE[suffix]
+
+    return 'unknown'
+
+
+def get_syntax_highlight(file_path: str) -> str:
+    """
+    Get syntax highlighting language for markdown code blocks.
+
+    Args:
+        file_path: File path or name
+
+    Returns:
+        Syntax highlighting identifier for markdown
+    """
+    lang = detect_language(file_path)
+
+    # Map some languages to their markdown syntax names
+    syntax_map = {
+        'typescript': 'typescript',
+        'javascript': 'javascript',
+        'python': 'python',
+        'java': 'java',
+        'go': 'go',
+        'rust': 'rust',
+        'csharp': 'csharp',
+        'ruby': 'ruby',
+        'php': 'php',
+        'swift': 'swift',
+        'dart': 'dart',
+        'kotlin': 'kotlin',
+        'scala': 'scala',
+        'cpp': 'cpp',
+        'c': 'c',
+        'html': 'html',
+        'css': 'css',
+        'scss': 'scss',
+        'json': 'json',
+        'yaml': 'yaml',
+        'xml': 'xml',
+        'bash': 'bash',
+        'sql': 'sql',
+        'dockerfile': 'dockerfile',
+        'vue': 'vue',
+        'svelte': 'svelte',
+    }
+
+    return syntax_map.get(lang, lang if lang != 'unknown' else '')
+
+
+def get_language_keywords(file_path: str) -> Set[str]:
+    """
+    Get keywords to filter out for a given file's language.
+
+    Args:
+        file_path: File path or name
+
+    Returns:
+        Set of keywords to filter out
+    """
+    lang = detect_language(file_path)
+    return LANGUAGE_KEYWORDS.get(lang, set())
+
+
 from app.services.error_classifier import ErrorClassifier, ErrorType, ClassifiedError
 from app.services.patch_validator import PatchValidator
 from app.services.retry_limiter import retry_limiter
@@ -177,7 +399,7 @@ class BoltFixer:
     """
 
     # Strict system prompt - Claude returns ONLY diffs
-    SYSTEM_PROMPT = """You are an automated code-fix agent.
+    SYSTEM_PROMPT = """You are an automated code-fix agent supporting ALL programming languages.
 
 STRICT RULES:
 - Return ONLY unified diffs or file blocks
@@ -191,26 +413,25 @@ The build has MULTIPLE files with errors. You MUST fix ALL of them in a single r
 - Output a separate <file> or <patch> block for EACH file that needs fixing
 - Do NOT just fix one file and stop - fix ALL files with errors
 
-IMPORTANT - DEPENDENCY ERRORS:
+IMPORTANT - DEPENDENCY ERRORS (ALL LANGUAGES):
 When you see errors like:
-- "cannot find symbol: method X()" - Add the missing method to the CLASS that should have it
-- "no suitable constructor found for X(...)" - Fix the constructor in X.java, not the calling file
-- "incompatible types" - Fix the SOURCE class that has wrong return type
-- "cannot find symbol: class X" - The class file may be missing or has wrong package
+- Java: "cannot find symbol: method X()" - Add the missing method to the CLASS that should have it
+- Python: "AttributeError: 'X' has no attribute 'y'" - Add the missing attribute/method to class X
+- TypeScript: "Property 'x' does not exist on type 'Y'" - Add the property to interface/type Y
+- Go: "undefined: X" - Add the missing function/type X
+- Rust: "cannot find value/type `x`" - Add the missing item to the module
 
 FIX THE ROOT CAUSE, NOT THE SYMPTOM:
-- If OrderService.java fails because Product.java is missing getPrice(), fix Product.java
-- If the error file imports/uses another class, check RELATED FILES section for the fix
+- If OrderService fails because Product is missing getPrice(), fix Product
+- If the error file imports/uses another module, check RELATED FILES section for the fix
 - Return patches for ALL files that need changes (you can return multiple patches)
 
-JAVA CONSISTENCY (MULTI-FILE):
-When fixing Java "cannot find symbol" errors:
-1. You MUST check ALL RELATED FILES (Entity, DTO, Service, Controller)
-2. Ensure field/method names match EXACTLY across related files
-3. If DTO missing getter/setter - add it to the DTO
-4. If Service interface missing method - add to BOTH interface AND implementation
-5. Output MULTIPLE <file> blocks - one for EACH file that needs changes
-6. If you see errors in UserDto, UserService, AND UserController - fix ALL THREE
+MULTI-FILE CONSISTENCY (ALL LANGUAGES):
+1. Check ALL RELATED FILES (models, services, controllers, interfaces)
+2. Ensure field/method/function names match EXACTLY across related files
+3. If interface missing method - add to BOTH interface AND implementation
+4. Output MULTIPLE <file> blocks - one for EACH file that needs changes
+5. For TypeScript/Python: ensure types/type hints match across files
 
 OUTPUT FORMAT:
 
@@ -882,9 +1103,11 @@ No explanations. Only the <file> block."""
                     logger.warning(f"[BoltFixer:{project_id}] Context limit reached at {total_chars} chars, included {len(error_files_sections)} files")
                     break
 
+                # Dynamic syntax highlighting based on file extension
+                syntax = get_syntax_highlight(err_file)
                 error_files_sections.append(f"""
 --- ERROR FILE: {err_file} (line {err_line}) ---
-```java
+```{syntax}
 {content}
 ```
 """)
@@ -922,9 +1145,9 @@ No explanations. Only the <file> block."""
             if not file_content:
                 logger.warning(f"[BoltFixer:{project_id}] Could not read target file from any path: {target_file}")
 
-        # For Java errors, also read related class files mentioned in the error
-        if target_file and target_file.endswith('.java'):
-            related_files_content = await self._read_related_java_files(
+        # For all languages, read related files mentioned in the error
+        if target_file:
+            related_files_content = await self._read_related_files(
                 project_path, combined_output, target_file
             )
 
@@ -1506,14 +1729,16 @@ BUILD LOG:
     # All persistence now happens via _persist_single_fix() immediately
     # ==========================================================================
 
-    async def _read_related_java_files(
+    async def _read_related_files(
         self,
         project_path: Path,
         error_output: str,
         current_file: str
     ) -> str:
         """
-        Extract and read Java class files mentioned in compilation errors.
+        Extract and read related files mentioned in compilation/build errors.
+
+        SUPPORTS ALL LANGUAGES: Java, Python, TypeScript, JavaScript, Go, Rust, C#, Ruby, PHP.
 
         IMPORTANT: This method identifies ROOT CAUSE files, not just mentioned files.
         For errors like "cannot find symbol: method getPrice() in class Product",
@@ -1523,145 +1748,238 @@ BUILD LOG:
 
         Args:
             project_path: Root path of the project
-            error_output: Full error output from compilation
+            error_output: Full error output from compilation/build
             current_file: The file already being read (to avoid duplicates)
 
         Returns:
             Formatted string with related file contents, marking ROOT CAUSE files
         """
-        import re
         import glob
 
-        # Get current file's class name to exclude
-        current_class = None
-        if current_file:
-            current_class = Path(current_file).stem
+        # Detect language from current file
+        language = detect_language(current_file)
+        keywords = get_language_keywords(current_file)
 
+        # Get current file's module/class name to exclude
+        current_name = Path(current_file).stem if current_file else None
         project_str = str(project_path)
 
         # =====================================================================
-        # STEP 1: Extract ROOT CAUSE classes from error patterns
-        # These are classes that likely need to be FIXED (not just referenced)
+        # STEP 1: Extract ROOT CAUSE modules/classes from error patterns
+        # Language-specific patterns for identifying files that need fixes
         # =====================================================================
-        root_cause_classes = set()
+        root_cause_names: Set[str] = set()
 
-        # Pattern: "cannot find symbol...in class X" or "cannot find symbol: class X"
-        for match in re.finditer(r'cannot find symbol.*?(?:class|interface)\s+(\w+)', error_output, re.IGNORECASE):
-            root_cause_classes.add(match.group(1))
+        # ----- JAVA PATTERNS -----
+        if language in ('java', 'kotlin', 'scala'):
+            # Pattern: "cannot find symbol...in class X"
+            for match in re.finditer(r'cannot find symbol.*?(?:class|interface)\s+(\w+)', error_output, re.IGNORECASE):
+                root_cause_names.add(match.group(1))
 
-        # Pattern: "location: variable xxx of type com.package.ClassName" - CRITICAL for Java errors
-        # This catches errors like "location: variable userDto of type com.complaint.dto.UserDto"
-        for match in re.finditer(r'location:\s*variable\s+\w+\s+of\s+type\s+(?:@[\w.]+\s+)?(?:[\w.]+\.)?(\w+)', error_output, re.IGNORECASE):
-            root_cause_classes.add(match.group(1))
+            # Pattern: "location: variable xxx of type com.package.ClassName"
+            for match in re.finditer(r'location:\s*variable\s+\w+\s+of\s+type\s+(?:@[\w.]+\s+)?(?:[\w.]+\.)?(\w+)', error_output, re.IGNORECASE):
+                root_cause_names.add(match.group(1))
 
-        # Pattern: "type com.package.ClassName" - generic type reference
-        # FIX #8: Filter out common Java keywords
-        java_keywords = {'String', 'int', 'Integer', 'long', 'Long', 'boolean', 'Boolean',
-                         'void', 'Object', 'List', 'Map', 'Set', 'Collection', 'Optional'}
-        for match in re.finditer(r'\btype\s+(?:[\w.]+\.)?(\w+)(?:\s|$|,)', error_output):
-            cls = match.group(1)
-            # FIX #7: Check cls is not empty before accessing cls[0]
-            if cls and len(cls) > 0 and cls[0].isupper() and cls not in java_keywords:
-                root_cause_classes.add(cls)
+            # Pattern: "type com.package.ClassName"
+            for match in re.finditer(r'\btype\s+(?:[\w.]+\.)?(\w+)(?:\s|$|,)', error_output):
+                cls = match.group(1)
+                if cls and len(cls) > 0 and cls[0].isupper() and cls not in keywords:
+                    root_cause_names.add(cls)
 
-        # Pattern: "no suitable constructor found for X(...)"
-        for match in re.finditer(r'no suitable (?:constructor|method).*?for\s+(\w+)', error_output, re.IGNORECASE):
-            cls = match.group(1)
-            if cls and cls not in java_keywords:
-                root_cause_classes.add(cls)
+            # Pattern: "no suitable constructor found for X(...)"
+            for match in re.finditer(r'no suitable (?:constructor|method).*?for\s+(\w+)', error_output, re.IGNORECASE):
+                cls = match.group(1)
+                if cls and cls not in keywords:
+                    root_cause_names.add(cls)
 
-        # Pattern: "incompatible types...cannot be converted to X" or "found: X"
-        for match in re.finditer(r'(?:cannot be converted to|found:\s*)(\w+)', error_output, re.IGNORECASE):
-            cls = match.group(1)
-            # FIX #7: Check cls is not empty before accessing cls[0]
-            if cls and len(cls) > 0 and cls[0].isupper() and cls not in java_keywords:
-                root_cause_classes.add(cls)
+            # Pattern: "incompatible types...cannot be converted to X"
+            for match in re.finditer(r'(?:cannot be converted to|found:\s*)(\w+)', error_output, re.IGNORECASE):
+                cls = match.group(1)
+                if cls and len(cls) > 0 and cls[0].isupper() and cls not in keywords:
+                    root_cause_names.add(cls)
 
-        # Pattern: "method X() in class Y" - Y is the root cause
-        for match in re.finditer(r'method\s+\w+\([^)]*\)\s+in\s+(?:class|interface)\s+(\w+)', error_output, re.IGNORECASE):
-            root_cause_classes.add(match.group(1))
+        # ----- PYTHON PATTERNS -----
+        elif language == 'python':
+            # Pattern: "ImportError: cannot import name 'X' from 'module'"
+            for match in re.finditer(r"cannot import name '(\w+)'", error_output):
+                root_cause_names.add(match.group(1))
 
-        # Pattern: "variable xxxRepository of type com.package.XxxRepository" - for repository errors
-        for match in re.finditer(r'variable\s+(\w+Repository)\s+of\s+type', error_output, re.IGNORECASE):
-            root_cause_classes.add(match.group(1))
+            # Pattern: "ModuleNotFoundError: No module named 'x'"
+            for match in re.finditer(r"No module named '([\w.]+)'", error_output):
+                module = match.group(1).split('.')[-1]
+                root_cause_names.add(module)
+
+            # Pattern: "AttributeError: 'X' object has no attribute 'y'"
+            for match in re.finditer(r"'(\w+)' object has no attribute", error_output):
+                root_cause_names.add(match.group(1))
+
+            # Pattern: "NameError: name 'X' is not defined"
+            for match in re.finditer(r"name '(\w+)' is not defined", error_output):
+                name = match.group(1)
+                if name and name not in keywords:
+                    root_cause_names.add(name)
+
+            # Pattern: "TypeError: X() missing required argument"
+            for match in re.finditer(r"TypeError:\s+(\w+)\(\)", error_output):
+                root_cause_names.add(match.group(1))
+
+        # ----- TYPESCRIPT/JAVASCRIPT PATTERNS -----
+        elif language in ('typescript', 'javascript'):
+            # Pattern: "Property 'x' does not exist on type 'Y'"
+            for match in re.finditer(r"does not exist on type '(\w+)'", error_output):
+                root_cause_names.add(match.group(1))
+
+            # Pattern: "Cannot find module 'x'"
+            for match in re.finditer(r"Cannot find module '([^']+)'", error_output):
+                module = match.group(1).split('/')[-1].replace('.js', '').replace('.ts', '')
+                if module and module not in keywords:
+                    root_cause_names.add(module)
+
+            # Pattern: "Module 'x' has no exported member 'Y'"
+            for match in re.finditer(r"has no exported member '(\w+)'", error_output):
+                root_cause_names.add(match.group(1))
+
+            # Pattern: "Type 'X' is not assignable to type 'Y'"
+            for match in re.finditer(r"Type '(\w+)' is not assignable", error_output):
+                t = match.group(1)
+                if t and t not in keywords:
+                    root_cause_names.add(t)
+
+            # Pattern: "'X' is not a valid JSX element"
+            for match in re.finditer(r"'(\w+)' is not a valid JSX element", error_output):
+                root_cause_names.add(match.group(1))
+
+        # ----- GO PATTERNS -----
+        elif language == 'go':
+            # Pattern: "undefined: X"
+            for match in re.finditer(r'undefined:\s+(\w+)', error_output):
+                name = match.group(1)
+                if name and name not in keywords:
+                    root_cause_names.add(name)
+
+            # Pattern: "cannot find package 'x'"
+            for match in re.finditer(r"cannot find package \"([^\"]+)\"", error_output):
+                pkg = match.group(1).split('/')[-1]
+                root_cause_names.add(pkg)
+
+            # Pattern: "X.Y undefined (type X has no field or method Y)"
+            for match in re.finditer(r'(\w+)\.\w+ undefined.*type (\w+) has no', error_output):
+                root_cause_names.add(match.group(2))
+
+        # ----- RUST PATTERNS -----
+        elif language == 'rust':
+            # Pattern: "cannot find value `x` in this scope"
+            for match in re.finditer(r'cannot find (?:value|type|function|struct|trait) `(\w+)`', error_output):
+                name = match.group(1)
+                if name and name not in keywords:
+                    root_cause_names.add(name)
+
+            # Pattern: "unresolved import `x`"
+            for match in re.finditer(r'unresolved import `(\w+)`', error_output):
+                root_cause_names.add(match.group(1))
+
+            # Pattern: "no method named `x` found for struct `Y`"
+            for match in re.finditer(r'no method named `\w+` found for (?:struct|type) `(\w+)`', error_output):
+                root_cause_names.add(match.group(1))
+
+        # ----- C# PATTERNS -----
+        elif language == 'csharp':
+            # Pattern: "The type or namespace name 'X' could not be found"
+            for match in re.finditer(r"type or namespace name '(\w+)'.*could not be found", error_output, re.IGNORECASE):
+                root_cause_names.add(match.group(1))
+
+            # Pattern: "'X' does not contain a definition for 'Y'"
+            for match in re.finditer(r"'(\w+)' does not contain a definition for", error_output):
+                root_cause_names.add(match.group(1))
+
+        # ----- GENERIC PATTERNS (all languages) -----
+        # Pattern: File paths in error messages (e.g., "Error in user_service.py")
+        for match in re.finditer(r'[/\\]?([\w-]+)\.(py|ts|tsx|js|jsx|java|go|rs|cs|rb|php)(?::\d+)?', error_output):
+            name = match.group(1)
+            if name and name != current_name:
+                root_cause_names.add(name)
 
         # =====================================================================
-        # STEP 1b: Add RELATED files by entity name pattern
-        # If error is in UserServiceImpl, also include User, UserDto, UserService, UserRepository
+        # STEP 1b: Add RELATED files by naming pattern (language-aware)
         # =====================================================================
-        if current_class:
-            # Extract entity name from patterns like UserServiceImpl, UserService, UserController
-            entity_patterns = [
-                (r'^(\w+)ServiceImpl$', lambda m: m.group(1)),      # UserServiceImpl -> User
-                (r'^(\w+)Service$', lambda m: m.group(1)),          # UserService -> User
-                (r'^(\w+)Controller$', lambda m: m.group(1)),       # UserController -> User
-                (r'^(\w+)Repository$', lambda m: m.group(1)),       # UserRepository -> User
-                (r'^(\w+)Dto$', lambda m: m.group(1)),              # UserDto -> User
-                (r'^(\w+)DTO$', lambda m: m.group(1)),              # UserDTO -> User
-            ]
+        if current_name:
+            patterns = RELATED_FILE_PATTERNS.get(language, {})
+            suffixes = patterns.get('suffixes', [])
 
+            # Extract base entity name
             entity_name = None
-            for pattern, extractor in entity_patterns:
-                match = re.match(pattern, current_class)
-                if match:
-                    entity_name = extractor(match)
+            for suffix in suffixes:
+                if current_name.endswith(suffix):
+                    entity_name = current_name[:-len(suffix)]
+                    break
+                if current_name.lower().endswith(suffix.lower()):
+                    # Handle case variations
+                    entity_name = current_name[:-len(suffix)]
                     break
 
             if entity_name:
-                # Add all related class patterns
-                related_patterns = [
-                    entity_name,                    # User (entity)
-                    f"{entity_name}Dto",            # UserDto
-                    f"{entity_name}DTO",            # UserDTO
-                    f"{entity_name}Service",        # UserService (interface)
-                    f"{entity_name}ServiceImpl",    # UserServiceImpl
-                    f"{entity_name}Repository",     # UserRepository
-                    f"{entity_name}Controller",     # UserController
-                ]
-                for pattern in related_patterns:
-                    if pattern != current_class:
-                        root_cause_classes.add(pattern)
-                logger.info(f"[BoltFixer] Added related classes for entity '{entity_name}': {related_patterns}")
+                # Add all related name patterns
+                for suffix in suffixes:
+                    related_name = f"{entity_name}{suffix}"
+                    if related_name != current_name:
+                        root_cause_names.add(related_name)
+                # Also add the base entity
+                root_cause_names.add(entity_name)
+                logger.info(f"[BoltFixer] Added related files for entity '{entity_name}'")
 
-        logger.info(f"[BoltFixer] Identified root cause classes: {root_cause_classes}")
+        # Filter out keywords
+        root_cause_names = {n for n in root_cause_names if n not in keywords}
+        logger.info(f"[BoltFixer] Identified root cause names ({language}): {root_cause_names}")
 
         # =====================================================================
-        # STEP 2: Find Java files - use sandbox_file_lister if available
+        # STEP 2: Find source files - use sandbox_file_lister if available
         # =====================================================================
-        all_java_files = []
+        patterns = RELATED_FILE_PATTERNS.get(language, {})
+        extensions = patterns.get('extensions', [])
 
-        if self._sandbox_file_lister:
-            try:
-                all_java_files = self._sandbox_file_lister(project_str, "*.java")
-                logger.info(f"[BoltFixer] Found {len(all_java_files)} Java files via sandbox lister")
-            except Exception as e:
-                logger.warning(f"[BoltFixer] Sandbox file listing failed: {e}")
-                all_java_files = []
-        else:
-            all_java_files = glob.glob(f"{project_str}/**/*.java", recursive=True)
+        # Default extensions if language not configured
+        if not extensions:
+            ext = Path(current_file).suffix if current_file else ''
+            extensions = [ext] if ext else ['.py', '.js', '.ts', '.java', '.go', '.rs']
+
+        all_source_files = []
+        for ext in extensions:
+            pattern = f"*{ext}"
+            if self._sandbox_file_lister:
+                try:
+                    files = self._sandbox_file_lister(project_str, pattern)
+                    all_source_files.extend(files)
+                except Exception as e:
+                    logger.warning(f"[BoltFixer] Sandbox file listing failed for {pattern}: {e}")
+            else:
+                all_source_files.extend(glob.glob(f"{project_str}/**/{pattern}", recursive=True))
+
+        logger.info(f"[BoltFixer] Found {len(all_source_files)} source files with extensions {extensions}")
 
         # =====================================================================
-        # STEP 3: Read files - prioritize ROOT CAUSE classes
+        # STEP 3: Read files - prioritize ROOT CAUSE files
         # =====================================================================
+        MAX_RELATED_FILES = 8
         related_contents = []
         files_found = 0
 
-        # First pass: Read ROOT CAUSE files (these need to be fixed)
-        for java_file in all_java_files:
-            if files_found >= 8:  # Increased to accommodate related files
+        # First pass: Read ROOT CAUSE files
+        for source_file in all_source_files:
+            if files_found >= MAX_RELATED_FILES:
                 break
 
-            class_name = Path(java_file).stem
+            file_name = Path(source_file).stem
 
-            if class_name == current_class:
+            if file_name == current_name:
                 continue
 
-            if class_name in root_cause_classes:
-                content = self._read_java_file(java_file, project_path)
+            if file_name in root_cause_names or file_name.lower() in {n.lower() for n in root_cause_names}:
+                content = self._read_source_file(source_file, project_path)
                 if content:
+                    syntax = get_syntax_highlight(source_file)
                     related_contents.append(f"""
 --- {content['path']} --- [ROOT CAUSE - FIX THIS FILE]
-```java
+```{syntax}
 {content['content'][:8000]}
 ```
 """)
@@ -1669,24 +1987,26 @@ BUILD LOG:
                     logger.info(f"[BoltFixer] Read ROOT CAUSE file: {content['path']}")
 
         # Second pass: Read other mentioned files (for context)
-        for java_file in all_java_files:
-            if files_found >= 8:  # Increased to accommodate related files
+        for source_file in all_source_files:
+            if files_found >= MAX_RELATED_FILES:
                 break
 
-            class_name = Path(java_file).stem
+            file_name = Path(source_file).stem
 
-            if class_name == current_class:
+            if file_name == current_name:
                 continue
 
-            if class_name in root_cause_classes:
+            if file_name in root_cause_names or file_name.lower() in {n.lower() for n in root_cause_names}:
                 continue  # Already read
 
-            if re.search(rf'\b{re.escape(class_name)}\b', error_output):
-                content = self._read_java_file(java_file, project_path)
+            # Check if mentioned in error output
+            if re.search(rf'\b{re.escape(file_name)}\b', error_output, re.IGNORECASE):
+                content = self._read_source_file(source_file, project_path)
                 if content:
+                    syntax = get_syntax_highlight(source_file)
                     related_contents.append(f"""
 --- {content['path']} --- [CONTEXT]
-```java
+```{syntax}
 {content['content'][:8000]}
 ```
 """)
@@ -1694,26 +2014,26 @@ BUILD LOG:
                     logger.info(f"[BoltFixer] Read context file: {content['path']}")
 
         if related_contents:
-            logger.info(f"[BoltFixer] Found {files_found} related Java files")
+            logger.info(f"[BoltFixer] Found {files_found} related files for {language}")
 
         return "\n".join(related_contents)
 
-    def _read_java_file(self, java_file: str, project_path: Path) -> Optional[Dict[str, str]]:
-        """Helper to read a Java file from local or remote sandbox."""
+    def _read_source_file(self, file_path: str, project_path: Path) -> Optional[Dict[str, str]]:
+        """Helper to read a source file from local or remote sandbox."""
         try:
             if self._sandbox_file_reader:
-                content = self._sandbox_file_reader(java_file)
+                content = self._sandbox_file_reader(file_path)
             else:
-                content = Path(java_file).read_text(encoding='utf-8')
+                content = Path(file_path).read_text(encoding='utf-8')
 
             if content:
                 try:
-                    rel_path = Path(java_file).relative_to(project_path)
+                    rel_path = Path(file_path).relative_to(project_path)
                 except ValueError:
-                    rel_path = Path(java_file).name
+                    rel_path = Path(file_path).name
                 return {"path": str(rel_path), "content": content}
         except Exception as e:
-            logger.warning(f"[BoltFixer] Could not read {java_file}: {e}")
+            logger.warning(f"[BoltFixer] Could not read {file_path}: {e}")
         return None
 
     async def _read_file_content(self, project_path: Path, file_path: str) -> Optional[str]:
