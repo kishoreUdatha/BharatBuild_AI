@@ -1906,6 +1906,34 @@ FROM eclipse-temurin:17-jre-alpine    # Recommended for runtime (smallest)
 FROM eclipse-temurin:17-jdk-alpine    # If you need full JDK
 ```
 
+⚠️ MAVEN/GRADLE WRAPPER RULES (CRITICAL!):
+❌ NEVER use mvnw or gradlew in Dockerfiles - wrapper files don't exist!
+```dockerfile
+# WRONG - mvnw/gradlew files are NOT generated:
+COPY mvnw .
+COPY .mvn .mvn
+RUN ./mvnw package    # FAILS! mvnw doesn't exist
+
+COPY gradlew .
+COPY gradle gradle
+RUN ./gradlew build   # FAILS! gradlew doesn't exist
+```
+
+✅ CORRECT - Use mvn/gradle directly from base image:
+```dockerfile
+# Maven - use 'mvn' command (available in maven base image)
+FROM maven:3.9-eclipse-temurin-17-alpine AS build
+COPY pom.xml .
+COPY src src
+RUN mvn package -DskipTests
+
+# Gradle - use 'gradle' command (available in gradle base image)
+FROM gradle:8-jdk17-alpine AS build
+COPY build.gradle .
+COPY src src
+RUN gradle build --no-daemon
+```
+
 NODE.JS/FRONTEND:
 ✅ CORRECT base images:
 ```dockerfile

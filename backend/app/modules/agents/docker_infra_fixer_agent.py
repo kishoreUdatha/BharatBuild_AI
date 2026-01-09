@@ -1678,24 +1678,28 @@ http {
 
     async def _fix_dockerfile_copy(self, error_message: str, project_path: str, sandbox_runner: callable) -> FixResult:
         """Fix COPY command errors in Dockerfile."""
-        # Extract the missing file
-        match = re.search(r'COPY.*"([^"]+)".*not found|failed to compute cache key.*"([^"]+)"', error_message)
+        # Extract the missing file - handle multiple error formats
+        match = re.search(
+            r'stat ([^:]+): file does not exist|'  # stat mvnw: file does not exist
+            r'COPY.*"([^"]+)".*not found|'         # COPY "file" not found
+            r'failed to compute cache key.*"([^"]+)"',  # cache key "file"
+            error_message
+        )
         if not match:
             return FixResult(success=False, message="Could not determine missing file")
 
-        missing_file = match.group(1) or match.group(2)
+        missing_file = (match.group(1) or match.group(2) or match.group(3)).strip()
 
-        # Common fixes
-        if missing_file == "package.json":
-            # Check if we're copying from wrong location
+        # For mvnw/gradlew, return helpful message for Claude to fix
+        if missing_file in ['mvnw', 'gradlew', '.mvn', 'gradle']:
             return FixResult(
                 success=False,
-                message=f"Missing {missing_file} - ensure file exists in build context"
+                message=f"Missing {missing_file} - remove wrapper COPY from Dockerfile and use mvn/gradle directly"
             )
 
         return FixResult(
             success=False,
-            message=f"COPY failed for {missing_file} - check if file exists in build context"
+            message=f"COPY failed for {missing_file} - file not found in build context"
         )
 
     # ========================================================================

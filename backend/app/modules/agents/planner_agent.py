@@ -1253,6 +1253,11 @@ DOCKERFILE BASE IMAGE RULES (CRITICAL - BUILD FAILURES IF WRONG!):
 - Maven builds: maven:3.9-eclipse-temurin-17-alpine
 - Gradle builds: gradle:8-jdk17-alpine
 
+⚠️ NEVER use mvnw or gradlew in Dockerfiles!
+- Wrapper files (mvnw, gradlew) are NOT generated - they don't exist!
+- Use 'mvn' directly (from maven base image)
+- Use 'gradle' directly (from gradle base image)
+
 ✅ CORRECT base images for other technologies:
 - Node.js: node:20-alpine (NOT node:latest)
 - Python: python:3.11-slim (NOT python:latest)
