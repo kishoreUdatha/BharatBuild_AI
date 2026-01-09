@@ -2498,6 +2498,16 @@ Be thorough, specific, and ensure all tasks are actionable by automation agents.
         if notes_match:
             plan["notes"] = notes_match.group(1).strip()
 
+        # Extract package_structure (CRITICAL for Java projects - ensures consistent packages)
+        package_structure_match = re.search(r'<package_structure>(.*?)</package_structure>', plan_content, re.DOTALL)
+        if package_structure_match:
+            plan["package_structure"] = package_structure_match.group(1).strip()
+            logger.info(f"[PlannerAgent] Extracted package_structure document for Writer context")
+        else:
+            # For Java projects, this is important - log a warning
+            if plan.get("tech_stack") and "java" in plan.get("tech_stack", "").lower():
+                logger.warning("[PlannerAgent] No <package_structure> found for Java project - Writer may have package inconsistencies!")
+
         # Log file count for debugging
         files_count = len(plan.get("files", []))
         logger.info(f"[PlannerAgent] Parsed plan with {files_count} files")

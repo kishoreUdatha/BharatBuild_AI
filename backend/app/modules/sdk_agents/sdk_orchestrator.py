@@ -204,6 +204,57 @@ class SDKOrchestrator:
             "attempts": result.attempts
         }
 
+    async def fix_all_project_errors_smart(
+        self,
+        project_id: str,
+        user_id: str,
+        build_command: str = "npm run build",
+        max_iterations: int = 15
+    ) -> Dict[str, Any]:
+        """
+        SMART BATCHING: Fix ALL project errors using prioritized category-based approach.
+
+        This is the recommended method for projects with many errors (e.g., 100+ compilation errors).
+
+        Strategy:
+        1. Run build and collect ALL errors
+        2. Parse and group errors by category (import, type, syntax, etc.)
+        3. Fix one category at a time, starting with imports (highest impact)
+        4. Rebuild after each category to see TRUE remaining errors
+        5. Repeat until fixed or max iterations
+
+        Why this works better for many errors:
+        - 100 errors might be 5 root causes (e.g., missing import causes 20 "cannot find symbol")
+        - Fixing imports first resolves cascading errors
+        - Rebuilding after each category shows actual remaining issues
+
+        Args:
+            project_id: Project identifier
+            user_id: User identifier
+            build_command: Command to build/compile the project
+            max_iterations: Maximum fix iterations across all categories
+
+        Returns:
+            Dict with fix results including success status, files modified, and summary
+        """
+        logger.info(f"[SDKOrchestrator:{project_id}] Starting smart batching fix")
+
+        result = await self.sdk_fixer.fix_all_errors_smart(
+            project_id=project_id,
+            user_id=user_id,
+            build_command=build_command,
+            max_total_iterations=max_iterations
+        )
+
+        return {
+            "success": result.success,
+            "error_fixed": result.error_fixed,
+            "files_modified": result.files_modified,
+            "message": result.message,
+            "attempts": result.attempts,
+            "method": "smart_batching"
+        }
+
     async def stream_orchestration(
         self,
         project_id: str,

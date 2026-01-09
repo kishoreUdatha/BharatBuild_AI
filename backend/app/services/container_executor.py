@@ -2009,15 +2009,17 @@ class ContainerExecutor:
             if validation_result.files_fixed:
                 try:
                     from app.services.bolt_fixer import BoltFixer
+                    from pathlib import Path
                     fixer = BoltFixer()
+                    project_path_obj = Path(project_path) if isinstance(project_path, str) else project_path
                     for fix_info in validation_result.files_fixed:
                         # Extract file path from fix info (e.g., "backend/Dockerfile (mvnw → mvn)")
                         file_path = fix_info.split(" (")[0] if " (" in fix_info else fix_info
                         # Handle relative paths
                         if "/" in file_path:
-                            full_path = project_path / file_path
+                            full_path = project_path_obj / file_path
                         else:
-                            full_path = project_path / file_path
+                            full_path = project_path_obj / file_path
                         # Read the fixed content and persist
                         try:
                             content = self._read_file_from_sandbox(str(full_path))
