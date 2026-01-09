@@ -838,70 +838,89 @@ No explanations. Only the <file> block."""
 
             # =================================================================
             # Step 1: Upload to S3 (REQUIRED for restore to work)
+            # WITH RETRY LOGIC for network errors
             # =================================================================
             s3_success = False
-            try:
-                await storage_service.upload_file(
-                    project_id=project_id,
-                    file_path=file_path,
-                    content=content_bytes,
-                    content_type="text/plain"
-                )
-                s3_success = True
-                logger.info(f"[BoltFixer:{project_id}] ✓ S3: {file_path}")
-            except Exception as s3_err:
-                logger.error(f"[BoltFixer:{project_id}] S3 failed: {file_path} - {s3_err}")
-                # ISSUE #1 FIX: S3 is REQUIRED for restore - if it fails, persistence fails
-                # Without S3 content, the file can't be restored on next run
-                return False
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    await storage_service.upload_file(
+                        project_id=project_id,
+                        file_path=file_path,
+                        content=content_bytes,
+                        content_type="text/plain"
+                    )
+                    s3_success = True
+                    logger.info(f"[BoltFixer:{project_id}] ✓ S3: {file_path}")
+                    break  # Success - exit retry loop
+                except Exception as s3_err:
+                    if attempt < max_retries - 1:
+                        wait_time = (attempt + 1) * 2  # 2, 4 seconds
+                        logger.warning(f"[BoltFixer:{project_id}] S3 retry {attempt + 1}/{max_retries} for {file_path}: {s3_err}")
+                        import asyncio
+                        await asyncio.sleep(wait_time)
+                    else:
+                        logger.error(f"[BoltFixer:{project_id}] S3 failed after {max_retries} retries: {file_path} - {s3_err}")
+                        # ISSUE #1 FIX: S3 is REQUIRED for restore - if it fails, persistence fails
+                        # Without S3 content, the file can't be restored on next run
+                        return False
 
             # =================================================================
             # Step 2: Update or CREATE database record
             # ISSUE #1 FIX: Only reach here if S3 succeeded
+            # WITH RETRY LOGIC for network errors
             # =================================================================
             db_success = False
-            try:
-                async with AsyncSessionLocal() as session:
-                    # Try to find existing record
-                    stmt = select(ProjectFile).where(
-                        ProjectFile.project_id == UUID(project_id),
-                        ProjectFile.path == file_path
-                    )
-                    db_result = await session.execute(stmt)
-                    file_record = db_result.scalar_one_or_none()
-
-                    if file_record:
-                        # UPDATE existing record
-                        file_record.content_hash = content_hash
-                        file_record.size_bytes = size_bytes
-                        file_record.s3_key = s3_key  # S3 succeeded, so always set
-                        await session.commit()
-                        db_success = True
-                        logger.info(f"[BoltFixer:{project_id}] ✓ DB updated: {file_path}")
-                    else:
-                        # CREATE new record for new files
-                        new_file = ProjectFile(
-                            project_id=UUID(project_id),
-                            path=file_path,
-                            name=os.path.basename(file_path),
-                            content_hash=content_hash,
-                            size_bytes=size_bytes,
-                            s3_key=s3_key,  # S3 succeeded, so always set
-                            is_folder=False,
-                            generation_status="completed"
+            for db_attempt in range(max_retries):
+                try:
+                    async with AsyncSessionLocal() as session:
+                        # Try to find existing record
+                        stmt = select(ProjectFile).where(
+                            ProjectFile.project_id == UUID(project_id),
+                            ProjectFile.path == file_path
                         )
-                        session.add(new_file)
-                        await session.commit()
-                        db_success = True
-                        logger.info(f"[BoltFixer:{project_id}] ✓ DB created: {file_path}")
+                        db_result = await session.execute(stmt)
+                        file_record = db_result.scalar_one_or_none()
 
-            except Exception as db_err:
-                logger.error(f"[BoltFixer:{project_id}] DB failed: {file_path} - {db_err}")
-                # DB failed but S3 has the file - this is inconsistent state
-                # Return False so caller knows persistence didn't fully succeed
-                # The file is in S3 but won't be restored without DB record
-                logger.warning(f"[BoltFixer:{project_id}] S3 has file but DB failed - returning False")
-                return False  # Consistent: BOTH must succeed
+                        if file_record:
+                            # UPDATE existing record
+                            file_record.content_hash = content_hash
+                            file_record.size_bytes = size_bytes
+                            file_record.s3_key = s3_key  # S3 succeeded, so always set
+                            await session.commit()
+                            db_success = True
+                            logger.info(f"[BoltFixer:{project_id}] ✓ DB updated: {file_path}")
+                        else:
+                            # CREATE new record for new files
+                            new_file = ProjectFile(
+                                project_id=UUID(project_id),
+                                path=file_path,
+                                name=os.path.basename(file_path),
+                                content_hash=content_hash,
+                                size_bytes=size_bytes,
+                                s3_key=s3_key,  # S3 succeeded, so always set
+                                is_folder=False,
+                                generation_status="completed"
+                            )
+                            session.add(new_file)
+                            await session.commit()
+                            db_success = True
+                            logger.info(f"[BoltFixer:{project_id}] ✓ DB created: {file_path}")
+                        break  # Success - exit retry loop
+
+                except Exception as db_err:
+                    if db_attempt < max_retries - 1:
+                        wait_time = (db_attempt + 1) * 2  # 2, 4 seconds
+                        logger.warning(f"[BoltFixer:{project_id}] DB retry {db_attempt + 1}/{max_retries} for {file_path}: {db_err}")
+                        import asyncio
+                        await asyncio.sleep(wait_time)
+                    else:
+                        logger.error(f"[BoltFixer:{project_id}] DB failed after {max_retries} retries: {file_path} - {db_err}")
+                        # DB failed but S3 has the file - this is inconsistent state
+                        # Return False so caller knows persistence didn't fully succeed
+                        # The file is in S3 but won't be restored without DB record
+                        logger.warning(f"[BoltFixer:{project_id}] S3 has file but DB failed - returning False")
+                        return False  # Consistent: BOTH must succeed
 
             # =================================================================
             # Return True ONLY if BOTH S3 and DB succeeded
