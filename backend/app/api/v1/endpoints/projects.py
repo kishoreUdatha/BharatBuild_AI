@@ -1580,10 +1580,13 @@ class PathCleanupResponse(BaseModel):
 @router.post("/{project_id}/cleanup-paths")
 async def cleanup_project_paths(
     project_id: str,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Clean up corrupted file paths in the database.
+
+    SECURITY: Requires authentication and verifies user owns the project.
 
     Fixes issues like:
     - app/frontend/... -> frontend/...
@@ -1596,6 +1599,17 @@ async def cleanup_project_paths(
 
     try:
         project_uuid = str(UUID(project_id))
+
+        # SECURITY: Verify user owns this project
+        result = await db.execute(
+            select(Project).where(
+                Project.id == UUID(project_id),
+                Project.user_id == current_user.id
+            )
+        )
+        project = result.scalar_one_or_none()
+        if not project:
+            raise HTTPException(status_code=403, detail="Access denied: You don't own this project")
         logger.info(f"[PathCleanup] Starting cleanup for project: {project_id}")
 
         # Get all files

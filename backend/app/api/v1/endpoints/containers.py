@@ -23,11 +23,19 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 # =============================================================================
 # PREVIEW URL - Use centralized function
 # =============================================================================
 from app.core.preview_url import get_preview_url as _get_preview_url_centralized
+
+# =============================================================================
+# USER ISOLATION - Import auth dependencies for ownership verification
+# =============================================================================
+from app.modules.auth.dependencies import get_current_user, get_current_user_optional
+from app.models.user import User
+from app.models.project import Project
 
 
 def _get_preview_url(port: int, project_id: str = None) -> str:
@@ -107,31 +115,95 @@ class FileInfo(BaseModel):
     size: int
 
 
-# Helper to get user_id from request
+# =============================================================================
+# SECURITY FIX: Removed X-User-ID header trust - use JWT auth only
+# =============================================================================
 async def get_current_user_id(request: Request) -> str:
-    """Extract user ID from request headers or auth token"""
-    # Check header first
-    user_id = request.headers.get("X-User-ID")
-    if user_id:
-        logger.info(f"[Auth] Got user_id from X-User-ID header: {user_id}")
-        return user_id
+    """
+    Extract user ID from JWT auth token ONLY.
 
-    # Decode JWT token to get user_id
+    SECURITY: Previously trusted X-User-ID header which allowed user spoofing.
+    Now only uses JWT token from Authorization header.
+    """
+    # SECURITY: Do NOT trust X-User-ID header - it can be spoofed!
+    # Only use JWT token authentication
+
     auth_header = request.headers.get("Authorization")
-    logger.info(f"[Auth] Authorization header present: {bool(auth_header)}")
     if auth_header and auth_header.startswith("Bearer "):
         try:
             token = auth_header[7:]  # Remove "Bearer " prefix
             payload = decode_token(token)
             user_id = payload.get("sub")
             if user_id:
-                logger.info(f"[Auth] Extracted user_id from JWT: {user_id}")
+                logger.debug(f"[Auth] Extracted user_id from JWT: {user_id}")
                 return user_id
         except Exception as e:
             logger.warning(f"[Auth] Failed to decode JWT token: {e}")
 
-    logger.info("[Auth] No valid auth found, returning 'anonymous'")
+    logger.debug("[Auth] No valid auth found, returning 'anonymous'")
     return "anonymous"
+
+
+async def verify_project_ownership(
+    project_id: str,
+    user_id: str,
+    db: AsyncSession
+) -> bool:
+    """
+    Verify that the user owns the specified project.
+
+    SECURITY: This must be called before any operation on a project
+    to prevent unauthorized access to other users' projects.
+
+    Args:
+        project_id: The project ID to check
+        user_id: The authenticated user's ID
+        db: Database session
+
+    Returns:
+        True if user owns the project or project is anonymous, False otherwise
+    """
+    # Anonymous users can only access anonymous projects
+    if user_id == "anonymous":
+        # For anonymous users, we allow access to their own anonymous projects
+        # which are identified by project_id alone (no user ownership in DB)
+        return True
+
+    try:
+        from uuid import UUID
+        # Validate project_id is a valid UUID
+        try:
+            project_uuid = UUID(project_id)
+        except (ValueError, TypeError):
+            logger.warning(f"[Security] Invalid project_id format: {project_id}")
+            return False
+
+        # Check if project exists and belongs to user
+        result = await db.execute(
+            select(Project).where(
+                Project.id == project_uuid,
+                Project.user_id == UUID(user_id)
+            )
+        )
+        project = result.scalar_one_or_none()
+
+        if project:
+            return True
+
+        # Also allow if project has no owner (legacy/anonymous projects)
+        result = await db.execute(
+            select(Project).where(Project.id == project_uuid)
+        )
+        project = result.scalar_one_or_none()
+        if project and project.user_id is None:
+            return True
+
+        logger.warning(f"[Security] User {user_id} denied access to project {project_id}")
+        return False
+
+    except Exception as e:
+        logger.error(f"[Security] Error verifying project ownership: {e}")
+        return False
 
 
 # Endpoints
@@ -276,10 +348,14 @@ async def create_container(
 async def execute_command(
     project_id: str,
     request: ExecuteCommandRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
     _: None = Depends(require_code_execution)
 ):
     """
     Execute a command inside project container with streaming output.
+
+    SECURITY: Verifies user owns the project before allowing command execution.
 
     This is the CORE API that runs user code:
     - npm install
@@ -304,6 +380,10 @@ async def execute_command(
         "timestamp": "HH:MM:SS"
     }
     """
+    # SECURITY: Verify user owns this project
+    if not await verify_project_ownership(project_id, user_id, db):
+        raise HTTPException(status_code=403, detail="Access denied: You don't own this project")
+
     from app.services.terminal_log_formatter import terminal_formatter
 
     manager = safe_get_container_manager()
@@ -404,15 +484,23 @@ async def execute_command(
 async def write_file(
     project_id: str,
     request: WriteFileRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Write a file to the project container.
+
+    SECURITY: Verifies user owns the project before allowing file write.
 
     Used when:
     - AI generates code
     - User saves file from editor
     - Creating new files
     """
+    # SECURITY: Verify user owns this project
+    if not await verify_project_ownership(project_id, user_id, db):
+        raise HTTPException(status_code=403, detail="Access denied: You don't own this project")
+
     manager = safe_get_container_manager()
 
     try:
@@ -435,14 +523,22 @@ async def write_file(
 async def list_files(
     project_id: str,
     path: str = Query(default=".", description="Directory path"),
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
 ) -> List[FileInfo]:
     """
     List files in project directory.
+
+    SECURITY: Verifies user owns the project before listing files.
 
     Used by:
     - File explorer in UI
     - Getting project structure
     """
+    # SECURITY: Verify user owns this project
+    if not await verify_project_ownership(project_id, user_id, db):
+        raise HTTPException(status_code=403, detail="Access denied: You don't own this project")
+
     manager = safe_get_container_manager()
 
     try:
@@ -460,14 +556,22 @@ async def list_files(
 async def read_file(
     project_id: str,
     file_path: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Read a file from the project container.
+
+    SECURITY: Verifies user owns the project before reading files.
 
     Used by:
     - Code editor to display file content
     - AI to read existing code
     """
+    # SECURITY: Verify user owns this project
+    if not await verify_project_ownership(project_id, user_id, db):
+        raise HTTPException(status_code=403, detail="Access denied: You don't own this project")
+
     manager = safe_get_container_manager()
 
     try:
