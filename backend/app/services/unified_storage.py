@@ -724,6 +724,11 @@ class UnifiedStorageService:
         Sync files from sandbox to S3 and update database records.
         Used when files exist on sandbox but were never uploaded to S3.
 
+        GAP #2 FIX:
+        - Increased file limit from 100 to 500 (most projects < 500 source files)
+        - Fixed path extraction using proper string manipulation
+        - Fixed newline splitting (was '\\n' instead of '\n')
+
         Returns: Number of files synced
         """
         import docker
@@ -747,29 +752,46 @@ class UnifiedStorageService:
                 docker_client = get_docker_client()
                 if not docker_client:
                     docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+                # GAP #2 FIX: Increased limit from 200 to 500 files
                 result = docker_client.containers.run(
                     image="alpine:latest",
-                    command=f"find {workspace_path} -type f -not -path '*/node_modules/*' -not -path '*/.git/*' | head -200",
-                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},  # Use sandbox_base for EFS support
+                    command=f"find {workspace_path} -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/build/*' | head -500",
+                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},
                     remove=True, detach=False
                 )
-                file_paths = [p.strip() for p in result.decode().split('\\n') if p.strip()]
+                # GAP #2 FIX: Fixed newline splitting (was '\\n' which is literal backslash-n)
+                file_paths = [p.strip() for p in result.decode().split('\n') if p.strip()]
             else:
                 sandbox_path = self.get_sandbox_path(project_id, user_id)
-                file_paths = [str(p) for p in sandbox_path.rglob('*') if p.is_file() and 'node_modules' not in str(p)]
+                file_paths = [str(p) for p in sandbox_path.rglob('*') if p.is_file() and 'node_modules' not in str(p) and '.git' not in str(p)]
 
             logger.info(f"[SyncToS3] Found {len(file_paths)} files in sandbox to sync")
 
-            for full_path in file_paths[:100]:  # Limit to 100 files per sync
+            # GAP #2 FIX: Increased limit from 100 to 500 files per sync
+            for full_path in file_paths[:500]:
                 try:
-                    # Get relative path
-                    rel_path = full_path.replace(workspace_path + '/', '').replace(str(workspace_path) + '/', '')
+                    # GAP #2 FIX: Improved path extraction
+                    # Ensure workspace_path ends without slash for consistent extraction
+                    workspace_normalized = workspace_path.rstrip('/')
+                    if full_path.startswith(workspace_normalized + '/'):
+                        rel_path = full_path[len(workspace_normalized) + 1:]
+                    elif full_path.startswith(workspace_normalized):
+                        rel_path = full_path[len(workspace_normalized):]
+                    else:
+                        # Fallback: just use filename
+                        rel_path = full_path.split('/')[-1] if '/' in full_path else full_path
+                        logger.warning(f"[SyncToS3] Could not extract relative path for {full_path}, using: {rel_path}")
+
+                    # Skip if path is invalid
                     if not rel_path or rel_path.startswith('/'):
+                        rel_path = rel_path.lstrip('/')
+                    if not rel_path:
                         continue
 
                     # Read file content from sandbox
                     content = await self.read_from_sandbox(project_id, rel_path, user_id)
                     if not content:
+                        logger.debug(f"[SyncToS3] Skipping empty file: {rel_path}")
                         continue
 
                     # Upload to S3 and save to database
@@ -782,10 +804,11 @@ class UnifiedStorageService:
                     logger.warning(f"[SyncToS3] Failed to sync {full_path}: {file_err}")
                     continue
 
-            logger.info(f"[SyncToS3] Completed: {synced_count} files synced to S3")
+            logger.info(f"[SyncToS3] Completed: {synced_count}/{len(file_paths)} files synced to S3")
 
         except Exception as e:
             logger.error(f"[SyncToS3] Sync failed: {e}", exc_info=True)
+            raise  # GAP #3 FIX: Re-raise so retry logic in execution.py can catch it
 
         return synced_count
 
