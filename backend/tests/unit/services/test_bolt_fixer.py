@@ -448,7 +448,7 @@ class TestRetryLimiterIntegration:
 # RELATED FILES READING TESTS
 # =============================================================================
 class TestRelatedFilesReading:
-    """Test reading related Java files"""
+    """Test reading related files (all languages)"""
 
     @pytest.fixture
     def fixer(self):
@@ -457,7 +457,7 @@ class TestRelatedFilesReading:
         return BoltFixer()
 
     @pytest.mark.asyncio
-    async def test_read_related_java_files(self, fixer):
+    async def test_read_related_files_java(self, fixer):
         """Test reading related Java files from error message"""
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -470,8 +470,51 @@ class TestRelatedFilesReading:
 
             error_output = "[ERROR] cannot find symbol: class UserDto\n[ERROR] location: class UserController"
 
-            related = await fixer._read_related_java_files(
+            # Use the generic _read_related_files method (renamed from _read_related_java_files)
+            related = await fixer._read_related_files(
                 tmp_path, error_output, "UserController.java"
+            )
+
+            # Should attempt to find related files
+            assert related is not None
+
+    @pytest.mark.asyncio
+    async def test_read_related_files_python(self, fixer):
+        """Test reading related Python files from error message"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            # Create Python project structure
+            (tmp_path / "app" / "services").mkdir(parents=True)
+            (tmp_path / "app" / "services" / "user_service.py").write_text(
+                "class UserService:\n    pass"
+            )
+
+            error_output = "ImportError: cannot import name 'UserService' from 'app.services.user_service'"
+
+            related = await fixer._read_related_files(
+                tmp_path, error_output, "app/controllers/user_controller.py"
+            )
+
+            # Should attempt to find related files
+            assert related is not None
+
+    @pytest.mark.asyncio
+    async def test_read_related_files_typescript(self, fixer):
+        """Test reading related TypeScript files from error message"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            # Create TypeScript project structure
+            (tmp_path / "src" / "services").mkdir(parents=True)
+            (tmp_path / "src" / "services" / "user.service.ts").write_text(
+                "export class UserService {}"
+            )
+
+            error_output = "Cannot find module './user.service'\nModule 'user.service' has no exported member 'getUser'"
+
+            related = await fixer._read_related_files(
+                tmp_path, error_output, "src/components/UserComponent.tsx"
             )
 
             # Should attempt to find related files
