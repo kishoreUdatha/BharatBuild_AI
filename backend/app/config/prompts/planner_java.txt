@@ -1,6 +1,38 @@
 
 JAVA / SPRING BOOT RULES:
 
+CRITICAL: PACKAGE STRUCTURE DOCUMENT (REQUIRED!)
+For ALL Java projects, you MUST output a <package_structure> section that documents:
+1. The base package name (e.g., com.company.project)
+2. The exact package for EACH entity, enum, DTO, repository, service, controller
+3. The ID type for each entity (Long, Integer, UUID)
+
+Example format:
+<package_structure>
+BASE_PACKAGE: com.goldmart
+ENTITIES:
+  - Order: com.goldmart.model.entity.Order (ID: Long)
+  - User: com.goldmart.model.entity.User (ID: Long)
+  - Product: com.goldmart.model.entity.Product (ID: Long)
+ENUMS:
+  - OrderStatus: com.goldmart.model.enums.OrderStatus
+  - UserRole: com.goldmart.model.enums.UserRole
+DTOS:
+  - OrderDto: com.goldmart.dto.OrderDto
+  - UserDto: com.goldmart.dto.UserDto
+REPOSITORIES:
+  - OrderRepository: com.goldmart.repository.OrderRepository extends JpaRepository<Order, Long>
+  - UserRepository: com.goldmart.repository.UserRepository extends JpaRepository<User, Long>
+SERVICES:
+  - OrderService: com.goldmart.service.OrderService
+  - UserService: com.goldmart.service.UserService
+CONTROLLERS:
+  - OrderController: com.goldmart.controller.OrderController
+  - UserController: com.goldmart.controller.UserController
+</package_structure>
+
+This document is CRITICAL - the Writer Agent will use it to ensure consistent packages across ALL files!
+
 PROJECT STRUCTURE:
 ```
 backend/

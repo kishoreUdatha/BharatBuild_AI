@@ -505,8 +505,13 @@ class UnifiedStorageService:
         else:
             workspace_path = f"{sandbox_base}/{project_id}"
 
-        full_path = f"{workspace_path}/{file_path}"
-        dir_path = "/".join(full_path.rsplit("/", 1)[:-1]) if "/" in file_path else workspace_path
+        # Handle both absolute and relative paths
+        # If file_path already starts with sandbox_base or workspace_path, use it directly
+        if file_path.startswith(sandbox_base) or file_path.startswith(workspace_path):
+            full_path = file_path
+        else:
+            full_path = f"{workspace_path}/{file_path}"
+        dir_path = "/".join(full_path.rsplit("/", 1)[:-1]) if "/" in full_path else workspace_path
 
         last_exception = None
 
@@ -595,7 +600,7 @@ class UnifiedStorageService:
 
         Args:
             project_id: Project UUID
-            file_path: Relative file path
+            file_path: Relative OR absolute file path (both supported)
             user_id: User ID for path scoping
 
         Returns:
@@ -614,7 +619,12 @@ class UnifiedStorageService:
                 else:
                     workspace_path = f"{sandbox_base}/{project_id}"
 
-                full_path = f"{workspace_path}/{file_path}"
+                # Handle both absolute and relative paths
+                # If file_path already starts with sandbox_base or workspace_path, use it directly
+                if file_path.startswith(sandbox_base) or file_path.startswith(workspace_path):
+                    full_path = file_path
+                else:
+                    full_path = f"{workspace_path}/{file_path}"
 
                 from app.services.docker_client_helper import get_docker_client
                 docker_client = get_docker_client()
@@ -632,9 +642,12 @@ class UnifiedStorageService:
                 content = result.decode('utf-8') if result else None
                 return content if content else None
 
-            # Local sandbox
+            # Local sandbox - handle both absolute and relative paths
             sandbox = self.get_sandbox_path(project_id, user_id)
-            full_path = sandbox / file_path
+            if file_path.startswith(str(sandbox)) or file_path.startswith('/'):
+                full_path = Path(file_path)
+            else:
+                full_path = sandbox / file_path
 
             if not full_path.exists():
                 return None
@@ -750,8 +763,13 @@ class UnifiedStorageService:
         else:
             workspace_path = f"{sandbox_base}/{project_id}"
 
-        full_path = f"{workspace_path}/{file_path}"
-        dir_path = "/".join(full_path.rsplit("/", 1)[:-1]) if "/" in file_path else workspace_path
+        # Handle both absolute and relative paths
+        # If file_path already starts with sandbox_base or workspace_path, use it directly
+        if file_path.startswith(sandbox_base) or file_path.startswith(workspace_path):
+            full_path = file_path
+        else:
+            full_path = f"{workspace_path}/{file_path}"
+        dir_path = "/".join(full_path.rsplit("/", 1)[:-1]) if "/" in full_path else workspace_path
 
         last_exception = None
 
@@ -835,8 +853,34 @@ class UnifiedStorageService:
         file_path: str,
         user_id: Optional[str] = None
     ) -> Optional[str]:
-        """Read a file from the sandbox workspace"""
+        """
+        Read a file from the sandbox workspace.
+
+        - If SANDBOX_DOCKER_HOST is set: Reads from remote EC2 sandbox via Docker
+        - Otherwise: Reads from local sandbox path
+
+        Args:
+            project_id: Project UUID
+            file_path: Relative file path
+            user_id: User ID for path scoping
+
+        Returns:
+            File content if found, None otherwise
+        """
         try:
+            # Check if using remote EC2 sandbox
+            sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
+            if sandbox_docker_host:
+                # CRITICAL FIX: Read from REMOTE EC2 sandbox using Docker
+                # Use sync version in threadpool to avoid blocking event loop
+                import asyncio
+                loop = asyncio.get_event_loop()
+                return await loop.run_in_executor(
+                    None,
+                    lambda: self.read_from_sandbox_sync(project_id, file_path, user_id)
+                )
+
+            # Local sandbox (ECS or development)
             sandbox = self.get_sandbox_path(project_id, user_id)
             full_path = sandbox / file_path
 
@@ -936,6 +980,7 @@ class UnifiedStorageService:
         # Build workspace path based on SANDBOX_PATH setting (supports EFS mount)
         sandbox_base = settings.SANDBOX_PATH
         workspace_path = f"{sandbox_base}/{user_id}/{project_id}" if user_id else f"{sandbox_base}/{project_id}"
+        logger.info(f"[SandboxCheck] Checking if sandbox exists at: {workspace_path} (user_id={user_id})")
         try:
             # Use TLS-enabled docker client
             from app.services.docker_client_helper import get_docker_client
@@ -948,9 +993,12 @@ class UnifiedStorageService:
                 volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},  # Use sandbox_base for EFS support
                 remove=True, detach=False,
             )
-            return result.decode().strip() == "EXISTS" if result else False
+            result_str = result.decode().strip() if result else "EMPTY"
+            exists = result_str == "EXISTS"
+            logger.info(f"[SandboxCheck] Result for {project_id}: {result_str} -> exists={exists}")
+            return exists
         except Exception as e:
-            logger.warning(f"[RemoteCheck] Failed to check EC2 sandbox: {e}")
+            logger.warning(f"[RemoteCheck] Failed to check EC2 sandbox {workspace_path}: {e}")
             return False
 
     async def sync_sandbox_to_s3(self, project_id: str, user_id: Optional[str] = None) -> int:

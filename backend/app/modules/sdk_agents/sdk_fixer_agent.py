@@ -36,6 +36,638 @@ class FixResult:
     final_error: Optional[str] = None
 
 
+@dataclass
+class ParsedError:
+    """A single parsed error from build output"""
+    file_path: str
+    line_number: Optional[int]
+    error_type: str  # 'import', 'missing_class', 'type_mismatch', 'syntax', 'other'
+    message: str
+    raw_text: str
+
+
+class ErrorCategory:
+    """Error categories with priority (lower = fix first)"""
+    IMPORT = 1          # Missing imports/packages - fix FIRST (cascading)
+    MISSING_FILE = 2    # Missing files/classes
+    TYPE_MISMATCH = 3   # Type errors
+    SYNTAX = 4          # Syntax errors
+    OTHER = 5           # Everything else
+
+
+class BuildErrorParser:
+    """
+    Parses build output to extract and categorize ALL compilation errors.
+
+    Supports ALL major technologies:
+    - Java (Maven/Gradle): "cannot find symbol", "package does not exist"
+    - TypeScript/JavaScript: "Cannot find module", "TS2304", "TS2307"
+    - Python: "ImportError", "ModuleNotFoundError", "NameError"
+    - Go: "undefined:", "imported and not used", "cannot find package"
+    - Rust: "unresolved import", "cannot find", "error[E0433]"
+    - C#/.NET: "CS0246", "CS0234", "CS0103"
+    - Generic fallback for any other technology
+
+    Error Categories (by priority):
+    1. import: Missing imports, packages, modules (FIX FIRST - cascading)
+    2. missing_class: Missing classes, types, definitions
+    3. type_mismatch: Type incompatibilities, wrong arguments
+    4. syntax: Syntax errors, missing tokens
+    5. other: Everything else
+    """
+
+    # Java error patterns
+    JAVA_PATTERNS = {
+        'import': [
+            r'package\s+(\S+)\s+does not exist',
+            r'cannot find symbol.*class\s+(\w+)',
+            r'cannot find symbol.*variable\s+(\w+)',
+            r'cannot access\s+(\w+)',
+            r'error: cannot find symbol',
+        ],
+        'missing_class': [
+            r'class\s+(\w+)\s+is public.*should be declared in a file',
+            r'cannot be resolved to a type',
+        ],
+        'type_mismatch': [
+            r'incompatible types',
+            r'required:\s+\S+.*found:\s+\S+',
+            r'method\s+\S+\s+in class\s+\S+\s+cannot be applied',
+        ],
+        'syntax': [
+            r"';' expected",
+            r"illegal start of",
+            r"unclosed string literal",
+            r"reached end of file while parsing",
+        ],
+    }
+
+    # TypeScript/JavaScript error patterns
+    TS_PATTERNS = {
+        'import': [
+            r"Cannot find module '([^']+)'",
+            r"Module '([^']+)' has no exported member",
+            r"TS2307.*Cannot find module",
+            r"TS2305.*has no exported member",
+        ],
+        'missing_class': [
+            r"TS2304.*Cannot find name '(\w+)'",
+            r"'(\w+)' is not defined",
+        ],
+        'type_mismatch': [
+            r"TS2322.*Type '.*' is not assignable",
+            r"TS2345.*Argument of type",
+            r"TS2339.*Property '(\w+)' does not exist",
+        ],
+        'syntax': [
+            r"TS1005.*'.*' expected",
+            r"Unexpected token",
+            r"SyntaxError:",
+        ],
+    }
+
+    # Python error patterns
+    PYTHON_PATTERNS = {
+        'import': [
+            r"ImportError: No module named '?(\w+)'?",
+            r"ModuleNotFoundError: No module named '?(\w+)'?",
+            r"cannot import name '(\w+)'",
+        ],
+        'missing_class': [
+            r"NameError: name '(\w+)' is not defined",
+        ],
+        'type_mismatch': [
+            r"TypeError:",
+            r"AttributeError: '(\w+)' object has no attribute",
+        ],
+        'syntax': [
+            r"SyntaxError:",
+            r"IndentationError:",
+        ],
+    }
+
+    # Go error patterns
+    GO_PATTERNS = {
+        'import': [
+            r'could not import\s+(\S+)',
+            r'package\s+(\S+)\s+is not in',
+            r'cannot find package',
+            r'imported and not used',
+        ],
+        'missing_class': [
+            r'undefined:\s+(\w+)',
+            r'undeclared name:\s+(\w+)',
+        ],
+        'type_mismatch': [
+            r'cannot use\s+.+\s+as\s+.+\s+in',
+            r'cannot convert',
+            r'incompatible type',
+        ],
+        'syntax': [
+            r'expected\s+.+,\s+found',
+            r'syntax error:',
+            r'missing\s+.+\s+in',
+        ],
+    }
+
+    # Rust error patterns
+    RUST_PATTERNS = {
+        'import': [
+            r'unresolved import\s+`([^`]+)`',
+            r"cannot find\s+.+\s+`([^`]+)`\s+in",
+            r'failed to resolve',
+            r'could not find\s+`([^`]+)`',
+        ],
+        'missing_class': [
+            r'cannot find\s+(?:type|struct|enum|trait)\s+`([^`]+)`',
+            r'not found in this scope',
+        ],
+        'type_mismatch': [
+            r'mismatched types',
+            r'expected\s+`[^`]+`,\s+found\s+`[^`]+`',
+            r'the trait bound\s+.+\s+is not satisfied',
+        ],
+        'syntax': [
+            r'expected\s+.+,\s+found\s+',
+            r'unexpected\s+',
+            r'unclosed delimiter',
+        ],
+    }
+
+    # C#/.NET error patterns
+    CSHARP_PATTERNS = {
+        'import': [
+            r"CS0246.*type or namespace name '(\w+)'.*could not be found",
+            r"CS0234.*type or namespace name '(\w+)'.*does not exist",
+            r'are you missing a using directive',
+        ],
+        'missing_class': [
+            r"CS0103.*name '(\w+)' does not exist",
+            r"CS1061.*does not contain a definition for '(\w+)'",
+        ],
+        'type_mismatch': [
+            r'CS0029.*Cannot implicitly convert type',
+            r'CS1503.*Argument.*cannot convert',
+        ],
+        'syntax': [
+            r"CS1002.*';' expected",
+            r'CS1513.*}.*expected',
+            r'CS1519.*Invalid token',
+        ],
+    }
+
+    @classmethod
+    def parse_build_output(cls, output: str, technology: str = "auto") -> List[ParsedError]:
+        """
+        Parse build output and extract all errors.
+
+        Supports ALL major technologies:
+        - Java (Maven/Gradle)
+        - TypeScript/JavaScript (npm, Vite, webpack)
+        - Python (pip, pytest, mypy)
+        - Go (go build, go test)
+        - Rust (cargo build)
+        - C#/.NET (dotnet build)
+        - Generic fallback for others
+
+        Args:
+            output: Build command output (stdout + stderr)
+            technology: Project technology (java, typescript, python, go, rust, csharp, auto)
+
+        Returns:
+            List of ParsedError objects grouped by file
+        """
+        errors = []
+        lines = output.split('\n')
+
+        # Auto-detect technology from output
+        if technology == "auto":
+            output_lower = output.lower()
+            if 'maven' in output_lower or '.java:' in output or 'BUILD FAILURE' in output or 'gradle' in output_lower:
+                technology = 'java'
+            elif 'error TS' in output or ('.ts' in output and 'error' in output_lower):
+                technology = 'typescript'
+            elif 'Traceback' in output or 'ModuleNotFoundError' in output or '.py' in output:
+                technology = 'python'
+            elif '.go:' in output or 'go build' in output_lower or 'go test' in output_lower:
+                technology = 'go'
+            elif 'error[E' in output or 'cargo' in output_lower or '.rs:' in output:
+                technology = 'rust'
+            elif 'error CS' in output or 'dotnet' in output_lower or '.cs(' in output:
+                technology = 'csharp'
+            else:
+                technology = 'generic'
+
+        # Parse based on technology
+        if technology == 'java':
+            errors = cls._parse_java_errors(output, lines)
+        elif technology in ['typescript', 'javascript']:
+            errors = cls._parse_typescript_errors(output, lines)
+        elif technology == 'python':
+            errors = cls._parse_python_errors(output, lines)
+        elif technology == 'go':
+            errors = cls._parse_go_errors(output, lines)
+        elif technology == 'rust':
+            errors = cls._parse_rust_errors(output, lines)
+        elif technology == 'csharp':
+            errors = cls._parse_csharp_errors(output, lines)
+        else:
+            errors = cls._parse_generic_errors(output, lines)
+
+        return errors
+
+    @classmethod
+    def _parse_java_errors(cls, output: str, lines: List[str]) -> List[ParsedError]:
+        """Parse Java/Maven build errors"""
+        errors = []
+
+        # Pattern: [ERROR] /path/to/File.java:[line,col] error message
+        error_pattern = re.compile(r'\[ERROR\]\s+(.+\.java):\[(\d+),\d+\]\s+(.+)')
+        # Alternative: src/main/java/com/example/File.java:10: error: message
+        alt_pattern = re.compile(r'(.+\.java):(\d+):\s*error:\s*(.+)')
+
+        for i, line in enumerate(lines):
+            match = error_pattern.search(line) or alt_pattern.search(line)
+            if match:
+                file_path = match.group(1)
+                line_num = int(match.group(2))
+                message = match.group(3)
+
+                # Categorize error
+                error_type = cls._categorize_java_error(message)
+
+                errors.append(ParsedError(
+                    file_path=file_path,
+                    line_number=line_num,
+                    error_type=error_type,
+                    message=message,
+                    raw_text=line
+                ))
+
+        return errors
+
+    @classmethod
+    def _categorize_java_error(cls, message: str) -> str:
+        """Categorize a Java error message"""
+        message_lower = message.lower()
+
+        if 'package' in message_lower and 'does not exist' in message_lower:
+            return 'import'
+        if 'cannot find symbol' in message_lower:
+            return 'import'
+        if 'cannot access' in message_lower:
+            return 'import'
+        if 'incompatible types' in message_lower:
+            return 'type_mismatch'
+        if 'cannot be applied' in message_lower:
+            return 'type_mismatch'
+        if "expected" in message_lower or 'illegal start' in message_lower:
+            return 'syntax'
+
+        return 'other'
+
+    @classmethod
+    def _parse_typescript_errors(cls, output: str, lines: List[str]) -> List[ParsedError]:
+        """Parse TypeScript/JavaScript build errors"""
+        errors = []
+
+        # Pattern: src/file.ts(10,5): error TS2304: Cannot find name 'X'
+        # Or: src/file.ts:10:5 - error TS2304: Cannot find name 'X'
+        error_pattern = re.compile(r'(.+\.[tj]sx?)[:\(](\d+)[,:]?\d*\)?:?\s*[-:]?\s*error\s+(TS\d+)?:?\s*(.+)')
+
+        for line in lines:
+            match = error_pattern.search(line)
+            if match:
+                file_path = match.group(1)
+                line_num = int(match.group(2))
+                ts_code = match.group(3) or ''
+                message = match.group(4)
+
+                # Categorize error
+                error_type = cls._categorize_ts_error(ts_code, message)
+
+                errors.append(ParsedError(
+                    file_path=file_path,
+                    line_number=line_num,
+                    error_type=error_type,
+                    message=message,
+                    raw_text=line
+                ))
+
+        return errors
+
+    @classmethod
+    def _categorize_ts_error(cls, ts_code: str, message: str) -> str:
+        """Categorize a TypeScript error"""
+        if ts_code in ['TS2307', 'TS2305']:
+            return 'import'
+        if ts_code == 'TS2304':
+            return 'missing_class'
+        if ts_code in ['TS2322', 'TS2345', 'TS2339']:
+            return 'type_mismatch'
+        if ts_code == 'TS1005':
+            return 'syntax'
+
+        message_lower = message.lower()
+        if 'cannot find module' in message_lower:
+            return 'import'
+        if 'cannot find name' in message_lower:
+            return 'missing_class'
+        if 'is not assignable' in message_lower:
+            return 'type_mismatch'
+
+        return 'other'
+
+    @classmethod
+    def _parse_python_errors(cls, output: str, lines: List[str]) -> List[ParsedError]:
+        """Parse Python build/lint errors"""
+        errors = []
+
+        # Pattern: File "path/to/file.py", line 10
+        file_pattern = re.compile(r'File "(.+\.py)", line (\d+)')
+        error_line_pattern = re.compile(r'(ImportError|ModuleNotFoundError|NameError|TypeError|SyntaxError|IndentationError):?\s*(.+)?')
+
+        current_file = None
+        current_line = None
+
+        for line in lines:
+            file_match = file_pattern.search(line)
+            if file_match:
+                current_file = file_match.group(1)
+                current_line = int(file_match.group(2))
+                continue
+
+            error_match = error_line_pattern.search(line)
+            if error_match and current_file:
+                error_name = error_match.group(1)
+                message = error_match.group(2) or ''
+
+                # Categorize
+                if error_name in ['ImportError', 'ModuleNotFoundError']:
+                    error_type = 'import'
+                elif error_name == 'NameError':
+                    error_type = 'missing_class'
+                elif error_name == 'TypeError':
+                    error_type = 'type_mismatch'
+                else:
+                    error_type = 'syntax'
+
+                errors.append(ParsedError(
+                    file_path=current_file,
+                    line_number=current_line,
+                    error_type=error_type,
+                    message=f"{error_name}: {message}",
+                    raw_text=line
+                ))
+                current_file = None
+
+        return errors
+
+    @classmethod
+    def _parse_go_errors(cls, output: str, lines: List[str]) -> List[ParsedError]:
+        """Parse Go build errors"""
+        errors = []
+
+        # Pattern: ./file.go:10:5: error message
+        # Or: file.go:10: error message
+        error_pattern = re.compile(r'\.?/?(.+\.go):(\d+)(?::\d+)?:\s*(.+)')
+
+        for line in lines:
+            match = error_pattern.search(line)
+            if match:
+                file_path = match.group(1)
+                line_num = int(match.group(2))
+                message = match.group(3)
+
+                # Categorize error
+                error_type = cls._categorize_go_error(message)
+
+                errors.append(ParsedError(
+                    file_path=file_path,
+                    line_number=line_num,
+                    error_type=error_type,
+                    message=message,
+                    raw_text=line
+                ))
+
+        return errors
+
+    @classmethod
+    def _categorize_go_error(cls, message: str) -> str:
+        """Categorize a Go error message"""
+        message_lower = message.lower()
+
+        if 'could not import' in message_lower or 'cannot find package' in message_lower:
+            return 'import'
+        if 'imported and not used' in message_lower:
+            return 'import'
+        if 'undefined' in message_lower or 'undeclared' in message_lower:
+            return 'missing_class'
+        if 'cannot use' in message_lower or 'cannot convert' in message_lower:
+            return 'type_mismatch'
+        if 'expected' in message_lower or 'syntax error' in message_lower:
+            return 'syntax'
+
+        return 'other'
+
+    @classmethod
+    def _parse_rust_errors(cls, output: str, lines: List[str]) -> List[ParsedError]:
+        """Parse Rust/Cargo build errors"""
+        errors = []
+
+        # Pattern: error[E0433]: failed to resolve...
+        #    --> src/main.rs:5:5
+        error_code_pattern = re.compile(r'error\[E\d+\]:\s*(.+)')
+        location_pattern = re.compile(r'-->\s*(.+\.rs):(\d+):\d+')
+
+        current_message = None
+
+        for i, line in enumerate(lines):
+            # Check for error message
+            error_match = error_code_pattern.search(line)
+            if error_match:
+                current_message = error_match.group(1)
+                continue
+
+            # Check for location
+            if current_message:
+                loc_match = location_pattern.search(line)
+                if loc_match:
+                    file_path = loc_match.group(1)
+                    line_num = int(loc_match.group(2))
+
+                    # Categorize error
+                    error_type = cls._categorize_rust_error(current_message)
+
+                    errors.append(ParsedError(
+                        file_path=file_path,
+                        line_number=line_num,
+                        error_type=error_type,
+                        message=current_message,
+                        raw_text=line
+                    ))
+                    current_message = None
+
+        return errors
+
+    @classmethod
+    def _categorize_rust_error(cls, message: str) -> str:
+        """Categorize a Rust error message"""
+        message_lower = message.lower()
+
+        if 'unresolved import' in message_lower or 'failed to resolve' in message_lower:
+            return 'import'
+        if 'could not find' in message_lower:
+            return 'import'
+        if 'cannot find' in message_lower or 'not found in this scope' in message_lower:
+            return 'missing_class'
+        if 'mismatched types' in message_lower or 'expected' in message_lower:
+            return 'type_mismatch'
+        if 'trait bound' in message_lower:
+            return 'type_mismatch'
+        if 'unexpected' in message_lower or 'unclosed' in message_lower:
+            return 'syntax'
+
+        return 'other'
+
+    @classmethod
+    def _parse_csharp_errors(cls, output: str, lines: List[str]) -> List[ParsedError]:
+        """Parse C#/.NET build errors"""
+        errors = []
+
+        # Pattern: File.cs(10,5): error CS0246: The type or namespace...
+        # Or: src/File.cs(10,5): error CS0246: message
+        error_pattern = re.compile(r'(.+\.cs)\((\d+),\d+\):\s*error\s+(CS\d+):\s*(.+)')
+
+        for line in lines:
+            match = error_pattern.search(line)
+            if match:
+                file_path = match.group(1)
+                line_num = int(match.group(2))
+                cs_code = match.group(3)
+                message = match.group(4)
+
+                # Categorize error
+                error_type = cls._categorize_csharp_error(cs_code, message)
+
+                errors.append(ParsedError(
+                    file_path=file_path,
+                    line_number=line_num,
+                    error_type=error_type,
+                    message=f"{cs_code}: {message}",
+                    raw_text=line
+                ))
+
+        return errors
+
+    @classmethod
+    def _categorize_csharp_error(cls, cs_code: str, message: str) -> str:
+        """Categorize a C# error message"""
+        # Common C# error codes
+        import_errors = ['CS0246', 'CS0234', 'CS0400']  # Missing type/namespace
+        missing_errors = ['CS0103', 'CS1061', 'CS0117']  # Name doesn't exist
+        type_errors = ['CS0029', 'CS1503', 'CS0266']  # Cannot convert
+        syntax_errors = ['CS1002', 'CS1513', 'CS1519', 'CS1026']  # Expected tokens
+
+        if cs_code in import_errors:
+            return 'import'
+        if cs_code in missing_errors:
+            return 'missing_class'
+        if cs_code in type_errors:
+            return 'type_mismatch'
+        if cs_code in syntax_errors:
+            return 'syntax'
+
+        return 'other'
+
+    @classmethod
+    def _parse_generic_errors(cls, output: str, lines: List[str]) -> List[ParsedError]:
+        """Parse generic error output"""
+        errors = []
+
+        # Generic pattern: file:line: error/Error message
+        error_pattern = re.compile(r'(.+):(\d+):?\s*[Ee]rror:?\s*(.+)')
+
+        for line in lines:
+            match = error_pattern.search(line)
+            if match:
+                errors.append(ParsedError(
+                    file_path=match.group(1),
+                    line_number=int(match.group(2)),
+                    error_type='other',
+                    message=match.group(3),
+                    raw_text=line
+                ))
+
+        return errors
+
+    @classmethod
+    def group_by_category(cls, errors: List[ParsedError]) -> Dict[str, List[ParsedError]]:
+        """
+        Group errors by category for prioritized fixing.
+
+        Returns dict with keys: 'import', 'missing_class', 'type_mismatch', 'syntax', 'other'
+        Sorted by priority (imports first).
+        """
+        groups = {
+            'import': [],
+            'missing_class': [],
+            'type_mismatch': [],
+            'syntax': [],
+            'other': [],
+        }
+
+        for error in errors:
+            if error.error_type in groups:
+                groups[error.error_type].append(error)
+            else:
+                groups['other'].append(error)
+
+        return groups
+
+    @classmethod
+    def group_by_file(cls, errors: List[ParsedError]) -> Dict[str, List[ParsedError]]:
+        """Group errors by file path"""
+        groups = {}
+        for error in errors:
+            if error.file_path not in groups:
+                groups[error.file_path] = []
+            groups[error.file_path].append(error)
+        return groups
+
+    @classmethod
+    def get_unique_root_causes(cls, errors: List[ParsedError]) -> List[str]:
+        """
+        Extract unique root causes from errors.
+
+        For example, 10 "cannot find symbol: User" errors are really 1 root cause.
+        """
+        seen = set()
+        root_causes = []
+
+        for error in errors:
+            # Extract the key identifier from the message
+            # For Java: extract class/variable name
+            symbol_match = re.search(r'symbol:?\s*(?:class|variable|method)?\s*(\w+)', error.message, re.IGNORECASE)
+            package_match = re.search(r'package\s+(\S+)', error.message)
+            module_match = re.search(r"module '([^']+)'", error.message)
+
+            if symbol_match:
+                key = f"symbol:{symbol_match.group(1)}"
+            elif package_match:
+                key = f"package:{package_match.group(1)}"
+            elif module_match:
+                key = f"module:{module_match.group(1)}"
+            else:
+                key = error.message[:50]
+
+            if key not in seen:
+                seen.add(key)
+                root_causes.append(key)
+
+        return root_causes
+
+
 class SDKFixerAgent:
     """
     Claude Agent SDK-style Fixer Agent.
@@ -314,6 +946,274 @@ class SDKFixerAgent:
             attempts=total_attempts,
             final_error=current_error
         )
+
+    async def fix_all_errors_smart(
+        self,
+        project_id: str,
+        user_id: str,
+        build_command: str = "npm run build",
+        max_category_iterations: int = 5,
+        max_total_iterations: int = 15
+    ) -> FixResult:
+        """
+        SMART BATCHING: Fix ALL compilation errors using prioritized category-based approach.
+
+        This is the recommended method for fixing projects with many errors (100+).
+
+        Strategy:
+        1. Run build and collect ALL errors
+        2. Parse and group errors by category (import, type, syntax, etc.)
+        3. Fix one category at a time, starting with imports (highest impact)
+        4. Rebuild after each category to see TRUE remaining errors
+        5. Repeat until fixed or max iterations
+
+        Why this works better:
+        - 100 errors might be 5 root causes (e.g., missing import causes 20 "cannot find symbol")
+        - Fixing imports first resolves cascading errors
+        - Rebuilding after each category shows actual remaining issues
+
+        Args:
+            project_id: Project identifier
+            user_id: User identifier
+            build_command: Command to build/compile the project
+            max_category_iterations: Max attempts per error category
+            max_total_iterations: Max total fix iterations across all categories
+
+        Returns:
+            FixResult with final status
+        """
+        logger.info(f"[SmartFixer:{project_id}] Starting smart batching fix with command: {build_command}")
+
+        all_files_modified = []
+        total_attempts = 0
+        iteration = 0
+
+        # Priority order for fixing categories
+        CATEGORY_PRIORITY = ['import', 'missing_class', 'type_mismatch', 'syntax', 'other']
+
+        while iteration < max_total_iterations:
+            iteration += 1
+            logger.info(f"[SmartFixer:{project_id}] === Iteration {iteration}/{max_total_iterations} ===")
+
+            # Step 1: Run build and collect ALL errors
+            build_output = await self._execute_tool(
+                project_id=project_id,
+                user_id=user_id,
+                tool_name="bash",
+                tool_input={"command": build_command, "timeout": 120}
+            )
+
+            # Step 2: Check if build succeeded
+            if self._is_build_successful(build_output):
+                logger.info(f"[SmartFixer:{project_id}] ✓ Build succeeded! All errors fixed.")
+                return FixResult(
+                    success=True,
+                    files_modified=list(set(all_files_modified)),
+                    error_fixed=True,
+                    message=f"All errors fixed after {iteration} iterations",
+                    attempts=total_attempts
+                )
+
+            # Step 3: Parse and categorize errors
+            errors = BuildErrorParser.parse_build_output(build_output)
+            if not errors:
+                # No parseable errors but build failed - use generic fix
+                logger.warning(f"[SmartFixer:{project_id}] No parseable errors, falling back to generic fix")
+                result = await self.fix_error(
+                    project_id=project_id,
+                    user_id=user_id,
+                    error_message=build_output,
+                    command=build_command
+                )
+                total_attempts += result.attempts
+                all_files_modified.extend(result.files_modified)
+                continue
+
+            # Group errors by category
+            error_groups = BuildErrorParser.group_by_category(errors)
+            root_causes = BuildErrorParser.get_unique_root_causes(errors)
+
+            logger.info(f"[SmartFixer:{project_id}] Found {len(errors)} errors, {len(root_causes)} unique root causes")
+            for cat, errs in error_groups.items():
+                if errs:
+                    logger.info(f"[SmartFixer:{project_id}]   - {cat}: {len(errs)} errors")
+
+            # Step 4: Fix highest priority category with errors
+            fixed_category = False
+            for category in CATEGORY_PRIORITY:
+                category_errors = error_groups.get(category, [])
+                if not category_errors:
+                    continue
+
+                logger.info(f"[SmartFixer:{project_id}] Fixing category: {category} ({len(category_errors)} errors)")
+
+                # Build focused prompt for this category
+                result = await self._fix_error_category(
+                    project_id=project_id,
+                    user_id=user_id,
+                    category=category,
+                    errors=category_errors,
+                    build_command=build_command
+                )
+
+                total_attempts += result.attempts
+                all_files_modified.extend(result.files_modified)
+
+                if result.success:
+                    fixed_category = True
+                    logger.info(f"[SmartFixer:{project_id}] ✓ Category {category} fixed, rebuilding...")
+                    break  # Rebuild to see remaining errors
+                else:
+                    logger.warning(f"[SmartFixer:{project_id}] ✗ Failed to fix {category}, trying next category")
+
+            if not fixed_category:
+                # No category could be fixed - try generic approach for remaining errors
+                logger.warning(f"[SmartFixer:{project_id}] No category fixed, trying generic fix")
+                result = await self.fix_error(
+                    project_id=project_id,
+                    user_id=user_id,
+                    error_message=build_output[:5000],
+                    command=build_command
+                )
+                total_attempts += result.attempts
+                all_files_modified.extend(result.files_modified)
+
+        # Max iterations reached
+        logger.warning(f"[SmartFixer:{project_id}] Max iterations ({max_total_iterations}) reached")
+        return FixResult(
+            success=False,
+            files_modified=list(set(all_files_modified)),
+            error_fixed=False,
+            message=f"Max iterations reached. Fixed some errors but build still failing.",
+            attempts=total_attempts,
+            final_error=build_output[:2000] if 'build_output' in locals() else "Unknown"
+        )
+
+    async def _fix_error_category(
+        self,
+        project_id: str,
+        user_id: str,
+        category: str,
+        errors: List[ParsedError],
+        build_command: str
+    ) -> FixResult:
+        """
+        Fix all errors in a specific category.
+
+        Groups errors by file and fixes them together for efficiency.
+        """
+        files_modified = []
+        attempts = 0
+
+        # Group errors by file for efficient fixing
+        errors_by_file = BuildErrorParser.group_by_file(errors)
+        root_causes = BuildErrorParser.get_unique_root_causes(errors)
+
+        # Build a focused prompt for this category
+        category_descriptions = {
+            'import': 'IMPORT/PACKAGE ERRORS - Fix missing imports, wrong package names, missing dependencies',
+            'missing_class': 'MISSING CLASS/TYPE ERRORS - Create missing files or fix references',
+            'type_mismatch': 'TYPE MISMATCH ERRORS - Fix type incompatibilities and method signatures',
+            'syntax': 'SYNTAX ERRORS - Fix syntax issues like missing semicolons, brackets',
+            'other': 'OTHER ERRORS - Fix remaining compilation issues',
+        }
+
+        # Get project structure for context
+        project_structure = await self._get_project_structure(project_id, user_id)
+
+        # Build context files (files with errors)
+        context_files = {}
+        for file_path in list(errors_by_file.keys())[:10]:  # Limit to 10 files
+            try:
+                content = await storage.read_from_sandbox(project_id, file_path, user_id)
+                if content:
+                    context_files[file_path] = content
+            except Exception:
+                pass
+
+        # Build the prompt
+        error_summary = []
+        for file_path, file_errors in errors_by_file.items():
+            error_summary.append(f"\n### {file_path}")
+            for err in file_errors[:5]:  # Limit errors per file
+                error_summary.append(f"  Line {err.line_number}: {err.message}")
+
+        prompt = f"""## {category_descriptions.get(category, 'ERRORS TO FIX')}
+
+**Total Errors in this Category:** {len(errors)}
+**Unique Root Causes:** {len(root_causes)}
+**Root Causes:** {', '.join(root_causes[:10])}
+
+**Files with Errors:**
+{''.join(error_summary[:50])}
+
+## Instructions
+
+1. **Analyze** the root causes - many errors share the same cause
+2. **Read** the affected files using `view_file`
+3. **Fix** the root causes (not individual errors):
+   - For import errors: Add missing imports, fix package names
+   - For missing class: Create the missing file or fix the reference
+   - For type errors: Fix the type definition or usage
+4. **Verify** by running: `{build_command}`
+
+IMPORTANT:
+- Fix ROOT CAUSES, not individual error lines
+- One missing import can cause 10+ "cannot find symbol" errors
+- After fixing, the build will show remaining errors
+"""
+
+        # Use the main fix_error method with our focused prompt
+        result = await self.fix_error(
+            project_id=project_id,
+            user_id=user_id,
+            error_message=prompt,
+            command=build_command
+        )
+
+        return result
+
+    def _is_build_successful(self, build_output: str) -> bool:
+        """Check if build output indicates success"""
+        output_lower = build_output.lower()
+
+        # Success indicators
+        success_patterns = [
+            'build successful',
+            'build success',
+            'compiled successfully',
+            'compilation successful',
+            '0 errors',
+            'built in',  # Vite: "built in 1.23s"
+        ]
+
+        # Failure indicators
+        failure_patterns = [
+            'error:',
+            'error ',
+            'failed',
+            'failure',
+            'cannot find',
+            'does not exist',
+            'compilation error',
+            'build failed',
+        ]
+
+        # Check for explicit success
+        for pattern in success_patterns:
+            if pattern in output_lower:
+                # But make sure no errors
+                has_error = any(fp in output_lower for fp in failure_patterns)
+                if not has_error:
+                    return True
+
+        # Check for errors
+        for pattern in failure_patterns:
+            if pattern in output_lower:
+                return False
+
+        # No clear indication - assume success if short output without errors
+        return len(build_output) < 500 and 'error' not in output_lower
 
     def _build_error_prompt(
         self,

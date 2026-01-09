@@ -4820,6 +4820,56 @@ DEPENDENCIES FOR THIS FILE:
 ⚠️ CRITICAL: Make sure to import from the correct paths listed above!
 """
 
+        # CRITICAL FIX: Include package_structure for Java projects to ensure consistent packages
+        package_structure_context = ""
+        if context.plan and context.plan.get('package_structure'):
+            package_structure_context = f"""
+⚠️ JAVA PACKAGE STRUCTURE (USE THESE EXACT PACKAGES!):
+{context.plan.get('package_structure')}
+
+CRITICAL RULES:
+- Use EXACTLY the package names listed above
+- All entities go in model/entity/ package
+- All DTOs go in dto/ package
+- All repositories extend the correct JpaRepository<Entity, IdType>
+- Import using the EXACT packages above, NOT guessed packages!
+"""
+
+        # CRITICAL FIX: For Java files, include package/import context from existing files
+        java_files_context = ""
+        if file_path.endswith('.java') and context.files_created:
+            java_context_parts = []
+            for created_file in context.files_created[-25:]:  # Last 25 files
+                created_path = created_file.get('path', '')
+                created_content = created_file.get('content', '')
+
+                if created_path.endswith('.java') and created_content:
+                    # Extract package, imports, and class signature
+                    lines = created_content.split('\n')
+                    key_lines = []
+                    for line in lines[:60]:
+                        stripped = line.strip()
+                        if stripped.startswith('package ') or \
+                           stripped.startswith('import ') or \
+                           stripped.startswith('public class ') or \
+                           stripped.startswith('public interface ') or \
+                           stripped.startswith('public enum ') or \
+                           stripped.startswith('@Entity') or \
+                           stripped.startswith('@Repository') or \
+                           stripped.startswith('@Service') or \
+                           'extends ' in stripped or \
+                           'implements ' in stripped:
+                            key_lines.append(stripped)
+
+                    if key_lines:
+                        java_context_parts.append(f"\n📄 {created_path}:\n" + '\n'.join(key_lines[:15]))
+
+            if java_context_parts:
+                java_files_context = f"""
+EXISTING JAVA FILES (use these EXACT packages and imports):
+{''.join(java_context_parts[:15])}
+"""
+
         user_prompt = f"""
 FILE TO GENERATE:
 Path: {file_path}
@@ -4829,7 +4879,9 @@ PROJECT CONTEXT:
 User Request: {context.user_request}
 Project Type: {context.project_type or 'Web Application'}
 Tech Stack: {json.dumps(context.tech_stack) if context.tech_stack else 'React + TypeScript + Tailwind'}
+{package_structure_context}
 {types_content}
+{java_files_context}
 FILES ALREADY CREATED (you can import from these):
 {chr(10).join(available_exports) if available_exports else "None yet - this may be a leaf file with no dependencies"}
 {dependency_context}
@@ -4837,6 +4889,7 @@ Generate ONLY the file: {file_path}
 Output using <file path="{file_path}">CONTENT</file> format.
 Make sure the file is COMPLETE and PRODUCTION-READY.
 Include all necessary imports at the top.
+For Java: Use EXACT package names from PACKAGE STRUCTURE above!
 """
 
         # Initialize Bolt streaming buffer
