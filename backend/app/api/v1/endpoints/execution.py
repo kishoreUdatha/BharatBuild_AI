@@ -1339,29 +1339,46 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
             yield emit("output", "✅ Server running successfully!")
 
             # =================================================================
-            # SYNC EC2 → S3 AFTER BUILD SUCCESS
+            # SYNC EC2 → S3 AFTER BUILD SUCCESS (with retry)
             #
             # This is the correct place to sync files to S3:
             # - BoltFixer fixes files on EC2 only (no S3 upload during fix)
             # - On retry, dir exists → skip S3 restore → use EC2 files
             # - After BUILD SUCCESS → sync ALL EC2 files to S3
             #
-            # This ensures fixes are persisted ONLY after build succeeds,
-            # and prevents S3 restore from overwriting EC2 fixes on retry.
+            # GAP #3 FIX: Added retry logic with exponential backoff
             # =================================================================
-            try:
-                yield emit("output", "☁️ Syncing to S3...")
-                synced_count = await unified_storage.sync_sandbox_to_s3(project_id, effective_user_id)
+            yield emit("output", "☁️ Syncing to S3...")
+            sync_success = False
+            sync_retries = 3
+            synced_count = 0
+
+            for sync_attempt in range(sync_retries):
+                try:
+                    synced_count = await unified_storage.sync_sandbox_to_s3(project_id, effective_user_id)
+                    sync_success = True
+                    break
+                except Exception as sync_err:
+                    if sync_attempt < sync_retries - 1:
+                        wait_time = (sync_attempt + 1) * 2  # 2, 4 seconds
+                        logger.warning(f"[Execution] S3 sync retry {sync_attempt + 1}/{sync_retries}: {sync_err}")
+                        yield emit("output", f"  ⚠️ S3 sync retry {sync_attempt + 1}...")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        logger.error(f"[Execution] S3 sync failed after {sync_retries} retries: {sync_err}")
+
+            if sync_success:
                 if synced_count > 0:
                     yield emit("output", f"  ✅ Synced {synced_count} files to S3")
                     logger.info(f"[Execution] BUILD SUCCESS: Synced {synced_count} files to S3 for {project_id}")
                 else:
                     yield emit("output", f"  ✅ S3 already up to date")
                     logger.info(f"[Execution] BUILD SUCCESS: S3 already up to date for {project_id}")
-            except Exception as sync_err:
-                # S3 sync failure is non-fatal - files are still on EC2
-                logger.warning(f"[Execution] S3 sync after BUILD SUCCESS failed: {sync_err}")
-                yield emit("output", f"  ⚠️ S3 sync skipped (non-fatal): {str(sync_err)[:50]}")
+            else:
+                # S3 sync failed after retries - files are still on EC2
+                # This is a problem because container cleanup will lose the files
+                yield emit("output", f"  ⚠️ S3 sync FAILED after {sync_retries} retries - fixes may be lost on restart!")
+                logger.error(f"[Execution] CRITICAL: S3 sync failed for {project_id} - fixes at risk of loss")
         else:
             yield emit("output", "✅ Build completed")
 

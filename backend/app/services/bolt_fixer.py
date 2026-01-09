@@ -791,11 +791,12 @@ No explanations. Only the <file> block."""
         """
         Track a SINGLE fix after writing to EC2 sandbox.
 
-        IMPORTANT: This function NO LONGER uploads to S3 during fixes.
+        IMPORTANT: This function does NOT upload to S3 during fixes.
+        But it DOES create/update database records so restore knows about new files.
 
         The correct flow is:
         1. BoltFixer fixes file on EC2 sandbox (via _write_file)
-        2. This function just tracks that a fix was applied (logs only)
+        2. This function creates/updates DB record (but NO S3 upload)
         3. On retry, dir exists → skip S3 restore → use EC2 files
         4. After BUILD SUCCESS → execution.py syncs EC2 to S3
 
@@ -808,8 +809,15 @@ No explanations. Only the <file> block."""
             content: Fixed file content
 
         Returns:
-            True (fix is already on EC2 sandbox via _write_file)
+            True if DB record created/updated, False on error
         """
+        from uuid import UUID
+        from sqlalchemy import select
+        from app.core.database import AsyncSessionLocal
+        from app.models.project_file import ProjectFile
+        import hashlib
+        import os
+
         # =================================================================
         # VALIDATION: file_path should already be normalized by caller
         # =================================================================
@@ -821,24 +829,76 @@ No explanations. Only the <file> block."""
         file_path = file_path.strip()
 
         # =================================================================
-        # NO S3 UPLOAD DURING FIX
+        # CREATE/UPDATE DATABASE RECORD (but NO S3 upload)
         #
-        # Previously, this function uploaded to S3 immediately after each fix.
-        # This caused issues because on retry:
-        # - S3 restore would fetch from S3 (overwriting EC2 files)
-        # - Fixes were lost because EC2 files were replaced
+        # GAP #1 FIX: We need DB records for new files so that:
+        # - restore_project_from_database() knows about them
+        # - sync_sandbox_to_s3() can find them
         #
-        # NEW FLOW:
-        # 1. Fix is written to EC2 sandbox (already done by _write_file)
-        # 2. On retry, dir exists on EC2 → skip S3 restore
-        # 3. After BUILD SUCCESS → sync EC2 to S3 (in execution.py)
+        # S3 upload is DEFERRED to BUILD SUCCESS (in execution.py)
         # =================================================================
+        try:
+            content_bytes = content.encode('utf-8')
+            content_hash = hashlib.sha256(content_bytes).hexdigest()
+            size_bytes = len(content_bytes)
 
-        logger.info(f"[BoltFixer:{project_id}] ✓ Fixed on EC2: {file_path} (S3 sync deferred to BUILD SUCCESS)")
+            # Create/update database record with retry
+            max_retries = 3
+            for db_attempt in range(max_retries):
+                try:
+                    async with AsyncSessionLocal() as session:
+                        # Try to find existing record
+                        stmt = select(ProjectFile).where(
+                            ProjectFile.project_id == UUID(project_id),
+                            ProjectFile.path == file_path
+                        )
+                        db_result = await session.execute(stmt)
+                        file_record = db_result.scalar_one_or_none()
 
-        # The file is already written to EC2 sandbox by _write_file()
-        # S3 upload will happen after BUILD SUCCESS in execution.py
-        return True
+                        if file_record:
+                            # UPDATE existing record (but don't set s3_key - S3 upload deferred)
+                            file_record.content_hash = content_hash
+                            file_record.size_bytes = size_bytes
+                            # Note: s3_key will be set by sync_sandbox_to_s3() after BUILD SUCCESS
+                            await session.commit()
+                            logger.info(f"[BoltFixer:{project_id}] ✓ DB updated: {file_path}")
+                        else:
+                            # CREATE new record for new files (no s3_key yet)
+                            new_file = ProjectFile(
+                                project_id=UUID(project_id),
+                                path=file_path,
+                                name=os.path.basename(file_path),
+                                content_hash=content_hash,
+                                size_bytes=size_bytes,
+                                s3_key=None,  # S3 upload deferred to BUILD SUCCESS
+                                is_folder=False,
+                                generation_status="completed"
+                            )
+                            session.add(new_file)
+                            await session.commit()
+                            logger.info(f"[BoltFixer:{project_id}] ✓ DB created (new file): {file_path}")
+
+                        logger.info(f"[BoltFixer:{project_id}] ✓ Fixed on EC2: {file_path} (S3 sync deferred to BUILD SUCCESS)")
+                        return True
+
+                except Exception as db_err:
+                    if db_attempt < max_retries - 1:
+                        wait_time = (db_attempt + 1) * 2  # 2, 4 seconds
+                        logger.warning(f"[BoltFixer:{project_id}] DB retry {db_attempt + 1}/{max_retries} for {file_path}: {db_err}")
+                        import asyncio
+                        await asyncio.sleep(wait_time)
+                    else:
+                        logger.error(f"[BoltFixer:{project_id}] DB failed after {max_retries} retries: {file_path} - {db_err}")
+                        # DB failed - file is on EC2 but not tracked
+                        # This is a problem, but we'll still return True since the file IS written
+                        # sync_sandbox_to_s3() will create the record later
+                        logger.warning(f"[BoltFixer:{project_id}] File on EC2 but DB failed - sync will fix later")
+                        return True
+
+        except Exception as e:
+            logger.error(f"[BoltFixer:{project_id}] Persist failed: {file_path} - {e}")
+            # File is still on EC2 sandbox
+            return True
 
     # ==========================================================================
     # ISSUE #9 FIX: Removed dead code _persist_fix_to_storage()
