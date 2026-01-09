@@ -421,6 +421,26 @@ When you see errors like:
 - Go: "undefined: X" - Add the missing function/type X
 - Rust: "cannot find value/type `x`" - Add the missing item to the module
 
+🚨 MISSING CLASS/FILE ERRORS - CREATE THE FILE:
+When you see "cannot find symbol: class XxxDto" or similar CLASS NOT FOUND errors:
+- Java: CREATE the missing class/enum/DTO using <newfile path="backend/src/main/java/com/package/XxxDto.java">
+- TypeScript: CREATE missing interface/type using <newfile path="src/types/Xxx.ts">
+- Python: CREATE missing module using <newfile path="src/xxx.py">
+
+For Java "cannot find symbol: class" errors:
+1. Look at the import statement to get the FULL package path
+2. Create file at: backend/src/main/java/[package/path]/[ClassName].java
+3. Include proper package declaration, imports, and complete class implementation
+
+Example: If error is "cannot find symbol: class OrderStatus" with import "com.goldmart.model.enums.OrderStatus":
+<newfile path="backend/src/main/java/com/goldmart/model/enums/OrderStatus.java">
+package com.goldmart.model.enums;
+
+public enum OrderStatus {
+    PENDING, CONFIRMED, PROCESSING, SHIPPED, DELIVERED, CANCELLED
+}
+</newfile>
+
 FIX THE ROOT CAUSE, NOT THE SYMPTOM:
 - If OrderService fails because Product is missing getPrice(), fix Product
 - If the error file imports/uses another module, check RELATED FILES section for the fix

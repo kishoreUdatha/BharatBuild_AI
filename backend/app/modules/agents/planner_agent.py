@@ -416,6 +416,65 @@ JAVA FILE ORDER (by priority):
     <exports>REST endpoints</exports>
   </file>
 
+🚨 JAVA FILE COMPLETENESS (CRITICAL - 76 ERRORS IF MISSING!):
+Every class referenced in code MUST have a corresponding file planned!
+
+FOR EACH ENTITY (e.g., Order, User, Product, Vendor):
+✅ MUST CREATE ALL THESE FILES:
+- Entity: src/main/java/com/app/model/entity/Order.java
+- Repository: src/main/java/com/app/repository/OrderRepository.java
+- Service: src/main/java/com/app/service/OrderService.java
+- Controller: src/main/java/com/app/controller/OrderController.java
+- DTOs (ALL of these):
+  - src/main/java/com/app/dto/OrderDto.java
+  - src/main/java/com/app/dto/OrderCreateDto.java
+  - src/main/java/com/app/dto/OrderUpdateDto.java
+  - src/main/java/com/app/dto/OrderResponseDto.java
+
+FOR RELATED ENTITIES (e.g., Order has List<OrderItem>):
+✅ MUST ALSO CREATE:
+- src/main/java/com/app/model/entity/OrderItem.java
+- src/main/java/com/app/repository/OrderItemRepository.java
+
+FOR ENUMS USED IN ENTITIES:
+✅ MUST CREATE SEPARATE FILES:
+- src/main/java/com/app/model/enums/OrderStatus.java
+- src/main/java/com/app/model/enums/PaymentStatus.java
+- src/main/java/com/app/model/enums/UserRole.java
+
+FOR AUTH/USER FEATURES:
+✅ MUST CREATE:
+- src/main/java/com/app/dto/RegisterDto.java
+- src/main/java/com/app/dto/LoginDto.java
+- src/main/java/com/app/dto/AuthResponseDto.java
+- src/main/java/com/app/dto/RefreshTokenDto.java
+- src/main/java/com/app/dto/UserProfileDto.java
+- src/main/java/com/app/dto/UpdateProfileDto.java
+- src/main/java/com/app/dto/ChangePasswordDto.java
+
+FOR VENDOR/ADMIN FEATURES:
+✅ MUST CREATE:
+- src/main/java/com/app/dto/VendorRegistrationDto.java
+- src/main/java/com/app/dto/VendorResponseDto.java
+- src/main/java/com/app/dto/VendorDashboardDto.java
+- src/main/java/com/app/service/AnalyticsService.java (if admin dashboard)
+
+PACKAGE CONSISTENCY (CRITICAL!):
+❌ WRONG: import com.app.entity.Product (inconsistent)
+✅ CORRECT: import com.app.model.entity.Product (use model/entity/)
+
+❌ WRONG: Mixing packages (some in model/, some in entity/)
+✅ CORRECT: ALL entities in model/entity/, ALL DTOs in dto/
+
+LOMBOK DEPENDENCY:
+If using @RequiredArgsConstructor, @Data, @Builder:
+✅ MUST add to pom.xml:
+<dependency>
+    <groupId>org.projectlombok</groupId>
+    <artifactId>lombok</artifactId>
+    <scope>provided</scope>
+</dependency>
+
 ⚛️ REACT/TYPESCRIPT:
 
 🚨 BUILD-CRITICAL CONFIG FILES (MUST INCLUDE THESE EXACTLY):
