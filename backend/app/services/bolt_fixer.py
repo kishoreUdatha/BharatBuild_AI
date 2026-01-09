@@ -264,7 +264,11 @@ No explanations. Only the <file> block."""
 
         In ECS/remote mode, files must be written via sandbox helper container,
         not directly via Python, because the sandbox filesystem is on a different host.
+
+        GAP #8 FIX: Validates that sandbox_file_writer exists in remote mode.
         """
+        import os
+
         try:
             # AUTO-SANITIZE: Apply technology-specific fixes before writing
             # This handles CSS @import order, Tailwind plugins, Vite config, pom.xml, etc.
@@ -275,6 +279,11 @@ No explanations. Only the <file> block."""
                     logger.info(f"[BoltFixer:{project_id}] Sanitizer applied: {', '.join(fixes)}")
             except Exception as sanitize_err:
                 logger.warning(f"[BoltFixer:{project_id}] Sanitization skipped: {sanitize_err}")
+
+            # =================================================================
+            # GAP #8 FIX: Check for remote mode without sandbox_file_writer
+            # =================================================================
+            is_remote_mode = bool(os.environ.get("SANDBOX_DOCKER_HOST"))
 
             if self._sandbox_file_writer:
                 # Use sandbox file writer (handles remote mode)
@@ -287,6 +296,27 @@ No explanations. Only the <file> block."""
                 else:
                     logger.error(f"[BoltFixer:{project_id}] Sandbox write failed: {abs_path}")
                 return success
+            elif is_remote_mode:
+                # =================================================================
+                # GAP #8 FIX: CRITICAL - In remote mode without sandbox_file_writer
+                # File will NOT be written to sandbox! This is a configuration error.
+                # =================================================================
+                logger.error(
+                    f"[BoltFixer:{project_id}] CRITICAL: Remote mode detected but no sandbox_file_writer! "
+                    f"File will NOT be written to sandbox: {file_path}"
+                )
+                # Still try local write as fallback (better than nothing)
+                # The file will be persisted to S3 and restored on next run
+                try:
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    file_path.write_text(content, encoding='utf-8')
+                    logger.warning(
+                        f"[BoltFixer:{project_id}] Fallback: Wrote locally (will be persisted to S3): {file_path}"
+                    )
+                    return True
+                except Exception as local_err:
+                    logger.error(f"[BoltFixer:{project_id}] Local fallback failed: {local_err}")
+                    return False
             else:
                 # Local mode - direct file write
                 file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -434,6 +464,7 @@ No explanations. Only the <file> block."""
         - No fixes lost if process crashes
         - Partial progress saved even if retry limit reached
         - User can continue from where they left off
+        - NEW FILES are also persisted (creates DB record if missing)
 
         Args:
             project_id: Project ID
@@ -444,10 +475,37 @@ No explanations. Only the <file> block."""
         Returns:
             True if persisted successfully, False otherwise
         """
+        from uuid import UUID
+        from sqlalchemy import select
+        from app.core.database import AsyncSessionLocal
+        from app.models.project_file import ProjectFile
+        import hashlib
+        import os
+
+        # =================================================================
+        # GAP #13 FIX: Validate file_path is not empty
+        # =================================================================
+        if not file_path or not file_path.strip():
+            logger.error(f"[BoltFixer:{project_id}] Invalid empty file path")
+            return False
+
+        # Normalize file path (remove leading slashes, normalize separators)
+        file_path = file_path.strip().lstrip('/\\').replace('\\', '/')
+
         try:
             content_bytes = content.encode('utf-8')
+            content_hash = hashlib.sha256(content_bytes).hexdigest()
+            size_bytes = len(content_bytes)
 
-            # Step 1: Upload to S3
+            # =================================================================
+            # GAP #6 FIX: Use storage_service for consistent S3 key generation
+            # =================================================================
+            s3_key = storage_service.generate_s3_key(project_id, file_path)
+
+            # =================================================================
+            # Step 1: Upload to S3 (always attempt)
+            # =================================================================
+            s3_success = False
             try:
                 await storage_service.upload_file(
                     project_id=project_id,
@@ -455,22 +513,20 @@ No explanations. Only the <file> block."""
                     content=content_bytes,
                     content_type="text/plain"
                 )
+                s3_success = True
                 logger.info(f"[BoltFixer:{project_id}] ✓ S3: {file_path}")
             except Exception as s3_err:
                 logger.warning(f"[BoltFixer:{project_id}] S3 failed: {file_path} - {s3_err}")
-                return False
+                # Continue to DB update even if S3 fails - we'll retry S3 later
 
-            # Step 2: Update database record
+            # =================================================================
+            # Step 2: Update or CREATE database record
+            # GAP #4 FIX: Create new record if file doesn't exist in DB
+            # GAP #1 & #2 FIX: Better error handling, update DB even if S3 fails
+            # =================================================================
             try:
-                from uuid import UUID
-                from sqlalchemy import select
-                from app.core.database import AsyncSessionLocal
-                from app.models.project_file import ProjectFile
-                import hashlib
-
-                s3_key = f"projects/{project_id}/{file_path.replace(chr(92), '/')}"
-
                 async with AsyncSessionLocal() as session:
+                    # Try to find existing record
                     stmt = select(ProjectFile).where(
                         ProjectFile.project_id == UUID(project_id),
                         ProjectFile.path == file_path
@@ -479,18 +535,36 @@ No explanations. Only the <file> block."""
                     file_record = db_result.scalar_one_or_none()
 
                     if file_record:
-                        file_record.content_hash = hashlib.sha256(content_bytes).hexdigest()
-                        file_record.size_bytes = len(content_bytes)
-                        file_record.s3_key = s3_key
+                        # UPDATE existing record
+                        file_record.content_hash = content_hash
+                        file_record.size_bytes = size_bytes
+                        if s3_success:
+                            file_record.s3_key = s3_key
                         await session.commit()
-                        logger.info(f"[BoltFixer:{project_id}] ✓ DB: {file_path}")
+                        logger.info(f"[BoltFixer:{project_id}] ✓ DB updated: {file_path}")
                     else:
-                        logger.warning(f"[BoltFixer:{project_id}] No DB record: {file_path}")
-                        return False
+                        # =================================================================
+                        # GAP #4 FIX: CREATE new record for new files
+                        # This ensures AI-created files are persisted!
+                        # =================================================================
+                        new_file = ProjectFile(
+                            project_id=UUID(project_id),
+                            path=file_path,
+                            name=os.path.basename(file_path),
+                            content_hash=content_hash,
+                            size_bytes=size_bytes,
+                            s3_key=s3_key if s3_success else None,
+                            is_folder=False,
+                            generation_status="completed"
+                        )
+                        session.add(new_file)
+                        await session.commit()
+                        logger.info(f"[BoltFixer:{project_id}] ✓ DB created: {file_path}")
 
             except Exception as db_err:
                 logger.warning(f"[BoltFixer:{project_id}] DB failed: {file_path} - {db_err}")
-                return False
+                # Return True if S3 succeeded - file is at least partially persisted
+                return s3_success
 
             return True
 
@@ -549,8 +623,8 @@ No explanations. Only the <file> block."""
                     from app.models.project_file import ProjectFile
                     import hashlib
 
-                    # Generate the s3_key that storage_service used
-                    s3_key = f"projects/{project_id}/{file_path.replace(chr(92), '/')}"
+                    # GAP #6 FIX: Use storage_service for consistent S3 key generation
+                    s3_key = storage_service.generate_s3_key(project_id, file_path)
 
                     async with AsyncSessionLocal() as session:
                         stmt = select(ProjectFile).where(
@@ -988,6 +1062,16 @@ BUILD LOG:
             file_path = file_info.get("path", "")
             content = file_info.get("content", "")
 
+            # =================================================================
+            # GAP #13 & #15 FIX: Validate path and content
+            # =================================================================
+            if not file_path or not file_path.strip():
+                logger.warning(f"[BoltFixer:{project_id}] Skipping file with empty path")
+                continue
+            if not content or not content.strip():
+                logger.warning(f"[BoltFixer:{project_id}] Skipping file with empty content: {file_path}")
+                continue
+
             # PROTECTION: Block full docker-compose.yml replacement
             # AI has been known to corrupt docker-compose.yml by deleting services
             if "docker-compose" in file_path.lower():
@@ -1008,24 +1092,39 @@ BUILD LOG:
             if file_path.startswith('backend/') or file_path.startswith('frontend/'):
                 # Path already has prefix, use as-is
                 target_path = project_path / file_path
+                normalized_path = file_path  # Already has correct prefix
             elif file_path.endswith('.java'):
                 target_path = project_path / "backend" / file_path
+                normalized_path = f"backend/{file_path}"  # GAP #7 FIX: Add prefix
             elif file_path.endswith(('.ts', '.tsx', '.js', '.jsx', '.css', '.html')):
                 target_path = project_path / "frontend" / file_path
+                normalized_path = f"frontend/{file_path}"  # GAP #7 FIX: Add prefix
             else:
                 target_path = project_path / file_path
+                normalized_path = file_path
 
             # Use sandbox-aware file writer
             if self._write_file(target_path, content, project_id):
                 # IMMEDIATELY persist to S3/database (survives restore)
-                await self._persist_single_fix(project_id, project_path, file_path, content)
-                files_modified.append(file_path)
-                logger.info(f"[BoltFixer:{project_id}] Wrote & persisted full file: {file_path}")
+                # GAP #7 FIX: Use normalized_path (includes backend/frontend prefix)
+                await self._persist_single_fix(project_id, project_path, normalized_path, content)
+                files_modified.append(normalized_path)
+                logger.info(f"[BoltFixer:{project_id}] Wrote & persisted full file: {normalized_path}")
 
         # Create new files
         for file_info in new_files:
             file_path = file_info.get("path", "")
             content = file_info.get("content", "")
+
+            # =================================================================
+            # GAP #13 & #15 FIX: Validate path and content
+            # =================================================================
+            if not file_path or not file_path.strip():
+                logger.warning(f"[BoltFixer:{project_id}] Skipping new file with empty path")
+                continue
+            if not content or not content.strip():
+                logger.warning(f"[BoltFixer:{project_id}] Skipping new file with empty content: {file_path}")
+                continue
 
             # PROTECTION: Don't create new docker-compose.yml if one already exists
             if "docker-compose" in file_path.lower():
@@ -1055,19 +1154,24 @@ BUILD LOG:
             if file_path.startswith('backend/') or file_path.startswith('frontend/'):
                 # Path already has prefix, use as-is
                 target_path = project_path / file_path
+                normalized_path = file_path  # Already has correct prefix
             elif file_path.endswith('.java'):
                 target_path = project_path / "backend" / file_path
+                normalized_path = f"backend/{file_path}"  # GAP #7 FIX: Add prefix
             elif file_path.endswith(('.ts', '.tsx', '.js', '.jsx', '.css', '.html')):
                 target_path = project_path / "frontend" / file_path
+                normalized_path = f"frontend/{file_path}"  # GAP #7 FIX: Add prefix
             else:
                 target_path = project_path / file_path
+                normalized_path = file_path
 
             # Use sandbox-aware file writer
             if self._write_file(target_path, content, project_id):
                 # IMMEDIATELY persist to S3/database (survives restore)
-                await self._persist_single_fix(project_id, project_path, file_path, content)
-                files_modified.append(file_path)
-                logger.info(f"[BoltFixer:{project_id}] Created & persisted new file: {file_path}")
+                # GAP #7 FIX: Use normalized_path (includes backend/frontend prefix)
+                await self._persist_single_fix(project_id, project_path, normalized_path, content)
+                files_modified.append(normalized_path)
+                logger.info(f"[BoltFixer:{project_id}] Created & persisted new file: {normalized_path}")
 
         # =================================================================
         # STEP 8: PERSISTENCE NOW HAPPENS IMMEDIATELY (above)
