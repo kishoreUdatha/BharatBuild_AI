@@ -1240,6 +1240,25 @@ USE HIGHER PORT NUMBERS in docker-compose.yml:
 - Redis: 6380:6379 (Host 6380, Container 6379)
 - MySQL: 3307:3306 (Host 3307, Container 3306)
 
+DOCKERFILE BASE IMAGE RULES (CRITICAL - BUILD FAILURES IF WRONG!):
+⚠️ USE CORRECT BASE IMAGES - DEPRECATED IMAGES CAUSE BUILD FAILURES!
+
+❌ WRONG - openjdk images are DEPRECATED and may not exist:
+- openjdk:17-slim        ← DOES NOT EXIST!
+- openjdk:17-jdk-slim    ← DOES NOT EXIST!
+- openjdk:11-slim        ← MAY NOT EXIST!
+
+✅ CORRECT - Use Eclipse Temurin (official OpenJDK distribution):
+- Java builds: eclipse-temurin:17-jdk-alpine or eclipse-temurin:17-jre-alpine
+- Maven builds: maven:3.9-eclipse-temurin-17-alpine
+- Gradle builds: gradle:8-jdk17-alpine
+
+✅ CORRECT base images for other technologies:
+- Node.js: node:20-alpine (NOT node:latest)
+- Python: python:3.11-slim (NOT python:latest)
+- Go: golang:1.21-alpine
+- Rust: rust:1.75-alpine
+
 ═══════════════════════════════════════════════════════════════════════════════
 
 4. ACADEMIC DOCUMENTS (Include ONLY if project type = Academic/Student Project):
