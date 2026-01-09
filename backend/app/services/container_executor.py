@@ -2005,6 +2005,30 @@ class ContainerExecutor:
             else:
                 yield f"  ⚠️ Some issues found - build may fail\n"
 
+            # PERSIST FIXES TO DATABASE - so they survive retry
+            if validation_result.files_fixed:
+                try:
+                    from app.services.bolt_fixer import BoltFixer
+                    fixer = BoltFixer()
+                    for fix_info in validation_result.files_fixed:
+                        # Extract file path from fix info (e.g., "backend/Dockerfile (mvnw → mvn)")
+                        file_path = fix_info.split(" (")[0] if " (" in fix_info else fix_info
+                        # Handle relative paths
+                        if "/" in file_path:
+                            full_path = project_path / file_path
+                        else:
+                            full_path = project_path / file_path
+                        # Read the fixed content and persist
+                        try:
+                            content = self._read_file_from_sandbox(str(full_path))
+                            if content:
+                                await fixer._persist_single_fix(project_id, project_path, file_path, content)
+                                logger.info(f"[ContainerExecutor] Persisted tech validation fix: {file_path}")
+                        except Exception as pe:
+                            logger.warning(f"[ContainerExecutor] Failed to persist {file_path}: {pe}")
+                except Exception as e:
+                    logger.warning(f"[ContainerExecutor] Failed to persist tech validation fixes: {e}")
+
         except Exception as e:
             logger.warning(f"[ContainerExecutor] Technology validation failed: {e}")
             yield f"  ⚠️ Technology validation skipped: {e}\n"
