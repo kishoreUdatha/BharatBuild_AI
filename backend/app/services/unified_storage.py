@@ -1673,16 +1673,32 @@ class UnifiedStorageService:
                             file_records = result.scalars().all()
                         return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in file_records]
                 except Exception as check_err:
-                    # CRITICAL FIX: Don't restore on error - assume files exist (preserves BoltFixer changes)
-                    # This prevents overwriting fixes when Docker check times out
-                    logger.warning(f"[RemoteRestore] Cache check failed: {check_err} - ASSUMING files exist to preserve fixes")
-                    # Return file info from DB without re-downloading
-                    async with AsyncSessionLocal() as session:
-                        result = await session.execute(
-                            select(ProjectFile).where(cast(ProjectFile.project_id, SQLString(36)) == str(UUID(project_id))).where(ProjectFile.is_folder == False)
+                    # Check if workspace directory exists (simpler check)
+                    try:
+                        dir_check = docker_client.containers.run(
+                            "alpine:latest",
+                            ["-c", f"test -d {workspace_path} && echo 'exists' || echo 'missing'"],
+                            entrypoint="/bin/sh",
+                            volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},
+                            remove=True,
+                            detach=False
                         )
-                        file_records = result.scalars().all()
-                    return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in file_records]
+                        dir_exists = dir_check.decode().strip() == 'exists'
+                    except:
+                        dir_exists = False
+
+                    if dir_exists:
+                        # Directory exists - assume files exist (preserves BoltFixer changes)
+                        logger.warning(f"[RemoteRestore] File count failed but dir exists: {check_err} - SKIPPING S3 restore")
+                        async with AsyncSessionLocal() as session:
+                            result = await session.execute(
+                                select(ProjectFile).where(cast(ProjectFile.project_id, SQLString(36)) == str(UUID(project_id))).where(ProjectFile.is_folder == False)
+                            )
+                            file_records = result.scalars().all()
+                        return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in file_records]
+                    else:
+                        # Directory doesn't exist - first run, proceed with S3 restore
+                        logger.info(f"[RemoteRestore] Workspace not found, proceeding with S3 restore")
 
             project_uuid = str(UUID(project_id))
             logger.info(f"[RemoteRestore] Querying database for project: {project_uuid}")
