@@ -1593,28 +1593,28 @@ class UnifiedStorageService:
 
         # =============================================================
         # EFS MODE: Files already persist on shared filesystem
-        # No S3 restore needed - just check if files exist
+        # No S3 restore needed - just check if directory exists
         # =============================================================
         if getattr(settings, 'EFS_ENABLED', False):
-            logger.info(f"[RemoteRestore] EFS mode enabled - checking for existing files")
+            logger.info(f"[RemoteRestore] EFS mode enabled - checking for existing workspace")
             try:
                 # Use TLS-enabled docker client
                 from app.services.docker_client_helper import get_docker_client
                 docker_client = get_docker_client()
                 if not docker_client:
                     docker_client = docker.DockerClient(base_url=sandbox_docker_host)
-                check_output = docker_client.containers.run(
+                dir_check = docker_client.containers.run(
                     "alpine:latest",
-                    ["-c", f"find {workspace_path} -type f ! -path '*/node_modules/*' 2>/dev/null | wc -l"],
+                    ["-c", f"test -d {workspace_path} && echo 'exists' || echo 'missing'"],
                     entrypoint="/bin/sh",
                     volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},
                     remove=True,
                     detach=False
                 )
-                file_count = int(check_output.decode().strip() or "0")
+                dir_exists = dir_check.decode().strip() == 'exists'
 
-                if file_count > 3:
-                    logger.info(f"[RemoteRestore] EFS: Found {file_count} files, no restore needed")
+                if dir_exists:
+                    logger.info(f"[RemoteRestore] EFS: Workspace exists, no restore needed")
                     # Return file info from DB
                     async with AsyncSessionLocal() as session:
                         result = await session.execute(
@@ -1623,7 +1623,7 @@ class UnifiedStorageService:
                         file_records = result.scalars().all()
                     return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in file_records]
                 else:
-                    logger.info(f"[RemoteRestore] EFS: Project not found on EFS, falling back to S3 restore")
+                    logger.info(f"[RemoteRestore] EFS: Workspace not found, falling back to S3 restore")
             except Exception as efs_err:
                 logger.warning(f"[RemoteRestore] EFS check failed: {efs_err}, falling back to S3")
 
@@ -1642,54 +1642,20 @@ class UnifiedStorageService:
             # Quick check if project already exists on EC2 (skip restore if cached)
             if docker_client:
                 try:
-                    # FIXED: Use recursive file count (excluding node_modules) instead of top-level ls
-                    # Old: ls | wc -l only counted top-level items (4-5 for typical project)
-                    # New: find -type f counts all actual files recursively
-                    check_output = docker_client.containers.run(
+                    # Simple check: does workspace directory exist?
+                    dir_check = docker_client.containers.run(
                         "alpine:latest",
-                        ["-c", f"find {workspace_path} -type f ! -path '*/node_modules/*' 2>/dev/null | wc -l"],
+                        ["-c", f"test -d {workspace_path} && echo 'exists' || echo 'missing'"],
                         entrypoint="/bin/sh",
-                        volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},  # Use sandbox_base for EFS support
+                        volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},
                         remove=True,
                         detach=False
                     )
-                    file_count = int(check_output.decode().strip() or "0")
-                    if file_count > 3:  # Project has files, skip S3 restore (preserves auto-fixer changes!)
-                        logger.info(f"[RemoteRestore] Project cached on EC2 ({file_count} files), SKIPPING S3 restore")
-                        # =============================================================
-                        # CACHED PROJECT - Use existing EC2 files WITHOUT modifications
-                        # =============================================================
-                        # WHY: Preserve auto-fixer changes between runs
-                        # - JSON sanitization, Dockerfile fixes, Vite fixes were removed
-                        # - These fixes only run during FIRST S3 restore (see below)
-                        # - If issues exist, auto-fixer will handle them during build
-                        # =============================================================
-
-                        # Return file info from DB without re-downloading or modifying
-                        async with AsyncSessionLocal() as session:
-                            result = await session.execute(
-                                select(ProjectFile).where(cast(ProjectFile.project_id, SQLString(36)) == str(UUID(project_id))).where(ProjectFile.is_folder == False)
-                            )
-                            file_records = result.scalars().all()
-                        return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in file_records]
-                except Exception as check_err:
-                    # Check if workspace directory exists (simpler check)
-                    try:
-                        dir_check = docker_client.containers.run(
-                            "alpine:latest",
-                            ["-c", f"test -d {workspace_path} && echo 'exists' || echo 'missing'"],
-                            entrypoint="/bin/sh",
-                            volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},
-                            remove=True,
-                            detach=False
-                        )
-                        dir_exists = dir_check.decode().strip() == 'exists'
-                    except:
-                        dir_exists = False
+                    dir_exists = dir_check.decode().strip() == 'exists'
 
                     if dir_exists:
-                        # Directory exists - assume files exist (preserves BoltFixer changes)
-                        logger.warning(f"[RemoteRestore] File count failed but dir exists: {check_err} - SKIPPING S3 restore")
+                        # Directory exists - skip S3 restore (preserves BoltFixer changes)
+                        logger.info(f"[RemoteRestore] Workspace exists on EC2, SKIPPING S3 restore")
                         async with AsyncSessionLocal() as session:
                             result = await session.execute(
                                 select(ProjectFile).where(cast(ProjectFile.project_id, SQLString(36)) == str(UUID(project_id))).where(ProjectFile.is_folder == False)
@@ -1698,7 +1664,10 @@ class UnifiedStorageService:
                         return [FileInfo(path=f.path, name=f.name, type='file', language=f.language or 'plaintext', size_bytes=f.size_bytes or 0) for f in file_records]
                     else:
                         # Directory doesn't exist - first run, proceed with S3 restore
-                        logger.info(f"[RemoteRestore] Workspace not found, proceeding with S3 restore")
+                        logger.info(f"[RemoteRestore] Workspace not found on EC2, will restore from S3")
+                except Exception as check_err:
+                    # Check failed - assume directory doesn't exist, proceed with S3 restore
+                    logger.warning(f"[RemoteRestore] Directory check failed: {check_err}, will restore from S3")
 
             project_uuid = str(UUID(project_id))
             logger.info(f"[RemoteRestore] Querying database for project: {project_uuid}")
