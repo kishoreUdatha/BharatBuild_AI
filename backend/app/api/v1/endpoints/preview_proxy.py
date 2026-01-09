@@ -31,15 +31,108 @@ import re
 import os
 import docker
 from typing import Optional
-from fastapi import APIRouter, Request, Response, HTTPException, WebSocket, WebSocketDisconnect
+from uuid import UUID
+from fastapi import APIRouter, Request, Response, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.modules.execution import get_container_manager
 from app.services.container_executor import container_executor
 from app.core.logging_config import logger
+from app.core.database import get_db
+from app.core.security import decode_token
+from app.models.project import Project
 
 router = APIRouter(prefix="/preview", tags=["Preview Proxy"])
+
+
+# =============================================================================
+# SECURITY: User Isolation for Preview Access
+# =============================================================================
+
+async def get_user_id_from_request(request: Request) -> Optional[str]:
+    """
+    Extract user ID from JWT token in request.
+    Returns None if not authenticated (for anonymous/public access check).
+    """
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        try:
+            token = auth_header[7:]
+            payload = decode_token(token)
+            return payload.get("sub")
+        except Exception:
+            pass
+    return None
+
+
+async def verify_preview_access(
+    project_id: str,
+    request: Request,
+    db: AsyncSession
+) -> bool:
+    """
+    Verify user has access to preview this project.
+
+    SECURITY: Prevents unauthorized access to other users' running projects.
+
+    Access is granted if:
+    1. User owns the project (user_id matches)
+    2. Project has no owner (anonymous/legacy project)
+    3. Project is marked as public (future feature)
+
+    Returns True if access is allowed, False otherwise.
+    """
+    user_id = await get_user_id_from_request(request)
+
+    try:
+        # Validate project_id format
+        try:
+            project_uuid = UUID(project_id)
+        except (ValueError, TypeError):
+            # Invalid UUID format - might be a legacy project ID
+            # Allow access for backwards compatibility with non-UUID project IDs
+            logger.debug(f"[Preview Security] Non-UUID project_id: {project_id}, allowing access")
+            return True
+
+        # Query project
+        result = await db.execute(
+            select(Project).where(Project.id == project_uuid)
+        )
+        project = result.scalar_one_or_none()
+
+        if not project:
+            # Project not in DB - might be anonymous/temporary
+            # Allow access (container manager will handle 404)
+            logger.debug(f"[Preview Security] Project not in DB: {project_id}, allowing access")
+            return True
+
+        # Check ownership
+        if project.user_id is None:
+            # Anonymous project - allow access
+            logger.debug(f"[Preview Security] Anonymous project: {project_id}, allowing access")
+            return True
+
+        if user_id and str(project.user_id) == user_id:
+            # User owns the project
+            logger.debug(f"[Preview Security] Owner access: {project_id} by {user_id}")
+            return True
+
+        # Check if project is public (future feature)
+        if hasattr(project, 'is_public') and project.is_public:
+            logger.debug(f"[Preview Security] Public project: {project_id}")
+            return True
+
+        # Access denied
+        logger.warning(f"[Preview Security] Access denied: user {user_id} tried to access project {project_id} owned by {project.user_id}")
+        return False
+
+    except Exception as e:
+        logger.error(f"[Preview Security] Error verifying access: {e}")
+        # Fail open for backwards compatibility (but log the error)
+        return True
 
 
 # =============================================================================
@@ -727,9 +820,16 @@ async def get_container_internal_address(project_id: str) -> Optional[tuple[str,
 
 
 @router.api_route("/{project_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
-async def proxy_preview(project_id: str, path: str, request: Request):
+async def proxy_preview(
+    project_id: str,
+    path: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
     """
     Reverse proxy to container via Traefik gateway.
+
+    SECURITY: Verifies user has access to this project before proxying.
 
     This is the Bolt.new-style preview URL handler:
     - GET /preview/abc123/ → gateway → container abc123 port 3000/5173/etc
@@ -740,6 +840,13 @@ async def proxy_preview(project_id: str, path: str, request: Request):
     - Remote mode: ECS → Traefik Gateway (EC2:8080) → Container
     - Local mode: Direct to container IP (for development)
     """
+    # SECURITY: Verify user has access to this project
+    if not await verify_preview_access(project_id, request, db):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: You don't have permission to view this project's preview"
+        )
+
     logger.info(f"[Preview] Incoming request: {request.method} /preview/{project_id}/{path}")
     logger.info(f"[Preview] IS_REMOTE_DOCKER={IS_REMOTE_DOCKER}, SANDBOX_DOCKER_HOST={SANDBOX_DOCKER_HOST}")
 
@@ -900,15 +1007,74 @@ async def proxy_preview(project_id: str, path: str, request: Request):
 
 
 @router.get("/{project_id}")
-async def preview_root(project_id: str, request: Request):
+async def preview_root(project_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     """Redirect root preview URL to include trailing slash"""
-    return await proxy_preview(project_id, "", request)
+    return await proxy_preview(project_id, "", request, db)
+
+
+async def verify_websocket_access(websocket: WebSocket, project_id: str) -> bool:
+    """
+    Verify WebSocket has access to this project.
+
+    SECURITY: WebSocket handlers can't use regular Depends, so we do manual verification.
+    """
+    # Get token from query params or headers
+    token = websocket.query_params.get("token")
+    if not token:
+        auth_header = websocket.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+
+    user_id = None
+    if token:
+        try:
+            payload = decode_token(token)
+            user_id = payload.get("sub")
+        except Exception:
+            pass
+
+    try:
+        # Validate project_id format
+        try:
+            project_uuid = UUID(project_id)
+        except (ValueError, TypeError):
+            # Non-UUID project ID - allow for backwards compatibility
+            return True
+
+        # Query project directly (can't use Depends in WebSocket)
+        from app.core.database import async_session_factory
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(Project).where(Project.id == project_uuid)
+            )
+            project = result.scalar_one_or_none()
+
+            if not project:
+                return True  # Project not in DB - allow
+
+            if project.user_id is None:
+                return True  # Anonymous project - allow
+
+            if user_id and str(project.user_id) == user_id:
+                return True  # Owner access
+
+            if hasattr(project, 'is_public') and project.is_public:
+                return True  # Public project
+
+            logger.warning(f"[Preview WS Security] Access denied: user {user_id} tried to access project {project_id}")
+            return False
+
+    except Exception as e:
+        logger.error(f"[Preview WS Security] Error: {e}")
+        return True  # Fail open for backwards compatibility
 
 
 @router.websocket("/{project_id}/{path:path}")
 async def websocket_proxy(websocket: WebSocket, project_id: str, path: str):
     """
     WebSocket proxy for HMR (Hot Module Replacement).
+
+    SECURITY: Verifies user has access to this project before proxying.
 
     Vite, Next.js, etc. use WebSockets for live reload.
     This proxies WS connections to the container.
@@ -918,6 +1084,11 @@ async def websocket_proxy(websocket: WebSocket, project_id: str, path: str):
     - Webpack: /sockjs-node, /ws
     - Next.js: /_next/webpack-hmr
     """
+    # SECURITY: Verify access before accepting connection
+    if not await verify_websocket_access(websocket, project_id):
+        await websocket.close(code=4003, reason="Access denied")
+        return
+
     logger.info(f"[Preview WS] Incoming WebSocket: /preview/{project_id}/{path}")
 
     # Get container address
