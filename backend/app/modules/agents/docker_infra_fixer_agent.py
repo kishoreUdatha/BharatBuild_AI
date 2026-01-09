@@ -418,7 +418,7 @@ class DockerInfraFixerAgent:
             InfraErrorType.PORT_CONFLICT: lambda sr: self._fix_port_conflict(error_message, sr, project_path),
             InfraErrorType.STALE_CONTAINER: lambda sr: self._fix_stale_container(error_message, sr),
             InfraErrorType.DISK_SPACE: self._fix_disk_space,
-            InfraErrorType.IMAGE_NOT_FOUND: lambda sr: self._fix_missing_image(error_message, sr),
+            InfraErrorType.IMAGE_NOT_FOUND: lambda sr: self._fix_missing_image(error_message, sr, project_path),
             InfraErrorType.MEMORY_LIMIT: lambda sr: self._fix_memory_limit(project_path, sr),
             InfraErrorType.DOCKERFILE_SYNTAX: lambda sr: self._fix_dockerfile_error(error_message, project_path, sr),
             InfraErrorType.DOCKERFILE_BASE_IMAGE: lambda sr: self._fix_dockerfile_base_image(error_message, project_path, sr),
@@ -863,37 +863,78 @@ class DockerInfraFixerAgent:
         except Exception as e:
             return FixResult(success=False, message=f"Disk cleanup failed: {e}")
 
-    async def _fix_missing_image(self, error_message: str, sandbox_runner: callable) -> FixResult:
-        """Auto-pull missing Docker image."""
+    async def _fix_missing_image(
+        self,
+        error_message: str,
+        sandbox_runner: callable,
+        project_path: str = None
+    ) -> FixResult:
+        """Auto-pull missing Docker image AND update Dockerfile if needed.
+
+        IMPORTANT: This method now also modifies the Dockerfile to use the
+        replacement image, not just pull it. Otherwise the next build will
+        fail with the same error.
+        """
         # Extract image name from error
         match = re.search(r'manifest for ([^\s]+) not found|pull access denied for ([^\s,]+)|repository ([^\s]+) not found',
                          error_message, re.IGNORECASE)
         if not match:
             return FixResult(success=False, message="Could not determine missing image name")
 
-        image = match.group(1) or match.group(2) or match.group(3)
+        original_image = match.group(1) or match.group(2) or match.group(3)
 
         # Check if we have an alternative
-        alt_image = DOCKERFILE_FIXES.get(image)
-        if alt_image:
-            image = alt_image
+        alt_image = DOCKERFILE_FIXES.get(original_image)
+        image_to_pull = alt_image if alt_image else original_image
+
+        dockerfile_modified = False
+        modified_file = None
+
+        # If we have an alternative image AND project_path, update the Dockerfile
+        if alt_image and project_path:
+            # Find and update all Dockerfiles that use the old image
+            dockerfile_paths = [
+                f"{project_path}/Dockerfile",
+                f"{project_path}/frontend/Dockerfile",
+                f"{project_path}/backend/Dockerfile",
+            ]
+
+            for dockerfile_path in dockerfile_paths:
+                if self._file_exists_in_sandbox(dockerfile_path, sandbox_runner):
+                    try:
+                        content = self._read_file_from_sandbox(dockerfile_path, sandbox_runner)
+                        if content and original_image in content:
+                            # Replace the old image with the new one
+                            fixed_content = content.replace(original_image, alt_image)
+                            if self._write_file_to_sandbox(dockerfile_path, fixed_content, sandbox_runner):
+                                dockerfile_modified = True
+                                modified_file = dockerfile_path
+                                logger.info(f"[DockerInfraFixer] Updated Dockerfile: {original_image} -> {alt_image}")
+                    except Exception as e:
+                        logger.warning(f"[DockerInfraFixer] Failed to update {dockerfile_path}: {e}")
 
         try:
-            exit_code, output = sandbox_runner(f"docker pull {image}", None, 300)
+            exit_code, output = sandbox_runner(f"docker pull {image_to_pull}", None, 300)
             if exit_code == 0:
+                message = f"Pulled image: {image_to_pull}"
+                if dockerfile_modified:
+                    message = f"Updated Dockerfile ({original_image} -> {alt_image}) and pulled image"
                 return FixResult(
                     success=True,
-                    message=f"Pulled image: {image}",
-                    command_executed=f"docker pull {image}"
+                    message=message,
+                    command_executed=f"docker pull {image_to_pull}",
+                    file_modified=modified_file,
+                    changes_made=f"Replaced {original_image} with {alt_image}" if dockerfile_modified else None
                 )
             else:
                 # Try without tag
-                base_image = image.split(':')[0]
+                base_image = image_to_pull.split(':')[0]
                 exit_code, output = sandbox_runner(f"docker pull {base_image}:latest", None, 300)
                 return FixResult(
                     success=exit_code == 0,
                     message=f"Pulled image: {base_image}:latest",
-                    command_executed=f"docker pull {base_image}:latest"
+                    command_executed=f"docker pull {base_image}:latest",
+                    file_modified=modified_file if dockerfile_modified else None
                 )
         except Exception as e:
             return FixResult(success=False, message=f"Image pull failed: {e}")
