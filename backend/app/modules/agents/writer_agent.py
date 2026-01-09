@@ -1895,12 +1895,15 @@ FROM openjdk:17-jdk-slim    # MAY NOT EXIST!
 
 ✅ CORRECT - Use Eclipse Temurin (official OpenJDK distribution):
 ```dockerfile
-# For build stage
-FROM maven:3.8.4-openjdk-17-slim AS build
+# For build stage (Maven)
+FROM maven:3.9-eclipse-temurin-17-alpine AS build
+
+# For build stage (Gradle)
+FROM gradle:8-jdk17-alpine AS build
 
 # For runtime stage
-FROM eclipse-temurin:17-jre        # Recommended for runtime
-FROM eclipse-temurin:17-jdk-slim   # If you need full JDK
+FROM eclipse-temurin:17-jre-alpine    # Recommended for runtime (smallest)
+FROM eclipse-temurin:17-jdk-alpine    # If you need full JDK
 ```
 
 NODE.JS/FRONTEND:

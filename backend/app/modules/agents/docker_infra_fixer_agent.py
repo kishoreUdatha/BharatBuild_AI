@@ -229,12 +229,34 @@ DOCKERFILE_FIXES = {
     "node:20": "node:20-alpine",
     "python:latest": "python:3.11-slim",
     "python:3": "python:3.11-slim",
+    # OpenJDK images - use Eclipse Temurin (official OpenJDK distribution)
     "openjdk:latest": "eclipse-temurin:17-jdk-alpine",
     "openjdk:17": "eclipse-temurin:17-jdk-alpine",
+    "openjdk:17-slim": "eclipse-temurin:17-jdk-alpine",
+    "openjdk:17-jdk-slim": "eclipse-temurin:17-jdk-alpine",
+    "openjdk:17-jdk": "eclipse-temurin:17-jdk-alpine",
     "openjdk:11": "eclipse-temurin:11-jdk-alpine",
+    "openjdk:11-slim": "eclipse-temurin:11-jdk-alpine",
+    "openjdk:11-jdk-slim": "eclipse-temurin:11-jdk-alpine",
+    "openjdk:11-jdk": "eclipse-temurin:11-jdk-alpine",
+    "openjdk:21": "eclipse-temurin:21-jdk-alpine",
+    "openjdk:21-slim": "eclipse-temurin:21-jdk-alpine",
+    "openjdk:21-jdk-slim": "eclipse-temurin:21-jdk-alpine",
+    "openjdk:21-jdk": "eclipse-temurin:21-jdk-alpine",
     "java:latest": "eclipse-temurin:17-jdk-alpine",
+    # Maven images - use eclipse-temurin based versions
     "maven:latest": "maven:3.9-eclipse-temurin-17-alpine",
+    "maven:3.8.4-openjdk-17-slim": "maven:3.9-eclipse-temurin-17-alpine",
+    "maven:3.8-openjdk-17-slim": "maven:3.9-eclipse-temurin-17-alpine",
+    "maven:3.9-openjdk-17-slim": "maven:3.9-eclipse-temurin-17-alpine",
+    "maven:3.8-openjdk-17": "maven:3.9-eclipse-temurin-17-alpine",
+    "maven:3.9-openjdk-17": "maven:3.9-eclipse-temurin-17-alpine",
+    "maven:3.8-openjdk-11-slim": "maven:3.9-eclipse-temurin-11-alpine",
+    "maven:3.9-openjdk-11-slim": "maven:3.9-eclipse-temurin-11-alpine",
+    # Gradle images
     "gradle:latest": "gradle:8-jdk17-alpine",
+    "gradle:7-jdk17": "gradle:8-jdk17-alpine",
+    "gradle:8-jdk17": "gradle:8-jdk17-alpine",
 }
 
 # Common Dockerfile patterns to fix
