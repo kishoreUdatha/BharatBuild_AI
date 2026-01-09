@@ -19,6 +19,7 @@ import asyncio
 import json
 import zipfile
 import io
+from pathlib import Path
 
 from app.core.database import get_db
 from app.core.logging_config import logger
@@ -30,6 +31,7 @@ from app.modules.orchestrator.dynamic_orchestrator import dynamic_orchestrator, 
 from app.modules.automation.file_manager import FileManager
 from app.modules.agents.production_fixer_agent import production_fixer_agent
 from app.modules.agents.base_agent import AgentContext
+from app.services.bolt_fixer import BoltFixer
 from app.modules.execution.docker_executor import docker_executor, docker_compose_executor, FrameworkType, DEFAULT_PORTS
 from app.services.unified_storage import unified_storage
 from app.services.sandbox_cleanup import touch_project
@@ -502,19 +504,47 @@ async def fix_runtime_error(
             }
         )
 
-        # Call the fixer agent
-        result = await production_fixer_agent.process(context)
+        # ============= USE BOLT FIXER =============
+        # BoltFixer handles deterministic fixes (Docker base images) + AI fixes
+        # and persists fixes to S3/database so they survive "restore from database"
+        bolt_fixer = BoltFixer()
 
-        if not result.get("success"):
-            logger.warning(f"Fixer agent failed: {result.get('error')}")
+        # Build payload for BoltFixer
+        bolt_payload = {
+            "stderr": context.metadata.get("error_message", "") + "\n" + context.metadata.get("stack_trace", ""),
+            "stdout": "",
+            "exit_code": 1,
+            "error_file": context.metadata.get("affected_files", [None])[0] if context.metadata.get("affected_files") else None,
+        }
+
+        # Call BoltFixer
+        bolt_result = await bolt_fixer.fix_from_backend(
+            project_id=project_id,
+            project_path=project_path,
+            payload=bolt_payload,
+            sandbox_file_writer=lambda fp, c: (project_path / fp).write_text(c, encoding='utf-8') or True,
+            sandbox_file_reader=lambda fp: (project_path / fp).read_text(encoding='utf-8') if (project_path / fp).exists() else None,
+            sandbox_file_lister=lambda d, p: [str(f) for f in Path(d).rglob(p)]
+        )
+
+        if not bolt_result.success:
+            logger.warning(f"BoltFixer failed: {bolt_result.message}")
             return {
                 "success": False,
-                "error": result.get("error", "Failed to generate fix"),
-                "suggestion": result.get("suggestion", "Manual intervention may be required")
+                "error": bolt_result.message,
+                "suggestion": "Manual intervention may be required"
             }
 
-        # Process fixed files - save them to disk
-        fixed_files = result.get("fixed_files", [])
+        # Convert BoltFixer result to expected format for rest of endpoint
+        fixed_files = []
+        for modified_file in bolt_result.files_modified:
+            full_path = project_path / modified_file
+            try:
+                if full_path.exists():
+                    content = full_path.read_text(encoding='utf-8')
+                    fixed_files.append({"path": modified_file, "content": content})
+            except Exception as read_err:
+                logger.warning(f"Could not read fixed file {modified_file}: {read_err}")
         saved_files = []
 
         for file_info in fixed_files:

@@ -17,6 +17,7 @@ from typing import Dict, Any, List, Optional, Tuple, Callable
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import re
 
 from app.core.logging_config import logger
 from app.services.error_classifier import ErrorClassifier, ErrorType, ClassifiedError
@@ -38,6 +39,114 @@ MAX_FILES_PER_BATCH = 6         # Max files to include in one fix
 CHARS_PER_FILE_LIMIT = 12000    # Truncate files larger than this
 CONTEXT_LINES_AROUND_ERROR = 60 # Lines to keep around error when truncating
 MAX_FIX_PASSES = 5              # Maximum multi-pass fix attempts
+
+# =============================================================================
+# DOCKERFILE BASE IMAGE FIXES (Deterministic - No AI needed)
+# =============================================================================
+# Maps deprecated/unavailable Docker base images to working alternatives
+DOCKERFILE_BASE_IMAGE_FIXES = {
+    # OpenJDK images - use Eclipse Temurin (official OpenJDK distribution)
+    "openjdk:latest": "eclipse-temurin:17-jdk-alpine",
+    "openjdk:17": "eclipse-temurin:17-jdk-alpine",
+    "openjdk:17-slim": "eclipse-temurin:17-jdk-alpine",
+    "openjdk:17-jdk-slim": "eclipse-temurin:17-jdk-alpine",
+    "openjdk:17-jdk": "eclipse-temurin:17-jdk-alpine",
+    "openjdk:11": "eclipse-temurin:11-jdk-alpine",
+    "openjdk:11-slim": "eclipse-temurin:11-jdk-alpine",
+    "openjdk:11-jdk-slim": "eclipse-temurin:11-jdk-alpine",
+    "openjdk:11-jdk": "eclipse-temurin:11-jdk-alpine",
+    "openjdk:21": "eclipse-temurin:21-jdk-alpine",
+    "openjdk:21-slim": "eclipse-temurin:21-jdk-alpine",
+    "openjdk:21-jdk-slim": "eclipse-temurin:21-jdk-alpine",
+    "openjdk:21-jdk": "eclipse-temurin:21-jdk-alpine",
+    "java:latest": "eclipse-temurin:17-jdk-alpine",
+    # Maven images - use eclipse-temurin based versions
+    "maven:latest": "maven:3.9-eclipse-temurin-17-alpine",
+    "maven:3.8.4-openjdk-17-slim": "maven:3.9-eclipse-temurin-17-alpine",
+    "maven:3.8-openjdk-17-slim": "maven:3.9-eclipse-temurin-17-alpine",
+    "maven:3.9-openjdk-17-slim": "maven:3.9-eclipse-temurin-17-alpine",
+    "maven:3.8-openjdk-17": "maven:3.9-eclipse-temurin-17-alpine",
+    "maven:3.9-openjdk-17": "maven:3.9-eclipse-temurin-17-alpine",
+    "maven:3.8-openjdk-11-slim": "maven:3.9-eclipse-temurin-11-alpine",
+    "maven:3.9-openjdk-11-slim": "maven:3.9-eclipse-temurin-11-alpine",
+    # Gradle images
+    "gradle:latest": "gradle:8-jdk17-alpine",
+    "gradle:7-jdk17": "gradle:8-jdk17-alpine",
+    # Node images
+    "node:latest": "node:20-alpine",
+    "node:18": "node:18-alpine",
+    "node:20": "node:20-alpine",
+    # Python images
+    "python:latest": "python:3.11-slim",
+    "python:3": "python:3.11-slim",
+}
+
+
+async def get_ai_image_replacement(bad_image: str, error_message: str = "") -> Optional[str]:
+    """
+    Use AI to suggest replacement for ANY unavailable Docker image.
+
+    This is a generic approach that works for all technologies:
+    - Java, Python, Node, Go, Rust, Ruby, PHP, .NET
+    - Databases, web servers, tools
+    - Any current or future images
+
+    Args:
+        bad_image: The Docker image that failed (e.g., "openjdk:17-jdk-slim")
+        error_message: Optional error context for better suggestions
+
+    Returns:
+        Replacement image string or None if AI couldn't suggest
+    """
+    import anthropic
+    from app.core.config import settings
+
+    # First check exact match (fast, no AI cost)
+    if bad_image in DOCKERFILE_BASE_IMAGE_FIXES:
+        return DOCKERFILE_BASE_IMAGE_FIXES[bad_image]
+
+    try:
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+        # Focused prompt - minimal tokens, fast response
+        prompt = f"""Docker image "{bad_image}" is unavailable (manifest not found).
+
+Return ONLY the working replacement image name. No explanation.
+
+Requirements:
+- Must be a real, currently available Docker Hub image
+- Prefer official images or well-maintained alternatives
+- Use alpine/slim variants when available for smaller size
+- Keep the same major version if possible
+
+Examples:
+- openjdk:17-jdk-slim → eclipse-temurin:17-jdk-alpine
+- maven:3.8-openjdk-17-slim → maven:3.9-eclipse-temurin-17-alpine
+- node:18 → node:18-alpine
+- python:3.11 → python:3.11-slim
+
+Reply with ONLY the replacement image (e.g., "eclipse-temurin:17-jdk-alpine"):"""
+
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=50,  # Very small - just need image name
+            temperature=0,  # Deterministic
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        if response.content:
+            replacement = response.content[0].text.strip()
+            # Validate response looks like a Docker image
+            if replacement and ':' in replacement and len(replacement) < 100:
+                # Remove any quotes or extra text
+                replacement = replacement.strip('"\'').split('\n')[0].strip()
+                logger.info(f"[BoltFixer] AI suggested replacement: {bad_image} → {replacement}")
+                return replacement
+
+    except Exception as e:
+        logger.warning(f"[BoltFixer] AI image replacement failed: {e}")
+
+    return None
 
 
 @dataclass
@@ -188,6 +297,284 @@ No explanations. Only the <file> block."""
             logger.error(f"[BoltFixer:{project_id}] Error writing file {file_path}: {e}")
             return False
 
+    async def _try_deterministic_dockerfile_fix(
+        self,
+        project_id: str,
+        project_path: Path,
+        error_output: str
+    ) -> Optional[BoltFixResult]:
+        """
+        Deterministically fix Docker base image errors (NO AI NEEDED).
+
+        This handles errors like:
+        - "manifest for openjdk:17-jdk-slim not found"
+        - "manifest unknown: manifest unknown"
+
+        These are caused by deprecated/unavailable Docker base images.
+        Fix: Replace with working alternatives from DOCKERFILE_BASE_IMAGE_FIXES.
+
+        Args:
+            project_id: Project ID for logging
+            project_path: Path to project root
+            error_output: Combined stdout/stderr from Docker build
+
+        Returns:
+            BoltFixResult if fixed, None if not applicable
+        """
+        # Check if this is a Docker base image error
+        manifest_pattern = r'manifest for ([^\s]+) not found|manifest unknown.*manifest unknown'
+        match = re.search(manifest_pattern, error_output, re.IGNORECASE)
+
+        if not match:
+            return None
+
+        # Extract the problematic image name
+        bad_image = match.group(1) if match.group(1) else None
+
+        logger.info(f"[BoltFixer:{project_id}] Detected Docker base image error: {bad_image or 'unknown'}")
+
+        # Find all Dockerfiles in the project
+        dockerfile_paths = []
+        possible_dockerfiles = [
+            project_path / "Dockerfile",
+            project_path / "backend" / "Dockerfile",
+            project_path / "backend" / "Dockerfile.light",
+            project_path / "frontend" / "Dockerfile",
+        ]
+
+        for dockerfile in possible_dockerfiles:
+            try:
+                if self._sandbox_file_reader:
+                    content = self._sandbox_file_reader(str(dockerfile))
+                    if content:
+                        dockerfile_paths.append((dockerfile, content))
+                elif dockerfile.exists():
+                    dockerfile_paths.append((dockerfile, dockerfile.read_text(encoding='utf-8')))
+            except Exception:
+                continue
+
+        if not dockerfile_paths:
+            logger.warning(f"[BoltFixer:{project_id}] No Dockerfiles found to fix")
+            return None
+
+        files_modified = []
+
+        for dockerfile_path, content in dockerfile_paths:
+            original_content = content
+            modified = False
+
+            # Try to fix the specific bad image
+            if bad_image:
+                # Tier 1: Check exact match in dictionary (fast, no AI cost)
+                replacement = DOCKERFILE_BASE_IMAGE_FIXES.get(bad_image)
+
+                # Tier 2: Use AI to get replacement (generic, works for any image)
+                if not replacement:
+                    logger.info(f"[BoltFixer:{project_id}] No exact match for {bad_image}, asking AI...")
+                    replacement = await get_ai_image_replacement(bad_image, error_output)
+
+                # Apply the replacement if found
+                if replacement:
+                    pattern = rf'^(FROM\s+){re.escape(bad_image)}(\s|$)'
+                    new_content = re.sub(pattern, rf'\g<1>{replacement}\2', content, flags=re.MULTILINE)
+                    if new_content != content:
+                        content = new_content
+                        modified = True
+                        logger.info(f"[BoltFixer:{project_id}] Fixed: {bad_image} -> {replacement}")
+
+            # Also scan for any other deprecated images in the file (dictionary only - fast)
+            for old_image, new_image in DOCKERFILE_BASE_IMAGE_FIXES.items():
+                if old_image in content:
+                    pattern = rf'^(FROM\s+){re.escape(old_image)}(\s|$)'
+                    new_content = re.sub(pattern, rf'\g<1>{new_image}\2', content, flags=re.MULTILINE)
+                    if new_content != content:
+                        content = new_content
+                        modified = True
+                        logger.info(f"[BoltFixer:{project_id}] Fixed: {old_image} -> {new_image}")
+
+            if modified and content != original_content:
+                # Write the fixed content to sandbox
+                if self._write_file(dockerfile_path, content, project_id):
+                    try:
+                        rel_path = str(dockerfile_path.relative_to(project_path))
+                    except ValueError:
+                        rel_path = str(dockerfile_path)
+
+                    # IMMEDIATELY persist this fix to S3/database
+                    # This ensures fix survives even if process crashes or retry limit reached
+                    await self._persist_single_fix(project_id, project_path, rel_path, content)
+
+                    files_modified.append(rel_path)
+                    logger.info(f"[BoltFixer:{project_id}] ✓ Fixed & persisted: {rel_path}")
+
+        if files_modified:
+            return BoltFixResult(
+                success=True,
+                files_modified=files_modified,
+                message=f"Deterministic fix: Replaced deprecated Docker base images in {len(files_modified)} file(s)",
+                patches_applied=len(files_modified),
+                error_type="dockerfile_base_image",
+                fix_strategy="deterministic"
+            )
+
+        return None
+
+    async def _persist_single_fix(
+        self,
+        project_id: str,
+        project_path: Path,
+        file_path: str,
+        content: str
+    ) -> bool:
+        """
+        Persist a SINGLE fix to S3/database IMMEDIATELY after fixing.
+
+        This is called after EACH file is fixed, not at the end.
+        Benefits:
+        - No fixes lost if process crashes
+        - Partial progress saved even if retry limit reached
+        - User can continue from where they left off
+
+        Args:
+            project_id: Project ID
+            project_path: Path to project root
+            file_path: Relative path of fixed file
+            content: Fixed file content
+
+        Returns:
+            True if persisted successfully, False otherwise
+        """
+        try:
+            content_bytes = content.encode('utf-8')
+
+            # Step 1: Upload to S3
+            try:
+                await storage_service.upload_file(
+                    project_id=project_id,
+                    file_path=file_path,
+                    content=content_bytes,
+                    content_type="text/plain"
+                )
+                logger.info(f"[BoltFixer:{project_id}] ✓ S3: {file_path}")
+            except Exception as s3_err:
+                logger.warning(f"[BoltFixer:{project_id}] S3 failed: {file_path} - {s3_err}")
+                return False
+
+            # Step 2: Update database record
+            try:
+                from uuid import UUID
+                from sqlalchemy import select
+                from app.core.database import AsyncSessionLocal
+                from app.models.project_file import ProjectFile
+                import hashlib
+
+                s3_key = f"projects/{project_id}/{file_path.replace(chr(92), '/')}"
+
+                async with AsyncSessionLocal() as session:
+                    stmt = select(ProjectFile).where(
+                        ProjectFile.project_id == UUID(project_id),
+                        ProjectFile.path == file_path
+                    )
+                    db_result = await session.execute(stmt)
+                    file_record = db_result.scalar_one_or_none()
+
+                    if file_record:
+                        file_record.content_hash = hashlib.sha256(content_bytes).hexdigest()
+                        file_record.size_bytes = len(content_bytes)
+                        file_record.s3_key = s3_key
+                        await session.commit()
+                        logger.info(f"[BoltFixer:{project_id}] ✓ DB: {file_path}")
+                    else:
+                        logger.warning(f"[BoltFixer:{project_id}] No DB record: {file_path}")
+                        return False
+
+            except Exception as db_err:
+                logger.warning(f"[BoltFixer:{project_id}] DB failed: {file_path} - {db_err}")
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"[BoltFixer:{project_id}] Persist failed: {file_path} - {e}")
+            return False
+
+    async def _persist_fix_to_storage(
+        self,
+        project_id: str,
+        project_path: Path,
+        files_modified: List[str]
+    ) -> None:
+        """
+        Persist fixes to database/S3 so they survive "restore from database" step.
+
+        NOTE: This is now a fallback/batch method. Primary persistence happens
+        in _persist_single_fix() immediately after each fix.
+        """
+        logger.info(f"[BoltFixer:{project_id}] Persisting {len(files_modified)} fix(es) to storage")
+
+        for file_path in files_modified:
+            try:
+                # Read the fixed content
+                full_path = project_path / file_path
+                content = None
+
+                if self._sandbox_file_reader:
+                    content = self._sandbox_file_reader(str(full_path))
+                elif full_path.exists():
+                    content = full_path.read_text(encoding='utf-8')
+
+                if not content:
+                    logger.warning(f"[BoltFixer:{project_id}] Could not read fixed file: {file_path}")
+                    continue
+
+                content_bytes = content.encode('utf-8')
+
+                # Upload to S3
+                try:
+                    await storage_service.upload_file(
+                        project_id=project_id,
+                        file_path=file_path,
+                        content=content_bytes,
+                        content_type="text/plain"
+                    )
+                    logger.info(f"[BoltFixer:{project_id}] ✓ Uploaded to S3: {file_path}")
+                except Exception as s3_err:
+                    logger.warning(f"[BoltFixer:{project_id}] S3 upload failed for {file_path}: {s3_err}")
+
+                # Update database record with new hash, size, and s3_key
+                try:
+                    from uuid import UUID
+                    from sqlalchemy import select
+                    from app.core.database import AsyncSessionLocal
+                    from app.models.project_file import ProjectFile
+                    import hashlib
+
+                    # Generate the s3_key that storage_service used
+                    s3_key = f"projects/{project_id}/{file_path.replace(chr(92), '/')}"
+
+                    async with AsyncSessionLocal() as session:
+                        stmt = select(ProjectFile).where(
+                            ProjectFile.project_id == UUID(project_id),
+                            ProjectFile.path == file_path
+                        )
+                        db_result = await session.execute(stmt)
+                        file_record = db_result.scalar_one_or_none()
+
+                        if file_record:
+                            # Update all relevant fields
+                            file_record.content_hash = hashlib.sha256(content_bytes).hexdigest()
+                            file_record.size_bytes = len(content_bytes)
+                            file_record.s3_key = s3_key  # Ensure s3_key matches S3 upload
+                            await session.commit()
+                            logger.info(f"[BoltFixer:{project_id}] ✓ Updated DB: {file_path} (s3_key={s3_key})")
+                        else:
+                            logger.warning(f"[BoltFixer:{project_id}] No DB record for: {file_path}")
+                except Exception as db_err:
+                    logger.warning(f"[BoltFixer:{project_id}] DB update failed for {file_path}: {db_err}")
+
+            except Exception as e:
+                logger.error(f"[BoltFixer:{project_id}] Error persisting {file_path}: {e}")
+
     async def fix_from_backend(
         self,
         project_id: str,
@@ -282,6 +669,20 @@ No explanations. Only the <file> block."""
                 error_type=classified.error_type.value,
                 fix_strategy="retry_blocked"
             )
+
+        # =================================================================
+        # STEP 3a: TRY DETERMINISTIC FIXES FIRST (fast, free, no AI cost)
+        # =================================================================
+        # Docker base image fixes (openjdk:17-jdk-slim -> eclipse-temurin:17-jdk-alpine)
+        dockerfile_fix_result = await self._try_deterministic_dockerfile_fix(
+            project_id=project_id,
+            project_path=project_path,
+            error_output=combined_output
+        )
+        if dockerfile_fix_result:
+            logger.info(f"[BoltFixer:{project_id}] Deterministic Dockerfile fix applied - skipping AI")
+            retry_limiter.record_attempt(project_id, error_hash, tokens_used=0, fixed=True)
+            return dockerfile_fix_result
 
         # =================================================================
         # STEP 4: GATHER CONTEXT (file content for Claude)
@@ -575,8 +976,10 @@ BUILD LOG:
                     if apply_result.success:
                         # Use sandbox-aware file writer
                         if self._write_file(target_path, apply_result.new_content, project_id):
+                            # IMMEDIATELY persist to S3/database (survives restore)
+                            await self._persist_single_fix(project_id, project_path, final_file, apply_result.new_content)
                             files_modified.append(final_file)
-                            logger.info(f"[BoltFixer:{project_id}] Applied patch to {final_file}")
+                            logger.info(f"[BoltFixer:{project_id}] Applied & persisted patch: {final_file}")
                 except Exception as e:
                     logger.error(f"[BoltFixer:{project_id}] Error applying patch to {final_file}: {e}")
 
@@ -614,8 +1017,10 @@ BUILD LOG:
 
             # Use sandbox-aware file writer
             if self._write_file(target_path, content, project_id):
+                # IMMEDIATELY persist to S3/database (survives restore)
+                await self._persist_single_fix(project_id, project_path, file_path, content)
                 files_modified.append(file_path)
-                logger.info(f"[BoltFixer:{project_id}] Wrote full file: {file_path}")
+                logger.info(f"[BoltFixer:{project_id}] Wrote & persisted full file: {file_path}")
 
         # Create new files
         for file_info in new_files:
@@ -659,13 +1064,19 @@ BUILD LOG:
 
             # Use sandbox-aware file writer
             if self._write_file(target_path, content, project_id):
+                # IMMEDIATELY persist to S3/database (survives restore)
+                await self._persist_single_fix(project_id, project_path, file_path, content)
                 files_modified.append(file_path)
-                logger.info(f"[BoltFixer:{project_id}] Created new file: {file_path}")
+                logger.info(f"[BoltFixer:{project_id}] Created & persisted new file: {file_path}")
 
         # =================================================================
-        # STEP 8: DO NOT SYNC TO S3 HERE
-        # S3 sync happens in ContainerExecutor AFTER build succeeds
-        # This ensures we only persist fixes that actually work
+        # STEP 8: PERSISTENCE NOW HAPPENS IMMEDIATELY (above)
+        # Each fix is persisted to S3/database right after it's applied.
+        # This ensures fixes survive "restore from database" on retry.
+        # Benefits:
+        # - No fix is ever lost, even if build fails for another reason
+        # - Retry doesn't re-fix the same files (efficient)
+        # - If a fix is wrong, next fix attempt will overwrite it
         # =================================================================
 
         # =================================================================
