@@ -1966,6 +1966,46 @@ class ContainerExecutor:
             yield f"  ⚠️ Pre-build validation skipped: {e}\n"
 
         # =================================================================
+        # JAVA STATIC ANALYZER - Fix Lombok, imports, duplicates BEFORE build
+        # This catches 100+ compile errors BEFORE Docker build starts
+        # =================================================================
+        try:
+            from app.services.java_analyzer import java_analyzer
+
+            # Check if this is a Java project by looking for Java files
+            java_files = self._list_files_from_sandbox(str(project_path), "*.java")
+            if java_files:
+                yield f"\n☕ Running Java analyzer on {len(java_files)} files...\n"
+
+                analysis = java_analyzer.analyze_project(
+                    project_path=project_path,
+                    file_reader=self._read_file_from_sandbox,
+                    file_writer=self._write_file_to_sandbox,
+                    file_lister=self._list_files_from_sandbox,
+                    auto_fix=True
+                )
+
+                if analysis.fixes_applied:
+                    yield f"  ✅ Auto-fixed {len(analysis.fixes_applied)} issues:\n"
+                    for fix in analysis.fixes_applied[:5]:
+                        yield f"     • {fix}\n"
+                    if len(analysis.fixes_applied) > 5:
+                        yield f"     • ... and {len(analysis.fixes_applied) - 5} more\n"
+
+                if analysis.issues:
+                    unfixed = [i for i in analysis.issues if not i.auto_fixable]
+                    if unfixed:
+                        yield f"  ⚠️ {len(unfixed)} issues need manual review\n"
+                        for issue in unfixed[:3]:
+                            yield f"     • {issue.file_path}: {issue.message}\n"
+
+                logger.info(f"[JavaAnalyzer] Pre-build: {len(analysis.fixes_applied)} fixes, {len(analysis.issues)} issues")
+
+        except Exception as e:
+            logger.warning(f"[ContainerExecutor] Java analyzer failed (continuing): {e}")
+            # Don't yield error - Java projects will be built anyway
+
+        # =================================================================
         # COMPREHENSIVE TECHNOLOGY VALIDATION - Fix ALL issues before build
         # Validates: React/Vite, Python, Java, Docker configs
         # Auto-creates: missing tsconfig.node.json, postcss.config.js, etc.

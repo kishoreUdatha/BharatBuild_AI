@@ -6278,6 +6278,9 @@ Stream code in chunks for real-time display.
                 "timeout": 300  # 5 minutes timeout for build commands
             }
 
+            # NOTE: Java analyzer moved to container_executor.py where it has
+            # access to sandbox file callbacks (files are on EC2, not local)
+
             # Execute command using process method
             agent_context = AgentContext(
                 user_request=command,
