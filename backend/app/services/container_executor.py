@@ -2236,6 +2236,23 @@ class ContainerExecutor:
                                         except Exception as persist_err:
                                             logger.warning(f"[SDKFixer] Failed to persist fixes: {persist_err}")
 
+                                        # VERIFY files were written before retrying
+                                        yield f"  🔍 Verifying fixes were written to EC2...\n"
+                                        verified_count = 0
+                                        for file_path in all_sdk_files:
+                                            full_path = Path(project_path) / file_path
+                                            if self._file_exists_on_sandbox(str(full_path)):
+                                                verified_count += 1
+                                                logger.info(f"[SDKFixer] ✅ Verified file exists: {file_path}")
+                                            else:
+                                                logger.error(f"[SDKFixer] ❌ File NOT found after write: {file_path}")
+                                                yield f"     ❌ {file_path} NOT FOUND!\n"
+
+                                        if verified_count == len(all_sdk_files):
+                                            yield f"  ✅ All {verified_count} files verified on EC2\n"
+                                        else:
+                                            yield f"  ⚠️ Only {verified_count}/{len(all_sdk_files)} files verified!\n"
+
                                         yield f"  🔄 Retrying docker-compose...\n"
                                         sdk_fixer_handled = True
                                         continue  # Retry build
@@ -3587,13 +3604,22 @@ class ContainerExecutor:
             import base64
             encoded_content = base64.b64encode(content.encode()).decode()
 
-            # Create directory and write file
+            # Create directory, write file, AND VERIFY write succeeded
+            # Without verification, writes can fail silently
             script = f'''
 mkdir -p "$(dirname {file_path})"
 echo "{encoded_content}" | base64 -d > "{file_path}"
+if [ -f "{file_path}" ]; then
+    echo "WRITE_SUCCESS"
+else
+    echo "WRITE_FAILED"
+    exit 1
+fi
 '''
 
             sandbox_base = _get_sandbox_base()
+            logger.info(f"[ContainerExecutor] Writing file to sandbox: {file_path} (sandbox_base: {sandbox_base})")
+
             result = self.docker_client.containers.run(
                 "alpine:latest",
                 ["-c", script],
@@ -3603,8 +3629,14 @@ echo "{encoded_content}" | base64 -d > "{file_path}"
                 detach=False
             )
 
-            logger.info(f"[ContainerExecutor] Wrote file via helper container: {file_path}")
-            return True
+            # Check result for success
+            output = result.decode() if isinstance(result, bytes) else str(result)
+            if "WRITE_SUCCESS" in output:
+                logger.info(f"[ContainerExecutor] ✅ Wrote file via helper container: {file_path}")
+                return True
+            else:
+                logger.error(f"[ContainerExecutor] ❌ Write verification failed for {file_path}: {output}")
+                return False
 
         except Exception as e:
             logger.error(f"[ContainerExecutor] Failed to write file {file_path}: {e}")

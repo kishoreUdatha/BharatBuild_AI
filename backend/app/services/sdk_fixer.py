@@ -301,7 +301,20 @@ Use read_file then write_file for each file that needs fixing.
 
         if self._sandbox_lister and self._project_path:
             # Use sandbox lister for remote mode
-            files = self._sandbox_lister(str(self._project_path), pattern)
+            # CRITICAL: sandbox_lister returns ABSOLUTE paths, we must convert to RELATIVE
+            # Otherwise _write_file will prepend project_path creating double paths like:
+            # /efs/.../project/efs/.../project/backend/src/...
+            abs_files = self._sandbox_lister(str(self._project_path), pattern)
+            project_path_str = str(self._project_path)
+            files = []
+            for f in abs_files:
+                # Convert absolute to relative by removing project_path prefix
+                if f.startswith(project_path_str):
+                    rel_path = f[len(project_path_str):].lstrip('/')
+                    files.append(rel_path)
+                else:
+                    # If not under project_path, use as-is (shouldn't happen)
+                    files.append(f)
         else:
             # Local mode
             full_pattern = str(self._project_path / pattern)
@@ -324,12 +337,20 @@ Use read_file then write_file for each file that needs fixing.
             path = path[1:]
 
         full_path = self._project_path / path
+        full_path_str = str(full_path).replace("\\", "/")
+
+        logger.info(f"[SDKFixer] Reading file: {path}")
+        logger.info(f"[SDKFixer]   full_path: {full_path_str}")
 
         if self._sandbox_reader:
             # Use sandbox reader for remote mode
-            content = self._sandbox_reader(str(full_path).replace("\\", "/"))
+            content = self._sandbox_reader(full_path_str)
             if content:
+                # Log first/last 200 chars to verify what version we're reading
+                logger.info(f"[SDKFixer]   Content preview (first 200 chars): {content[:200]}")
+                logger.info(f"[SDKFixer]   Content length: {len(content)} chars")
                 return content
+            logger.warning(f"[SDKFixer]   File not found via sandbox_reader: {path}")
             return f"File not found: {path}"
         else:
             # Local mode
@@ -345,20 +366,28 @@ Use read_file then write_file for each file that needs fixing.
             path = path[1:]
 
         full_path = self._project_path / path
+        full_path_str = str(full_path).replace("\\", "/")
+
+        logger.info(f"[SDKFixer] Writing file: {path}")
+        logger.info(f"[SDKFixer]   project_path: {self._project_path}")
+        logger.info(f"[SDKFixer]   full_path: {full_path_str}")
 
         # Check if file exists (for tracking modified vs created)
         file_exists = False
         if self._sandbox_reader:
-            file_exists = self._sandbox_reader(str(full_path).replace("\\", "/")) is not None
+            file_exists = self._sandbox_reader(full_path_str) is not None
         else:
             file_exists = full_path.exists()
 
         # Write file
         if self._sandbox_writer:
             # Use sandbox writer for remote mode
-            success = self._sandbox_writer(str(full_path).replace("\\", "/"), content)
+            logger.info(f"[SDKFixer] Using sandbox_writer for: {full_path_str}")
+            success = self._sandbox_writer(full_path_str, content)
             if not success:
+                logger.error(f"[SDKFixer] ❌ sandbox_writer returned False for: {path}")
                 return f"Failed to write: {path}"
+            logger.info(f"[SDKFixer] ✅ sandbox_writer succeeded for: {path}")
         else:
             # Local mode
             full_path.parent.mkdir(parents=True, exist_ok=True)
