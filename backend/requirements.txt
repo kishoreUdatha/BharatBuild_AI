@@ -70,7 +70,7 @@ pandas==2.1.4
 scipy==1.12.0
 polars==0.20.7
 dask==2024.1.1
-vaex==4.17.0
+# vaex removed - not used and fails to compile on newer GCC
 
 # ============================================
 # NLP - Natural Language Processing
