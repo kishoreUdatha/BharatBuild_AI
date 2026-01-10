@@ -2137,73 +2137,90 @@ class ContainerExecutor:
                                 break  # Don't retry with AI fixer
 
                             # Step 2: Use BoltFixer for ALL errors (batch, cascade, dependency graph)
+                            # =================================================================
+                            # SMART FIXER SELECTION:
+                            # - Java errors (cannot find symbol, getter/setter) → SDK Fixer (primary)
+                            # - Other errors (syntax, config, etc.) → BoltFixer
+                            # - If SDK Fixer fails → BoltFixer as fallback
+                            # =================================================================
+                            is_java_error = '.java' in output or 'cannot find symbol' in output or 'mvn' in output.lower()
+                            sdk_fixer_handled = False
+
+                            if is_java_error:
+                                # SDK Fixer is PRIMARY for Java errors (simpler, tool-based approach)
+                                yield f"  🔧 Step 2: Trying SDK Agent Fixer (Java errors)...\n"
+                                try:
+                                    from app.services.sdk_fixer import sdk_fix_errors
+                                    sdk_result = await sdk_fix_errors(
+                                        project_path=Path(project_path),
+                                        build_errors=output,
+                                        sandbox_reader=self._read_file_from_sandbox,
+                                        sandbox_writer=self._write_file_to_sandbox,
+                                        sandbox_lister=self._list_files_from_sandbox
+                                    )
+                                    if sdk_result.success and sdk_result.files_modified:
+                                        yield f"  ✅ SDK Fixer fixed {len(sdk_result.files_modified)} files:\n"
+                                        for f in sdk_result.files_modified:
+                                            yield f"     📝 {f}\n"
+                                        all_files_modified.extend(sdk_result.files_modified)
+                                        yield f"  🔄 Retrying docker-compose...\n"
+                                        sdk_fixer_handled = True
+                                        continue  # Retry build
+                                    else:
+                                        yield f"  ⚠️ SDK Fixer: {sdk_result.message}\n"
+                                        yield f"  🔧 Step 3: Falling back to BoltFixer...\n"
+                                except Exception as sdk_err:
+                                    logger.warning(f"[ContainerExecutor] SDK Fixer error: {sdk_err}")
+                                    yield f"  ⚠️ SDK Fixer error: {sdk_err}\n"
+                                    yield f"  🔧 Step 3: Falling back to BoltFixer...\n"
+
                             # BoltFixer handles: syntax, import, type, config, dependency, build errors
-                            yield f"  🔧 Step 2: Trying BoltFixer (batch + cascade)...\n"
-                            try:
-                                from app.services.bolt_fixer import BoltFixer
-                                bolt_fixer_instance = BoltFixer()
+                            # Also used as fallback when SDK Fixer fails for Java
+                            if not sdk_fixer_handled:
+                                if not is_java_error:
+                                    yield f"  🔧 Step 2: Trying BoltFixer (batch + cascade)...\n"
 
-                                # Build payload for BoltFixer
-                                bolt_payload = {
-                                    "stderr": output,
-                                    "stdout": "",
-                                    "exit_code": exit_code,
-                                }
+                            if not sdk_fixer_handled:
+                                try:
+                                    from app.services.bolt_fixer import BoltFixer
+                                    bolt_fixer_instance = BoltFixer()
 
-                                fix_result = await bolt_fixer_instance.fix_from_backend(
-                                    project_id=project_id,
-                                    project_path=Path(project_path),
-                                    payload=bolt_payload,
-                                    sandbox_file_writer=self._write_file_to_sandbox,
-                                    sandbox_file_reader=self._read_file_from_sandbox,
-                                    sandbox_file_lister=self._list_files_from_sandbox
-                                )
+                                    # Build payload for BoltFixer
+                                    bolt_payload = {
+                                        "stderr": output,
+                                        "stdout": "",
+                                        "exit_code": exit_code,
+                                    }
 
-                                if fix_result.success and fix_result.files_modified:
-                                    yield f"  ✅ BoltFixer fixed {len(fix_result.files_modified)} files:\n"
-                                    for f in fix_result.files_modified:
-                                        yield f"     📝 {f}\n"
+                                    fix_result = await bolt_fixer_instance.fix_from_backend(
+                                        project_id=project_id,
+                                        project_path=Path(project_path),
+                                        payload=bolt_payload,
+                                        sandbox_file_writer=self._write_file_to_sandbox,
+                                        sandbox_file_reader=self._read_file_from_sandbox,
+                                        sandbox_file_lister=self._list_files_from_sandbox
+                                    )
 
-                                    # Track files for S3 sync
-                                    all_files_modified.extend(fix_result.files_modified)
+                                    if fix_result.success and fix_result.files_modified:
+                                        yield f"  ✅ BoltFixer fixed {len(fix_result.files_modified)} files:\n"
+                                        for f in fix_result.files_modified:
+                                            yield f"     📝 {f}\n"
 
-                                    # Check if more passes needed (cascading errors)
-                                    if fix_result.needs_another_pass:
-                                        yield f"  🔄 Pass {fix_result.current_pass} complete, {fix_result.remaining_errors} errors remaining...\n"
+                                        # Track files for S3 sync
+                                        all_files_modified.extend(fix_result.files_modified)
 
-                                    yield f"  🔄 Retrying docker-compose...\n"
-                                    continue  # Retry
-                                else:
-                                    yield f"  ⚠️ BoltFixer: {fix_result.message if hasattr(fix_result, 'message') else 'No fix generated'}\n"
+                                        # Check if more passes needed (cascading errors)
+                                        if fix_result.needs_another_pass:
+                                            yield f"  🔄 Pass {fix_result.current_pass} complete, {fix_result.remaining_errors} errors remaining...\n"
 
-                                    # Try SDK Fixer as fallback for Java errors
-                                    if '.java' in output or 'cannot find symbol' in output:
-                                        yield f"  🔧 Step 3: Trying SDK Agent Fixer...\n"
-                                        try:
-                                            from app.services.sdk_fixer import sdk_fix_errors
-                                            sdk_result = await sdk_fix_errors(
-                                                project_path=Path(project_path),
-                                                build_errors=output,
-                                                sandbox_reader=self._read_file_from_sandbox,
-                                                sandbox_writer=self._write_file_to_sandbox,
-                                                sandbox_lister=self._list_files_from_sandbox
-                                            )
-                                            if sdk_result.success:
-                                                yield f"  ✅ SDK Fixer fixed {len(sdk_result.files_modified)} files:\n"
-                                                for f in sdk_result.files_modified:
-                                                    yield f"     📝 {f}\n"
-                                                all_files_modified.extend(sdk_result.files_modified)
-                                                yield f"  🔄 Retrying docker-compose...\n"
-                                                continue
-                                            else:
-                                                yield f"  ⚠️ SDK Fixer: {sdk_result.message}\n"
-                                        except Exception as sdk_err:
-                                            logger.warning(f"[ContainerExecutor] SDK Fixer error: {sdk_err}")
-                                            yield f"  ⚠️ SDK Fixer error: {sdk_err}\n"
+                                        yield f"  🔄 Retrying docker-compose...\n"
+                                        continue  # Retry
+                                    else:
+                                        yield f"  ⚠️ BoltFixer: {fix_result.message if hasattr(fix_result, 'message') else 'No fix generated'}\n"
 
-                            except Exception as bolt_err:
-                                logger.warning(f"[ContainerExecutor] BoltFixer error: {bolt_err}")
-                                yield f"  ⚠️ BoltFixer error: {bolt_err}\n"
+                                except Exception as bolt_err:
+                                    logger.warning(f"[ContainerExecutor] BoltFixer error: {bolt_err}")
+                                    yield f"  ⚠️ BoltFixer error: {bolt_err}\n"
 
                     yield f"\n❌ Docker Compose failed with exit code {exit_code}\n"
                     return
