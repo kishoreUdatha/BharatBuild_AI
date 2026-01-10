@@ -466,14 +466,15 @@ PACKAGE CONSISTENCY (CRITICAL!):
 ❌ WRONG: Mixing packages (some in model/, some in entity/)
 ✅ CORRECT: ALL entities in model/entity/, ALL DTOs in dto/
 
-LOMBOK DEPENDENCY:
-If using @RequiredArgsConstructor, @Data, @Builder:
-✅ MUST add to pom.xml:
-<dependency>
-    <groupId>org.projectlombok</groupId>
-    <artifactId>lombok</artifactId>
-    <scope>provided</scope>
-</dependency>
+🚨 NO LOMBOK - USE EXPLICIT GETTERS/SETTERS:
+❌ DO NOT use Lombok annotations (@Data, @Getter, @Setter, @Builder, @RequiredArgsConstructor, @NoArgsConstructor, @AllArgsConstructor)
+✅ For EVERY field in entity/model/DTO classes, generate:
+   - Explicit getter method: public FieldType getFieldName() { return fieldName; }
+   - Explicit setter method: public void setFieldName(FieldType fieldName) { this.fieldName = fieldName; }
+✅ Generate explicit constructors:
+   - No-arg constructor (required by JPA): public ClassName() {}
+   - All-args constructor with all fields as parameters
+✅ For builder pattern, create static builder() method and Builder inner class manually
 
 ⚛️ REACT/TYPESCRIPT:
 

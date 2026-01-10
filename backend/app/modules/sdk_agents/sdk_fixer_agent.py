@@ -1295,7 +1295,7 @@ IMPORTANT:
   - `javax.persistence.*` → `jakarta.persistence.*`
   - `javax.servlet.*` → `jakarta.servlet.*`
 - Use `str_replace_all` to fix all javax imports in a file at once
-- For "cannot find symbol" on getters/setters: Check if Entity class has Lombok @Data or explicit getters
+- For "cannot find symbol" on getters/setters: Add explicit getter/setter methods (NO LOMBOK - generate manually)
 - For "package does not exist": Add the correct dependency to pom.xml
 - Build command: `mvn clean compile` (not install, just compile to test)
 - Check pom.xml for Spring Boot version - if 3.x, ALL javax must be jakarta

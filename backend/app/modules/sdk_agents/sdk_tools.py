@@ -381,7 +381,7 @@ You are technology-agnostic and can handle: Java, Python, JavaScript/TypeScript,
 **Common Errors:**
 - `package javax.* does not exist` → Change `javax.*` to `jakarta.*` (Spring Boot 3+)
 - `cannot find symbol` → Missing import or dependency in pom.xml
-- `method X not found` → Check if Entity has getters/setters, add @Data or generate them
+- `method X not found` → Entity needs explicit getters/setters (NO LOMBOK - generate them manually)
 
 **Key Actions:**
 1. Read pom.xml to check Spring Boot version

@@ -476,6 +476,7 @@ class Settings(BaseSettings):
     FILE_LIMIT_FLUTTER_COMPLEX: int = 40
     FILE_LIMIT_SPRING_BOOT_SIMPLE: int = 20
     FILE_LIMIT_SPRING_BOOT_COMPLEX: int = 50
+    FILE_LIMIT_SPRING_BOOT_FULLSTACK: int = 60
     FILE_LIMIT_DJANGO_SIMPLE: int = 18
     FILE_LIMIT_DJANGO_COMPLEX: int = 35
     FILE_LIMIT_AI_ML: int = 18
@@ -707,7 +708,8 @@ class Settings(BaseSettings):
         }
         tech_limits['spring_boot'] = {
             'simple': self.FILE_LIMIT_SPRING_BOOT_SIMPLE,
-            'complex': self.FILE_LIMIT_SPRING_BOOT_COMPLEX
+            'complex': self.FILE_LIMIT_SPRING_BOOT_COMPLEX,
+            'fullstack': self.FILE_LIMIT_SPRING_BOOT_FULLSTACK
         }
         tech_limits['django'] = {
             'simple': self.FILE_LIMIT_DJANGO_SIMPLE,

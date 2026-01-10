@@ -1,194 +1,61 @@
 
 JAVA/SPRING BOOT RULES:
 
+🚨 NO LOMBOK - USE EXPLICIT GETTERS/SETTERS:
+- DO NOT use Lombok annotations (@Data, @Getter, @Setter, @Builder, @NoArgsConstructor, @AllArgsConstructor, @RequiredArgsConstructor)
+- DO NOT import lombok.*
+- For EVERY field, generate explicit getter and setter methods
+- Generate explicit no-arg constructor and all-args constructor
+- Use constructor injection for service dependencies
+
 PACKAGE FROM FILE PATH:
-- File: src/main/java/com/app/service/UserService.java
-- Remove: src/main/java/
+- Remove: src/main/java/ prefix
 - Replace / with .
 - Remove filename
-- Result: package com.app.service;
+- Result: package statement
 
 IMPORTS - DERIVE FROM CONTEXT:
-1. Read "FILES ALREADY CREATED"
+1. Read "FILES ALREADY CREATED" section
 2. Find file containing needed class
 3. Convert path to package + class name
 4. Add import statement
 
 ENUMS MUST BE SEPARATE FILES!
-❌ WRONG: Inner enum in Entity class
-✅ CORRECT: Separate file in model/enums/
 
-ENTITY CLASS:
-```java
-package com.app.model.entity;
+ENTITY CLASS REQUIREMENTS:
+- @Entity and @Table annotations
+- @Id and @GeneratedValue for primary key
+- Private fields with JPA annotations
+- Public no-arg constructor
+- Public all-args constructor
+- Public getter for EVERY field
+- Public setter for EVERY field
 
-import jakarta.persistence.*;
-import lombok.*;
-import java.time.LocalDateTime;
+DTO CLASS REQUIREMENTS:
+- Private fields
+- Public no-arg constructor
+- Public all-args constructor
+- Public getter for EVERY field
+- Public setter for EVERY field
 
-@Entity
-@Table(name = "users")
-@Data
-@Builder
-@NoArgsConstructor
-@AllArgsConstructor
-public class User {
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+SERVICE REQUIREMENTS:
+- @Service annotation
+- Private final repository fields
+- Constructor with dependencies (constructor injection)
 
-    @Column(nullable = false, unique = true)
-    private String email;
-
-    @Column(nullable = false)
-    private String password;
-
-    @Enumerated(EnumType.STRING)
-    private UserRole role;
-
-    @Column(name = "created_at")
-    private LocalDateTime createdAt;
-
-    @PrePersist
-    protected void onCreate() {
-        createdAt = LocalDateTime.now();
-    }
-}
-```
-
-DTO CLASSES:
-```java
-package com.app.model.dto;
-
-import lombok.*;
-
-@Data
-@Builder
-@NoArgsConstructor
-@AllArgsConstructor
-public class UserRequest {
-    private String email;
-    private String password;
-}
-
-@Data
-@Builder
-@NoArgsConstructor
-@AllArgsConstructor
-public class UserResponse {
-    private Long id;
-    private String email;
-    private LocalDateTime createdAt;
-}
-```
-
-REPOSITORY:
-```java
-package com.app.repository;
-
-import com.app.model.entity.User;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.stereotype.Repository;
-import java.util.Optional;
-
-@Repository
-public interface UserRepository extends JpaRepository<User, Long> {
-    Optional<User> findByEmail(String email);
-    boolean existsByEmail(String email);
-}
-```
-
-SERVICE:
-```java
-package com.app.service;
-
-import com.app.model.entity.User;
-import com.app.model.dto.*;
-import com.app.repository.UserRepository;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Service;
-import java.util.List;
-
-@Service
-@RequiredArgsConstructor
-public class UserService {
-    private final UserRepository userRepository;
-
-    public List<User> getAllUsers() {
-        return userRepository.findAll();
-    }
-
-    public User getUserById(Long id) {
-        return userRepository.findById(id)
-            .orElseThrow(() -> new RuntimeException("User not found"));
-    }
-
-    public User createUser(UserRequest request) {
-        User user = User.builder()
-            .email(request.getEmail())
-            .password(request.getPassword())
-            .build();
-        return userRepository.save(user);
-    }
-}
-```
-
-CONTROLLER:
-```java
-package com.app.controller;
-
-import com.app.model.dto.*;
-import com.app.service.UserService;
-import lombok.RequiredArgsConstructor;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-import java.util.List;
-
-@RestController
-@RequestMapping("/api/users")
-@RequiredArgsConstructor
-public class UserController {
-    private final UserService userService;
-
-    @GetMapping
-    public ResponseEntity<List<UserResponse>> getAllUsers() {
-        return ResponseEntity.ok(userService.getAllUsers());
-    }
-
-    @GetMapping("/{id}")
-    public ResponseEntity<UserResponse> getUserById(@PathVariable Long id) {
-        return ResponseEntity.ok(userService.getUserById(id));
-    }
-
-    @PostMapping
-    public ResponseEntity<UserResponse> createUser(@RequestBody UserRequest request) {
-        return ResponseEntity.ok(userService.createUser(request));
-    }
-}
-```
+CONTROLLER REQUIREMENTS:
+- @RestController annotation
+- @RequestMapping for base path
+- Constructor with dependencies (constructor injection)
 
 TYPE CONSISTENCY:
-- Money: BigDecimal everywhere
-- ID: Long or UUID everywhere
-- Date: LocalDateTime everywhere
-- Enum: Reference separate enum file
+- Money: BigDecimal
+- ID: Long or UUID
+- Date: LocalDateTime
+- Enum: Separate file in model/enums/
 
-⚠️ FIELD NAME CONSISTENCY (CRITICAL - Prevents "cannot find symbol"):
-1. READ ENTITY FIRST: Check what fields exist in Entity class
-2. USE EXACT NAMES: DTO and Service must use same field names as Entity
-3. NEVER INVENT: Don't guess field names - check the Entity definition
-4. NESTED TYPES: If Entity has relationship, check related Entity for its fields
-
-BEFORE writing any Service/Controller:
-1. Look at the ENTITY/DTO DEFINITIONS in context
-2. Note the EXACT field names defined
-3. Use ONLY those field names in your code
-
-VERIFICATION CHECKLIST:
-[ ] Package declaration matches file path
-[ ] All imports present
-[ ] Entity has @Entity, @Table, @Id
-[ ] Repository extends JpaRepository
-[ ] Service has @Service, @RequiredArgsConstructor
-[ ] Controller has @RestController, @RequestMapping
-[ ] Types match across Entity, DTO, Service
+VERIFICATION:
+- Package matches file path
+- All imports present (NO lombok!)
+- Explicit getters/setters for ALL fields
+- Constructor injection (not @RequiredArgsConstructor)
