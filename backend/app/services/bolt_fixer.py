@@ -1193,12 +1193,40 @@ RELATED FILES (may need modification):
 IMPORTANT: The above files ALL have errors. Output a <file> or <patch> block for EACH one.
 """
 
+        # =================================================================
+        # JAVA ERROR CONTEXT: Extract full symbol/location details
+        # This is CRITICAL for "cannot find symbol" errors
+        # =================================================================
+        java_error_context = ""
+        java_errors = ErrorClassifier.extract_java_error_context(combined_output)
+        if java_errors:
+            java_error_lines = []
+            for err in java_errors:
+                err_line = f"- {err['file_path']}:{err['line']} - {err['error_type']}"
+                if err['symbol']:
+                    err_line += f"\n    symbol: {err['symbol']}"
+                if err['location']:
+                    err_line += f"\n    location: {err['location']}"
+                java_error_lines.append(err_line)
+
+            java_error_context = f"""
+=== JAVA COMPILATION ERRORS (DETAILED) ===
+{chr(10).join(java_error_lines)}
+=== END JAVA ERRORS ===
+
+CRITICAL: For "cannot find symbol" errors:
+- If symbol is "class XxxDto" → CREATE the missing DTO class
+- If symbol is "method xxx()" → ADD the method to the location class
+- If symbol is "variable xxx" → CHECK imports or add the field
+"""
+            logger.info(f"[BoltFixer:{project_id}] Added {len(java_errors)} Java errors with full context")
+
         user_prompt = f"""{error_type_template}
 
 ERROR: {combined_output[:2000]}
 FILE: {target_file or 'unknown'}
 LINE: {classified.line_number or error_line or 0}
-
+{java_error_context}
 FILE CONTENT:
 ```
 {file_content[:10000] if file_content else 'No file content available'}

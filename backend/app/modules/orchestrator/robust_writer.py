@@ -542,12 +542,58 @@ Now output the files correctly:
         project_id = context.get('project_id', 'default')
         tech_stack = context.get('tech_stack', {}).get('raw', '')
 
-        # Build file context
+        # Build file context with ACTUAL CONTENT (not just paths!)
+        # This is CRITICAL for ensuring consistent packages/imports across files
         file_context = ""
         if previous_files:
-            file_context = "\n\nPREVIOUSLY CREATED FILES:\n"
-            for f in previous_files[-10:]:  # Last 10 files
-                file_context += f"- {f.path} ({len(f.content)} bytes)\n"
+            file_context = "\n\nPREVIOUSLY CREATED FILES (WITH KEY CONTENT):\n"
+            file_context += "=" * 60 + "\n"
+
+            # For Java files, show package declaration and imports
+            # For other files, show first 30 lines
+            for f in previous_files[-15:]:  # Last 15 files for more context
+                file_context += f"\n📄 {f.path}:\n"
+                file_context += "-" * 40 + "\n"
+
+                # Extract key content based on file type
+                if f.path.endswith('.java'):
+                    # For Java: show package, imports, and class declaration
+                    lines = f.content.split('\n')
+                    key_lines = []
+                    for line in lines[:50]:  # First 50 lines
+                        stripped = line.strip()
+                        if stripped.startswith('package ') or \
+                           stripped.startswith('import ') or \
+                           stripped.startswith('public class ') or \
+                           stripped.startswith('public interface ') or \
+                           stripped.startswith('public enum ') or \
+                           stripped.startswith('@Entity') or \
+                           stripped.startswith('@Table') or \
+                           stripped.startswith('@Data') or \
+                           stripped.startswith('@Repository') or \
+                           stripped.startswith('@Service') or \
+                           stripped.startswith('@RestController') or \
+                           'extends ' in stripped or \
+                           'implements ' in stripped:
+                            key_lines.append(line)
+                    file_context += '\n'.join(key_lines[:25]) + "\n"
+                elif f.path.endswith(('.ts', '.tsx', '.js', '.jsx')):
+                    # For TypeScript/JavaScript: show imports and exports
+                    lines = f.content.split('\n')
+                    key_lines = [l for l in lines[:40] if l.strip().startswith(('import ', 'export ', 'interface ', 'type ', 'const '))]
+                    file_context += '\n'.join(key_lines[:20]) + "\n"
+                else:
+                    # For other files: show first 20 lines
+                    lines = f.content.split('\n')[:20]
+                    file_context += '\n'.join(lines) + "\n"
+
+            file_context += "=" * 60 + "\n"
+
+        # Get package structure from plan if available (CRITICAL for Java)
+        package_structure = ""
+        plan_data = context.get('plan', {})
+        if isinstance(plan_data, dict) and plan_data.get('package_structure'):
+            package_structure = f"\n\nPACKAGE STRUCTURE (USE THESE EXACT PACKAGES!):\n{plan_data['package_structure']}\n"
 
         system_prompt = """You are an expert code generator for the Bolt.new platform.
 
@@ -580,7 +626,7 @@ USER REQUEST:
 
 TECH STACK:
 {tech_stack or 'Use best practices for the requested technology'}
-
+{package_structure}
 PLAN CONTEXT:
 {plan_raw[:1000]}...
 {file_context}
@@ -591,6 +637,8 @@ OUTPUT REQUIREMENTS:
 3. Include proper imports and dependencies
 4. Follow the tech stack specified
 5. Focus ONLY on Step {task.number}
+6. CRITICAL: For Java files, use the EXACT package names from PACKAGE STRUCTURE above!
+7. CRITICAL: Check PREVIOUSLY CREATED FILES for correct import paths!
 
 Now generate the files:
 """
