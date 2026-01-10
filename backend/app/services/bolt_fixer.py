@@ -885,14 +885,19 @@ No explanations. Only the <file> block."""
                         file_record = db_result.scalar_one_or_none()
 
                         if file_record:
-                            # UPDATE existing record (but don't set s3_key - S3 upload deferred)
+                            # UPDATE existing record with fixed content
+                            # CRITICAL: Store content_inline so restore uses FIXED content
+                            # and clear s3_key so it won't fallback to OLD S3 content
                             file_record.content_hash = content_hash
                             file_record.size_bytes = size_bytes
+                            file_record.content_inline = content  # Store fixed content!
+                            file_record.s3_key = None  # Clear old S3 key to prevent old content restore
                             # Note: s3_key will be set by sync_sandbox_to_s3() after BUILD SUCCESS
                             await session.commit()
-                            logger.info(f"[BoltFixer:{project_id}] ✓ DB updated: {file_path}")
+                            logger.info(f"[BoltFixer:{project_id}] ✓ DB updated with content_inline: {file_path}")
                         else:
-                            # CREATE new record for new files (no s3_key yet)
+                            # CREATE new record for new files with content_inline
+                            # CRITICAL: Store content_inline so restore uses FIXED content
                             new_file = ProjectFile(
                                 project_id=UUID(project_id),
                                 path=file_path,
@@ -900,12 +905,13 @@ No explanations. Only the <file> block."""
                                 content_hash=content_hash,
                                 size_bytes=size_bytes,
                                 s3_key=None,  # S3 upload deferred to BUILD SUCCESS
+                                content_inline=content,  # Store fixed content for restore!
                                 is_folder=False,
                                 generation_status="completed"
                             )
                             session.add(new_file)
                             await session.commit()
-                            logger.info(f"[BoltFixer:{project_id}] ✓ DB created (new file): {file_path}")
+                            logger.info(f"[BoltFixer:{project_id}] ✓ DB created with content_inline (new file): {file_path}")
 
                         logger.info(f"[BoltFixer:{project_id}] ✓ Fixed on EC2: {file_path} (S3 sync deferred to BUILD SUCCESS)")
                         return True
