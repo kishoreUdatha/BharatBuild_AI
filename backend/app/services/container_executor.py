@@ -3604,23 +3604,16 @@ class ContainerExecutor:
             import base64
             encoded_content = base64.b64encode(content.encode()).decode()
 
-            # Create directory, write file, AND VERIFY write succeeded
-            # Without verification, writes can fail silently
+            # Create directory and write file
             script = f'''
 mkdir -p "$(dirname {file_path})"
 echo "{encoded_content}" | base64 -d > "{file_path}"
-if [ -f "{file_path}" ]; then
-    echo "WRITE_SUCCESS"
-else
-    echo "WRITE_FAILED"
-    exit 1
-fi
 '''
 
             sandbox_base = _get_sandbox_base()
             logger.info(f"[ContainerExecutor] Writing file to sandbox: {file_path} (sandbox_base: {sandbox_base})")
 
-            result = self.docker_client.containers.run(
+            self.docker_client.containers.run(
                 "alpine:latest",
                 ["-c", script],
                 entrypoint="/bin/sh",
@@ -3629,13 +3622,12 @@ fi
                 detach=False
             )
 
-            # Check result for success
-            output = result.decode() if isinstance(result, bytes) else str(result)
-            if "WRITE_SUCCESS" in output:
+            # Verify file was written using separate check
+            if self._file_exists_on_sandbox(file_path):
                 logger.info(f"[ContainerExecutor] ✅ Wrote file via helper container: {file_path}")
                 return True
             else:
-                logger.error(f"[ContainerExecutor] ❌ Write verification failed for {file_path}: {output}")
+                logger.error(f"[ContainerExecutor] ❌ Write failed - file not found: {file_path}")
                 return False
 
         except Exception as e:
