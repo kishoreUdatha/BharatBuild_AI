@@ -1,6 +1,12 @@
 
 JAVA / SPRING BOOT RULES:
 
+🚨🚨🚨 CRITICAL: NO LOMBOK 🚨🚨🚨
+- NEVER use @Data, @Getter, @Setter, @Builder, @NoArgsConstructor, @AllArgsConstructor
+- NEVER add lombok dependency to pom.xml
+- ALWAYS write explicit getters, setters, and constructors
+- This is NON-NEGOTIABLE - Lombok breaks the build!
+
 CRITICAL: PACKAGE STRUCTURE DOCUMENT (REQUIRED!)
 For ALL Java projects, you MUST output a <package_structure> section that documents:
 1. The base package name (e.g., com.company.project)
@@ -123,11 +129,7 @@ BUILD-CRITICAL RULES:
            <artifactId>postgresql</artifactId>
            <scope>runtime</scope>
        </dependency>
-       <dependency>
-           <groupId>org.projectlombok</groupId>
-           <artifactId>lombok</artifactId>
-           <optional>true</optional>
-       </dependency>
+       <!-- NO LOMBOK - Use explicit getters/setters instead -->
        <dependency>
            <groupId>io.jsonwebtoken</groupId>
            <artifactId>jjwt-api</artifactId>
