@@ -64,23 +64,45 @@ async def get_project_path_async(project_id: str, user_id: str = None):
         user_id: User UUID string (required for correct sandbox path)
     """
     from pathlib import Path
+    from app.core.database import AsyncSessionLocal
+    from sqlalchemy import select
 
-    sandbox_path = unified_storage.get_sandbox_path(project_id, user_id)
+    # CRITICAL FIX: If user_id not provided, fetch from project record
+    # This ensures consistent path whether called with or without user_id
+    effective_user_id = user_id
+    if not effective_user_id:
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(Project.user_id).where(Project.id == project_id)
+                )
+                project_user_id = result.scalar_one_or_none()
+                if project_user_id:
+                    effective_user_id = str(project_user_id)
+                    logger.info(f"[Execution] Fetched user_id from project: {effective_user_id}")
+        except Exception as e:
+            logger.warning(f"[Execution] Could not fetch project user_id: {e}")
+
+    # Fallback to "anonymous" if still no user_id (DB lookup failed)
+    if not effective_user_id:
+        effective_user_id = "anonymous"
+
+    sandbox_path = unified_storage.get_sandbox_path(project_id, effective_user_id)
     sandbox_docker_host = _os.environ.get("SANDBOX_DOCKER_HOST")
 
     # Gap #20: Path logging for debugging
-    logger.info(f"[Execution] Path resolution: project={project_id}, user={user_id}, sandbox_path={sandbox_path}, remote={bool(sandbox_docker_host)}")
+    logger.info(f"[Execution] Path resolution: project={project_id}, user={user_id}, effective_user={effective_user_id}, sandbox_path={sandbox_path}, remote={bool(sandbox_docker_host)}")
 
     # Check if using remote EC2 sandbox
     if sandbox_docker_host:
         # Check if sandbox exists on EC2
-        exists_on_ec2 = await unified_storage.sandbox_exists(project_id, user_id)
+        exists_on_ec2 = await unified_storage.sandbox_exists(project_id, effective_user_id)
 
         if not exists_on_ec2:
             # Try to restore from DB/S3 to EC2
             logger.info(f"[Execution] Sandbox not on EC2, restoring from DB/S3: {project_id}")
             try:
-                restored_files = await unified_storage.restore_project_from_database(project_id, user_id)
+                restored_files = await unified_storage.restore_project_from_database(project_id, effective_user_id)
                 if restored_files:
                     logger.info(f"[Execution] Restored {len(restored_files)} files to EC2 for {project_id}")
                     return sandbox_path
