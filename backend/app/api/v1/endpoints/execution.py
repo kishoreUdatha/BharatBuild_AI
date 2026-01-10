@@ -861,10 +861,27 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
             yield emit("error", "Invalid project ID")
             return
 
-        # Handle user_id being None (anonymous/dev mode)
-        effective_user_id = user_id or "anonymous"
+        # Handle user_id being None - fetch from project record
+        effective_user_id = user_id
+        if not effective_user_id:
+            try:
+                from app.core.database import AsyncSessionLocal
+                async with AsyncSessionLocal() as session:
+                    result = await session.execute(
+                        select(Project.user_id).where(Project.id == project_id)
+                    )
+                    project_user_id = result.scalar_one_or_none()
+                    if project_user_id:
+                        effective_user_id = str(project_user_id)
+                        logger.info(f"[SSE] Fetched user_id from project: {effective_user_id}")
+            except Exception as e:
+                logger.warning(f"[SSE] Could not fetch project user_id: {e}")
 
-        logger.info(f"[SSE] Starting execution stream for {project_id}")
+        # Fallback to "anonymous" only if DB lookup failed
+        if not effective_user_id:
+            effective_user_id = "anonymous"
+
+        logger.info(f"[SSE] Starting execution stream for {project_id}, effective_user={effective_user_id}")
 
         # ==================== STEP 1: Check Project Status ====================
         yield emit("output", "[1/5] Checking project status...")
