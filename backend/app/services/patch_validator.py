@@ -71,6 +71,17 @@ class PatchValidator:
         '.html', '.htm', '.vue', '.svelte',
         '.md', '.txt', '.yaml', '.yml',
         '.mjs', '.cjs',
+        # Backend languages
+        '.java', '.kt', '.scala', '.groovy',  # JVM
+        '.py', '.pyi',  # Python
+        '.go',  # Go
+        '.rs',  # Rust
+        '.rb',  # Ruby
+        '.php',  # PHP
+        '.cs',  # C#
+        '.dart',  # Flutter/Dart
+        '.swift',  # iOS
+        '.xml', '.properties', '.gradle',  # Config files
     ]
 
     @classmethod

@@ -2175,6 +2175,32 @@ class ContainerExecutor:
                                     continue  # Retry
                                 else:
                                     yield f"  ⚠️ BoltFixer: {fix_result.message if hasattr(fix_result, 'message') else 'No fix generated'}\n"
+
+                                    # Try SDK Fixer as fallback for Java errors
+                                    if '.java' in output or 'cannot find symbol' in output:
+                                        yield f"  🔧 Step 3: Trying SDK Agent Fixer...\n"
+                                        try:
+                                            from app.services.sdk_fixer import sdk_fix_errors
+                                            sdk_result = await sdk_fix_errors(
+                                                project_path=Path(project_path),
+                                                build_errors=output,
+                                                sandbox_reader=self._read_file_from_sandbox,
+                                                sandbox_writer=self._write_file_to_sandbox,
+                                                sandbox_lister=self._list_files_from_sandbox
+                                            )
+                                            if sdk_result.success:
+                                                yield f"  ✅ SDK Fixer fixed {len(sdk_result.files_modified)} files:\n"
+                                                for f in sdk_result.files_modified:
+                                                    yield f"     📝 {f}\n"
+                                                all_files_modified.extend(sdk_result.files_modified)
+                                                yield f"  🔄 Retrying docker-compose...\n"
+                                                continue
+                                            else:
+                                                yield f"  ⚠️ SDK Fixer: {sdk_result.message}\n"
+                                        except Exception as sdk_err:
+                                            logger.warning(f"[ContainerExecutor] SDK Fixer error: {sdk_err}")
+                                            yield f"  ⚠️ SDK Fixer error: {sdk_err}\n"
+
                             except Exception as bolt_err:
                                 logger.warning(f"[ContainerExecutor] BoltFixer error: {bolt_err}")
                                 yield f"  ⚠️ BoltFixer error: {bolt_err}\n"

@@ -1305,7 +1305,7 @@ BUILD LOG:
 
         # DEBUG: Log what Claude will receive
         logger.info(f"[BoltFixer:{project_id}] Calling Claude for {classified.error_type.value}")
-        logger.info(f"[BoltFixer:{project_id}] Prompt stats: file_content={len(file_content) if file_content else 0} chars, all_errors_section={len(all_errors_section) if all_errors_section else 0} chars, java_errors={len(java_errors) if java_errors else 0}")
+        logger.info(f"[BoltFixer:{project_id}] Prompt stats: file_content={len(file_content) if file_content else 0} chars, all_errors={len(all_errors_section) if all_errors_section else 0} chars, related={len(related_section) if related_section else 0} chars, java_errors={len(java_errors) if java_errors else 0}")
 
         # CRITICAL: If no file content, Claude cannot fix
         if not file_content and not all_error_files_content:
@@ -1891,6 +1891,11 @@ BUILD LOG:
             for match in re.finditer(r'cannot find symbol.*?(?:class|interface)\s+(\w+)', error_output, re.IGNORECASE):
                 root_cause_names.add(match.group(1))
 
+            # Pattern: "location: class ClassName" (CRITICAL - this is the ROOT CAUSE file!)
+            for match in re.finditer(r'location:\s*class\s+(?:[\w.]+\.)?(\w+)', error_output, re.IGNORECASE):
+                root_cause_names.add(match.group(1))
+                logger.debug(f"[BoltFixer] Found ROOT CAUSE class from location: {match.group(1)}")
+
             # Pattern: "location: variable xxx of type com.package.ClassName"
             for match in re.finditer(r'location:\s*variable\s+\w+\s+of\s+type\s+(?:@[\w.]+\s+)?(?:[\w.]+\.)?(\w+)', error_output, re.IGNORECASE):
                 root_cause_names.add(match.group(1))
@@ -2092,14 +2097,22 @@ BUILD LOG:
                 content = self._read_source_file(source_file, project_path)
                 if content:
                     syntax = get_syntax_highlight(source_file)
+                    # For Java files with Lombok, include more content to see annotations
+                    file_content = content['content']
+                    is_java_with_lombok = source_file.endswith('.java') and ('import lombok' in file_content or '@Data' in file_content)
+                    content_limit = 15000 if is_java_with_lombok else 8000
+
                     related_contents.append(f"""
 --- {content['path']} --- [ROOT CAUSE - FIX THIS FILE]
 ```{syntax}
-{content['content'][:8000]}
+{file_content[:content_limit]}
 ```
 """)
                     files_found += 1
-                    logger.info(f"[BoltFixer] Read ROOT CAUSE file: {content['path']}")
+                    if is_java_with_lombok:
+                        logger.info(f"[BoltFixer] Read ROOT CAUSE file with Lombok: {content['path']} ({len(file_content)} chars)")
+                    else:
+                        logger.info(f"[BoltFixer] Read ROOT CAUSE file: {content['path']}")
 
         # Second pass: Read other mentioned files (for context)
         for source_file in all_source_files:
