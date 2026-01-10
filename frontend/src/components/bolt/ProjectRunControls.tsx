@@ -127,6 +127,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   const forwardDebounceRef = useRef<NodeJS.Timeout | null>(null) // Debounce error forwarding
   const fixRequestIdRef = useRef<number>(0) // Unique ID for fix requests (deduplication)
   const serverStartedRef = useRef<boolean>(false) // Track if server has started (Gap #3)
+  const buildFailedRef = useRef<boolean>(false) // Track if build actually failed (prevents false SUCCESS)
 
   // Calculate exponential backoff delay
   const getRetryDelay = useCallback((failureCount: number): number => {
@@ -694,6 +695,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     consecutiveFailuresRef.current = 0
     isRetryingRef.current = false
     serverStartedRef.current = false
+    buildFailedRef.current = false // Reset build failure flag
     fixRequestIdRef.current = 0
     // Reset server running state in error collector
     setServerRunning(false)
@@ -1310,6 +1312,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
                     const exitCode = event.exit_code || event.exitCode || 0
                     if (exitCode !== 0) {
                       hasRealError = true
+                      buildFailedRef.current = true // Mark build as failed (prevents false SUCCESS)
                       // CRITICAL #2: Reset serverStarted if command failed
                       // This ensures we don't show "server running" when it actually crashed
                       if (serverStarted) {
@@ -1487,6 +1490,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
                 onOutput?.(`🚀 Server running at: ${url}`)
               } else if (data.type === 'command_complete' && data.data?.success === false) {
                 hasError = true
+                buildFailedRef.current = true // Mark build as failed (prevents false SUCCESS)
                 const errorMsg = `Command failed with exit code ${data.data?.exit_code}`
                 onOutput?.(`❌ ${errorMsg}`)
                 // Forward full context to centralized error collector
@@ -1610,8 +1614,8 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         // ============= FIX → VERIFY → RE-RUN LOOP (Bolt.new style!) =============
         // This loop continues UNTIL SUCCESS or max attempts reached
 
-        // IMPORTANT: If server is already running, treat as success (error might be from earlier in stream)
-        if (serverStartedRef.current) {
+        // IMPORTANT: If server is already running AND build didn't fail, treat as success (error might be from earlier in stream)
+        if (serverStartedRef.current && !buildFailedRef.current) {
           console.log('[AutoFix] Server is running - skipping auto-fix despite error in stream')
           if (fixAttemptsRef.current > 0) {
             onOutput?.(`\n✨ SUCCESS after ${fixAttemptsRef.current} fix attempt(s)!`)
@@ -1677,8 +1681,8 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         }
 
         // Max attempts reached or autoFix disabled
-        // BUT: Check if server is actually running (it might have succeeded after fixes!)
-        if (serverStartedRef.current) {
+        // BUT: Check if server is actually running AND build didn't fail (it might have succeeded after fixes!)
+        if (serverStartedRef.current && !buildFailedRef.current) {
           console.log('[AutoFix] Server is running despite hitting max attempts - treating as success')
           if (fixAttemptsRef.current > 0) {
             onOutput?.(`\n✨ SUCCESS after ${fixAttemptsRef.current} fix attempt(s)!`)
@@ -1688,9 +1692,9 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
           isRetryingRef.current = false
           // Don't change status - it's already 'running'
         } else if (fixAttemptsRef.current >= MAX_AUTO_FIX_ATTEMPTS) {
-          // CRITICAL: Final check - if server actually started (preview URL set), don't show error
+          // CRITICAL: Final check - if server actually started (preview URL set) AND build didn't fail, don't show error
           // This catches cases where server started but errors were detected earlier in stream
-          if (previewUrl || serverStartedRef.current) {
+          if ((previewUrl || serverStartedRef.current) && !buildFailedRef.current) {
             console.log('[AutoFix] Server is running (previewUrl or ref set) - suppressing MAX ATTEMPTS message')
             resetFixState()
             isRetryingRef.current = false

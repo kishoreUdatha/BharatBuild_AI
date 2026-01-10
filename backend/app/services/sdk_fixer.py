@@ -41,21 +41,21 @@ class SDKFixer:
     - No truncation issues
     """
 
-    SYSTEM_PROMPT = """You are a Java code fixer. You MUST use write_file to apply fixes - do not just describe fixes.
+    SYSTEM_PROMPT = """You are a Java code fixer. IMMEDIATELY call list_files - do NOT output text first.
 
-WORKFLOW:
-1. list_files with pattern "backend/**/*.java" (ONE call only - don't retry patterns)
-2. read_file for files with errors
-3. write_file with COMPLETE fixed file content
+MANDATORY WORKFLOW (call tools, don't explain):
+1. FIRST: list_files pattern="backend/**/*.java"
+2. THEN: read_file for each file mentioned in errors
+3. FINALLY: write_file with complete fixed content
 
-CRITICAL FIXES:
-- Method signature mismatch: If Controller calls service.method(a,b,c), Service interface MUST declare method(a,b,c)
-- Missing interface methods: Add method declarations to interface that implementations need
-- Missing repository methods: Add @Query methods for custom queries like findAverageSalary()
-- Missing DTO getters: Add getXxx() methods for fields used in services
-- Remove Lombok (@Data, @Getter, @Setter) and add explicit getters/setters
+CRITICAL JAVA FIXES TO APPLY:
+- Method signature mismatch: Controller calls service.method(a,b,c) but Service interface has method(x). FIX: Add method(a,b,c) to interface
+- Missing interface methods: ServiceImpl has methods that Service interface doesn't. FIX: Add to interface
+- Missing repository methods: findAverageSalary(), existsByEmail(), countByDepartment(). FIX: Add @Query methods
+- Missing DTO getters: getJoinDate(), etc. FIX: Add getter methods to DTO class
+- Lombok annotations: REMOVE @Data/@Getter/@Setter and add explicit getters/setters
 
-ALWAYS write_file after reading - do not just read and stop!
+START NOW: Call list_files immediately. Do not output any text.
 """
 
     TOOLS = [
@@ -171,19 +171,30 @@ Use read_file then write_file for each file that needs fixing.
             for iteration in range(max_iterations):
                 logger.info(f"[SDKFixer] Iteration {iteration + 1}/{max_iterations}")
 
-                # Call Claude
-                response = await self._client.messages.create(
-                    model="claude-sonnet-4-20250514",
-                    max_tokens=16384,
-                    system=self.SYSTEM_PROMPT,
-                    tools=self.TOOLS,
-                    messages=messages
-                )
+                # Call Claude - force tool use on first iteration
+                api_params = {
+                    "model": "claude-sonnet-4-20250514",
+                    "max_tokens": 16384,
+                    "system": self.SYSTEM_PROMPT,
+                    "tools": self.TOOLS,
+                    "messages": messages
+                }
+
+                # Force tool use on first call to ensure Claude starts working immediately
+                if iteration == 0:
+                    api_params["tool_choice"] = {"type": "any"}
+
+                response = await self._client.messages.create(**api_params)
 
                 total_tokens += response.usage.input_tokens + response.usage.output_tokens
+                logger.info(f"[SDKFixer] Response stop_reason: {response.stop_reason}")
 
                 # Check if done
                 if response.stop_reason == "end_turn":
+                    # Log what Claude said if it didn't use tools
+                    text_content = [b.text for b in response.content if hasattr(b, 'text')]
+                    if text_content:
+                        logger.warning(f"[SDKFixer] Claude ended without tools. Response: {text_content[0][:500]}")
                     logger.info(f"[SDKFixer] Completed after {iteration + 1} iterations")
                     break
 
