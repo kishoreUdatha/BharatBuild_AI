@@ -309,6 +309,22 @@ async def report_errors(
             logger.info(f"[ErrorHandler:{project_id}] Error: {error_context[:200]}")
             logger.info(f"[ErrorHandler:{project_id}] Command: {request.command}")
 
+            # =================================================================
+            # SKIP SimpleFixer for BUILD errors - BoltFixer handles them
+            # This prevents duplicate fixes and wasted API tokens
+            # =================================================================
+            if primary_error.source == ErrorSource.BUILD:
+                logger.info(f"[ErrorHandler:{project_id}] Skipping SimpleFixer for BUILD error - BoltFixer will handle during build")
+                return ErrorResponse(
+                    success=True,
+                    project_id=project_id,
+                    errors_count=len(request.errors),
+                    has_fixable_error=True,
+                    fix_triggered=False,
+                    fix_status="build_error_deferred",
+                    message="Build errors will be fixed automatically during next build"
+                )
+
             # Notify WebSocket clients that fix is starting
             await notify_fix_started(project_id, primary_error.message[:100])
 
