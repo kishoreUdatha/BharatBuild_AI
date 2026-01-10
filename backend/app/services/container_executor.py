@@ -2132,11 +2132,18 @@ class ContainerExecutor:
         max_compose_attempts = 4  # Allow multiple retries for cascading fixes (port conflicts, etc.)
         compose_attempt = 0
 
+        fixes_applied_this_cycle = False  # Track if fixes were applied, so retry uses --no-cache
         while compose_attempt < max_compose_attempts:
             compose_attempt += 1
             try:
                 # Use legacy build mode (buildx 0.17+ not available on EC2)
-                cmd = f"COMPOSE_DOCKER_CLI_BUILD=0 DOCKER_BUILDKIT=0 docker-compose -p {project_name} -f {compose_file} up -d --build"
+                # CRITICAL: After fixes are applied, use --no-cache to pick up new files
+                # Otherwise Docker's cached COPY layers will have OLD unfixed code!
+                if fixes_applied_this_cycle:
+                    cmd = f"COMPOSE_DOCKER_CLI_BUILD=0 DOCKER_BUILDKIT=0 docker-compose -p {project_name} -f {compose_file} build --no-cache && COMPOSE_DOCKER_CLI_BUILD=0 DOCKER_BUILDKIT=0 docker-compose -p {project_name} -f {compose_file} up -d"
+                    logger.info(f"[ContainerExecutor] Using --no-cache after fixes were applied")
+                else:
+                    cmd = f"COMPOSE_DOCKER_CLI_BUILD=0 DOCKER_BUILDKIT=0 docker-compose -p {project_name} -f {compose_file} up -d --build"
                 exit_code, output = self._run_shell_on_sandbox(cmd, working_dir=project_path, timeout=300)
 
                 # Stream output lines
@@ -2162,6 +2169,7 @@ class ContainerExecutor:
                         if fix_result.success:
                             yield f"  ✅ Infrastructure fix applied: {fix_result.message}\n"
                             yield f"  🔄 Retrying docker-compose...\n"
+                            fixes_applied_this_cycle = True  # Force --no-cache on retry
                             continue  # Retry
                         else:
                             yield f"  ⚠️ Infrastructure fix not applicable: {fix_result.message}\n"
@@ -2255,6 +2263,7 @@ class ContainerExecutor:
 
                                         yield f"  🔄 Retrying docker-compose...\n"
                                         sdk_fixer_handled = True
+                                        fixes_applied_this_cycle = True  # Force --no-cache on retry
                                         continue  # Retry build
                                     else:
                                         yield f"  ⚠️ SDK Fixer: {sdk_result.message}\n"
@@ -2323,6 +2332,7 @@ class ContainerExecutor:
                                             yield f"  🔄 Pass {fix_result.current_pass} complete, {fix_result.remaining_errors} errors remaining...\n"
 
                                         yield f"  🔄 Retrying docker-compose...\n"
+                                        fixes_applied_this_cycle = True  # Force --no-cache on retry
                                         continue  # Retry
                                     else:
                                         yield f"  ⚠️ BoltFixer: {fix_result.message if hasattr(fix_result, 'message') else 'No fix generated'}\n"
