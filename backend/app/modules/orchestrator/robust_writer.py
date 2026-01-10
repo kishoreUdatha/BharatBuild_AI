@@ -610,6 +610,12 @@ CRITICAL RULES:
 6. Use proper error handling
 7. Write clean, production-ready code
 
+JAVA-SPECIFIC RULES (NO LOMBOK):
+- DO NOT use Lombok annotations (@Data, @Getter, @Setter, @Builder, @NoArgsConstructor, @AllArgsConstructor)
+- For EVERY field in entity/model/DTO classes, generate explicit getter and setter methods
+- Generate explicit no-arg constructor and all-args constructor
+- This ensures compatibility without Lombok dependency issues
+
 TASK FOCUS:
 Generate ONLY the files needed for THIS SPECIFIC TASK.
 Do NOT generate files for future tasks.
