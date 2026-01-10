@@ -1,0 +1,46 @@
+name: Run Tests Before Deploy
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        cd backend
+        pip install -r requirements.txt
+        pip install pytest pytest-asyncio
+
+    - name: Run unit tests
+      run: |
+        cd backend
+        pytest tests/ -v --tb=short
+
+    - name: Check test coverage
+      run: |
+        cd backend
+        pip install pytest-cov
+        pytest tests/ --cov=app --cov-report=term-missing --cov-fail-under=50
+
+  # Block deployment if tests fail
+  deploy:
+    needs: test  # Only runs if tests pass
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+
+    steps:
+    - name: Deploy to ECS
+      run: echo "Deploy only after tests pass"
