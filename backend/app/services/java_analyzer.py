@@ -68,10 +68,21 @@ class JavaAnalyzer:
     Catches common issues BEFORE build to prevent 100+ compile errors.
     """
 
-    # Lombok annotations that should be present
-    ENTITY_ANNOTATIONS = {'@Entity', '@Data', '@NoArgsConstructor'}
-    DTO_ANNOTATIONS = {'@Data', '@NoArgsConstructor', '@AllArgsConstructor'}
-    SERVICE_ANNOTATIONS = {'@Service', '@Slf4j', '@RequiredArgsConstructor'}
+    # NO LOMBOK - These annotations should be REMOVED and replaced with explicit code
+    # Lombok breaks builds because annotation processing isn't configured
+    LOMBOK_ANNOTATIONS_TO_REMOVE = {
+        '@Data', '@Getter', '@Setter', '@Builder', '@NoArgsConstructor',
+        '@AllArgsConstructor', '@RequiredArgsConstructor', '@Slf4j', '@Log4j', '@Log'
+    }
+    LOMBOK_IMPORTS_TO_REMOVE = {
+        'lombok.Data', 'lombok.Getter', 'lombok.Setter', 'lombok.Builder',
+        'lombok.NoArgsConstructor', 'lombok.AllArgsConstructor', 'lombok.RequiredArgsConstructor',
+        'lombok.extern.slf4j.Slf4j', 'lombok.extern.log4j.Log4j', 'lombok.extern.java.Log'
+    }
+
+    # Required annotations (NOT Lombok)
+    ENTITY_ANNOTATIONS = {'@Entity'}
+    SERVICE_ANNOTATIONS = {'@Service'}
 
     # Patterns for parsing Java files
     PACKAGE_PATTERN = re.compile(r'^\s*package\s+([\w.]+)\s*;', re.MULTILINE)
@@ -149,10 +160,10 @@ class JavaAnalyzer:
 
         logger.info(f"[JavaAnalyzer] Parsed {len(classes)} classes")
 
-        # Step 3: Detect issues
+        # Step 3: Detect issues (NO Lombok checking - we remove it instead)
         issues = []
         issues.extend(self._check_duplicate_classes(classes))
-        issues.extend(self._check_missing_lombok(classes))
+        # NOT checking for missing Lombok - we REMOVE Lombok and add explicit code
         issues.extend(self._check_missing_methods(classes))
         issues.extend(self._check_wrong_imports(classes))
 
@@ -522,37 +533,15 @@ class JavaAnalyzer:
 
             modified = False
 
+            # ALWAYS remove Lombok from ALL Java files (regardless of issues)
+            original_content = content
+            content = self._remove_lombok_and_add_explicit_code(content)
+            if content != original_content:
+                modified = True
+                fixes_applied.append(f"Removed Lombok from {file_path}")
+
             for issue in file_issues:
-                if issue.issue_type == "missing_lombok":
-                    # Add missing Lombok annotations
-                    if "@Data" in issue.message and "@Data" not in content:
-                        content = self._add_lombok_annotation(content, "@Data")
-                        modified = True
-                        fixes_applied.append(f"Added @Data to {file_path}")
-
-                    if "@Slf4j" in issue.message and "@Slf4j" not in content:
-                        content = self._add_lombok_annotation(content, "@Slf4j")
-                        # Also add import
-                        if "import lombok.extern.slf4j.Slf4j;" not in content:
-                            content = self._add_import(content, "lombok.extern.slf4j.Slf4j")
-                        modified = True
-                        fixes_applied.append(f"Added @Slf4j to {file_path}")
-
-                    if "@RequiredArgsConstructor" in issue.message and "@RequiredArgsConstructor" not in content:
-                        content = self._add_lombok_annotation(content, "@RequiredArgsConstructor")
-                        if "import lombok.RequiredArgsConstructor;" not in content:
-                            content = self._add_import(content, "lombok.RequiredArgsConstructor")
-                        modified = True
-                        fixes_applied.append(f"Added @RequiredArgsConstructor to {file_path}")
-
-                    if "@NoArgsConstructor" in issue.message and "@NoArgsConstructor" not in content:
-                        content = self._add_lombok_annotation(content, "@NoArgsConstructor")
-                        if "import lombok.NoArgsConstructor;" not in content:
-                            content = self._add_import(content, "lombok.NoArgsConstructor")
-                        modified = True
-                        fixes_applied.append(f"Added @NoArgsConstructor to {file_path}")
-
-                elif issue.issue_type == "wrong_import":
+                if issue.issue_type == "wrong_import":
                     # Fix wrong import
                     if "should be" in issue.message:
                         old_import = issue.message.split("Import ")[1].split(" should be")[0]
@@ -613,6 +602,99 @@ class JavaAnalyzer:
 
         # No package, add at beginning
         return import_stmt + "\n" + content
+
+    def _remove_lombok_and_add_explicit_code(self, content: str) -> str:
+        """Remove Lombok annotations and add explicit getters/setters/constructors"""
+        original = content
+
+        # Check if file has any Lombok
+        has_lombok = any(ann in content for ann in self.LOMBOK_ANNOTATIONS_TO_REMOVE)
+        has_lombok_import = 'import lombok' in content
+
+        if not has_lombok and not has_lombok_import:
+            return content
+
+        logger.info(f"[JavaAnalyzer] Removing Lombok from file")
+
+        # 1. Remove Lombok imports
+        for lombok_import in self.LOMBOK_IMPORTS_TO_REMOVE:
+            content = re.sub(rf'import\s+{re.escape(lombok_import)}\s*;\s*\n?', '', content)
+        # Remove any remaining lombok imports
+        content = re.sub(r'import\s+lombok\.[\w.]+\s*;\s*\n?', '', content)
+
+        # 2. Check what Lombok annotations were present
+        had_data = '@Data' in content
+        had_getter = '@Getter' in content
+        had_setter = '@Setter' in content
+        had_slf4j = '@Slf4j' in content
+        had_no_args = '@NoArgsConstructor' in content
+        had_all_args = '@AllArgsConstructor' in content
+        had_builder = '@Builder' in content
+
+        # 3. Remove Lombok annotations
+        for annotation in self.LOMBOK_ANNOTATIONS_TO_REMOVE:
+            content = re.sub(rf'{re.escape(annotation)}\s*\n?', '', content)
+
+        # 4. Extract fields for getter/setter generation
+        fields = []
+        field_pattern = re.compile(
+            r'private\s+(?:final\s+)?'
+            r'([\w<>,\s]+?)\s+'  # type
+            r'(\w+)\s*;'  # name
+        )
+        for match in field_pattern.finditer(content):
+            field_type = match.group(1).strip()
+            field_name = match.group(2).strip()
+            # Skip static fields
+            if 'static' not in content[max(0, match.start()-20):match.start()]:
+                fields.append({'type': field_type, 'name': field_name})
+
+        # 5. Generate getters/setters if @Data, @Getter, or @Setter was present
+        if (had_data or had_getter or had_setter) and fields:
+            # Find the position before the closing brace of the class
+            class_end = content.rfind('}')
+            if class_end > 0:
+                methods_code = "\n\n    // Generated getters and setters\n"
+                for field in fields:
+                    field_type = field['type']
+                    field_name = field['name']
+                    getter_name = 'get' + field_name[0].upper() + field_name[1:]
+                    setter_name = 'set' + field_name[0].upper() + field_name[1:]
+
+                    # Check if getter/setter already exists
+                    if f'{getter_name}(' not in content:
+                        methods_code += f"    public {field_type} {getter_name}() {{ return this.{field_name}; }}\n"
+                    if f'{setter_name}(' not in content and (had_data or had_setter):
+                        methods_code += f"    public void {setter_name}({field_type} {field_name}) {{ this.{field_name} = {field_name}; }}\n"
+
+                content = content[:class_end] + methods_code + content[class_end:]
+
+        # 6. Generate no-args constructor if @NoArgsConstructor was present
+        if had_no_args or had_data:
+            class_match = self.CLASS_PATTERN.search(content)
+            if class_match:
+                class_name = class_match.group(2)
+                no_arg_constructor = f"public {class_name}()"
+                if no_arg_constructor not in content:
+                    class_end = content.rfind('}')
+                    if class_end > 0:
+                        constructor_code = f"\n    // No-args constructor\n    public {class_name}() {{}}\n"
+                        content = content[:class_end] + constructor_code + content[class_end:]
+
+        # 7. Replace @Slf4j with explicit Logger
+        if had_slf4j:
+            class_match = self.CLASS_PATTERN.search(content)
+            if class_match:
+                class_name = class_match.group(2)
+                # Add SLF4J Logger field after class declaration
+                if 'private static final Logger' not in content and 'private final Logger' not in content:
+                    # Find class body start (after {)
+                    class_body_start = content.find('{', class_match.end())
+                    if class_body_start > 0:
+                        logger_field = f"\n    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger({class_name}.class);\n"
+                        content = content[:class_body_start+1] + logger_field + content[class_body_start+1:]
+
+        return content
 
 
 # Singleton instance
