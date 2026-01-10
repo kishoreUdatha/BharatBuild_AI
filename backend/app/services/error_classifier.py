@@ -577,6 +577,91 @@ class ErrorClassifier:
         return False
 
     @classmethod
+    def extract_java_error_context(cls, text: str) -> List[Dict[str, Any]]:
+        """
+        Extract FULL Java error context including symbol and location details.
+
+        Java compiler errors span multiple lines:
+            [ERROR] /path/File.java:[62,18] cannot find symbol
+            [ERROR]   symbol:   method getPrice()
+            [ERROR]   location: class Product
+
+        Returns:
+            List of dicts with: file_path, line, column, error_type, symbol, location, full_message
+        """
+        errors = []
+        lines = text.split('\n')
+        i = 0
+
+        while i < len(lines):
+            line = lines[i]
+
+            # Match Java error line: [ERROR] /path/File.java:[line,col] message
+            match = re.match(
+                r'\[ERROR\]\s*(/[^\s:]+\.java):\[(\d+),(\d+)\]\s*(.+)',
+                line
+            )
+
+            if match:
+                error_info = {
+                    'file_path': cls._normalize_container_path(match.group(1).replace('\\', '/')),
+                    'line': int(match.group(2)),
+                    'column': int(match.group(3)),
+                    'error_type': match.group(4).strip(),
+                    'symbol': None,
+                    'location': None,
+                    'full_message': match.group(4).strip()
+                }
+
+                # Look ahead for symbol:, location:, both class..., required/found lines
+                j = i + 1
+                while j < len(lines) and j < i + 8:  # Check next 8 lines max
+                    next_line = lines[j]
+
+                    # Match symbol line: [ERROR]   symbol:   method getPrice()
+                    symbol_match = re.match(r'\[ERROR\]\s*symbol:\s*(.+)', next_line)
+                    if symbol_match:
+                        error_info['symbol'] = symbol_match.group(1).strip()
+                        error_info['full_message'] += f"\n  symbol: {error_info['symbol']}"
+
+                    # Match location line: [ERROR]   location: class Product
+                    location_match = re.match(r'\[ERROR\]\s*location:\s*(.+)', next_line)
+                    if location_match:
+                        error_info['location'] = location_match.group(1).strip()
+                        error_info['full_message'] += f"\n  location: {error_info['location']}"
+
+                    # Match "both class..." line for ambiguous reference errors
+                    both_match = re.match(r'\[ERROR\]\s*(both\s+.+)', next_line)
+                    if both_match:
+                        error_info['full_message'] += f"\n  {both_match.group(1).strip()}"
+
+                    # Match required/found lines for type mismatch errors
+                    req_found_match = re.match(r'\[ERROR\]\s*(required:|found:|reason:)\s*(.+)', next_line)
+                    if req_found_match:
+                        error_info['full_message'] += f"\n  {req_found_match.group(1)} {req_found_match.group(2).strip()}"
+
+                    # Match "lower bounds" lines for generic type errors
+                    bounds_match = re.match(r'\[ERROR\]\s*(lower bounds:|upper bounds:)\s*(.+)', next_line)
+                    if bounds_match:
+                        error_info['full_message'] += f"\n    {bounds_match.group(1)} {bounds_match.group(2).strip()}"
+
+                    # Stop if we hit another file error or non-continuation line
+                    if re.match(r'\[ERROR\]\s*/[^\s:]+\.java:', next_line):
+                        break
+                    if re.match(r'\[(INFO|WARNING)\]', next_line):
+                        break
+
+                    j += 1
+
+                errors.append(error_info)
+                logger.debug(f"[ErrorClassifier] Java error: {error_info['file_path']}:{error_info['line']} - {error_info['error_type']}, symbol={error_info['symbol']}")
+
+            i += 1
+
+        logger.info(f"[ErrorClassifier] Extracted {len(errors)} Java errors with full context")
+        return errors
+
+    @classmethod
     def extract_all_error_files(cls, text: str) -> List[Tuple[str, int]]:
         """
         Extract ALL files with errors, useful for batch fixing.
@@ -587,7 +672,17 @@ class ErrorClassifier:
         error_files = []
         seen_files = set()
 
-        # For Java, extract all [ERROR] lines
+        # For Java, extract all [ERROR] lines with FULL context
+        java_errors = cls.extract_java_error_context(text)
+        for err in java_errors:
+            file_path = err['file_path']
+            if cls._is_excluded_path(file_path):
+                continue
+            if file_path not in seen_files:
+                error_files.append((file_path, err['line']))
+                seen_files.add(file_path)
+
+        # Fallback: Also try simple pattern for Java (in case full extraction missed any)
         java_error_pattern = r'\[ERROR\]\s*(/[a-zA-Z0-9_\-./\\]+\.java):\[(\d+),\s*\d+\]'
         for match in re.finditer(java_error_pattern, text):
             file_path = match.group(1)
