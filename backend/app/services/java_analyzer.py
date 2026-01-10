@@ -514,7 +514,8 @@ class JavaAnalyzer:
                 issues_by_file[issue.file_path].append(issue)
 
         for file_path, file_issues in issues_by_file.items():
-            full_path = project_path / file_path
+            # Handle both Path objects and strings for project_path
+            full_path = str(Path(project_path) / file_path) if not isinstance(project_path, Path) else project_path / file_path
             content = self._read_file(str(full_path))
             if not content:
                 continue
