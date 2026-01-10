@@ -446,13 +446,16 @@ FIX THE ROOT CAUSE, NOT THE SYMPTOM:
 - If the error file imports/uses another module, check RELATED FILES section for the fix
 - Return patches for ALL files that need changes (you can return multiple patches)
 
-🚨 NO LOMBOK - USE EXPLICIT GETTERS/SETTERS (CRITICAL FOR JAVA):
-- DO NOT use or add Lombok annotations (@Data, @Getter, @Setter, @Builder, @NoArgsConstructor, @AllArgsConstructor)
-- If you see existing Lombok annotations, REMOVE them and add explicit methods instead
-- For EVERY field in entity/model/DTO, add explicit getter: public FieldType getFieldName() { return fieldName; }
-- For EVERY field, add explicit setter: public void setFieldName(FieldType value) { this.fieldName = value; }
-- Add no-arg constructor: public ClassName() {}
-- Add all-args constructor with all fields as parameters
+🚨 NO LOMBOK - COMPLETE FILE REPLACEMENT FOR JAVA (CRITICAL):
+When fixing Java "cannot find symbol" errors for getters/setters:
+1. Output the COMPLETE file using <file path="...">content</file>
+2. REMOVE all Lombok annotations: @Data, @Getter, @Setter, @Builder, @NoArgsConstructor, @AllArgsConstructor, @RequiredArgsConstructor
+3. REMOVE import lombok.*; lines
+4. ADD explicit getter for EVERY field: public FieldType getFieldName() { return fieldName; }
+5. ADD explicit setter for EVERY field: public void setFieldName(FieldType value) { this.fieldName = value; }
+6. ADD no-arg constructor: public ClassName() {}
+7. ADD all-args constructor with all fields
+8. For services/controllers: Use constructor injection instead of @RequiredArgsConstructor
 
 🚨 AVOID DUPLICATE FIELDS:
 - BEFORE adding a field, check if it already exists in the provided FILE CONTENT
@@ -1240,17 +1243,50 @@ IMPORTANT: The above files ALL have errors. Output a <file> or <patch> block for
                     err_line += f"\n    location: {err['location']}"
                 java_error_lines.append(err_line)
 
+            # Detect getter/setter errors - need special handling
+            has_getter_setter_error = any(
+                'method get' in str(err.get('symbol', '')).lower() or
+                'method set' in str(err.get('symbol', '')).lower() or
+                'method builder' in str(err.get('symbol', '')).lower()
+                for err in java_errors
+            )
+
+            getter_setter_instruction = ""
+            if has_getter_setter_error:
+                getter_setter_instruction = """
+🚨 GETTER/SETTER ERROR DETECTED - FULL FILE REPLACEMENT REQUIRED:
+1. Output COMPLETE file using <file path="...">content</file> - DO NOT use patches
+2. REMOVE all Lombok: @Data, @Getter, @Setter, @Builder, @NoArgsConstructor, @AllArgsConstructor
+3. REMOVE: import lombok.*;
+4. ADD explicit getters/setters for EVERY field
+5. ADD no-arg constructor and all-args constructor
+"""
+
             java_error_context = f"""
 === JAVA COMPILATION ERRORS (DETAILED) ===
 {chr(10).join(java_error_lines)}
 === END JAVA ERRORS ===
-
+{getter_setter_instruction}
 CRITICAL: For "cannot find symbol" errors:
 - If symbol is "class XxxDto" → CREATE the missing DTO class
-- If symbol is "method xxx()" → ADD the method to the location class
+- If symbol is "method get/set/builder()" → Output COMPLETE file with Lombok REMOVED and explicit methods ADDED
 - If symbol is "variable xxx" → CHECK imports or add the field
 """
+            if has_getter_setter_error:
+                logger.info(f"[BoltFixer:{project_id}] Detected getter/setter error - will require full file replacement")
             logger.info(f"[BoltFixer:{project_id}] Added {len(java_errors)} Java errors with full context")
+
+        # For Java files with getter/setter errors, include MORE content
+        # to ensure Lombok annotations at TOP are visible
+        is_java_file = target_file and target_file.endswith('.java')
+        has_lombok = file_content and ('import lombok' in file_content or '@Data' in file_content)
+
+        if is_java_file and has_lombok and java_errors:
+            # Include full file for Java with Lombok (up to 20000 chars)
+            file_content_for_prompt = file_content[:20000] if file_content else 'No file content available'
+            logger.info(f"[BoltFixer:{project_id}] Java file with Lombok detected - including full content ({len(file_content_for_prompt)} chars)")
+        else:
+            file_content_for_prompt = file_content[:10000] if file_content else 'No file content available'
 
         user_prompt = f"""{error_type_template}
 
@@ -1260,7 +1296,7 @@ LINE: {classified.line_number or error_line or 0}
 {java_error_context}
 FILE CONTENT:
 ```
-{file_content[:10000] if file_content else 'No file content available'}
+{file_content_for_prompt}
 ```
 {all_errors_section}{related_section}
 BUILD LOG:
@@ -1763,8 +1799,9 @@ BUILD LOG:
         result_sections = []
         chars_used = 0
 
-        # SECTION 1: Keep first 15 lines (package, imports, class declaration)
-        header_lines = min(15, total_lines)
+        # SECTION 1: Keep first 30 lines (package, imports, annotations, class declaration)
+        # 30 lines needed for Java files with Lombok annotations
+        header_lines = min(30, total_lines)
         header = '\n'.join(lines[:header_lines])
         result_sections.append(header)
         chars_used += len(header)
