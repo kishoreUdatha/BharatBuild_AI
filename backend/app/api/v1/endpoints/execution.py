@@ -865,32 +865,37 @@ async def _execute_docker_stream_with_progress(project_id: str, user_id: str, db
                 if container_already_running:
                     yield emit("output", "  ♻️ Container exists - skipping file restoration (prevents restart loop)")
                     logger.info(f"[Execution] Container exists for {project_id}, skipping restore to prevent restart loop")
+                    # ACTUALLY SKIP - set path and don't restore
+                    project_path = unified_storage.get_sandbox_path(project_id, effective_user_id)
+                    needs_restore = False
             except Exception as check_err:
                 logger.warning(f"[Execution] Error checking container status: {check_err}")
 
-        # Check if sandbox exists
+        # Check if sandbox exists (only if container check didn't already handle it)
         if sandbox_docker_host:
-            # Remote EC2 sandbox
-            try:
-                exists_on_ec2 = await unified_storage.sandbox_exists(project_id, effective_user_id)
-            except asyncio.TimeoutError:
-                logger.warning(f"[Execution] sandbox_exists timed out for {project_id}")
-                yield emit("output", "  Warning: Sandbox check timed out, will attempt restore")
-                exists_on_ec2 = False
-            except Exception as sandbox_err:
-                logger.warning(f"[Execution] sandbox_exists check failed: {sandbox_err}")
-                yield emit("output", "  Warning: Could not check sandbox, will attempt restore")
-                exists_on_ec2 = False
+            if not container_already_running:
+                # Remote EC2 sandbox - need to check if files exist
+                try:
+                    exists_on_ec2 = await unified_storage.sandbox_exists(project_id, effective_user_id)
+                except asyncio.TimeoutError:
+                    logger.warning(f"[Execution] sandbox_exists timed out for {project_id}")
+                    yield emit("output", "  Warning: Sandbox check timed out, will attempt restore")
+                    exists_on_ec2 = False
+                except Exception as sandbox_err:
+                    logger.warning(f"[Execution] sandbox_exists check failed: {sandbox_err}")
+                    yield emit("output", "  Warning: Could not check sandbox, will attempt restore")
+                    exists_on_ec2 = False
 
-            if exists_on_ec2:
-                yield emit("output", "  Project files found in sandbox")
-                project_path = unified_storage.get_sandbox_path(project_id, effective_user_id)
-                # DEBUG: Log actual path for troubleshooting
-                logger.info(f"[Execution] DEBUG: project_path (cached) = {project_path}, effective_user_id = {effective_user_id}")
-                yield emit("output", f"  📁 Path: {project_path}")
-            else:
-                yield emit("output", "  Project files not in sandbox, will restore from database")
-                needs_restore = True
+                if exists_on_ec2:
+                    yield emit("output", "  Project files found in sandbox")
+                    project_path = unified_storage.get_sandbox_path(project_id, effective_user_id)
+                    # DEBUG: Log actual path for troubleshooting
+                    logger.info(f"[Execution] DEBUG: project_path (cached) = {project_path}, effective_user_id = {effective_user_id}")
+                    yield emit("output", f"  📁 Path: {project_path}")
+                else:
+                    yield emit("output", "  Project files not in sandbox, will restore from database")
+                    needs_restore = True
+            # else: container_already_running=True, project_path and needs_restore already set above
         else:
             # Local sandbox
             try:

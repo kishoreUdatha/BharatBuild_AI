@@ -915,6 +915,10 @@ class ContainerExecutor:
         If a container exists (even if stopped), files are already in its volume,
         so we should skip file restoration to prevent Vite restart loops.
 
+        Checks for multiple container naming patterns:
+        - Standard: bharatbuild_{user_id[:8]}_{project_id[:8]}
+        - Docker Compose: bharatbuild_{project_id[:8]}-backend, bharatbuild_{project_id[:8]}-frontend
+
         Returns:
             True if container exists (running or stopped), False otherwise
         """
@@ -922,17 +926,23 @@ class ContainerExecutor:
             return False
 
         try:
-            container_name = f"bharatbuild_{user_id[:8]}_{project_id[:8]}"
-            # IMPORTANT: all=True to check for stopped containers too
-            containers = self.docker_client.containers.list(
-                filters={"name": container_name},
-                all=True  # Include stopped containers
-            )
+            # Check multiple naming patterns
+            container_patterns = [
+                f"bharatbuild_{user_id[:8]}_{project_id[:8]}",  # Standard pattern
+                f"bharatbuild_{project_id[:8]}",  # Docker Compose pattern (prefix)
+            ]
 
-            for container in containers:
-                # Container exists (running, exited, paused, etc.)
-                logger.info(f"[ContainerExecutor] Found existing container for {project_id}: {container.name} (status: {container.status})")
-                return True
+            for pattern in container_patterns:
+                # IMPORTANT: all=True to check for stopped containers too
+                containers = self.docker_client.containers.list(
+                    filters={"name": pattern},
+                    all=True  # Include stopped containers
+                )
+
+                for container in containers:
+                    # Container exists (running, exited, paused, etc.)
+                    logger.info(f"[ContainerExecutor] Found existing container for {project_id}: {container.name} (status: {container.status})")
+                    return True
 
             return False
         except Exception as e:
