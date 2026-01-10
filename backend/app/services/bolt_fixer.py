@@ -858,25 +858,39 @@ No explanations. Only the <file> block."""
         file_path = file_path.strip()
 
         # =================================================================
-        # CREATE/UPDATE DATABASE RECORD (but NO S3 upload)
+        # UPLOAD TO S3 IMMEDIATELY + UPDATE DATABASE
         #
-        # GAP #1 FIX: We need DB records for new files so that:
-        # - restore_project_from_database() knows about them
-        # - sync_sandbox_to_s3() can find them
-        #
-        # S3 upload is DEFERRED to BUILD SUCCESS (in execution.py)
+        # This ensures S3 always has the LATEST fixed content.
+        # When user clicks Run again, restore gets FIXED files from S3.
         # =================================================================
         try:
             content_bytes = content.encode('utf-8')
             content_hash = hashlib.sha256(content_bytes).hexdigest()
             size_bytes = len(content_bytes)
 
-            # Create/update database record with retry
+            # STEP 1: Upload to S3 IMMEDIATELY
+            s3_key = None
+            try:
+                from app.services.storage_service import storage_service
+                upload_result = await storage_service.upload_file(
+                    project_id,
+                    file_path,
+                    content_bytes
+                )
+                s3_key = upload_result.get('s3_key') if upload_result else None
+                if s3_key:
+                    logger.info(f"[BoltFixer:{project_id}] ✓ Uploaded to S3: {s3_key}")
+                else:
+                    logger.warning(f"[BoltFixer:{project_id}] S3 upload returned no key: {file_path}")
+            except Exception as s3_err:
+                logger.warning(f"[BoltFixer:{project_id}] S3 upload failed: {file_path} - {s3_err}")
+                # Continue - will use content_inline as fallback
+
+            # STEP 2: Update database with s3_key
             max_retries = 3
             for db_attempt in range(max_retries):
                 try:
                     async with AsyncSessionLocal() as session:
-                        # Try to find existing record
                         stmt = select(ProjectFile).where(
                             ProjectFile.project_id == UUID(project_id),
                             ProjectFile.path == file_path
@@ -885,54 +899,48 @@ No explanations. Only the <file> block."""
                         file_record = db_result.scalar_one_or_none()
 
                         if file_record:
-                            # UPDATE existing record with fixed content
-                            # CRITICAL: Store content_inline so restore uses FIXED content
-                            # and clear s3_key so it won't fallback to OLD S3 content
+                            # UPDATE existing record with new s3_key
                             file_record.content_hash = content_hash
                             file_record.size_bytes = size_bytes
-                            file_record.content_inline = content  # Store fixed content!
-                            file_record.s3_key = None  # Clear old S3 key to prevent old content restore
-                            # Note: s3_key will be set by sync_sandbox_to_s3() after BUILD SUCCESS
+                            if s3_key:
+                                file_record.s3_key = s3_key  # Point to FIXED content in S3
+                                file_record.content_inline = None  # S3 has content
+                            else:
+                                file_record.content_inline = content  # Fallback if S3 failed
                             await session.commit()
-                            logger.info(f"[BoltFixer:{project_id}] ✓ DB updated with content_inline: {file_path}")
+                            logger.info(f"[BoltFixer:{project_id}] ✓ DB updated: {file_path} (s3={s3_key is not None})")
                         else:
-                            # CREATE new record for new files with content_inline
-                            # CRITICAL: Store content_inline so restore uses FIXED content
+                            # CREATE new record
                             new_file = ProjectFile(
                                 project_id=UUID(project_id),
                                 path=file_path,
                                 name=os.path.basename(file_path),
                                 content_hash=content_hash,
                                 size_bytes=size_bytes,
-                                s3_key=None,  # S3 upload deferred to BUILD SUCCESS
-                                content_inline=content,  # Store fixed content for restore!
+                                s3_key=s3_key,  # Points to FIXED content in S3
+                                content_inline=content if not s3_key else None,
                                 is_folder=False,
                                 generation_status="completed"
                             )
                             session.add(new_file)
                             await session.commit()
-                            logger.info(f"[BoltFixer:{project_id}] ✓ DB created with content_inline (new file): {file_path}")
+                            logger.info(f"[BoltFixer:{project_id}] ✓ DB created: {file_path} (s3={s3_key is not None})")
 
-                        logger.info(f"[BoltFixer:{project_id}] ✓ Fixed on EC2: {file_path} (S3 sync deferred to BUILD SUCCESS)")
+                        logger.info(f"[BoltFixer:{project_id}] ✓ Persisted to S3+DB: {file_path}")
                         return True
 
                 except Exception as db_err:
                     if db_attempt < max_retries - 1:
-                        wait_time = (db_attempt + 1) * 2  # 2, 4 seconds
-                        logger.warning(f"[BoltFixer:{project_id}] DB retry {db_attempt + 1}/{max_retries} for {file_path}: {db_err}")
+                        wait_time = (db_attempt + 1) * 2
+                        logger.warning(f"[BoltFixer:{project_id}] DB retry {db_attempt + 1}/{max_retries}: {db_err}")
                         import asyncio
                         await asyncio.sleep(wait_time)
                     else:
-                        logger.error(f"[BoltFixer:{project_id}] DB failed after {max_retries} retries: {file_path} - {db_err}")
-                        # DB failed - file is on EC2 but not tracked
-                        # This is a problem, but we'll still return True since the file IS written
-                        # sync_sandbox_to_s3() will create the record later
-                        logger.warning(f"[BoltFixer:{project_id}] File on EC2 but DB failed - sync will fix later")
-                        return True
+                        logger.error(f"[BoltFixer:{project_id}] DB failed: {file_path} - {db_err}")
+                        return s3_key is not None  # Success if at least S3 worked
 
         except Exception as e:
             logger.error(f"[BoltFixer:{project_id}] Persist failed: {file_path} - {e}")
-            # File is still on EC2 sandbox
             return True
 
     # ==========================================================================
