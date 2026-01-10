@@ -41,14 +41,21 @@ class SDKFixer:
     - No truncation issues
     """
 
-    SYSTEM_PROMPT = """You are a Java code fixer. You MUST use the tools to fix files - do not just describe fixes.
+    SYSTEM_PROMPT = """You are a Java code fixer. You MUST use write_file to apply fixes - do not just describe fixes.
 
-For each file with errors:
-1. read_file → 2. write_file with fixed content
+WORKFLOW:
+1. list_files with pattern "backend/**/*.java" (ONE call only - don't retry patterns)
+2. read_file for files with errors
+3. write_file with COMPLETE fixed file content
 
-Common Java fixes:
-- Remove Lombok (@Data, @Getter, @Setter, @Builder) and add explicit getters/setters
-- Add missing constructors
+CRITICAL FIXES:
+- Method signature mismatch: If Controller calls service.method(a,b,c), Service interface MUST declare method(a,b,c)
+- Missing interface methods: Add method declarations to interface that implementations need
+- Missing repository methods: Add @Query methods for custom queries like findAverageSalary()
+- Missing DTO getters: Add getXxx() methods for fields used in services
+- Remove Lombok (@Data, @Getter, @Setter) and add explicit getters/setters
+
+ALWAYS write_file after reading - do not just read and stop!
 """
 
     TOOLS = [
@@ -126,7 +133,7 @@ Common Java fixes:
         self,
         project_path: Path,
         build_errors: str,
-        max_iterations: int = 10
+        max_iterations: int = 25
     ) -> SDKFixResult:
         """
         Fix build errors using Claude SDK agent.
