@@ -1143,7 +1143,7 @@ export function BoltLayout({
           style={!isMobile ? { width: isSidebarOpen ? `${leftPanelWidth}%` : '100%' } : undefined}
         >
           {/* Project Stages Panel - Timeline View */}
-          <div ref={messagesContainerRef} className="flex-1 overflow-y-auto scrollbar-thin bg-[hsl(var(--bolt-bg-primary))]">
+          <div ref={messagesContainerRef} className="flex-1 overflow-y-auto scrollbar-hide bg-[hsl(var(--bolt-bg-primary))]">
             <ProjectStagesPanel />
             <div ref={messagesEndRef} />
           </div>
@@ -1337,7 +1337,7 @@ export function BoltLayout({
                 </div>
 
                 {/* Terminal Content - xterm.js - Single instance */}
-                <div className="flex-1 overflow-auto bg-[hsl(var(--bolt-bg-primary))]">
+                <div className="flex-1 overflow-hidden bg-[hsl(var(--bolt-bg-primary))]">
                   <XTerminal
                     logs={terminalLogs}
                     onCommand={handleTerminalCommand}
