@@ -1100,6 +1100,7 @@ No explanations. Only the <file> block."""
             for err_file, err_line in all_error_files:
                 content = await self._read_file_content(project_path, err_file)
                 if not content:
+                    logger.warning(f"[BoltFixer:{project_id}] Could not read error file: {err_file} (sandbox_reader={'set' if self._sandbox_file_reader else 'not set'})")
                     continue
 
                 # SMART TRUNCATE: Keep relevant context around error
@@ -1135,12 +1136,16 @@ No explanations. Only the <file> block."""
 
             for file_path in possible_paths:
                 try:
+                    # CRITICAL: Use forward slashes for EC2 sandbox (Linux)
+                    # Windows Path() converts to backslashes which breaks SSH cat command
+                    file_path_str = str(file_path).replace('\\', '/')
+
                     # Use sandbox_file_reader for remote mode, local read for local mode
                     if self._sandbox_file_reader:
-                        content = self._sandbox_file_reader(str(file_path))
+                        content = self._sandbox_file_reader(file_path_str)
                         if content:
                             file_content = content
-                            logger.info(f"[BoltFixer:{project_id}] Read file via sandbox: {file_path} ({len(file_content)} chars)")
+                            logger.info(f"[BoltFixer:{project_id}] Read file via sandbox: {file_path_str} ({len(file_content)} chars)")
                             break
                     elif file_path.exists():
                         file_content = file_path.read_text(encoding='utf-8')
@@ -1236,7 +1241,14 @@ BUILD LOG:
 {combined_output[-2000:]}
 """
 
+        # DEBUG: Log what Claude will receive
         logger.info(f"[BoltFixer:{project_id}] Calling Claude for {classified.error_type.value}")
+        logger.info(f"[BoltFixer:{project_id}] Prompt stats: file_content={len(file_content) if file_content else 0} chars, all_errors_section={len(all_errors_section) if all_errors_section else 0} chars, java_errors={len(java_errors) if java_errors else 0}")
+
+        # CRITICAL: If no file content, Claude cannot fix
+        if not file_content and not all_error_files_content:
+            logger.error(f"[BoltFixer:{project_id}] NO FILE CONTENT FOR CLAUDE - cannot fix without code!")
+            logger.error(f"[BoltFixer:{project_id}] target_file={target_file}, error_files={[f[0] for f in all_error_files[:5]]}")
 
         try:
             response = await self._call_claude(
@@ -1271,7 +1283,11 @@ BUILD LOG:
         )
 
         if not patches and not full_files and not new_files:
-            logger.warning(f"[BoltFixer:{project_id}] No fixes in Claude response")
+            # DEBUG: Log Claude's response to understand why no fixes were parsed
+            response_preview = response[:500] if len(response) > 500 else response
+            logger.warning(f"[BoltFixer:{project_id}] No fixes in Claude response. Response preview: {response_preview}")
+            logger.warning(f"[BoltFixer:{project_id}] File content was: {'present' if file_content else 'MISSING'} ({len(file_content) if file_content else 0} chars)")
+            logger.warning(f"[BoltFixer:{project_id}] Error files content was: {'present' if all_error_files_content else 'MISSING'}")
             retry_limiter.record_attempt(project_id, error_hash, tokens_used=tokens_used, fixed=False)
             return BoltFixResult(
                 success=False,
@@ -2094,18 +2110,36 @@ BUILD LOG:
         if file_path.startswith("backend/"):
             possible_paths.append(project_path / file_path.replace("backend/", ""))
 
-        for path in possible_paths:
+        # DEBUG: Log all paths being tried
+        logger.info(f"[BoltFixer] Reading file: {file_path}")
+        logger.info(f"[BoltFixer] project_path: {project_path}")
+        logger.info(f"[BoltFixer] sandbox_reader set: {self._sandbox_file_reader is not None}")
+
+        for i, path in enumerate(possible_paths):
             try:
+                # CRITICAL: Use forward slashes for EC2 sandbox (Linux)
+                # Windows Path() converts to backslashes which breaks SSH cat command
+                path_str = str(path).replace('\\', '/')
+                logger.info(f"[BoltFixer] Trying path {i+1}/{len(possible_paths)}: {path_str}")
+
                 if self._sandbox_file_reader:
-                    content = self._sandbox_file_reader(str(path))
+                    content = self._sandbox_file_reader(path_str)
                     if content:
+                        logger.info(f"[BoltFixer] SUCCESS! Read {len(content)} chars from: {path_str}")
                         return content
+                    else:
+                        logger.info(f"[BoltFixer] Path {i+1} returned None (file not found)")
                 elif path.exists():
-                    return path.read_text(encoding='utf-8')
+                    content = path.read_text(encoding='utf-8')
+                    logger.info(f"[BoltFixer] SUCCESS! Read {len(content)} chars locally from: {path_str}")
+                    return content
+                else:
+                    logger.info(f"[BoltFixer] Path {i+1} does not exist locally")
             except Exception as e:
-                logger.debug(f"[BoltFixer] Could not read {path}: {e}")
+                logger.warning(f"[BoltFixer] Path {i+1} error: {e}")
                 continue
 
+        logger.error(f"[BoltFixer] FAILED to read file from any path! Tried: {[str(p).replace(chr(92), '/') for p in possible_paths]}")
         return None
 
 
