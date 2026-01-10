@@ -2213,6 +2213,29 @@ class ContainerExecutor:
                                             yield f"     📝 {f}\n"
                                         all_files_modified.extend(sdk_result.files_modified)
                                         all_files_modified.extend(sdk_result.files_created)
+
+                                        # PERSIST SDK FIXER FIXES TO DATABASE IMMEDIATELY
+                                        # So they survive container removal and re-runs
+                                        try:
+                                            from app.services.bolt_fixer import BoltFixer
+                                            persist_fixer = BoltFixer()
+                                            all_sdk_files = sdk_result.files_modified + sdk_result.files_created
+                                            persisted_count = 0
+                                            for file_path in all_sdk_files:
+                                                try:
+                                                    full_path = Path(project_path) / file_path
+                                                    content = self._read_file_from_sandbox(str(full_path))
+                                                    if content:
+                                                        await persist_fixer._persist_single_fix(project_id, project_path, file_path, content)
+                                                        persisted_count += 1
+                                                except Exception as pe:
+                                                    logger.warning(f"[SDKFixer] Failed to persist {file_path}: {pe}")
+                                            if persisted_count > 0:
+                                                yield f"  💾 Persisted {persisted_count} fixes to database\n"
+                                                logger.info(f"[SDKFixer] Persisted {persisted_count} fixes to database")
+                                        except Exception as persist_err:
+                                            logger.warning(f"[SDKFixer] Failed to persist fixes: {persist_err}")
+
                                         yield f"  🔄 Retrying docker-compose...\n"
                                         sdk_fixer_handled = True
                                         continue  # Retry build
@@ -2258,6 +2281,25 @@ class ContainerExecutor:
 
                                         # Track files for S3 sync
                                         all_files_modified.extend(fix_result.files_modified)
+
+                                        # PERSIST BOLTFIXER FIXES TO DATABASE IMMEDIATELY
+                                        # So they survive container removal and re-runs
+                                        try:
+                                            persisted_count = 0
+                                            for file_path in fix_result.files_modified:
+                                                try:
+                                                    full_path = Path(project_path) / file_path
+                                                    content = self._read_file_from_sandbox(str(full_path))
+                                                    if content:
+                                                        await bolt_fixer_instance._persist_single_fix(project_id, project_path, file_path, content)
+                                                        persisted_count += 1
+                                                except Exception as pe:
+                                                    logger.warning(f"[BoltFixer] Failed to persist {file_path}: {pe}")
+                                            if persisted_count > 0:
+                                                yield f"  💾 Persisted {persisted_count} fixes to database\n"
+                                                logger.info(f"[BoltFixer] Persisted {persisted_count} fixes to database")
+                                        except Exception as persist_err:
+                                            logger.warning(f"[BoltFixer] Failed to persist fixes: {persist_err}")
 
                                         # Check if more passes needed (cascading errors)
                                         if fix_result.needs_another_pass:
