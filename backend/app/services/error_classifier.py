@@ -826,8 +826,11 @@ Return ONLY a unified diff or <file path="...">complete content</file> for Java.
 
             ErrorType.UNDEFINED_VARIABLE: """Error type: UNDEFINED_VARIABLE
 Fix the undefined variable/symbol by adding import or declaration.
-For Java: add missing import statement or declare the missing class/method.
-Return ONLY a unified diff or <file path="...">complete content</file>.""",
+For Java "cannot find symbol" errors:
+- If symbol is a missing class/DTO: CREATE using <newfile path="...">content</newfile>
+- If symbol is a missing method/field: PREFER <file path="...">complete content</file> over patches
+- Use the COMPLETE fixed file to avoid context mismatch issues
+Return <file path="...">complete content</file> for Java files (more reliable than patches).""",
 
             ErrorType.REACT_ERROR: """Error type: REACT_ERROR
 Fix the React error.

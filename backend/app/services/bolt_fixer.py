@@ -455,7 +455,7 @@ MULTI-FILE CONSISTENCY (ALL LANGUAGES):
 
 OUTPUT FORMAT:
 
-For patching existing files:
+For patching existing files (SIMPLE changes - 1-3 lines):
 <patch>
 --- path/to/file
 +++ path/to/file
@@ -469,10 +469,13 @@ For creating missing files:
 file content
 </newfile>
 
-For full file replacement (syntax errors):
+For full file replacement (PREFERRED for Java/complex changes):
 <file path="path/to/file">
 complete file content
 </file>
+
+IMPORTANT: For Java files with "cannot find symbol" errors, PREFER using <file> blocks
+instead of <patch> to ensure reliable fixes. Patches may fail due to context mismatch.
 
 If no fix possible: <patch></patch>
 
