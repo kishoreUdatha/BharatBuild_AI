@@ -603,13 +603,13 @@ export function ProjectStagesPanel() {
   return (
     <div
       ref={messagesContainerRef}
-      className="h-full overflow-y-auto scrollbar-thin px-4 py-4"
+      className="h-full overflow-y-auto overflow-x-hidden px-3 py-3"
     >
-      {/* User Prompt - Right aligned bubble */}
+      {/* User Prompt - Full width bubble */}
       {userPrompt && (
-        <div className="flex justify-end mb-4">
-          <div className="max-w-[85%] px-4 py-2.5 rounded-2xl rounded-tr-sm bg-violet-600 text-white">
-            <p className="text-sm leading-relaxed whitespace-pre-wrap text-left">
+        <div className="mb-4">
+          <div className="w-full px-4 py-3 rounded-2xl bg-violet-600 text-white">
+            <p className="text-sm leading-relaxed whitespace-pre-wrap">
               {userPrompt}
             </p>
           </div>

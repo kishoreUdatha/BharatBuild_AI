@@ -3103,9 +3103,9 @@ Think: Premium, Beautiful, Production-Ready - like code from Apple, Stripe, or V
         if not pom_path.exists():
             return
 
-        # Known Java/Spring dependencies
+        # Known Java/Spring dependencies (NO LOMBOK - it breaks builds)
         JAVA_PACKAGES = {
-            'lombok': '<dependency>\n            <groupId>org.projectlombok</groupId>\n            <artifactId>lombok</artifactId>\n            <optional>true</optional>\n        </dependency>',
+            # 'lombok' removed - we never want to add Lombok
             'jakarta.validation': '<dependency>\n            <groupId>org.springframework.boot</groupId>\n            <artifactId>spring-boot-starter-validation</artifactId>\n        </dependency>',
             'springframework.web': '<dependency>\n            <groupId>org.springframework.boot</groupId>\n            <artifactId>spring-boot-starter-web</artifactId>\n        </dependency>',
             'springframework.data.jpa': '<dependency>\n            <groupId>org.springframework.boot</groupId>\n            <artifactId>spring-boot-starter-data-jpa</artifactId>\n        </dependency>',
