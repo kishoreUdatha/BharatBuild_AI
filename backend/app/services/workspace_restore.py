@@ -594,23 +594,50 @@ class WorkspaceRestoreService:
                 # If they do, DON'T restore from S3 - use existing files
                 # This preserves auto-fixer changes!
                 # =====================================================================
-                # Use TLS-enabled docker client helper
-                docker_client = get_docker_client()
-                if not docker_client:
-                    # Fallback to non-TLS (will fail if Docker requires TLS)
-                    docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+                # Use docker exec on an existing container OR check via unified_storage
+                # This is more reliable than spinning up alpine container
+                # =====================================================================
                 try:
-                    # Count files on EC2 sandbox (exclude node_modules)
-                    check_cmd = f"find {workspace_path} -type f ! -path '*/node_modules/*' 2>/dev/null | wc -l"
-                    check_output = docker_client.containers.run(
-                        "alpine:latest",
-                        ["-c", check_cmd],
-                        entrypoint="/bin/sh",
-                        volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},
-                        remove=True,
-                        detach=False
-                    )
-                    file_count = int(check_output.decode().strip() or "0")
+                    # First, try to check via unified_storage (checks S3 metadata)
+                    from app.services.unified_storage import unified_storage
+
+                    # Check if files exist on EC2 using docker exec (faster than new container)
+                    docker_client = get_docker_client()
+                    if not docker_client:
+                        docker_client = docker.DockerClient(base_url=sandbox_docker_host)
+
+                    # Use existing container or quick alpine check
+                    # Look for any running container that has the sandbox volume mounted
+                    running_containers = docker_client.containers.list(filters={"status": "running"})
+                    file_count = 0
+
+                    for container in running_containers:
+                        try:
+                            # Check if container has sandbox volume
+                            mounts = container.attrs.get("Mounts", [])
+                            has_sandbox = any(sandbox_base in str(m.get("Source", "")) for m in mounts)
+                            if has_sandbox:
+                                # Use docker exec instead of new container
+                                check_cmd = f"find {workspace_path} -type f ! -path '*/node_modules/*' 2>/dev/null | wc -l"
+                                exit_code, output = container.exec_run(["sh", "-c", check_cmd])
+                                if exit_code == 0:
+                                    file_count = int(output.decode().strip() or "0")
+                                    break
+                        except Exception:
+                            continue
+
+                    # Fallback: quick alpine container if no running container found
+                    if file_count == 0:
+                        check_cmd = f"find {workspace_path} -type f ! -path '*/node_modules/*' 2>/dev/null | wc -l"
+                        check_output = docker_client.containers.run(
+                            "alpine:latest",
+                            ["-c", check_cmd],
+                            entrypoint="/bin/sh",
+                            volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},
+                            remove=True,
+                            detach=False
+                        )
+                        file_count = int(check_output.decode().strip() or "0")
 
                     if file_count > 3:  # Project has files, skip restore
                         logger.info(f"[WorkspaceRestore] EC2 sandbox has {file_count} files, SKIPPING S3 restore")

@@ -2001,6 +2001,43 @@ class ContainerExecutor:
 
                 logger.info(f"[JavaAnalyzer] Pre-build: {len(analysis.fixes_applied)} fixes, {len(analysis.issues)} issues")
 
+                # PERSIST JAVA ANALYZER FIXES TO DATABASE - so they survive retry
+                if analysis.fixes_applied:
+                    try:
+                        from app.services.bolt_fixer import BoltFixer
+                        from pathlib import Path
+                        fixer = BoltFixer()
+                        project_path_obj = Path(project_path) if isinstance(project_path, str) else project_path
+                        persisted_count = 0
+                        for fix_desc in analysis.fixes_applied:
+                            # Extract file path from fix description
+                            # Format: "Added @Slf4j to backend/src/.../File.java"
+                            # or "Fixed imports in backend/src/.../File.java"
+                            if " to " in fix_desc:
+                                file_path = fix_desc.split(" to ")[-1].strip()
+                            elif " in " in fix_desc:
+                                file_path = fix_desc.split(" in ")[-1].strip()
+                            else:
+                                continue  # Can't extract path
+
+                            # Only process .java files
+                            if not file_path.endswith(".java"):
+                                continue
+
+                            full_path = project_path_obj / file_path
+                            try:
+                                content = self._read_file_from_sandbox(str(full_path))
+                                if content:
+                                    await fixer._persist_single_fix(project_id, project_path, file_path, content)
+                                    persisted_count += 1
+                            except Exception as pe:
+                                logger.warning(f"[JavaAnalyzer] Failed to persist {file_path}: {pe}")
+
+                        if persisted_count > 0:
+                            logger.info(f"[JavaAnalyzer] Persisted {persisted_count} fixes to database")
+                    except Exception as e:
+                        logger.warning(f"[JavaAnalyzer] Failed to persist fixes: {e}")
+
         except Exception as e:
             logger.warning(f"[ContainerExecutor] Java analyzer failed (continuing): {e}")
             # Don't yield error - Java projects will be built anyway
@@ -2158,11 +2195,14 @@ class ContainerExecutor:
                                         sandbox_writer=self._write_file_to_sandbox,
                                         sandbox_lister=self._list_files_from_sandbox
                                     )
-                                    if sdk_result.success and sdk_result.files_modified:
-                                        yield f"  ✅ SDK Fixer fixed {len(sdk_result.files_modified)} files:\n"
+                                    # Check both modified and created files
+                                    total_fixed = len(sdk_result.files_modified) + len(sdk_result.files_created)
+                                    if sdk_result.success and total_fixed > 0:
+                                        yield f"  ✅ SDK Fixer fixed {total_fixed} files:\n"
                                         for f in sdk_result.files_modified:
                                             yield f"     📝 {f}\n"
                                         all_files_modified.extend(sdk_result.files_modified)
+                                        all_files_modified.extend(sdk_result.files_created)
                                         yield f"  🔄 Retrying docker-compose...\n"
                                         sdk_fixer_handled = True
                                         continue  # Retry build

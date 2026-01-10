@@ -41,43 +41,26 @@ class SDKFixer:
     - No truncation issues
     """
 
-    SYSTEM_PROMPT = """You are an expert code fixer. Fix build/compilation errors.
+    SYSTEM_PROMPT = """You are a Java code fixer. You MUST use the tools to fix files - do not just describe fixes.
 
-RULES:
-1. First, use list_files to see project structure
-2. Use read_file to read files that have errors or need fixing
-3. Use write_file to write the fixed content
+For each file with errors:
+1. read_file → 2. write_file with fixed content
 
-JAVA RULES (CRITICAL):
-- NO LOMBOK: Remove @Data, @Getter, @Setter, @Builder, @NoArgsConstructor, @AllArgsConstructor
-- Remove: import lombok.*;
-- Add explicit getter for EVERY field: public Type getField() { return field; }
-- Add explicit setter for EVERY field: public void setField(Type val) { this.field = val; }
-- Add no-arg constructor and all-args constructor
-- Use constructor injection for services (not @RequiredArgsConstructor)
-
-FIX ROOT CAUSE:
-- If error says "cannot find symbol: method getX() in class Order"
-  → Read Order.java and add the missing getter
-- If error says "location: class Product"
-  → Fix Product.java, not the file that uses it
-
-OUTPUT:
-- Fix ALL files that need fixing
-- Write complete, working files
-- No placeholders or TODOs
+Common Java fixes:
+- Remove Lombok (@Data, @Getter, @Setter, @Builder) and add explicit getters/setters
+- Add missing constructors
 """
 
     TOOLS = [
         {
             "name": "list_files",
-            "description": "List files in a directory. Use pattern like '**/*.java' or 'src/**/*'",
+            "description": "List Java files in the project",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Glob pattern like '**/*.java' or 'backend/src/**/*.java'"
+                        "description": "Glob pattern like '**/*.java'"
                     }
                 },
                 "required": ["pattern"]
@@ -85,13 +68,13 @@ OUTPUT:
         },
         {
             "name": "read_file",
-            "description": "Read a file's content",
+            "description": "Read file content before fixing it",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "File path relative to project root"
+                        "description": "File path from error message"
                     }
                 },
                 "required": ["path"]
@@ -99,17 +82,17 @@ OUTPUT:
         },
         {
             "name": "write_file",
-            "description": "Write content to a file (creates or overwrites)",
+            "description": "Save the fixed file content - REQUIRED to apply fixes",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "File path relative to project root"
+                        "description": "Same path as read_file"
                     },
                     "content": {
                         "type": "string",
-                        "description": "Complete file content to write"
+                        "description": "Complete fixed file content"
                     }
                 },
                 "required": ["path", "content"]
@@ -161,23 +144,19 @@ OUTPUT:
         self._files_created = []
         tool_calls = 0
         total_tokens = 0
+        read_count = 0
+        write_count = 0
 
         # Initial message with build errors
         messages = [{
             "role": "user",
-            "content": f"""Fix these build errors:
+            "content": f"""Fix these build errors by using write_file:
 
 ```
 {build_errors[:8000]}
 ```
 
-Project path: {project_path}
-
-Steps:
-1. List Java files to understand structure
-2. Read files that have errors (check "location:" in errors)
-3. Fix each file - remove Lombok, add explicit getters/setters
-4. Write the fixed files
+Use read_file then write_file for each file that needs fixing.
 """
         }]
 
@@ -214,6 +193,11 @@ Steps:
                     for block in response.content:
                         if block.type == "tool_use":
                             tool_calls += 1
+                            # Track read vs write ratio
+                            if block.name == "read_file":
+                                read_count += 1
+                            elif block.name == "write_file":
+                                write_count += 1
                             result = await self._execute_tool(
                                 block.name,
                                 block.input,
@@ -231,11 +215,16 @@ Steps:
                     logger.warning(f"[SDKFixer] Unexpected stop: {response.stop_reason}")
                     break
 
+            # Log read/write stats
+            logger.info(f"[SDKFixer] Stats: {read_count} reads, {write_count} writes, {tool_calls} total calls")
+            if read_count > 0 and write_count == 0:
+                logger.warning(f"[SDKFixer] WARNING: {read_count} reads but 0 writes! Claude is not writing fixes.")
+
             return SDKFixResult(
                 success=len(self._files_modified) > 0 or len(self._files_created) > 0,
                 files_modified=self._files_modified,
                 files_created=self._files_created,
-                message=f"Fixed {len(self._files_modified)} files, created {len(self._files_created)} files",
+                message=f"Fixed {len(self._files_modified)} files, created {len(self._files_created)} files (reads: {read_count}, writes: {write_count})",
                 tool_calls=tool_calls,
                 tokens_used=total_tokens
             )
