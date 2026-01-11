@@ -1075,37 +1075,49 @@ class DockerInfraFixerAgent:
                 filename = source_path.split('/')[-1].lower()
 
                 if 'nginx.conf' in filename:
+                    # Detect backend port from docker-compose.yml
+                    backend_port = self._detect_backend_port(project_path, sandbox_runner)
+
                     # Create nginx.conf for serving static files (Vite/React production build)
                     # This serves /usr/share/nginx/html with SPA fallback and proxies /api to backend
-                    nginx_config = '''server {
-    listen 80;
-    server_name _;
-    root /usr/share/nginx/html;
-    index index.html;
+                    nginx_config = f'''events {{
+    worker_connections 1024;
+}}
 
-    # Frontend routes - serve static files with SPA fallback
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # API proxy - forward /api/* requests to backend container
-    location /api/ {
-        proxy_pass http://backend:8080/api/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_cache_bypass $http_upgrade;
-        proxy_read_timeout 86400;
-    }
+http {{
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
 
     # Gzip compression
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml;
-}
+
+    server {{
+        listen 80;
+        server_name _;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        # Frontend routes - serve static files with SPA fallback
+        location / {{
+            try_files $uri $uri/ /index.html;
+        }}
+
+        # API proxy - forward /api/* requests to backend container
+        location /api/ {{
+            proxy_pass http://backend:{backend_port}/api/;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection 'upgrade';
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_cache_bypass $http_upgrade;
+            proxy_read_timeout 86400;
+        }}
+    }}
+}}
 '''
                     # Write using base64 to handle special chars
                     import base64
@@ -1523,52 +1535,70 @@ class DockerInfraFixerAgent:
 
         filename_lower = filename.lower()
 
-        # Default content templates for common files
-        # nginx.conf serves static files from /usr/share/nginx/html with SPA fallback
-        DEFAULT_CONTENTS = {
-            'nginx.conf': '''server {
-    listen 80;
-    server_name _;
-    root /usr/share/nginx/html;
-    index index.html;
+        # For nginx.conf, detect backend port dynamically
+        if 'nginx.conf' in filename_lower:
+            # Extract project path from file_path
+            # e.g., /workspace/project123/nginx.conf -> /workspace/project123
+            project_path = '/'.join(file_path.split('/')[:-1])
+            if not project_path:
+                project_path = '.'
+            backend_port = self._detect_backend_port(project_path, sandbox_runner)
 
-    # Frontend routes - serve static files with SPA fallback
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
+            content = f'''events {{
+    worker_connections 1024;
+}}
 
-    # API proxy - forward /api/* requests to backend container
-    location /api/ {
-        proxy_pass http://backend:8080/api/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_cache_bypass $http_upgrade;
-        proxy_read_timeout 86400;
-    }
+http {{
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
 
     # Gzip compression
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml;
-}
-''',
-            '.env': '# Environment variables\n',
-            '.gitignore': 'node_modules/\n.env\n*.log\n',
-            'init.sql': '-- Database initialization\n',
-            'schema.sql': '-- Database schema\n',
-            'seed.sql': '-- Seed data\n',
-        }
 
-        # Find matching template
-        content = None
-        for key, template in DEFAULT_CONTENTS.items():
-            if key in filename_lower:
-                content = template
-                break
+    server {{
+        listen 80;
+        server_name _;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        # Frontend routes - serve static files with SPA fallback
+        location / {{
+            try_files $uri $uri/ /index.html;
+        }}
+
+        # API proxy - forward /api/* requests to backend container
+        location /api/ {{
+            proxy_pass http://backend:{backend_port}/api/;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection 'upgrade';
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_cache_bypass $http_upgrade;
+            proxy_read_timeout 86400;
+        }}
+    }}
+}}
+'''
+        else:
+            # Default content templates for other common files
+            DEFAULT_CONTENTS = {
+                '.env': '# Environment variables\n',
+                '.gitignore': 'node_modules/\n.env\n*.log\n',
+                'init.sql': '-- Database initialization\n',
+                'schema.sql': '-- Database schema\n',
+                'seed.sql': '-- Seed data\n',
+            }
+
+            # Find matching template
+            content = None
+            for key, template in DEFAULT_CONTENTS.items():
+                if key in filename_lower:
+                    content = template
+                    break
 
         if content is None:
             # Default: create empty file
@@ -1811,6 +1841,123 @@ class DockerInfraFixerAgent:
     # ========================================================================
     # DOCKER-COMPOSE FIXES
     # ========================================================================
+
+    def _detect_backend_port(self, project_path: str, sandbox_runner: callable) -> str:
+        """
+        Detect the backend service port from docker-compose.yml.
+
+        Checks multiple sources:
+        1. ports mapping in docker-compose.yml
+        2. environment variables (SERVER_PORT, PORT)
+        3. Dockerfile EXPOSE directive
+        4. Technology inference from image/build context
+
+        Returns the detected port or '8080' as default.
+        """
+        backend_port = '8080'  # Default for Spring Boot
+        backend_service = None
+        backend_config = None
+
+        try:
+            compose_content = self._read_file_from_sandbox(f"{project_path}/docker-compose.yml", sandbox_runner)
+            if not compose_content:
+                return backend_port
+
+            compose_data = yaml.safe_load(compose_content)
+            if not compose_data or 'services' not in compose_data:
+                return backend_port
+
+            # Find backend service - check multiple naming patterns
+            backend_patterns = ['backend', 'api', 'server', 'app', 'spring', 'java', 'python', 'fastapi', 'flask', 'express', 'go']
+            frontend_patterns = ['frontend', 'web', 'client', 'ui', 'react', 'vue', 'angular', 'nginx']
+
+            for svc_name, svc_config in compose_data.get('services', {}).items():
+                svc_lower = svc_name.lower()
+                # Skip frontend services
+                if any(fp in svc_lower for fp in frontend_patterns):
+                    continue
+                # Match backend services
+                if any(bp in svc_lower for bp in backend_patterns):
+                    backend_service = svc_name
+                    backend_config = svc_config
+                    break
+
+            if not backend_config:
+                # Fallback: find any service that's not frontend/nginx
+                for svc_name, svc_config in compose_data.get('services', {}).items():
+                    svc_lower = svc_name.lower()
+                    if not any(fp in svc_lower for fp in frontend_patterns):
+                        backend_service = svc_name
+                        backend_config = svc_config
+                        break
+
+            if not backend_config:
+                return backend_port
+
+            # 1. Check ports mapping (e.g., "8080:8080", "8000:8000")
+            ports = backend_config.get('ports', [])
+            for port in ports:
+                port_str = str(port)
+                # Extract container port (right side of host:container mapping)
+                if ':' in port_str:
+                    backend_port = port_str.split(':')[-1].split('/')[0].strip()
+                else:
+                    backend_port = port_str.split('/')[0].strip()
+                break
+
+            # 2. Check environment variables
+            env_list = backend_config.get('environment', [])
+            if isinstance(env_list, list):
+                for env in env_list:
+                    env_str = str(env)
+                    if env_str.startswith('SERVER_PORT=') or env_str.startswith('PORT='):
+                        backend_port = env_str.split('=')[1].strip()
+                        break
+            elif isinstance(env_list, dict):
+                if 'SERVER_PORT' in env_list:
+                    backend_port = str(env_list['SERVER_PORT'])
+                elif 'PORT' in env_list:
+                    backend_port = str(env_list['PORT'])
+
+            # 3. Check build context to detect technology
+            build_config = backend_config.get('build', {})
+            if isinstance(build_config, str):
+                build_context = build_config
+            elif isinstance(build_config, dict):
+                build_context = build_config.get('context', '')
+            else:
+                build_context = ''
+
+            # Check Dockerfile for EXPOSE if we have a build context
+            if build_context:
+                dockerfile_path = f"{project_path}/{build_context}/Dockerfile"
+                dockerfile_content = self._read_file_from_sandbox(dockerfile_path, sandbox_runner)
+                if dockerfile_content:
+                    # Look for EXPOSE directive
+                    expose_match = re.search(r'EXPOSE\s+(\d+)', dockerfile_content)
+                    if expose_match:
+                        backend_port = expose_match.group(1)
+                    # Detect technology from Dockerfile
+                    dockerfile_lower = dockerfile_content.lower()
+                    if 'python' in dockerfile_lower or 'uvicorn' in dockerfile_lower or 'gunicorn' in dockerfile_lower:
+                        if backend_port == '8080':
+                            backend_port = '8000'
+                    elif 'maven' in dockerfile_lower or 'gradle' in dockerfile_lower or 'spring' in dockerfile_lower:
+                        if backend_port == '8000':
+                            backend_port = '8080'
+
+            # 4. Check image for technology hints
+            image = backend_config.get('image', '').lower()
+            if 'python' in image or 'fastapi' in image or 'flask' in image or 'django' in image:
+                if backend_port == '8080':
+                    backend_port = '8000'
+
+            logger.debug(f"[DockerInfraFixer] Detected backend port: {backend_port} for service: {backend_service}")
+
+        except Exception as e:
+            logger.debug(f"[DockerInfraFixer] Could not detect backend port: {e}, using default 8080")
+
+        return backend_port
 
     def _read_file_from_sandbox(self, file_path: str, sandbox_runner: callable) -> Optional[str]:
         """Read a file from the sandbox (works for both local and remote)."""
