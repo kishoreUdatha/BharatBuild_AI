@@ -421,6 +421,36 @@ When you see errors like:
 - Go: "undefined: X" - Add the missing function/type X
 - Rust: "cannot find value/type `x`" - Add the missing item to the module
 
+🚨 SPRING BOOT PAGE FORMAT (FULLSTACK PROJECTS):
+When you see TypeScript errors like:
+- "Property 'content' does not exist on type 'EmployeeListResponse'"
+- "Property 'totalElements' does not exist on type '...'"
+- "Property 'number' does not exist on type '...'"
+
+This means frontend types don't match Spring Boot's Page<T> format!
+
+FIX: Replace custom types with Spring Boot PageResponse format:
+```typescript
+// CORRECT - matches Spring Boot Page<T>
+interface PageResponse<T> {
+  content: T[];           // NOT 'data', 'items', 'employees'
+  totalElements: number;  // NOT 'total', 'count'
+  totalPages: number;
+  number: number;         // NOT 'page' (0-indexed!)
+  size: number;
+  first: boolean;
+  last: boolean;
+  empty: boolean;
+}
+
+// Usage:
+const response: PageResponse<Employee> = await api.get('/employees');
+setEmployees(response.content);      // NOT response.data
+setTotal(response.totalElements);    // NOT response.total
+```
+
+Also check services that use pagination - update them to use .content, .totalElements, .number
+
 🚨 MISSING CLASS/FILE ERRORS - CREATE THE FILE:
 When you see "cannot find symbol: class XxxDto" or similar CLASS NOT FOUND errors:
 - Java: CREATE the missing class/enum/DTO using <newfile path="backend/src/main/java/com/package/XxxDto.java">

@@ -48,6 +48,36 @@ CONTROLLER REQUIREMENTS:
 - @RequestMapping for base path
 - Constructor with dependencies (constructor injection)
 
+PAGINATION - USE SPRING BOOT Page<T> FORMAT:
+When returning paginated data, use Spring Data's Page<T>:
+```java
+// In Controller - return Page<Entity> or Page<DTO>
+@GetMapping
+public ResponseEntity<Page<EmployeeDto>> getAll(
+    @RequestParam(defaultValue = "0") int page,
+    @RequestParam(defaultValue = "10") int size) {
+    return ResponseEntity.ok(employeeService.findAll(PageRequest.of(page, size)));
+}
+```
+
+Spring Boot Page<T> response format (frontend must match this!):
+```json
+{
+  "content": [...],        // Array of items
+  "totalElements": 100,    // Total count
+  "totalPages": 10,        // Total pages
+  "number": 0,             // Current page (0-indexed)
+  "size": 10,              // Page size
+  "first": true,           // Is first page
+  "last": false            // Is last page
+}
+```
+
+⚠️ CRITICAL: Frontend types MUST use these exact property names!
+- content (NOT 'items', 'data', 'employees')
+- totalElements (NOT 'total', 'count')
+- number (NOT 'page', 'currentPage')
+
 TYPE CONSISTENCY:
 - Money: BigDecimal
 - ID: Long or UUID

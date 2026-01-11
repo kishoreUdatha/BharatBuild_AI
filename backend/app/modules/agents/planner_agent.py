@@ -104,6 +104,14 @@ class PlannerAgent(BaseAgent):
         if tech_prompts:
             full_prompt += "\n" + "\n".join(tech_prompts)
 
+        # Add fullstack integration prompt when frontend + backend detected
+        is_fullstack = ("react" in detected_techs and ("java" in detected_techs or "python" in detected_techs))
+        if is_fullstack:
+            fullstack_prompt = cls._load_prompt_file("planner_fullstack.txt")
+            if fullstack_prompt:
+                full_prompt += f"\n{'='*60}\nFULLSTACK INTEGRATION RULES:\n{'='*60}\n{fullstack_prompt}"
+                logger.info("[PlannerAgent] Added fullstack integration rules")
+
         # Log prompt size for debugging
         token_estimate = len(full_prompt) // 4
         logger.info(f"[PlannerAgent] Dynamic prompt size: ~{token_estimate} tokens (vs ~50k with old prompt)")

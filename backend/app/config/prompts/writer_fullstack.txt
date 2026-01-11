@@ -1,0 +1,333 @@
+
+FULLSTACK PROJECT INTEGRATION RULES (Java Spring Boot + React/TypeScript)
+
+This prompt is loaded for fullstack projects with both frontend/ and backend/ folders.
+These rules ensure PERFECT integration between backend APIs and frontend consumption.
+
+═══════════════════════════════════════════════════════════════════════════════
+⚠️ CRITICAL: BACKEND-FRONTEND TYPE SYNCHRONIZATION
+═══════════════════════════════════════════════════════════════════════════════
+
+The #1 cause of fullstack build failures is TYPE MISMATCH between backend
+API responses and frontend TypeScript interfaces. FOLLOW THESE RULES:
+
+1. SPRING BOOT PAGINATION - Page<T> FORMAT (MANDATORY)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When returning paginated data from Spring Boot, the response format is:
+
+BACKEND (Java Controller):
+```java
+@GetMapping
+public ResponseEntity<Page<EmployeeDto>> getAll(
+    @RequestParam(defaultValue = "0") int page,
+    @RequestParam(defaultValue = "10") int size) {
+    return ResponseEntity.ok(service.findAll(PageRequest.of(page, size)));
+}
+```
+
+ACTUAL JSON RESPONSE from Spring Boot:
+```json
+{
+  "content": [...],           // Array of items
+  "totalElements": 100,       // Total count
+  "totalPages": 10,           // Number of pages
+  "number": 0,                // Current page (0-indexed!)
+  "size": 10,                 // Items per page
+  "first": true,              // Is first page
+  "last": false,              // Is last page
+  "empty": false              // Is empty
+}
+```
+
+FRONTEND (TypeScript) - MUST MATCH EXACTLY:
+```typescript
+// src/types/index.ts - CORRECT
+interface PageResponse<T> {
+  content: T[];               // NOT 'data', 'items', 'employees'
+  totalElements: number;      // NOT 'total', 'count'
+  totalPages: number;
+  number: number;             // NOT 'page', 'currentPage' (0-indexed!)
+  size: number;
+  first: boolean;
+  last: boolean;
+  empty: boolean;
+}
+
+// Usage in service:
+const response = await api.get<PageResponse<Employee>>('/api/employees');
+setEmployees(response.content);        // NOT response.data
+setTotal(response.totalElements);      // NOT response.total
+setCurrentPage(response.number);       // NOT response.page
+```
+
+❌ WRONG - DO NOT DO THIS:
+```typescript
+interface EmployeeListResponse {
+  employees: Employee[];     // WRONG! Spring uses 'content'
+  total: number;             // WRONG! Spring uses 'totalElements'
+  page: number;              // WRONG! Spring uses 'number'
+}
+```
+
+2. ENTITY/DTO TO TYPESCRIPT TYPE MAPPING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+BACKEND Entity (Java):
+```java
+@Entity
+public class Employee {
+    @Id @GeneratedValue
+    private Long id;
+    private String firstName;
+    private String lastName;
+    private String email;
+    private String department;
+    private BigDecimal salary;
+    private LocalDate joinDate;
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+    // getters and setters...
+}
+```
+
+BACKEND DTO (Java):
+```java
+public class EmployeeDto {
+    private Long id;
+    private String firstName;
+    private String lastName;
+    private String email;
+    private String department;
+    private BigDecimal salary;
+    private String joinDate;      // Formatted as ISO string
+    private String createdAt;
+    private String updatedAt;
+    // getters and setters...
+}
+```
+
+FRONTEND Type (TypeScript) - MUST MATCH DTO:
+```typescript
+// src/types/index.ts
+export interface Employee {
+  id: number;                 // Long -> number
+  firstName: string;          // String -> string (camelCase!)
+  lastName: string;
+  email: string;
+  department: string;
+  salary: number;             // BigDecimal -> number
+  joinDate: string;           // LocalDate -> string (ISO format)
+  createdAt: string;          // LocalDateTime -> string
+  updatedAt: string;
+}
+
+// Request DTOs (for create/update)
+export interface CreateEmployeeRequest {
+  firstName: string;
+  lastName: string;
+  email: string;
+  department: string;
+  salary: number;
+  joinDate: string;
+}
+
+export interface UpdateEmployeeRequest {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  department?: string;
+  salary?: number;
+  joinDate?: string;
+}
+```
+
+3. API SERVICE CONFIGURATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FRONTEND API Service (src/services/api.ts):
+```typescript
+import axios from 'axios';
+
+// Use environment variable or relative path for Vite proxy
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 30000,
+  headers: { 'Content-Type': 'application/json' },
+});
+
+// Add auth token to requests
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+export default api;
+```
+
+FRONTEND Employee Service (src/services/employeeService.ts):
+```typescript
+import api from './api';
+import { Employee, CreateEmployeeRequest, UpdateEmployeeRequest, PageResponse } from '../types';
+
+export const employeeService = {
+  getAll: async (page = 0, size = 10) => {
+    const response = await api.get<PageResponse<Employee>>(`/employees?page=${page}&size=${size}`);
+    return response.data;  // This IS the PageResponse object
+  },
+
+  getById: async (id: number) => {
+    const response = await api.get<Employee>(`/employees/${id}`);
+    return response.data;
+  },
+
+  create: async (data: CreateEmployeeRequest) => {
+    const response = await api.post<Employee>('/employees', data);
+    return response.data;
+  },
+
+  update: async (id: number, data: UpdateEmployeeRequest) => {
+    const response = await api.put<Employee>(`/employees/${id}`, data);
+    return response.data;
+  },
+
+  delete: async (id: number) => {
+    await api.delete(`/employees/${id}`);
+  },
+};
+```
+
+4. VITE CONFIGURATION FOR FULLSTACK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FRONTEND vite.config.ts - REQUIRED:
+```typescript
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    host: '0.0.0.0',
+    port: 3000,
+    hmr: false,  // Required for Docker preview
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8080',  // Spring Boot port
+        changeOrigin: true,
+        secure: false,
+      },
+    },
+  },
+});
+```
+
+FRONTEND src/vite-env.d.ts - REQUIRED FOR import.meta.env:
+```typescript
+/// <reference types="vite/client" />
+interface ImportMetaEnv {
+  readonly VITE_API_URL: string;
+}
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+```
+
+5. BACKEND CORS CONFIGURATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+BACKEND CorsConfig.java - REQUIRED:
+```java
+@Configuration
+public class CorsConfig implements WebMvcConfigurer {
+    @Override
+    public void addCorsMappings(CorsRegistry registry) {
+        registry.addMapping("/api/**")
+            .allowedOrigins("http://localhost:3000", "http://localhost:5173")
+            .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
+            .allowedHeaders("*")
+            .allowCredentials(true);
+    }
+}
+```
+
+6. DOCKER COMPOSE FOR FULLSTACK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+docker-compose.yml:
+```yaml
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - CORS_ORIGINS=http://localhost:3000,http://frontend:3000
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_URL=http://backend:8080/api
+```
+
+7. COMPONENT PROPS CONSISTENCY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When creating components, define props interface FIRST:
+
+```typescript
+// Define props interface
+interface EmployeeCardProps {
+  employee: Employee;
+  onEdit: (employee: Employee) => void;
+  onDelete: (id: number) => void;
+  onView: (id: number) => void;
+}
+
+// Use props interface
+export default function EmployeeCard({ employee, onEdit, onDelete, onView }: EmployeeCardProps) {
+  return (
+    <div>
+      <h3>{employee.firstName} {employee.lastName}</h3>
+      <p>{employee.email}</p>
+      <button onClick={() => onEdit(employee)}>Edit</button>
+      <button onClick={() => onDelete(employee.id)}>Delete</button>
+      <button onClick={() => onView(employee.id)}>View</button>
+    </div>
+  );
+}
+```
+
+When using component, pass ALL required props:
+```typescript
+<EmployeeCard
+  employee={employee}
+  onEdit={handleEdit}
+  onDelete={handleDelete}
+  onView={handleView}
+/>
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+VERIFICATION CHECKLIST
+═══════════════════════════════════════════════════════════════════════════════
+
+Before generating ANY file in a fullstack project:
+
+[ ] PageResponse<T> uses: content, totalElements, number (NOT data, total, page)
+[ ] Frontend types match backend DTO property names EXACTLY
+[ ] vite-env.d.ts exists for import.meta.env support
+[ ] API service uses correct base URL configuration
+[ ] Component props interfaces match usage
+[ ] CORS is configured on backend
+[ ] Vite proxy is configured for /api routes
