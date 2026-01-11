@@ -2192,11 +2192,40 @@ class ContainerExecutor:
                             # Step 2: Use BoltFixer for ALL errors (batch, cascade, dependency graph)
                             # =================================================================
                             # SMART FIXER SELECTION:
-                            # - Java errors (cannot find symbol, getter/setter) → SDK Fixer (primary)
+                            # - Java COMPILATION errors (cannot find symbol, method not found) → SDK Fixer
+                            # - Docker/Dockerfile errors (not found, groupadd, etc.) → BoltFixer
                             # - Other errors (syntax, config, etc.) → BoltFixer
                             # - If SDK Fixer fails → BoltFixer as fallback
                             # =================================================================
-                            is_java_error = '.java' in output or 'cannot find symbol' in output or 'mvn' in output.lower()
+
+                            # IMPORTANT: Detect Docker/Dockerfile errors FIRST
+                            # These should NOT go to SDK Fixer (which is Java-only)
+                            is_docker_error = any(pattern in output.lower() for pattern in [
+                                'groupadd:', 'useradd:', 'addgroup:', 'adduser:',  # User/group commands
+                                'not found', 'command not found',  # Missing commands
+                                'failed to solve', 'dockerfile parse error',  # Dockerfile issues
+                                'executor failed running', 'error: process',  # Docker build failures
+                                '/bin/sh:', '/bin/bash:',  # Shell errors in Dockerfile
+                            ])
+
+                            # Java COMPILATION errors (not just any .java mention)
+                            # Must have specific javac/Maven compilation error patterns
+                            java_compilation_patterns = [
+                                'cannot find symbol',
+                                'cannot resolve symbol',
+                                'error: method',
+                                'error: constructor',
+                                'incompatible types',
+                                'compilation failure',
+                                '[error] /.*\\.java:',  # Maven error format with .java file
+                            ]
+                            is_java_compilation_error = any(
+                                re.search(pattern, output, re.IGNORECASE)
+                                for pattern in java_compilation_patterns
+                            )
+
+                            # Only use SDK Fixer for Java COMPILATION errors, NOT Docker errors
+                            is_java_error = is_java_compilation_error and not is_docker_error
                             sdk_fixer_handled = False
 
                             if is_java_error:

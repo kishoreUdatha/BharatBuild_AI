@@ -63,6 +63,7 @@ class InfraErrorType(Enum):
     DOCKERFILE_WORKDIR = "dockerfile_workdir"
     DOCKERFILE_MISSING = "dockerfile_missing"  # Cannot locate specified Dockerfile
     DOCKERFILE_TARGET_MISSING = "dockerfile_target_missing"  # target stage not found in Dockerfile
+    DOCKERFILE_ALPINE_COMMANDS = "dockerfile_alpine_commands"  # groupadd/useradd not found on Alpine
     # Docker Compose
     COMPOSE_SYNTAX = "compose_syntax"
     COMPOSE_DEPENDS_ON = "compose_depends_on"
@@ -191,6 +192,12 @@ ERROR_PATTERNS: List[Tuple[str, InfraErrorType, str, Optional[str]]] = [
     (r"target stage .* could not be found|failed to solve.*target.*not found",
      InfraErrorType.DOCKERFILE_TARGET_MISSING,
      "Target stage not found - remove 'target:' from docker-compose.yml build config",
+     None),
+
+    # Alpine Linux command compatibility (groupadd/useradd not available on Alpine)
+    (r"groupadd:.*not found|useradd:.*not found|/bin/sh:.*groupadd|/bin/sh:.*useradd|groupadd: command not found|useradd: command not found",
+     InfraErrorType.DOCKERFILE_ALPINE_COMMANDS,
+     "Alpine Linux uses addgroup/adduser instead of groupadd/useradd",
      None),
 
     # Docker Compose errors
@@ -328,6 +335,7 @@ class DockerInfraFixerAgent:
             InfraErrorType.COMPOSE_VOLUME,  # Volume mount errors (file/directory mismatch)
             InfraErrorType.DOCKERFILE_MISSING,  # Missing Dockerfile (e.g., nginx with build: .)
             InfraErrorType.DOCKERFILE_TARGET_MISSING,  # Target stage not found (remove 'target:')
+            InfraErrorType.DOCKERFILE_ALPINE_COMMANDS,  # Alpine uses addgroup/adduser
         }
         return error_type in fixable_types
 
@@ -430,6 +438,7 @@ class DockerInfraFixerAgent:
             InfraErrorType.COMPOSE_VOLUME: lambda sr: self._fix_volume_mount(error_message, project_path, sr),
             InfraErrorType.DOCKERFILE_MISSING: lambda sr: self._fix_missing_dockerfile(error_message, project_path, sr),
             InfraErrorType.DOCKERFILE_TARGET_MISSING: lambda sr: self._fix_missing_target(error_message, project_path, sr),
+            InfraErrorType.DOCKERFILE_ALPINE_COMMANDS: lambda sr: self._fix_alpine_commands(error_message, project_path, sr),
         }
 
         handler = fix_handlers.get(error.error_type)
@@ -1303,6 +1312,119 @@ http {
         except Exception as e:
             logger.error(f"[DockerInfraFixer] Missing target fix failed: {e}")
             return FixResult(success=False, message=f"Missing target fix failed: {e}")
+
+    async def _fix_alpine_commands(self, error_message: str, project_path: str, sandbox_runner: callable) -> FixResult:
+        """
+        Fix Alpine Linux command compatibility issues in Dockerfile.
+
+        Alpine uses:
+        - addgroup instead of groupadd
+        - adduser instead of useradd
+
+        Common patterns to fix:
+        - RUN groupadd -r appuser && useradd -r -g appuser appuser
+          → RUN addgroup -S appuser && adduser -S -G appuser appuser
+        - RUN groupadd --system appuser
+          → RUN addgroup -S appuser
+        - RUN useradd --system --gid appuser appuser
+          → RUN adduser -S -G appuser appuser
+        """
+        try:
+            # Find all Dockerfiles
+            dockerfile_paths = [
+                f"{project_path}/Dockerfile",
+                f"{project_path}/backend/Dockerfile",
+                f"{project_path}/frontend/Dockerfile",
+            ]
+
+            fixed_files = []
+
+            for dockerfile_path in dockerfile_paths:
+                if not self._file_exists_in_sandbox(dockerfile_path, sandbox_runner):
+                    continue
+
+                content = self._read_file_from_sandbox(dockerfile_path, sandbox_runner)
+                if not content:
+                    continue
+
+                # Check if this Dockerfile has groupadd/useradd commands
+                if 'groupadd' not in content and 'useradd' not in content:
+                    continue
+
+                original_content = content
+
+                # Replace groupadd patterns with addgroup
+                # Pattern: groupadd -r groupname OR groupadd --system groupname
+                content = re.sub(
+                    r'groupadd\s+(?:-r|--system)\s+(\w+)',
+                    r'addgroup -S \1',
+                    content
+                )
+
+                # Pattern: groupadd groupname (without flags)
+                content = re.sub(
+                    r'groupadd\s+(\w+)(?!\s)',
+                    r'addgroup -S \1',
+                    content
+                )
+
+                # Replace useradd patterns with adduser
+                # Pattern: useradd -r -g groupname username OR useradd --system --gid groupname username
+                content = re.sub(
+                    r'useradd\s+(?:-r|--system)\s+(?:-g|--gid)\s+(\w+)\s+(\w+)',
+                    r'adduser -S -G \1 \2',
+                    content
+                )
+
+                # Pattern: useradd -r username (system user without group)
+                content = re.sub(
+                    r'useradd\s+(?:-r|--system)\s+(\w+)(?!\s+-)',
+                    r'adduser -S \1',
+                    content
+                )
+
+                # Pattern: useradd --no-create-home --shell /sbin/nologin -g group user
+                content = re.sub(
+                    r'useradd\s+(?:--no-create-home\s+)?(?:--shell\s+\S+\s+)?(?:-g|--gid)\s+(\w+)\s+(\w+)',
+                    r'adduser -S -G \1 -H -D \2',
+                    content
+                )
+
+                # Pattern: useradd -u UID -g GID username
+                content = re.sub(
+                    r'useradd\s+(?:-u|--uid)\s+(\d+)\s+(?:-g|--gid)\s+(\w+)\s+(\w+)',
+                    r'adduser -S -u \1 -G \2 \3',
+                    content
+                )
+
+                # Pattern: Simple useradd username
+                content = re.sub(
+                    r'useradd\s+(\w+)(?!\s+-)',
+                    r'adduser -S -D \1',
+                    content
+                )
+
+                if content != original_content:
+                    if self._write_file_to_sandbox(dockerfile_path, content, sandbox_runner):
+                        fixed_files.append(dockerfile_path.split('/')[-1])
+                        logger.info(f"[DockerInfraFixer] Fixed Alpine commands in {dockerfile_path}")
+
+            if fixed_files:
+                return FixResult(
+                    success=True,
+                    message=f"Fixed Alpine commands (groupadd→addgroup, useradd→adduser) in: {', '.join(fixed_files)}",
+                    file_modified=dockerfile_paths[0] if len(fixed_files) == 1 else None,
+                    changes_made="Replaced Debian user/group commands with Alpine equivalents"
+                )
+
+            return FixResult(
+                success=False,
+                message="Could not find groupadd/useradd commands to fix in Dockerfiles"
+            )
+
+        except Exception as e:
+            logger.error(f"[DockerInfraFixer] Alpine commands fix failed: {e}")
+            return FixResult(success=False, message=f"Alpine commands fix failed: {e}")
 
     async def _validate_volume_mounts(self, project_path: str, sandbox_runner: callable) -> List[FixResult]:
         """
