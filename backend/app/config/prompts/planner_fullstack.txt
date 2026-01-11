@@ -1,0 +1,231 @@
+
+FULLSTACK PROJECT PLANNING RULES (Java Spring Boot + React/TypeScript)
+
+When planning a fullstack project, you MUST ensure proper integration between
+backend APIs and frontend consumption. This prevents 90% of build failures.
+
+═══════════════════════════════════════════════════════════════════════════════
+MANDATORY FILES FOR FULLSTACK PROJECTS
+═══════════════════════════════════════════════════════════════════════════════
+
+BACKEND (Spring Boot) - Required Files:
+```
+backend/
+├── src/main/java/com/app/
+│   ├── config/
+│   │   └── CorsConfig.java          # CORS for frontend access
+│   ├── controller/
+│   │   └── {Entity}Controller.java  # REST endpoints
+│   ├── service/
+│   │   └── {Entity}Service.java     # Business logic
+│   ├── repository/
+│   │   └── {Entity}Repository.java  # JPA repository
+│   ├── entity/
+│   │   └── {Entity}.java            # JPA entity with getters/setters
+│   ├── dto/
+│   │   └── {Entity}Dto.java         # Data transfer object
+│   └── Application.java
+├── src/main/resources/
+│   └── application.yml              # Database, CORS config
+├── pom.xml
+└── Dockerfile
+```
+
+FRONTEND (React + TypeScript) - Required Files:
+```
+frontend/
+├── src/
+│   ├── types/
+│   │   └── index.ts                 # ALL types matching backend DTOs
+│   ├── services/
+│   │   ├── api.ts                   # Axios config with interceptors
+│   │   └── {entity}Service.ts       # API calls for entity
+│   ├── components/
+│   │   └── {Entity}Card.tsx         # Reusable components
+│   ├── pages/
+│   │   ├── {Entity}ListPage.tsx     # List/table page
+│   │   └── {Entity}DetailPage.tsx   # Detail/form page
+│   ├── hooks/
+│   │   └── use{Entity}.ts           # Data fetching hooks
+│   ├── App.tsx
+│   ├── main.tsx
+│   └── vite-env.d.ts                # REQUIRED for import.meta.env
+├── package.json
+├── vite.config.ts                   # MUST have proxy config
+├── tsconfig.json
+├── tailwind.config.js
+├── postcss.config.js
+├── index.html
+└── Dockerfile
+```
+
+ROOT:
+```
+docker-compose.yml                   # Both services
+.env.example                         # Environment template
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+CRITICAL: TYPE SYNCHRONIZATION PLANNING
+═══════════════════════════════════════════════════════════════════════════════
+
+When planning files, the types MUST be planned to match the backend exactly.
+
+1. PLAN BACKEND ENTITY FIRST:
+   <file path="backend/src/main/java/com/app/entity/Employee.java" priority="10">
+     <description>JPA entity with fields: id, firstName, lastName, email, department, salary, joinDate</description>
+     <exports>Employee</exports>
+   </file>
+
+2. PLAN BACKEND DTO:
+   <file path="backend/src/main/java/com/app/dto/EmployeeDto.java" priority="11">
+     <description>DTO matching entity fields for API responses</description>
+     <exports>EmployeeDto</exports>
+   </file>
+
+3. PLAN FRONTEND TYPES TO MATCH DTO:
+   <file path="frontend/src/types/index.ts" priority="15">
+     <description>
+       Types matching backend DTOs:
+       - Employee interface with: id, firstName, lastName, email, department, salary, joinDate
+       - PageResponse&lt;T&gt; with: content, totalElements, totalPages, number, size, first, last
+       - CreateEmployeeRequest, UpdateEmployeeRequest
+     </description>
+     <exports>Employee, PageResponse, CreateEmployeeRequest, UpdateEmployeeRequest</exports>
+   </file>
+
+═══════════════════════════════════════════════════════════════════════════════
+PAGINATION TYPE - SPRING BOOT Page<T> FORMAT
+═══════════════════════════════════════════════════════════════════════════════
+
+ALWAYS plan frontend PageResponse to match Spring Boot's Page<T>:
+
+Frontend types/index.ts MUST include:
+```typescript
+interface PageResponse<T> {
+  content: T[];           // NOT 'data', 'items', or entity name
+  totalElements: number;  // NOT 'total', 'count'
+  totalPages: number;
+  number: number;         // NOT 'page', 'currentPage' (0-indexed!)
+  size: number;
+  first: boolean;
+  last: boolean;
+  empty: boolean;
+}
+```
+
+❌ WRONG - DO NOT PLAN THESE:
+```typescript
+interface EmployeeListResponse {
+  employees: Employee[];  // WRONG!
+  total: number;          // WRONG!
+  page: number;           // WRONG!
+}
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+API SERVICE PLANNING
+═══════════════════════════════════════════════════════════════════════════════
+
+Plan API service to handle pagination correctly:
+
+<file path="frontend/src/services/employeeService.ts" priority="20">
+  <description>
+    API service for Employee CRUD:
+    - getAll(page, size) returns PageResponse&lt;Employee&gt;
+    - getById(id) returns Employee
+    - create(data) returns Employee
+    - update(id, data) returns Employee
+    - delete(id) returns void
+
+    Uses PageResponse type with content, totalElements, number properties
+  </description>
+  <exports>employeeService</exports>
+</file>
+
+═══════════════════════════════════════════════════════════════════════════════
+MANDATORY CONFIGURATION FILES
+═══════════════════════════════════════════════════════════════════════════════
+
+1. VITE CONFIG with proxy:
+   <file path="frontend/vite.config.ts" priority="3">
+     <description>
+       Vite config with:
+       - React plugin
+       - Server host: 0.0.0.0, port: 3000
+       - HMR disabled for Docker
+       - Proxy: /api -> http://backend:8080
+     </description>
+   </file>
+
+2. VITE-ENV.D.TS (REQUIRED):
+   <file path="frontend/src/vite-env.d.ts" priority="4">
+     <description>
+       Vite environment types for import.meta.env:
+       - ImportMetaEnv with VITE_API_URL
+       - ImportMeta with env property
+     </description>
+   </file>
+
+3. CORS CONFIG:
+   <file path="backend/src/main/java/com/app/config/CorsConfig.java" priority="5">
+     <description>
+       Spring CORS configuration:
+       - Allow origins: localhost:3000, localhost:5173
+       - Allow methods: GET, POST, PUT, DELETE, PATCH
+       - Allow credentials: true
+     </description>
+   </file>
+
+4. DOCKER COMPOSE:
+   <file path="docker-compose.yml" priority="2">
+     <description>
+       Docker Compose for fullstack:
+       - backend service: Spring Boot on 8080
+       - frontend service: Vite on 3000, depends on backend
+       - db service: PostgreSQL on 5432 (if needed)
+     </description>
+   </file>
+
+═══════════════════════════════════════════════════════════════════════════════
+COMPONENT PROPS PLANNING
+═══════════════════════════════════════════════════════════════════════════════
+
+When planning components, explicitly list required props:
+
+<file path="frontend/src/components/EmployeeCard.tsx" priority="30">
+  <description>
+    Employee card component
+    Props: employee: Employee, onEdit: (e: Employee) => void, onDelete: (id: number) => void
+    Displays: firstName, lastName, email, department
+  </description>
+  <exports>EmployeeCard</exports>
+</file>
+
+<file path="frontend/src/pages/EmployeesPage.tsx" priority="40">
+  <description>
+    Employee list page
+    - Uses employeeService.getAll() for PageResponse&lt;Employee&gt;
+    - Accesses response.content for employee array
+    - Accesses response.totalElements for total count
+    - Accesses response.number for current page
+  </description>
+  <exports>EmployeesPage</exports>
+</file>
+
+═══════════════════════════════════════════════════════════════════════════════
+PLANNING CHECKLIST
+═══════════════════════════════════════════════════════════════════════════════
+
+Before finalizing the plan, verify:
+
+[ ] Backend entity has all required fields with getters/setters
+[ ] Backend DTO matches entity for API responses
+[ ] Frontend types/index.ts matches backend DTO property names
+[ ] PageResponse<T> uses: content, totalElements, number (Spring Boot format)
+[ ] vite-env.d.ts is included in files list
+[ ] vite.config.ts has proxy configuration
+[ ] CorsConfig.java is included
+[ ] API service methods use correct types
+[ ] Component props are explicitly documented
+[ ] docker-compose.yml connects frontend to backend

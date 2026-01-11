@@ -8435,6 +8435,15 @@ htmlcov
         if tech_prompt:
             full_prompt += f"\n\n{'='*60}\n{tech_name} SPECIFIC RULES:\n{'='*60}\n{tech_prompt}"
 
+        # Add fullstack integration rules for fullstack projects
+        # Detect fullstack by file path having frontend/ or backend/
+        is_fullstack = 'frontend/' in file_path or 'backend/' in file_path
+        if is_fullstack:
+            fullstack_prompt = load_prompt("writer_fullstack.txt")
+            if fullstack_prompt:
+                full_prompt += f"\n\n{'='*60}\nFULLSTACK INTEGRATION RULES:\n{'='*60}\n{fullstack_prompt}"
+                logger.info(f"[Writer] Added fullstack integration rules for {file_path}")
+
         # Log optimization
         token_estimate = len(full_prompt) // 4
         logger.info(f"[Writer] Dynamic prompt for {file_path}: ~{token_estimate} tokens (vs ~50k with old prompt)")

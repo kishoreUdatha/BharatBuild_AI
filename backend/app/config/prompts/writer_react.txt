@@ -20,8 +20,12 @@ BUILD-CRITICAL - THESE CAUSE 90% OF FAILURES:
    - Types/Interfaces: Always camelCase
    - Variables: Always camelCase
 
-4. VITE ENV TYPES - Create vite-env.d.ts:
+4. VITE ENV TYPES - ⚠️ MUST CREATE src/vite-env.d.ts:
+   This file is REQUIRED for import.meta.env to work!
+   Without it: error TS2339: Property 'env' does not exist on type 'ImportMeta'
+
    ```typescript
+   // src/vite-env.d.ts - ALWAYS CREATE THIS FILE!
    /// <reference types="vite/client" />
    interface ImportMetaEnv {
      readonly VITE_API_URL: string;
@@ -30,6 +34,11 @@ BUILD-CRITICAL - THESE CAUSE 90% OF FAILURES:
      readonly env: ImportMetaEnv;
    }
    ```
+
+   ⚠️ MANDATORY FILES for Vite projects:
+   - src/vite-env.d.ts (for import.meta.env)
+   - tsconfig.json (with correct settings)
+   - vite.config.ts
 
 5. ONLY IMPORT WHAT YOU USE!
    ❌ WRONG: import { Home, Settings, User } // but only use Home
@@ -143,6 +152,38 @@ RULE: Before writing ANY component, check types/index.ts!
    - API response shape must match your types
    - If API uses snake_case, transform to camelCase
    - All properties used in components must exist in types
+
+5. SPRING BOOT PAGE FORMAT (for Java fullstack projects):
+   When backend uses Spring Boot, pagination returns Page<T> format.
+   Your types MUST match exactly:
+
+   ```typescript
+   // ✅ CORRECT - matches Spring Boot Page<T>
+   interface PageResponse<T> {
+     content: T[];           // Array of items
+     totalElements: number;  // Total count
+     totalPages: number;     // Total pages
+     number: number;         // Current page (0-indexed!)
+     size: number;           // Page size
+     first: boolean;         // Is first page
+     last: boolean;          // Is last page
+   }
+
+   // Usage in service:
+   const response = await api.get<PageResponse<Employee>>('/api/employees');
+   setEmployees(response.content);
+   setTotalPages(response.totalPages);
+   setCurrentPage(response.number);
+   ```
+
+   ❌ WRONG - custom names that don't match backend:
+   ```typescript
+   interface EmployeeListResponse {
+     employees: Employee[];  // WRONG! Spring uses 'content'
+     total: number;          // WRONG! Spring uses 'totalElements'
+     page: number;           // WRONG! Spring uses 'number'
+   }
+   ```
 
 ⚠️ PROPERTY NAME RULES (Prevents TS2339 errors):
 
