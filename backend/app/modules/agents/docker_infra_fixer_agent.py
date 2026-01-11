@@ -1075,44 +1075,36 @@ class DockerInfraFixerAgent:
                 filename = source_path.split('/')[-1].lower()
 
                 if 'nginx.conf' in filename:
-                    # Create default nginx.conf for reverse proxy
-                    nginx_config = '''events {
-    worker_connections 1024;
-}
+                    # Create nginx.conf for serving static files (Vite/React production build)
+                    # This serves /usr/share/nginx/html with SPA fallback and proxies /api to backend
+                    nginx_config = '''server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
 
-http {
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
-
-    upstream frontend {
-        server frontend:3000;
+    # Frontend routes - serve static files with SPA fallback
+    location / {
+        try_files $uri $uri/ /index.html;
     }
 
-    upstream backend {
-        server backend:8080;
+    # API proxy - forward /api/* requests to backend container
+    location /api/ {
+        proxy_pass http://backend:8080/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        proxy_read_timeout 86400;
     }
 
-    server {
-        listen 80;
-        server_name localhost;
-
-        location / {
-            proxy_pass http://frontend;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection 'upgrade';
-            proxy_set_header Host $host;
-            proxy_cache_bypass $http_upgrade;
-        }
-
-        location /api {
-            proxy_pass http://backend;
-            proxy_http_version 1.1;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        }
-    }
+    # Gzip compression
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml;
 }
 '''
                     # Write using base64 to handle special chars
@@ -1532,44 +1524,36 @@ http {
         filename_lower = filename.lower()
 
         # Default content templates for common files
+        # nginx.conf serves static files from /usr/share/nginx/html with SPA fallback
         DEFAULT_CONTENTS = {
-            'nginx.conf': '''events {
-    worker_connections 1024;
-}
+            'nginx.conf': '''server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
 
-http {
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
-
-    upstream frontend {
-        server frontend:3000;
+    # Frontend routes - serve static files with SPA fallback
+    location / {
+        try_files $uri $uri/ /index.html;
     }
 
-    upstream backend {
-        server backend:8080;
+    # API proxy - forward /api/* requests to backend container
+    location /api/ {
+        proxy_pass http://backend:8080/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        proxy_read_timeout 86400;
     }
 
-    server {
-        listen 80;
-        server_name localhost;
-
-        location / {
-            proxy_pass http://frontend;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection 'upgrade';
-            proxy_set_header Host $host;
-            proxy_cache_bypass $http_upgrade;
-        }
-
-        location /api {
-            proxy_pass http://backend;
-            proxy_http_version 1.1;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        }
-    }
+    # Gzip compression
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml;
 }
 ''',
             '.env': '# Environment variables\n',
