@@ -2385,16 +2385,18 @@ class ContainerExecutor:
         # Wait for services to be ready and verify they stay running
         yield f"\n  ⏳ Verifying services are healthy...\n"
 
-        # Simple command - just list all containers, filter in Python
-        check_cmd = "docker ps -a --format 'table {{.Names}}\t{{.Status}}'"
+        # Use docker-compose ps to get containers for THIS project specifically
+        # This works regardless of explicit container_name settings in docker-compose.yml
+        check_cmd = f"docker-compose -p {project_name} -f {compose_file} ps --format 'table {{{{.Name}}}}\t{{{{.Status}}}}'"
 
         # Quick initial check (5s) to catch immediate startup failures
         yield f"  ⏳ Initial startup check (5s)...\n"
         await asyncio.sleep(5)
 
         exit_code, ps_output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
+        # docker-compose ps returns all containers for the project, filter out header line
         project_lines = [line for line in (ps_output.strip().split('\n') if ps_output else [])
-                        if project_name.lower() in line.lower()]
+                        if line.strip() and not line.startswith('NAME') and not line.startswith('---')]
 
         if not project_lines:
             yield f"  ⚠️ No containers started for project {project_name}\n"
@@ -2417,7 +2419,14 @@ class ContainerExecutor:
                 parts = line.split()
                 if parts:
                     container_name = parts[0]
-                    service_name = container_name.replace(f"{project_name}_", "").rsplit("_", 1)[0]
+                    # Extract service name - handle both default naming (project_service_1) and explicit names
+                    if f"{project_name}_" in container_name:
+                        service_name = container_name.replace(f"{project_name}_", "").rsplit("_", 1)[0]
+                    elif "-" in container_name:
+                        # Explicit name like "employee-backend" -> extract "backend"
+                        service_name = container_name.split("-")[-1]
+                    else:
+                        service_name = container_name
                     if "Up" in line:
                         yield f"     ✅ {service_name}: Running\n"
                         running_count += 1
@@ -2492,14 +2501,16 @@ class ContainerExecutor:
             yield f"\n  ⏳ Initializing containers...\n"
             await asyncio.sleep(5)
 
-            # Get all containers for this project
+            # Get all containers for this project (docker-compose ps returns only project containers)
             exit_code, ps_output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
             if exit_code != 0 or not ps_output:
                 yield f"  ⚠️ Failed to get container status\n"
                 failure_detected = True
             else:
                 output_lines = ps_output.strip().split('\n') if ps_output else []
-                project_lines = [line for line in output_lines if project_name.lower() in line.lower()]
+                # Filter out header lines - docker-compose ps returns project containers only
+                project_lines = [line for line in output_lines
+                               if line.strip() and not line.startswith('NAME') and not line.startswith('---')]
 
             if not project_lines and not failure_detected:
                 yield f"  ⚠️ No containers found for {project_name}\n"
@@ -2513,7 +2524,14 @@ class ContainerExecutor:
                     if not parts:
                         continue
                     container_name = parts[0]
-                    service_name = container_name.replace(f"{project_name}_", "").rsplit("_", 1)[0]
+                    # Extract service name - handle both default naming (project_service_1) and explicit names
+                    if f"{project_name}_" in container_name:
+                        service_name = container_name.replace(f"{project_name}_", "").rsplit("_", 1)[0]
+                    elif "-" in container_name:
+                        # Explicit name like "employee-backend" -> extract "backend"
+                        service_name = container_name.split("-")[-1]
+                    else:
+                        service_name = container_name
 
                     # Find matching config
                     config = DEFAULT_CONFIG.copy()
