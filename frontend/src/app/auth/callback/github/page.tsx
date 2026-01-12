@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { apiClient } from '@/lib/api-client'
+import { setAccessToken } from '@/lib/auth-utils'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Loader2, CheckCircle, AlertCircle } from 'lucide-react'
@@ -59,8 +60,8 @@ function GitHubCallbackContent() {
         localStorage.removeItem('bharatbuild-project-storage')
         localStorage.removeItem('bharatbuild-chat-storage')
 
-        // Store tokens
-        localStorage.setItem('access_token', response.access_token)
+        // Store tokens (localStorage + cookie for iframe preview access)
+        setAccessToken(response.access_token)
         localStorage.setItem('refresh_token', response.refresh_token)
 
         // Clean up session storage

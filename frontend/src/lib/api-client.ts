@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from 'axios'
+import { setAccessToken, removeAccessToken } from './auth-utils'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
 
@@ -46,7 +47,8 @@ class ApiClient {
                   { headers: { 'Content-Type': 'application/json' } }
                 )
                 if (response.data?.access_token) {
-                  localStorage.setItem('access_token', response.data.access_token)
+                  // Update token in both localStorage and cookie
+                  setAccessToken(response.data.access_token)
                   // Retry the original request with new token
                   error.config.headers.Authorization = `Bearer ${response.data.access_token}`
                   return this.axiosInstance.request(error.config)
@@ -57,7 +59,7 @@ class ApiClient {
               }
             }
             // No refresh token or refresh failed - logout
-            localStorage.removeItem('access_token')
+            removeAccessToken()
             localStorage.removeItem('refresh_token')
             window.location.href = '/login'
           }

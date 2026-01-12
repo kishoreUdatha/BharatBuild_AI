@@ -56,7 +56,12 @@ async def get_user_id_from_request(request: Request) -> Optional[str]:
     """
     Extract user ID from JWT token in request.
     Returns None if not authenticated (for anonymous/public access check).
+
+    Checks in order:
+    1. Authorization header (Bearer token)
+    2. Cookie (access_token) - for iframe/browser access
     """
+    # First check Authorization header
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
         try:
@@ -65,6 +70,16 @@ async def get_user_id_from_request(request: Request) -> Optional[str]:
             return payload.get("sub")
         except Exception:
             pass
+
+    # Fallback to cookie-based auth (for iframe preview access)
+    cookie_token = request.cookies.get("access_token")
+    if cookie_token:
+        try:
+            payload = decode_token(cookie_token)
+            return payload.get("sub")
+        except Exception:
+            pass
+
     return None
 
 
