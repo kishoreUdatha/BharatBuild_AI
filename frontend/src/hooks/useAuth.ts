@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import { setAccessToken, removeAccessToken } from '@/lib/auth-utils'
 
 interface User {
   id: string
@@ -99,7 +100,8 @@ export function useAuth(): UseAuthReturn {
         // This prevents user isolation issues where user B sees user A's projects
         localStorage.removeItem('bharatbuild-project-storage')
         localStorage.removeItem('bharatbuild-chat-storage')
-        localStorage.setItem('access_token', data.access_token)
+        // Set token in both localStorage and cookie (cookie needed for iframe preview)
+        setAccessToken(data.access_token)
         if (data.refresh_token) {
           localStorage.setItem('refresh_token', data.refresh_token)
         }
@@ -115,8 +117,8 @@ export function useAuth(): UseAuthReturn {
 
   // Logout function - clears ALL user-specific localStorage data
   const logout = useCallback(() => {
-    // Auth tokens
-    localStorage.removeItem('access_token')
+    // Auth tokens (removes from both localStorage and cookie)
+    removeAccessToken()
     localStorage.removeItem('refresh_token')
     localStorage.removeItem('user')
     // Theme preferences

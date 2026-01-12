@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { apiClient } from '@/lib/api-client'
+import { setAccessToken } from '@/lib/auth-utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -60,8 +61,8 @@ export default function LoginPage() {
     try {
       const response = await apiClient.login(email, password)
 
-      // Store tokens in localStorage
-      localStorage.setItem('access_token', response.access_token)
+      // Store tokens (localStorage + cookie for iframe preview access)
+      setAccessToken(response.access_token)
       localStorage.setItem('refresh_token', response.refresh_token)
 
       // Store user info if available

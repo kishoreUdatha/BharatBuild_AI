@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { apiClient } from '@/lib/api-client'
+import { setAccessToken } from '@/lib/auth-utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -193,8 +194,8 @@ export default function RegisterPage() {
       // Automatically log in after registration
       const loginResponse = await apiClient.login(formData.email, formData.password)
 
-      // Store tokens
-      localStorage.setItem('access_token', loginResponse.access_token)
+      // Store tokens (localStorage + cookie for iframe preview access)
+      setAccessToken(loginResponse.access_token)
       localStorage.setItem('refresh_token', loginResponse.refresh_token)
 
       // Redirect to build
