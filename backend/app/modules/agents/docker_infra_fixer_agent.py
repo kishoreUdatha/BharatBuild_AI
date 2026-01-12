@@ -1833,10 +1833,217 @@ http {{
                 message=f"Missing {missing_file} - remove wrapper COPY from Dockerfile and use mvn/gradle directly"
             )
 
+        # For nginx.conf, convert Dockerfile to dev mode (student projects don't need production)
+        if 'nginx.conf' in missing_file.lower():
+            return await self._convert_nginx_to_dev_mode(error_message, project_path, sandbox_runner)
+
         return FixResult(
             success=False,
             message=f"COPY failed for {missing_file} - file not found in build context"
         )
+
+    async def _convert_nginx_to_dev_mode(self, error_message: str, project_path: str, sandbox_runner: callable) -> FixResult:
+        """
+        Convert nginx-based Dockerfile to dev mode (recommended approach).
+
+        Dev mode is better because:
+        - Hot reload for instant feedback
+        - No build step needed
+        - Simpler (no nginx.conf required)
+
+        Returns success if Dockerfile was converted, failure if not applicable.
+        """
+        try:
+            # Find the Dockerfile with nginx
+            dockerfile_paths = [
+                f"{project_path}/frontend/Dockerfile",
+                f"{project_path}/client/Dockerfile",
+                f"{project_path}/web/Dockerfile",
+                f"{project_path}/Dockerfile",
+            ]
+
+            # Also check error message for hints
+            if 'frontend' in error_message.lower():
+                dockerfile_paths.insert(0, f"{project_path}/frontend/Dockerfile")
+
+            for dockerfile_path in dockerfile_paths:
+                content = self._read_file_from_sandbox(dockerfile_path, sandbox_runner)
+                if not content:
+                    continue
+
+                # Check if this is a nginx-based Dockerfile
+                if 'nginx' not in content.lower():
+                    continue
+
+                # Check if it's a React/Vite/Node frontend (has package.json)
+                dir_path = '/'.join(dockerfile_path.split('/')[:-1])
+                package_json = self._read_file_from_sandbox(f"{dir_path}/package.json", sandbox_runner)
+                if not package_json:
+                    continue
+
+                # Detect the dev command and port
+                dev_port = "5173"  # Vite default
+                dev_cmd = 'npm run dev -- --host 0.0.0.0'
+
+                if '"next"' in package_json:
+                    dev_port = "3000"
+                    dev_cmd = 'npm run dev -- --hostname 0.0.0.0'
+                elif '"vue"' in package_json or '"@vue' in package_json:
+                    dev_port = "5173"
+                    dev_cmd = 'npm run dev -- --host 0.0.0.0'
+                elif '"svelte"' in package_json or '"@sveltejs' in package_json:
+                    dev_port = "5173"
+                    dev_cmd = 'npm run dev -- --host 0.0.0.0'
+                # Default is Vite/React
+
+                # Create dev mode Dockerfile
+                dev_dockerfile = f'''FROM node:20
+WORKDIR /app
+
+# Install dependencies
+COPY package*.json ./
+RUN npm install
+
+# Copy source files
+COPY . .
+
+# Expose dev server port
+EXPOSE {dev_port}
+
+# Start development server with host binding for Docker
+CMD ["/bin/sh", "-c", "{dev_cmd}"]
+'''
+
+                # Write the new Dockerfile
+                import base64
+                encoded = base64.b64encode(dev_dockerfile.encode()).decode()
+                exit_code, output = sandbox_runner(f'echo "{encoded}" | base64 -d > "{dockerfile_path}"', None, 10)
+
+                if exit_code == 0:
+                    logger.info(f"[DockerInfraFixer] Converted {dockerfile_path} to dev mode (removed nginx)")
+                    return FixResult(
+                        success=True,
+                        message=f"Converted Dockerfile to dev mode (hot reload enabled) at {dockerfile_path}",
+                        file_modified=dockerfile_path
+                    )
+
+            # No nginx Dockerfile found to convert
+            return FixResult(
+                success=False,
+                message="No nginx Dockerfile found to convert to dev mode"
+            )
+
+        except Exception as e:
+            logger.error(f"[DockerInfraFixer] Error converting to dev mode: {e}")
+            return FixResult(
+                success=False,
+                message=f"Error converting to dev mode: {e}"
+            )
+
+    async def _create_nginx_conf_in_build_context(self, error_message: str, project_path: str, sandbox_runner: callable) -> FixResult:
+        """
+        Create nginx.conf in the build context for Dockerfile COPY.
+
+        This is a FALLBACK for when dev mode conversion fails.
+        Creates nginx.conf for production builds that require nginx.
+        """
+        try:
+            # Determine the build context by checking which Dockerfile is being built
+            # Error message may contain hints like "frontend" or service name
+            build_context = project_path  # Default to project root
+
+            # Check common frontend locations
+            frontend_paths = [
+                f"{project_path}/frontend",
+                f"{project_path}/client",
+                f"{project_path}/web",
+            ]
+
+            for frontend_path in frontend_paths:
+                # Check if this path has a Dockerfile with nginx
+                dockerfile_path = f"{frontend_path}/Dockerfile"
+                dockerfile_content = self._read_file_from_sandbox(dockerfile_path, sandbox_runner)
+                if dockerfile_content and 'nginx' in dockerfile_content.lower():
+                    build_context = frontend_path
+                    break
+
+            # Also check if error mentions a specific service/path
+            if 'frontend' in error_message.lower():
+                build_context = f"{project_path}/frontend"
+            elif 'client' in error_message.lower():
+                build_context = f"{project_path}/client"
+
+            # Detect backend port for API proxy
+            backend_port = self._detect_backend_port(project_path, sandbox_runner)
+
+            # Create nginx.conf for serving static files (Vite/React production build)
+            nginx_config = f'''events {{
+    worker_connections 1024;
+}}
+
+http {{
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    # Gzip compression
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml;
+
+    server {{
+        listen 80;
+        server_name _;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        # Frontend routes - serve static files with SPA fallback
+        location / {{
+            try_files $uri $uri/ /index.html;
+        }}
+
+        # API proxy - forward /api/* requests to backend container
+        location /api/ {{
+            proxy_pass http://backend:{backend_port}/api/;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection 'upgrade';
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_cache_bypass $http_upgrade;
+            proxy_read_timeout 86400;
+        }}
+    }}
+}}
+'''
+            # Write nginx.conf to the build context
+            nginx_conf_path = f"{build_context}/nginx.conf"
+
+            # Write using base64 to handle special chars
+            import base64
+            encoded = base64.b64encode(nginx_config.encode()).decode()
+            exit_code, output = sandbox_runner(f'echo "{encoded}" | base64 -d > "{nginx_conf_path}"', None, 10)
+
+            if exit_code == 0:
+                logger.info(f"[DockerInfraFixer] Created nginx.conf at {nginx_conf_path}")
+                return FixResult(
+                    success=True,
+                    message=f"Created nginx.conf at {nginx_conf_path}",
+                    file_modified=nginx_conf_path
+                )
+            else:
+                logger.error(f"[DockerInfraFixer] Failed to create nginx.conf: {output}")
+                return FixResult(
+                    success=False,
+                    message=f"Failed to create nginx.conf: {output}"
+                )
+
+        except Exception as e:
+            logger.error(f"[DockerInfraFixer] Error creating nginx.conf: {e}")
+            return FixResult(
+                success=False,
+                message=f"Error creating nginx.conf: {e}"
+            )
 
     # ========================================================================
     # DOCKER-COMPOSE FIXES
