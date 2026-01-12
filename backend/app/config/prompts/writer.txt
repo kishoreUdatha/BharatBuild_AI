@@ -3072,6 +3072,12 @@ end
                          🐳 DOCKER GUIDELINES
 ═══════════════════════════════════════════════════════════════════════════════
 
+🚨 CRITICAL - ALWAYS USE DEV MODE FOR FRONTEND DOCKERFILES:
+- ALWAYS use dev server (npm run dev) for frontend Dockerfiles - NEVER nginx!
+- This is a STUDENT platform - dev mode with hot reload is required
+- NEVER use nginx, multi-stage builds, or production builds for frontend
+- Dev mode = instant feedback, hot reload, faster learning
+
 ⚠️ CRITICAL: Use node:20 (NOT node:20-alpine) for Vite/React projects!
 Alpine Linux has esbuild compatibility issues that cause "The service was stopped" errors.
 
