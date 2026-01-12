@@ -716,13 +716,15 @@ async def get_container_internal_address(project_id: str) -> Optional[tuple[str,
 
             # Fallback: Search by container name pattern for docker-compose containers
             # Docker-compose creates containers like: bharatbuild_{project_id[:8]}_frontend_1
+            # OR with explicit container_name like: employee-frontend
             if not containers:
                 project_prefix = project_id[:8]
-                logger.info(f"[Preview] No labeled container found, searching by name pattern: bharatbuild_{project_prefix}_*")
+                logger.info(f"[Preview] No labeled container found, searching by name/network pattern")
                 all_containers = docker_client.containers.list(filters={"status": "running"})
+
                 for c in all_containers:
+                    # Check 1: Default docker-compose naming (project_service_1)
                     if f"bharatbuild_{project_prefix}" in c.name:
-                        # Prefer frontend container for preview
                         if "frontend" in c.name:
                             containers = [c]
                             logger.info(f"[Preview] Found docker-compose frontend container: {c.name}")
@@ -730,6 +732,20 @@ async def get_container_internal_address(project_id: str) -> Optional[tuple[str,
                         elif not containers:
                             containers = [c]
                             logger.info(f"[Preview] Found docker-compose container: {c.name}")
+
+                    # Check 2: Container is on project's network (handles explicit container_name)
+                    # Docker-compose creates network: bharatbuild_{project_prefix}_*
+                    elif not containers:
+                        networks = c.attrs.get('NetworkSettings', {}).get('Networks', {})
+                        for net_name in networks.keys():
+                            if f"bharatbuild_{project_prefix}" in net_name:
+                                if "frontend" in c.name:
+                                    containers = [c]
+                                    logger.info(f"[Preview] Found container by network {net_name}: {c.name}")
+                                    break
+                                elif not containers:
+                                    containers = [c]
+                                    logger.info(f"[Preview] Found container by network {net_name}: {c.name}")
 
             if not containers:
                 logger.warning(f"[Preview] No running container found for {project_id}")
