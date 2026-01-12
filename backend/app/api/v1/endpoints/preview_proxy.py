@@ -109,6 +109,82 @@ async def verify_preview_access(
 # RESPONSE REWRITING - Fix absolute paths in HTML/JS for path-based proxying
 # =============================================================================
 
+def get_router_base_fix_script(project_id: str) -> str:
+    """
+    Generate a script that fixes React Router / Vue Router path issues.
+
+    Problem: Browser URL is /api/v1/preview/{project_id}/ but app routes expect /
+    Solution: Use history.replaceState to make React Router see / instead of the full path
+
+    This script:
+    1. Replaces initial URL state to strip preview prefix
+    2. Patches pushState/replaceState to handle prefix transparently
+    """
+    prefix = f"/api/v1/preview/{project_id}"
+    return f'''<script data-bb-router-fix="true">
+(function() {{
+  // Prevent double-injection
+  if (window.__bbRouterFixLoaded) return;
+  window.__bbRouterFixLoaded = true;
+
+  var PREFIX = "{prefix}";
+
+  // Strip prefix from path for router
+  function stripPrefix(path) {{
+    if (path && path.startsWith(PREFIX)) {{
+      var stripped = path.slice(PREFIX.length) || "/";
+      return stripped;
+    }}
+    return path;
+  }}
+
+  // Add prefix to path for browser
+  function addPrefix(path) {{
+    if (path && !path.startsWith(PREFIX) && !path.startsWith("http")) {{
+      return PREFIX + (path.startsWith("/") ? path : "/" + path);
+    }}
+    return path;
+  }}
+
+  // Fix initial URL - make router see "/" instead of "/api/v1/preview/xxx/"
+  try {{
+    var currentPath = window.location.pathname;
+    var strippedPath = stripPrefix(currentPath);
+    if (strippedPath !== currentPath) {{
+      // Replace state without triggering navigation
+      window.history.replaceState(
+        window.history.state,
+        "",
+        strippedPath + window.location.search + window.location.hash
+      );
+    }}
+  }} catch (e) {{
+    console.warn("[BharatBuild] Router fix: initial state error", e);
+  }}
+
+  // Patch pushState to handle prefix
+  var originalPushState = window.history.pushState;
+  window.history.pushState = function(state, title, url) {{
+    if (url) {{
+      url = addPrefix(url);
+    }}
+    return originalPushState.call(this, state, title, url);
+  }};
+
+  // Patch replaceState to handle prefix
+  var originalReplaceState = window.history.replaceState;
+  window.history.replaceState = function(state, title, url) {{
+    if (url) {{
+      url = addPrefix(url);
+    }}
+    return originalReplaceState.call(this, state, title, url);
+  }};
+
+  console.log("[BharatBuild] Router fix active for: " + PREFIX);
+}})();
+</script>'''
+
+
 def get_error_capture_script(project_id: str) -> str:
     """
     Generate the browser error capture script to inject into HTML responses.
@@ -435,6 +511,29 @@ def rewrite_absolute_paths(content: bytes, project_id: str, content_type: str) -
             lambda m: f"{m.group(1)}='{prefix}{m.group(2)}'" if not m.group(2).startswith(prefix) else m.group(0),
             text
         )
+
+        # ROUTER FIX: Inject script to fix React Router / Vue Router path issues
+        # Must be injected FIRST (before app loads) to fix initial URL
+        if 'data-bb-router-fix' not in text:
+            router_script = get_router_base_fix_script(project_id)
+            # Inject at the START of <head> so it runs before any other scripts
+            if '<head>' in text:
+                text = text.replace('<head>', f'<head>{router_script}')
+            elif '<head ' in text:
+                # Head with attributes
+                head_match = re.search(r'<head[^>]*>', text)
+                if head_match:
+                    insert_pos = head_match.end()
+                    text = text[:insert_pos] + router_script + text[insert_pos:]
+            elif '<body' in text:
+                # No head, inject before body
+                body_match = re.search(r'<body[^>]*>', text)
+                if body_match:
+                    text = text[:body_match.start()] + router_script + text[body_match.start():]
+            else:
+                # No head or body, prepend
+                text = router_script + text
+            logger.debug(f"[Preview] Injected router fix script for {project_id}")
 
         # BROWSER ERROR CAPTURE: Inject error capture script into HTML responses
         # This captures JS errors, 404s, network errors and sends them to the auto-fixer
