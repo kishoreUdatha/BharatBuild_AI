@@ -2394,9 +2394,14 @@ class ContainerExecutor:
         await asyncio.sleep(5)
 
         exit_code, ps_output = self._run_shell_on_sandbox(check_cmd, working_dir=project_path, timeout=30)
-        # docker-compose ps returns all containers for the project, filter out header line
+        # docker-compose ps returns all containers for the project, filter out header lines and log noise
         project_lines = [line for line in (ps_output.strip().split('\n') if ps_output else [])
-                        if line.strip() and not line.startswith('NAME') and not line.startswith('---')]
+                        if line.strip()
+                        and not line.startswith('NAME')
+                        and not line.startswith('---')
+                        and 'time=' not in line  # Filter out docker log timestamps
+                        and 'level=' not in line  # Filter out docker log levels
+                        and not line.startswith('time=')]  # Filter timestamp lines
 
         if not project_lines:
             yield f"  ⚠️ No containers started for project {project_name}\n"
@@ -2508,9 +2513,14 @@ class ContainerExecutor:
                 failure_detected = True
             else:
                 output_lines = ps_output.strip().split('\n') if ps_output else []
-                # Filter out header lines - docker-compose ps returns project containers only
+                # Filter out header lines and log noise - docker-compose ps returns project containers only
                 project_lines = [line for line in output_lines
-                               if line.strip() and not line.startswith('NAME') and not line.startswith('---')]
+                               if line.strip()
+                               and not line.startswith('NAME')
+                               and not line.startswith('---')
+                               and 'time=' not in line  # Filter docker log timestamps
+                               and 'level=' not in line  # Filter docker log levels
+                               and not line.startswith('time=')]
 
             if not project_lines and not failure_detected:
                 yield f"  ⚠️ No containers found for {project_name}\n"
