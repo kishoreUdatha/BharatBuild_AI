@@ -91,63 +91,18 @@ async def verify_preview_access(
     """
     Verify user has access to preview this project.
 
-    SECURITY: Prevents unauthorized access to other users' running projects.
+    For student platform: ALL previews are PUBLIC by design.
+    Students can share their project previews with teachers, classmates, etc.
 
-    Access is granted if:
-    1. User owns the project (user_id matches)
-    2. Project has no owner (anonymous/legacy project)
-    3. Project is marked as public (future feature)
+    The container itself provides isolation - only the running preview is accessible,
+    not the source code or other project data.
 
-    Returns True if access is allowed, False otherwise.
+    Returns True always to allow public preview access.
     """
-    user_id = await get_user_id_from_request(request)
-
-    try:
-        # Validate project_id format
-        try:
-            project_uuid = UUID(project_id)
-        except (ValueError, TypeError):
-            # Invalid UUID format - might be a legacy project ID
-            # Allow access for backwards compatibility with non-UUID project IDs
-            logger.debug(f"[Preview Security] Non-UUID project_id: {project_id}, allowing access")
-            return True
-
-        # Query project
-        result = await db.execute(
-            select(Project).where(Project.id == project_uuid)
-        )
-        project = result.scalar_one_or_none()
-
-        if not project:
-            # Project not in DB - might be anonymous/temporary
-            # Allow access (container manager will handle 404)
-            logger.debug(f"[Preview Security] Project not in DB: {project_id}, allowing access")
-            return True
-
-        # Check ownership
-        if project.user_id is None:
-            # Anonymous project - allow access
-            logger.debug(f"[Preview Security] Anonymous project: {project_id}, allowing access")
-            return True
-
-        if user_id and str(project.user_id) == user_id:
-            # User owns the project
-            logger.debug(f"[Preview Security] Owner access: {project_id} by {user_id}")
-            return True
-
-        # Check if project is public (future feature)
-        if hasattr(project, 'is_public') and project.is_public:
-            logger.debug(f"[Preview Security] Public project: {project_id}")
-            return True
-
-        # Access denied
-        logger.warning(f"[Preview Security] Access denied: user {user_id} tried to access project {project_id} owned by {project.user_id}")
-        return False
-
-    except Exception as e:
-        logger.error(f"[Preview Security] Error verifying access: {e}")
-        # Fail open for backwards compatibility (but log the error)
-        return True
+    # Student platform: All previews are public for easy sharing
+    # Students can share preview URLs with teachers, classmates, portfolio viewers
+    logger.debug(f"[Preview Security] Public access allowed for project: {project_id}")
+    return True
 
 
 # =============================================================================

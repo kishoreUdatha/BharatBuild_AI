@@ -1921,6 +1921,11 @@ CMD ["/bin/sh", "-c", "{dev_cmd}"]
 
                 if exit_code == 0:
                     logger.info(f"[DockerInfraFixer] Converted {dockerfile_path} to dev mode (removed nginx)")
+
+                    # Also update nginx.conf if there's a separate nginx service
+                    # This makes nginx proxy to frontend dev server instead of serving static files
+                    await self._update_nginx_conf_for_dev_mode(project_path, dev_port, sandbox_runner)
+
                     return FixResult(
                         success=True,
                         message=f"Converted Dockerfile to dev mode (hot reload enabled) at {dockerfile_path}",
@@ -1939,6 +1944,107 @@ CMD ["/bin/sh", "-c", "{dev_cmd}"]
                 success=False,
                 message=f"Error converting to dev mode: {e}"
             )
+
+    async def _update_nginx_conf_for_dev_mode(self, project_path: str, frontend_port: str, sandbox_runner: callable) -> bool:
+        """
+        Update nginx.conf to proxy to frontend dev server instead of serving static files.
+
+        This is needed when:
+        - Frontend Dockerfile is converted to dev mode
+        - There's a separate nginx service acting as reverse proxy
+        - nginx needs to proxy to frontend:{frontend_port} instead of serving /usr/share/nginx/html
+
+        Args:
+            project_path: Path to project
+            frontend_port: Port the frontend dev server runs on (e.g., "5173")
+            sandbox_runner: Function to run commands
+
+        Returns:
+            True if nginx.conf was updated, False otherwise
+        """
+        try:
+            # Common nginx.conf locations in fullstack projects
+            nginx_conf_paths = [
+                f"{project_path}/docker/nginx/nginx.conf",
+                f"{project_path}/nginx/nginx.conf",
+                f"{project_path}/nginx.conf",
+            ]
+
+            for nginx_conf_path in nginx_conf_paths:
+                content = self._read_file_from_sandbox(nginx_conf_path, sandbox_runner)
+                if not content:
+                    continue
+
+                logger.info(f"[DockerInfraFixer] Found nginx.conf at {nginx_conf_path}, updating for dev mode")
+
+                # Detect backend port from existing config
+                backend_port = "8080"  # Default
+                import re
+                backend_match = re.search(r'proxy_pass\s+http://backend:(\d+)', content)
+                if backend_match:
+                    backend_port = backend_match.group(1)
+
+                # Create new nginx.conf that proxies to frontend dev server
+                dev_nginx_conf = f'''events {{
+    worker_connections 1024;
+}}
+
+http {{
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    # Logging
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log;
+
+    server {{
+        listen 80;
+        server_name _;
+
+        # Frontend - proxy to dev server (hot reload)
+        location / {{
+            proxy_pass http://frontend:{frontend_port};
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            # WebSocket support for HMR (Hot Module Replacement)
+            proxy_read_timeout 86400;
+        }}
+
+        # Backend API
+        location /api/ {{
+            proxy_pass http://backend:{backend_port}/api/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }}
+    }}
+}}
+'''
+                # Write updated nginx.conf
+                import base64
+                encoded = base64.b64encode(dev_nginx_conf.encode()).decode()
+                exit_code, output = sandbox_runner(f'echo "{encoded}" | base64 -d > "{nginx_conf_path}"', None, 10)
+
+                if exit_code == 0:
+                    logger.info(f"[DockerInfraFixer] Updated {nginx_conf_path} to proxy to frontend:{frontend_port}")
+                    return True
+                else:
+                    logger.warning(f"[DockerInfraFixer] Failed to update {nginx_conf_path}: {output}")
+
+            logger.debug(f"[DockerInfraFixer] No nginx.conf found to update for dev mode")
+            return False
+
+        except Exception as e:
+            logger.warning(f"[DockerInfraFixer] Error updating nginx.conf for dev mode: {e}")
+            return False
 
     async def _create_nginx_conf_in_build_context(self, error_message: str, project_path: str, sandbox_runner: callable) -> FixResult:
         """
