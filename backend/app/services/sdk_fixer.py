@@ -41,32 +41,28 @@ class SDKFixer:
     - No truncation issues
     """
 
-    SYSTEM_PROMPT = """You are a Java code fixer. IMMEDIATELY call list_files - do NOT output text first.
+    SYSTEM_PROMPT = """You are a Java code fixer. Your ONLY job is to FIX files by calling write_file.
 
-MANDATORY WORKFLOW (call tools, don't explain):
-1. FIRST: list_files pattern="backend/**/*.java"
-2. THEN: read_file for each file mentioned in errors
-3. FINALLY: write_file with complete fixed content
+⚠️ CRITICAL: You MUST call write_file for EVERY file that has errors. Reading without writing = FAILURE.
 
-CRITICAL - NEVER ADD DUPLICATE METHODS:
-- If error says "method X is already defined" - REMOVE the duplicate method, don't add more
-- ALWAYS read_file BEFORE write_file to see existing methods
-- Check if method exists before adding it
-- If a method appears twice, keep only ONE
+WORKFLOW:
+1. list_files pattern="backend/**/*.java"
+2. read_file for files with errors
+3. write_file with COMPLETE fixed content (MANDATORY - do not skip!)
 
-CRITICAL JAVA FIXES TO APPLY:
-- Method signature mismatch: Controller calls service.method(a,b,c) but Service interface has method(x). FIX: Add method(a,b,c) to interface
-- Missing interface methods: ServiceImpl has methods that Service interface doesn't. FIX: Add to interface
-- Missing repository methods: findAverageSalary(), existsByEmail(), countByDepartment(). FIX: Add @Query methods
-- Missing DTO getters: getJoinDate(), etc. FIX: Add getter methods to DTO class
-- Lombok annotations: REMOVE @Data/@Getter/@Setter and add explicit getters/setters
-- Missing model fields: If getStockQuantity() missing, add field + getter + setter to entity
+AFTER EVERY read_file, you MUST call write_file with the fixed version.
+DO NOT end your turn until you have called write_file for all files with errors.
 
-SPRING BOOT 3.x - USE jakarta.* NOT javax.*:
-- import jakarta.persistence.* (NOT javax.persistence.*)
-- import jakarta.validation.* (NOT javax.validation.*)
+COMMON FIXES:
+- "cannot find symbol" for method → Add missing method to class/interface
+- "method X already defined" → REMOVE duplicate, keep only ONE
+- "package javax.* does not exist" → Change javax.* to jakarta.*
+- Missing getter/setter → Add explicit getter and setter methods
+- Missing @Query method → Add method with @Query annotation to repository
 
-START NOW: Call list_files immediately. Do not output any text.
+SPRING BOOT 3.x: Use jakarta.persistence.* and jakarta.validation.* (NOT javax.*)
+
+REMEMBER: Your success is measured by write_file calls, not read_file calls.
 """
 
     TOOLS = [
@@ -168,13 +164,18 @@ START NOW: Call list_files immediately. Do not output any text.
         # Initial message with build errors
         messages = [{
             "role": "user",
-            "content": f"""Fix these build errors by using write_file:
+            "content": f"""Fix these Java build errors. For EACH file with errors:
+1. read_file to see current content
+2. write_file with the COMPLETE fixed content
 
+You MUST call write_file - reading alone does NOT fix anything.
+
+ERRORS:
 ```
 {build_errors[:8000]}
 ```
 
-Use read_file then write_file for each file that needs fixing.
+Start now. Call list_files, then read_file, then write_file for each broken file.
 """
         }]
 
@@ -206,6 +207,20 @@ Use read_file then write_file for each file that needs fixing.
                     text_content = [b.text for b in response.content if hasattr(b, 'text')]
                     if text_content:
                         logger.warning(f"[SDKFixer] Claude ended without tools. Response: {text_content[0][:500]}")
+
+                    # If Claude read files but didn't write, nudge it to write
+                    if read_count > 0 and write_count == 0 and iteration < max_iterations - 1:
+                        logger.warning(f"[SDKFixer] Claude read {read_count} files but wrote 0. Nudging to write...")
+                        messages.append({
+                            "role": "assistant",
+                            "content": response.content
+                        })
+                        messages.append({
+                            "role": "user",
+                            "content": f"You read {read_count} files but wrote 0 fixes. You MUST call write_file now to fix the errors. Do not explain - just call write_file with the fixed content for each file that has errors."
+                        })
+                        continue  # Don't break, continue the loop
+
                     logger.info(f"[SDKFixer] Completed after {iteration + 1} iterations")
                     break
 
