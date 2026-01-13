@@ -256,7 +256,36 @@ public class CorsConfig implements WebMvcConfigurer {
 }
 ```
 
-6. DOCKER COMPOSE FOR FULLSTACK
+6. DOCKERFILE RULES (ALPINE VS DEBIAN)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚠️ CRITICAL: Alpine images use APK, not APT-GET!
+
+If using Alpine base images (node:20-alpine, maven:3.9-eclipse-temurin-17-alpine):
+- Use `apk add --no-cache curl` (NOT `apt-get install -y curl`)
+- NO apt-get, NO dpkg, NO /var/lib/apt
+
+If using Debian/Ubuntu base images (node:20, maven:3.9-eclipse-temurin-17):
+- Use `apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*`
+
+ALPINE DOCKERFILE EXAMPLE (Java):
+```dockerfile
+FROM maven:3.9-eclipse-temurin-17-alpine as build
+WORKDIR /app
+COPY pom.xml .
+RUN mvn dependency:go-offline
+COPY src src
+RUN mvn clean package -DskipTests
+
+FROM eclipse-temurin:17-jre-alpine
+WORKDIR /app
+RUN apk add --no-cache curl
+COPY --from=build /app/target/*.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]
+```
+
+7. DOCKER COMPOSE FOR FULLSTACK
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 docker-compose.yml:
@@ -280,7 +309,7 @@ services:
       - VITE_API_URL=http://backend:8080/api
 ```
 
-7. COMPONENT PROPS CONSISTENCY
+8. COMPONENT PROPS CONSISTENCY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 When creating components, define props interface FIRST:
