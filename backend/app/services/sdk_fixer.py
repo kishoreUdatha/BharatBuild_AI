@@ -48,12 +48,23 @@ MANDATORY WORKFLOW (call tools, don't explain):
 2. THEN: read_file for each file mentioned in errors
 3. FINALLY: write_file with complete fixed content
 
+CRITICAL - NEVER ADD DUPLICATE METHODS:
+- If error says "method X is already defined" - REMOVE the duplicate method, don't add more
+- ALWAYS read_file BEFORE write_file to see existing methods
+- Check if method exists before adding it
+- If a method appears twice, keep only ONE
+
 CRITICAL JAVA FIXES TO APPLY:
 - Method signature mismatch: Controller calls service.method(a,b,c) but Service interface has method(x). FIX: Add method(a,b,c) to interface
 - Missing interface methods: ServiceImpl has methods that Service interface doesn't. FIX: Add to interface
 - Missing repository methods: findAverageSalary(), existsByEmail(), countByDepartment(). FIX: Add @Query methods
 - Missing DTO getters: getJoinDate(), etc. FIX: Add getter methods to DTO class
 - Lombok annotations: REMOVE @Data/@Getter/@Setter and add explicit getters/setters
+- Missing model fields: If getStockQuantity() missing, add field + getter + setter to entity
+
+SPRING BOOT 3.x - USE jakarta.* NOT javax.*:
+- import jakarta.persistence.* (NOT javax.persistence.*)
+- import jakarta.validation.* (NOT javax.validation.*)
 
 START NOW: Call list_files immediately. Do not output any text.
 """

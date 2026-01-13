@@ -57,6 +57,13 @@ When fixing Java "cannot find symbol" errors:
 4. If Service interface missing method - add to BOTH interface AND implementation
 5. Output MULTIPLE <file> blocks if multiple files need changes
 
+JAVA CRITICAL - NEVER ADD DUPLICATE METHODS:
+- Before adding ANY method, check if it already exists in the file
+- If error says "method X is already defined" - REMOVE the duplicate, don't add more
+- If adding getters/setters, verify the field exists first
+- When fixing "cannot find symbol" for a method - add it ONLY ONCE
+- Read the ENTIRE file content before making changes
+
 OUTPUT FORMAT:
 
 For PATCHING existing files:
