@@ -15,6 +15,52 @@ CRITICAL RULES FOR STUDENT PROJECTS
 5. ALPINE Dockerfile uses apk (NOT apt-get)
 
 ═══════════════════════════════════════════════════════════════════════════════
+ENTITY FIELD SPECIFICATIONS (LAYER 2 - CRITICAL)
+═══════════════════════════════════════════════════════════════════════════════
+
+For EACH entity, you MUST define exact fields in a <entity_specs> section.
+This ensures Writer uses SAME field names across backend AND frontend.
+
+FORMAT (fill in based on project requirements):
+<entity_specs>
+ENTITY: {EntityName}
+BACKEND_FIELDS:
+  - id: Long (primary key)
+  - {field1}: {JavaType1}
+  - {field2}: {JavaType2}
+  - {field3}: {JavaType3}
+  - createdAt: LocalDateTime
+  - updatedAt: LocalDateTime
+FRONTEND_FIELDS:
+  - id: number
+  - {field1}: {tsType1}
+  - {field2}: {tsType2}
+  - {field3}: {tsType3}
+  - createdAt: string
+  - updatedAt: string
+TABLE: {table_name}
+API_PATH: /api/{entities}
+
+ENUM: {EnumName}
+VALUES: {VALUE1}, {VALUE2}, {VALUE3}
+</entity_specs>
+
+TYPE MAPPING (Java -> TypeScript):
+- Long, Integer, Double, BigDecimal -> number
+- String -> string
+- Boolean -> boolean
+- LocalDate, LocalDateTime -> string (ISO format)
+- List<T> -> T[]
+
+Writer will use these EXACT field names in:
+- Backend Entity class (private fields + getters + setters)
+- Backend DTO class (same fields)
+- Backend Service (convertToDto uses these field names)
+- Frontend types/index.ts (TypeScript interfaces)
+- Frontend services (API calls return these fields)
+- Frontend components (access these field names)
+
+═══════════════════════════════════════════════════════════════════════════════
 MANDATORY FILES FOR FULLSTACK PROJECTS
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -80,28 +126,72 @@ CRITICAL: TYPE SYNCHRONIZATION PLANNING
 ═══════════════════════════════════════════════════════════════════════════════
 
 When planning files, the types MUST be planned to match the backend exactly.
+Include EXACT FIELDS from <entity_specs> in each file description.
 
 1. PLAN BACKEND ENTITY FIRST:
-   <file path="backend/src/main/java/com/app/entity/Employee.java" priority="10">
-     <description>JPA entity with fields: id, firstName, lastName, email, department, salary, joinDate</description>
-     <exports>Employee</exports>
+   <file path="backend/src/main/java/com/{project}/model/{Entity}.java" priority="6">
+     <description>
+       JPA Entity for {table_name} table.
+       FIELDS: [copy BACKEND_FIELDS from entity_specs]
+       Include: @Entity, @Table, @Id, @GeneratedValue
+       Include: explicit getter and setter for EACH field
+       Include: no-arg constructor, @PrePersist, @PreUpdate
+     </description>
+     <exports>{Entity}</exports>
    </file>
 
 2. PLAN BACKEND DTO:
-   <file path="backend/src/main/java/com/app/dto/EmployeeDto.java" priority="11">
-     <description>DTO matching entity fields for API responses</description>
-     <exports>EmployeeDto</exports>
+   <file path="backend/src/main/java/com/{project}/dto/{Entity}Dto.java" priority="11">
+     <description>
+       DTO for {Entity} API responses.
+       FIELDS: [copy BACKEND_FIELDS from entity_specs]
+       SAME FIELDS as {Entity} entity.
+       Include: explicit getter and setter for EACH field
+     </description>
+     <exports>{Entity}Dto</exports>
    </file>
 
-3. PLAN FRONTEND TYPES TO MATCH DTO:
+3. PLAN BACKEND SERVICE:
+   <file path="backend/src/main/java/com/{project}/service/{Entity}Service.java" priority="21">
+     <description>
+       Service for {Entity} CRUD operations.
+       ENTITY_FIELDS: [list field names from entity_specs]
+
+       Methods:
+       - findAll(): List&lt;{Entity}Dto&gt;
+       - findAll(Pageable): Page&lt;{Entity}Dto&gt;
+       - findById(Long id): {Entity}Dto
+       - create({Entity}Dto dto): {Entity}Dto
+       - update(Long id, {Entity}Dto dto): {Entity}Dto
+       - delete(Long id): void
+
+       convertToDto must map: [all fields from entity_specs]
+       convertToEntity must map: [all fields except id, createdAt, updatedAt]
+     </description>
+     <exports>{Entity}Service</exports>
+   </file>
+
+4. PLAN FRONTEND TYPES TO MATCH DTO:
    <file path="frontend/src/types/index.ts" priority="15">
      <description>
-       Types matching backend DTOs:
-       - Employee interface with: id, firstName, lastName, email, department, salary, joinDate
-       - PageResponse&lt;T&gt; with: content, totalElements, totalPages, number, size, first, last
-       - CreateEmployeeRequest, UpdateEmployeeRequest
+       TypeScript types matching backend DTOs EXACTLY:
+
+       {Entity} interface:
+       [copy FRONTEND_FIELDS from entity_specs]
+
+       PageResponse&lt;T&gt; (Spring Boot format - REQUIRED):
+       - content: T[]
+       - totalElements: number
+       - totalPages: number
+       - number: number (0-indexed!)
+       - size: number
+       - first: boolean
+       - last: boolean
+       - empty: boolean
+
+       Create{Entity}Request, Update{Entity}Request
      </description>
-     <exports>Employee, PageResponse, CreateEmployeeRequest, UpdateEmployeeRequest</exports>
+     <exports>{Entity}, PageResponse, Create{Entity}Request, Update{Entity}Request</exports>
    </file>
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -132,26 +222,6 @@ interface EmployeeListResponse {
   page: number;           // WRONG!
 }
 ```
-
-═══════════════════════════════════════════════════════════════════════════════
-API SERVICE PLANNING
-═══════════════════════════════════════════════════════════════════════════════
-
-Plan API service to handle pagination correctly:
-
-<file path="frontend/src/services/employeeService.ts" priority="20">
-  <description>
-    API service for Employee CRUD:
-    - getAll(page, size) returns PageResponse&lt;Employee&gt;
-    - getById(id) returns Employee
-    - create(data) returns Employee
-    - update(id, data) returns Employee
-    - delete(id) returns void
-
-    Uses PageResponse type with content, totalElements, number properties
-  </description>
-  <exports>employeeService</exports>
-</file>
 
 ═══════════════════════════════════════════════════════════════════════════════
 MANDATORY CONFIGURATION FILES
@@ -203,24 +273,38 @@ COMPONENT PROPS PLANNING
 
 When planning components, explicitly list required props:
 
-<file path="frontend/src/components/EmployeeCard.tsx" priority="30">
+<file path="frontend/src/components/{Entity}Card.tsx" priority="30">
   <description>
-    Employee card component
-    Props: employee: Employee, onEdit: (e: Employee) => void, onDelete: (id: number) => void
-    Displays: firstName, lastName, email, department
+    {Entity} card component
+    Props: {entity}: {Entity}, onEdit: (e: {Entity}) => void, onDelete: (id: number) => void
+    Displays: [list display fields from FRONTEND_FIELDS]
   </description>
-  <exports>EmployeeCard</exports>
+  <exports>{Entity}Card</exports>
 </file>
 
-<file path="frontend/src/pages/EmployeesPage.tsx" priority="40">
+<file path="frontend/src/pages/{Entity}ListPage.tsx" priority="40">
   <description>
-    Employee list page
-    - Uses employeeService.getAll() for PageResponse&lt;Employee&gt;
-    - Accesses response.content for employee array
+    {Entity} list page
+    - Uses {entity}Service.getAll() for PageResponse&lt;{Entity}&gt;
+    - Accesses response.content for {entity} array
     - Accesses response.totalElements for total count
     - Accesses response.number for current page
   </description>
-  <exports>EmployeesPage</exports>
+  <exports>{Entity}ListPage</exports>
+</file>
+
+<file path="frontend/src/services/{entity}Service.ts" priority="20">
+  <description>
+    API service for {Entity} CRUD:
+    - getAll(page, size) returns PageResponse&lt;{Entity}&gt;
+    - getById(id) returns {Entity}
+    - create(data) returns {Entity}
+    - update(id, data) returns {Entity}
+    - delete(id) returns void
+
+    Uses PageResponse type with content, totalElements, number properties
+  </description>
+  <exports>{entity}Service</exports>
 </file>
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -229,15 +313,31 @@ PLANNING CHECKLIST
 
 Before finalizing the plan, verify:
 
+LAYER 2 - FIELD SPECIFICATIONS:
+[ ] <entity_specs> section with ALL entities and their EXACT fields
+[ ] BACKEND_FIELDS and FRONTEND_FIELDS defined for each entity
+[ ] Each file description includes FIELDS list
+[ ] Service description includes convertToDto field mappings
+[ ] Controller description includes exact method signatures
+[ ] Field names CONSISTENT across Entity/DTO/Service/Frontend types
+
+SECURITY & LOMBOK (STUDENT PROJECTS):
 [ ] NO spring-boot-starter-security in pom.xml
 [ ] NO SecurityConfig.java, NO JWT files
 [ ] NO Lombok in pom.xml
+
+BACKEND:
 [ ] Backend entity has all fields with explicit getters/setters
 [ ] Backend DTO matches entity for API responses
-[ ] Frontend types/index.ts matches backend DTO property names
+[ ] CorsConfig.java is included (CORS only, not security)
+[ ] Enums are separate files in model/enums/
+
+FRONTEND:
+[ ] Frontend types/index.ts matches backend DTO property names EXACTLY
 [ ] PageResponse<T> uses: content, totalElements, number (Spring Boot format)
 [ ] vite-env.d.ts is included in files list
 [ ] vite.config.ts has proxy configuration
-[ ] CorsConfig.java is included (CORS only, not security)
+
+DOCKER:
 [ ] Dockerfile uses apk (not apt-get) for Alpine images
 [ ] docker-compose.yml connects frontend to backend
