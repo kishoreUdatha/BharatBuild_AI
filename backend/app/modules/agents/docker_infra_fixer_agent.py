@@ -208,8 +208,8 @@ ERROR_PATTERNS: List[Tuple[str, InfraErrorType, str, Optional[str]]] = [
      "Spring Boot 3.x requires jakarta.* imports (not javax.*)",
      None),
 
-    # Docker Compose errors
-    (r"yaml:|YAML|error validating|mapping values are not allowed|could not find expected",
+    # Docker Compose errors - more specific patterns to avoid false positives
+    (r"yaml:.*error|yaml parse error|yaml scanner error|YAML syntax error|error validating docker-compose|mapping values are not allowed|could not find expected ':'",
      InfraErrorType.COMPOSE_SYNTAX,
      "Docker Compose YAML syntax error",
      None),
