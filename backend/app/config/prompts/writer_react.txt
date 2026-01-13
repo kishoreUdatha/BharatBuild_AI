@@ -41,8 +41,8 @@ BUILD-CRITICAL - THESE CAUSE 90% OF FAILURES:
    - vite.config.ts
 
 5. ONLY IMPORT WHAT YOU USE!
-   ❌ WRONG: import { Home, Settings, User } // but only use Home
-   ✅ CORRECT: import { Home } // only what's used
+   ❌ WRONG: import { IconA, IconB, IconC } // but only use IconA
+   ✅ CORRECT: import { IconA } // only what's used
 
 6. PACKAGE.JSON - Every import MUST exist!
    If you use: import { QueryClient } from '@tanstack/react-query'
@@ -269,5 +269,5 @@ export const api = {
 
 ICONS: Use lucide-react
 ```tsx
-import { Home, Settings, User, Bell, Search } from 'lucide-react';
+import { Home, Settings, Menu, Bell, Search } from 'lucide-react';
 ```

@@ -4842,16 +4842,31 @@ CRITICAL RULES:
         # CRITICAL FIX: Include entity_specs for field name consistency across all files
         entity_specs_context = ""
         if context.plan and context.plan.get('entity_specs'):
+            # Language-specific instructions based on file type
+            if file_path.endswith('.java'):
+                lang_rules = """- Java Entity: private {Type} {fieldName}; + get{FieldName}() + set{FieldName}()
+- Java DTO: SAME field names as Entity
+- Java Service convertToDto: map ALL fields from entity_specs"""
+            elif file_path.endswith('.py'):
+                lang_rules = """- SQLAlchemy Model: {fieldName}: Mapped[{Type}] = mapped_column(...)
+- Pydantic Schema: {fieldName}: {Type}
+- Service: entity.{fieldName}, data.{fieldName}"""
+            elif file_path.endswith(('.ts', '.tsx')):
+                lang_rules = """- TypeScript interface: {fieldName}: {tsType}
+- React component: {item.fieldName}
+- API service: response.{fieldName}"""
+            else:
+                lang_rules = """- Use EXACT field names from entity_specs
+- Never invent or guess field names"""
+
             entity_specs_context = f"""
 ⚠️ ENTITY FIELD SPECIFICATIONS (USE THESE EXACT FIELD NAMES!):
 {context.plan.get('entity_specs')}
 
 CRITICAL RULES:
-- Use EXACTLY the field names listed above in Entity, DTO, Service, and Frontend
-- Backend Entity must have: private {{Type}} {{fieldName}}; + get{{FieldName}}() + set{{FieldName}}()
-- Backend DTO must have: SAME field names as Entity
-- Backend Service convertToDto must map: ALL fields from entity_specs
-- Frontend types must have: SAME field names (with TypeScript types)
+- Use EXACTLY the field names listed above across ALL files
+{lang_rules}
+- Frontend types must have: SAME field names (with appropriate types)
 - NEVER invent or guess field names - use ONLY what's in entity_specs!
 """
 

@@ -252,39 +252,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class ItemCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
+class {Entity}Create(BaseModel):
+    {field1}: str
+    {field2}: Optional[str] = None
 
 @app.get("/")
 async def root():
     return {"message": "API is running"}
 
-@app.post("/items/", response_model=dict)
-async def create_item(item: ItemCreate):
-    return {"id": 1, **item.dict()}
+@app.post("/{entities}/", response_model=dict)
+async def create_{entity}({entity}: {Entity}Create):
+    return {"id": 1, **{entity}.dict()}
 ```
 
 DJANGO:
 ```python
 from django.db import models
-from django.contrib.auth.models import AbstractUser
 
-class User(AbstractUser):
-    email = models.EmailField(unique=True)
+class {Entity}(models.Model):
+    {field1} = models.CharField(max_length=255)
+    {field2} = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        db_table = 'users'
+        db_table = '{entities}'
 
 # views.py
 from django.shortcuts import render
 from django.http import JsonResponse
-from .models import User
+from .models import {Entity}
 
-def user_list(request):
-    users = User.objects.all().values('id', 'username', 'email')
-    return JsonResponse(list(users), safe=False)
+def {entity}_list(request):
+    {entities} = {Entity}.objects.all().values('id', '{field1}', '{field2}')
+    return JsonResponse(list({entities}), safe=False)
 ```
 
 FLASK:
@@ -1470,31 +1470,31 @@ st.plotly_chart(fig, use_container_width=True)
 
 REACT + TYPESCRIPT:
 ```tsx
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { Search, Plus, Trash } from 'lucide-react'
 
-interface Item {
+interface {Entity} {
   id: string
-  name: string
-  completed: boolean
+  {field1}: string
+  {field2}: boolean
 }
 
-export function ItemList() {
-  const [items, setItems] = useState<Item[]>([])
+export function {Entity}List() {
+  const [{entities}, set{Entities}] = useState<{Entity}[]>([])
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    fetchItems()
+    fetch{Entities}()
   }, [])
 
-  const fetchItems = async () => {
+  const fetch{Entities} = async () => {
     setLoading(true)
     try {
-      const response = await fetch('/api/items')
+      const response = await fetch('/api/{entities}')
       const data = await response.json()
-      setItems(data)
+      set{Entities}(data)
     } catch (error) {
-      console.error('Failed to fetch items:', error)
+      console.error('Failed to fetch {entities}:', error)
     } finally {
       setLoading(false)
     }
@@ -1502,14 +1502,14 @@ export function ItemList() {
 
   return (
     <div className="p-6 bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10">
-      <h2 className="text-2xl font-bold text-white mb-4">Items</h2>
+      <h2 className="text-2xl font-bold text-white mb-4">{Entities}</h2>
       {loading ? (
         <p className="text-gray-400">Loading...</p>
       ) : (
         <ul className="space-y-2">
-          {items.map(item => (
-            <li key={item.id} className="flex items-center gap-2 text-white">
-              <span>{item.name}</span>
+          {{entities}.map({entity} => (
+            <li key={{entity}.id} className="flex items-center gap-2 text-white">
+              <span>{{entity}.{field1}}</span>
             </li>
           ))}
         </ul>
@@ -1523,25 +1523,25 @@ NEXT.JS (App Router):
 ```tsx
 // app/page.tsx
 import { Suspense } from 'react'
-import { ItemList } from '@/components/ItemList'
+import { {Entity}List } from '@/components/{Entity}List'
 
 export default function HomePage() {
   return (
     <main className="min-h-screen bg-gray-900 p-8">
       <h1 className="text-4xl font-bold text-white mb-8">Dashboard</h1>
       <Suspense fallback={<div>Loading...</div>}>
-        <ItemList />
+        <{Entity}List />
       </Suspense>
     </main>
   )
 }
 
-// app/api/items/route.ts
+// app/api/{entities}/route.ts
 import { NextResponse } from 'next/server'
 
 export async function GET() {
-  const items = [{ id: '1', name: 'Item 1' }]
-  return NextResponse.json(items)
+  const {entities} = [{ id: '1', {field1}: '{Entity} 1' }]
+  return NextResponse.json({entities})
 }
 
 export async function POST(request: Request) {
@@ -1555,27 +1555,27 @@ VUE 3 (Composition API):
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 
-interface Item {
+interface {Entity} {
   id: string
-  name: string
-  completed: boolean
+  {field1}: string
+  {field2}: boolean
 }
 
-const items = ref<Item[]>([])
+const {entities} = ref<{Entity}[]>([])
 const loading = ref(false)
 const searchQuery = ref('')
 
-const filteredItems = computed(() => {
-  return items.value.filter(item =>
-    item.name.toLowerCase().includes(searchQuery.value.toLowerCase())
+const filtered{Entities} = computed(() => {
+  return {entities}.value.filter({entity} =>
+    {entity}.{field1}.toLowerCase().includes(searchQuery.value.toLowerCase())
   )
 })
 
 onMounted(async () => {
   loading.value = true
   try {
-    const response = await fetch('/api/items')
-    items.value = await response.json()
+    const response = await fetch('/api/{entities}')
+    {entities}.value = await response.json()
   } finally {
     loading.value = false
   }
@@ -1830,41 +1830,41 @@ POM.XML (Required dependencies for Spring Boot 3.x):
 
 SPRING BOOT ENTITY (with proper jakarta imports):
 ```java
-package com.example.app.model;
+package com.{project}.model;
 
 import jakarta.persistence.*;
 import jakarta.validation.constraints.*;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "items")
-public class Item {
+@Table(name = "{entities}")
+public class {Entity} {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @NotBlank(message = "Name is required")
+    @NotBlank(message = "{field1} is required")
     @Column(nullable = false)
-    private String name;
+    private String {field1};
 
-    private String description;
+    private String {field2};
 
     // Getters and Setters (always include complete implementations)
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
-    public String getName() { return name; }
-    public void setName(String name) { this.name = name; }
-    public String getDescription() { return description; }
-    public void setDescription(String description) { this.description = description; }
+    public String get{Field1}() { return {field1}; }
+    public void set{Field1}(String {field1}) { this.{field1} = {field1}; }
+    public String get{Field2}() { return {field2}; }
+    public void set{Field2}(String {field2}) { this.{field2} = {field2}; }
 }
 ```
 
 SPRING BOOT CONTROLLER (with @Valid from jakarta):
 ```java
-package com.example.app.controller;
+package com.{project}.controller;
 
-import com.example.app.model.Item;
-import com.example.app.repository.ItemRepository;
+import com.{project}.model.{Entity};
+import com.{project}.repository.{Entity}Repository;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -1872,20 +1872,20 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/items")
+@RequestMapping("/api/{entities}")
 @CrossOrigin(origins = "*")
-public class ItemController {
+public class {Entity}Controller {
     @Autowired
-    private ItemRepository repository;
+    private {Entity}Repository repository;
 
     @GetMapping
-    public List<Item> getAll() {
+    public List<{Entity}> getAll() {
         return repository.findAll();
     }
 
     @PostMapping
-    public Item create(@Valid @RequestBody Item item) {
-        return repository.save(item);
+    public {Entity} create(@Valid @RequestBody {Entity} {entity}) {
+        return repository.save({entity});
     }
 
     @DeleteMapping("/{id}")
@@ -1901,7 +1901,7 @@ public class ItemController {
 
 GLOBAL EXCEPTION HANDLER (with proper jakarta imports):
 ```java
-package com.example.app.exception;
+package com.{project}.exception;
 
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.validation.ConstraintViolationException;
@@ -1969,17 +1969,17 @@ public class UserDto {
 
 ✅ CORRECT (flat, predictable):
 ```java
-public class UserDto {
+public class {Entity}Dto {
     private Long id;
-    private String email;
-    private String username;
+    private String {field1};
+    private String {field2};
     // All getters and setters directly on the class
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 }
 // Separate DTOs for different purposes:
-public class UserCreateDto { ... }
-public class UserUpdateDto { ... }
+public class {Entity}CreateDto { ... }
+public class {Entity}UpdateDto { ... }
 ```
 
 2. FIELD NAMING - MUST MATCH ACROSS MODEL, DTO, SERVICE:
@@ -2027,89 +2027,79 @@ public void setEnabled(boolean enabled) { this.enabled = enabled; }
 ❌ WRONG (signature mismatch):
 ```java
 // Interface
-Page<UserDto> getAllUsers(Pageable pageable);
+Page<{Entity}Dto> getAll{Entities}(Pageable pageable);
 
 // Controller calls with extra params:
-userService.getAllUsers(pageable, search, role);  // ERROR!
+{entity}Service.getAll{Entities}(pageable, search, status);  // ERROR!
 ```
 
 ✅ CORRECT (matching signatures):
 ```java
 // Interface - include ALL needed overloads
-Page<UserDto> getAllUsers(Pageable pageable);
-Page<UserDto> getAllUsers(Pageable pageable, String search, UserRole role);
+Page<{Entity}Dto> getAll{Entities}(Pageable pageable);
+Page<{Entity}Dto> getAll{Entities}(Pageable pageable, String search, {Entity}Status status);
 
 // Controller - uses matching method
-userService.getAllUsers(pageable, search, role);  // ✓ Works!
+{entity}Service.getAll{Entities}(pageable, search, status);  // ✓ Works!
 ```
 
 5. OPTIONAL HANDLING - ALWAYS USE orElseThrow():
 ❌ WRONG (type mismatch):
 ```java
 // Service returns Optional
-Optional<UserDto> getUserByEmail(String email);
+Optional<{Entity}Dto> get{Entity}By{Field}(String {field});
 
 // Controller expects direct value:
-UserDto user = userService.getUserByEmail(email);  // ERROR!
+{Entity}Dto {entity} = {entity}Service.get{Entity}By{Field}({field});  // ERROR!
 ```
 
 ✅ CORRECT (proper unwrapping):
 ```java
 // Service returns Optional
-Optional<UserDto> getUserByEmail(String email);
+Optional<{Entity}Dto> get{Entity}By{Field}(String {field});
 
 // Controller handles Optional:
-UserDto user = userService.getUserByEmail(email)
-    .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+{Entity}Dto {entity} = {entity}Service.get{Entity}By{Field}({field})
+    .orElseThrow(() -> new ResourceNotFoundException("{Entity} not found"));
 ```
 
 6. REPOSITORY METHODS - STANDARD NAMING:
 ✅ Use Spring Data JPA conventions:
 ```java
 // Boolean checks
-boolean existsByEmail(String email);
-boolean existsByPhoneNumber(String phoneNumber);  // NOT existsByPhone
+boolean existsBy{Field1}(String {field1});
+boolean existsBy{Field2}(String {field2});
 
 // Count queries
 long countByEnabledTrue();  // NOT countByActiveTrue
 
 // Find queries
-Optional<User> findByEmail(String email);
-List<User> findByEnabledTrue();  // NOT findByActiveTrue
+Optional<{Entity}> findBy{Field1}(String {field1});
+List<{Entity}> findByEnabledTrue();  // NOT findByActiveTrue
 ```
 
 7. COMPLETE JAVA ENTITY TEMPLATE:
 ```java
 @Entity
-@Table(name = "users")
-public class User implements UserDetails {
+@Table(name = "{entities}")
+public class {Entity} {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true)
-    private String username;
-
-    @Column(nullable = false, unique = true)
-    private String email;
+    @Column(nullable = false)
+    private String {field1};
 
     @Column(nullable = false)
-    private String password;
+    private String {field2};
 
-    @Column(name = "first_name")
-    private String firstName;
-
-    @Column(name = "last_name")
-    private String lastName;
-
-    @Column(name = "phone_number")
-    private String phoneNumber;  // NOT "phone"
+    private String {field3};
 
     @Column(nullable = false)
     private boolean enabled = true;  // NOT "active"
 
     @Enumerated(EnumType.STRING)
-    private Role role = Role.USER;
+    private {Entity}Status status;
 
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
@@ -2132,98 +2122,60 @@ public class User implements UserDetails {
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
-    public String getUsername() { return username; }
-    public void setUsername(String username) { this.username = username; }
+    public String get{Field1}() { return {field1}; }
+    public void set{Field1}(String {field1}) { this.{field1} = {field1}; }
 
-    public String getEmail() { return email; }
-    public void setEmail(String email) { this.email = email; }
+    public String get{Field2}() { return {field2}; }
+    public void set{Field2}(String {field2}) { this.{field2} = {field2}; }
 
-    public String getPassword() { return password; }
-    public void setPassword(String password) { this.password = password; }
-
-    public String getFirstName() { return firstName; }
-    public void setFirstName(String firstName) { this.firstName = firstName; }
-
-    public String getLastName() { return lastName; }
-    public void setLastName(String lastName) { this.lastName = lastName; }
-
-    public String getPhoneNumber() { return phoneNumber; }
-    public void setPhoneNumber(String phoneNumber) { this.phoneNumber = phoneNumber; }
+    public String get{Field3}() { return {field3}; }
+    public void set{Field3}(String {field3}) { this.{field3} = {field3}; }
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
 
-    public Role getRole() { return role; }
-    public void setRole(Role role) { this.role = role; }
+    public {Entity}Status getStatus() { return status; }
+    public void setStatus({Entity}Status status) { this.status = status; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
-
-    // UserDetails implementation
-    @Override
-    public Collection<? extends GrantedAuthority> getAuthorities() {
-        return List.of(new SimpleGrantedAuthority(role.name()));
-    }
-
-    @Override
-    public boolean isAccountNonExpired() { return true; }
-
-    @Override
-    public boolean isAccountNonLocked() { return true; }
-
-    @Override
-    public boolean isCredentialsNonExpired() { return true; }
-
-    public String getFullName() {
-        return firstName + " " + lastName;
-    }
 }
 ```
 
 8. MATCHING DTO TEMPLATE:
 ```java
-public class UserDto {
+public class {Entity}Dto {
     private Long id;
-    private String username;
-    private String email;
-    private String firstName;
-    private String lastName;
-    private String phoneNumber;  // SAME as entity
+    private String {field1};
+    private String {field2};
+    private String {field3};
     private boolean enabled;     // SAME as entity
-    private String role;
+    private String status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
     // Default constructor
-    public UserDto() {}
+    public {Entity}Dto() {}
 
     // ALL getters - MUST match entity field names
     public Long getId() { return id; }
-    public String getUsername() { return username; }
-    public String getEmail() { return email; }
-    public String getFirstName() { return firstName; }
-    public String getLastName() { return lastName; }
-    public String getPhoneNumber() { return phoneNumber; }  // NOT getPhone()
+    public String get{Field1}() { return {field1}; }
+    public String get{Field2}() { return {field2}; }
+    public String get{Field3}() { return {field3}; }
     public boolean isEnabled() { return enabled; }          // NOT isActive()
-    public String getRole() { return role; }
+    public String getStatus() { return status; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
 
     // ALL setters
     public void setId(Long id) { this.id = id; }
-    public void setUsername(String username) { this.username = username; }
-    public void setEmail(String email) { this.email = email; }
-    public void setFirstName(String firstName) { this.firstName = firstName; }
-    public void setLastName(String lastName) { this.lastName = lastName; }
-    public void setPhoneNumber(String phoneNumber) { this.phoneNumber = phoneNumber; }
+    public void set{Field1}(String {field1}) { this.{field1} = {field1}; }
+    public void set{Field2}(String {field2}) { this.{field2} = {field2}; }
+    public void set{Field3}(String {field3}) { this.{field3} = {field3}; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
-    public void setRole(String role) { this.role = role; }
+    public void setStatus(String status) { this.status = status; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
-
-    public String getFullName() {
-        return firstName + " " + lastName;
-    }
 }
 ```
 
@@ -2249,49 +2201,49 @@ import (
     "github.com/gin-contrib/cors"
 )
 
-type Item struct {
+type {Entity} struct {
     ID        string `json:"id"`
-    Name      string `json:"name"`
-    Completed bool   `json:"completed"`
+    {Field1}  string `json:"{field1}"`
+    {Field2}  bool   `json:"{field2}"`
 }
 
-var items = []Item{}
+var {entities} = []{Entity}{}
 
 func main() {
     r := gin.Default()
     r.Use(cors.Default())
 
-    r.GET("/api/items", getItems)
-    r.POST("/api/items", createItem)
-    r.DELETE("/api/items/:id", deleteItem)
+    r.GET("/api/{entities}", get{Entities})
+    r.POST("/api/{entities}", create{Entity})
+    r.DELETE("/api/{entities}/:id", delete{Entity})
 
     r.Run(":8080")
 }
 
-func getItems(c *gin.Context) {
-    c.JSON(http.StatusOK, items)
+func get{Entities}(c *gin.Context) {
+    c.JSON(http.StatusOK, {entities})
 }
 
-func createItem(c *gin.Context) {
-    var item Item
-    if err := c.ShouldBindJSON(&item); err != nil {
+func create{Entity}(c *gin.Context) {
+    var {entity} {Entity}
+    if err := c.ShouldBindJSON(&{entity}); err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
         return
     }
-    items = append(items, item)
-    c.JSON(http.StatusCreated, item)
+    {entities} = append({entities}, {entity})
+    c.JSON(http.StatusCreated, {entity})
 }
 
-func deleteItem(c *gin.Context) {
+func delete{Entity}(c *gin.Context) {
     id := c.Param("id")
-    for i, item := range items {
-        if item.ID == id {
-            items = append(items[:i], items[i+1:]...)
+    for i, {entity} := range {entities} {
+        if {entity}.ID == id {
+            {entities} = append({entities}[:i], {entities}[i+1:]...)
             c.Status(http.StatusNoContent)
             return
         }
     }
-    c.JSON(http.StatusNotFound, gin.H{"error": "Item not found"})
+    c.JSON(http.StatusNotFound, gin.H{"error": "{Entity} not found"})
 }
 ```
 
@@ -2307,39 +2259,39 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
 #[derive(Serialize, Deserialize, Clone)]
-struct Item {
+struct {Entity} {
     id: String,
-    name: String,
-    completed: bool,
+    {field1}: String,
+    {field2}: bool,
 }
 
 struct AppState {
-    items: Mutex<Vec<Item>>,
+    {entities}: Mutex<Vec<{Entity}>>,
 }
 
-async fn get_items(data: web::Data<AppState>) -> HttpResponse {
-    let items = data.items.lock().unwrap();
-    HttpResponse::Ok().json(&*items)
+async fn get_{entities}(data: web::Data<AppState>) -> HttpResponse {
+    let {entities} = data.{entities}.lock().unwrap();
+    HttpResponse::Ok().json(&*{entities})
 }
 
-async fn create_item(data: web::Data<AppState>, item: web::Json<Item>) -> HttpResponse {
-    let mut items = data.items.lock().unwrap();
-    items.push(item.into_inner());
+async fn create_{entity}(data: web::Data<AppState>, {entity}: web::Json<{Entity}>) -> HttpResponse {
+    let mut {entities} = data.{entities}.lock().unwrap();
+    {entities}.push({entity}.into_inner());
     HttpResponse::Created().finish()
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let app_state = web::Data::new(AppState {
-        items: Mutex::new(vec![]),
+        {entities}: Mutex::new(vec![]),
     });
 
     HttpServer::new(move || {
         App::new()
             .wrap(Cors::permissive())
             .app_data(app_state.clone())
-            .route("/api/items", web::get().to(get_items))
-            .route("/api/items", web::post().to(create_item))
+            .route("/api/{entities}", web::get().to(get_{entities}))
+            .route("/api/{entities}", web::post().to(create_{entity}))
     })
     .bind("127.0.0.1:8080")?
     .run()
@@ -2459,14 +2411,14 @@ if __name__ == "__main__":
 
 ANDROID ACTIVITY (Kotlin):
 ```kotlin
-package com.example.app
+package com.{project}.app
 
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
-import com.example.app.databinding.ActivityMainBinding
+import com.{project}.app.databinding.ActivityMainBinding
 import kotlinx.coroutines.launch
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -2474,24 +2426,24 @@ import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Body
 
-data class Item(
+data class {Entity}(
     val id: String,
-    val name: String,
-    val completed: Boolean = false
+    val {field1}: String,
+    val {field2}: Boolean = false
 )
 
 interface ApiService {
-    @GET("api/items")
-    suspend fun getItems(): List<Item>
+    @GET("api/{entities}")
+    suspend fun get{Entities}(): List<{Entity}>
 
-    @POST("api/items")
-    suspend fun createItem(@Body item: Item): Item
+    @POST("api/{entities}")
+    suspend fun create{Entity}(@Body {entity}: {Entity}): {Entity}
 }
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
-    private lateinit var adapter: ItemAdapter
-    private val items = mutableListOf<Item>()
+    private lateinit var adapter: {Entity}Adapter
+    private val {entities} = mutableListOf<{Entity}>()
 
     private val retrofit = Retrofit.Builder()
         .baseUrl("https://api.example.com/")
@@ -2506,23 +2458,23 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         setupRecyclerView()
-        fetchItems()
+        fetch{Entities}()
     }
 
     private fun setupRecyclerView() {
-        adapter = ItemAdapter(items) { item ->
-            Toast.makeText(this, "Clicked: ${item.name}", Toast.LENGTH_SHORT).show()
+        adapter = {Entity}Adapter({entities}) { {entity} ->
+            Toast.makeText(this, "Clicked: ${{entity}.{field1}}", Toast.LENGTH_SHORT).show()
         }
         binding.recyclerView.layoutManager = LinearLayoutManager(this)
         binding.recyclerView.adapter = adapter
     }
 
-    private fun fetchItems() {
+    private fun fetch{Entities}() {
         lifecycleScope.launch {
             try {
-                val fetchedItems = apiService.getItems()
-                items.clear()
-                items.addAll(fetchedItems)
+                val fetched{Entities} = apiService.get{Entities}()
+                {entities}.clear()
+                {entities}.addAll(fetched{Entities})
                 adapter.notifyDataSetChanged()
             } catch (e: Exception) {
                 Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
@@ -2534,7 +2486,7 @@ class MainActivity : AppCompatActivity() {
 
 ANDROID VIEWMODEL (Kotlin + MVVM):
 ```kotlin
-package com.example.app.viewmodel
+package com.{project}.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -2544,37 +2496,37 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 data class UiState(
-    val items: List<Item> = emptyList(),
+    val {entities}: List<{Entity}> = emptyList(),
     val isLoading: Boolean = false,
     val error: String? = null
 )
 
-class ItemViewModel(private val repository: ItemRepository) : ViewModel() {
+class {Entity}ViewModel(private val repository: {Entity}Repository) : ViewModel() {
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     init {
-        loadItems()
+        load{Entities}()
     }
 
-    fun loadItems() {
+    fun load{Entities}() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             try {
-                val items = repository.getItems()
-                _uiState.value = _uiState.value.copy(items = items, isLoading = false)
+                val {entities} = repository.get{Entities}()
+                _uiState.value = _uiState.value.copy({entities} = {entities}, isLoading = false)
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(error = e.message, isLoading = false)
             }
         }
     }
 
-    fun addItem(name: String) {
+    fun add{Entity}({field1}: String) {
         viewModelScope.launch {
             try {
-                val newItem = repository.createItem(Item(id = "", name = name))
+                val new{Entity} = repository.create{Entity}({Entity}(id = "", {field1} = {field1}))
                 _uiState.value = _uiState.value.copy(
-                    items = _uiState.value.items + newItem
+                    {entities} = _uiState.value.{entities} + new{Entity}
                 )
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(error = e.message)
@@ -2586,7 +2538,7 @@ class ItemViewModel(private val repository: ItemRepository) : ViewModel() {
 
 JETPACK COMPOSE UI:
 ```kotlin
-package com.example.app.ui
+package com.{project}.app.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -2600,13 +2552,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ItemListScreen(viewModel: ItemViewModel = viewModel()) {
+fun {Entity}ListScreen(viewModel: {Entity}ViewModel = viewModel()) {
     val uiState by viewModel.uiState.collectAsState()
-    var newItemName by remember { mutableStateOf("") }
+    var new{Entity}{Field1} by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("Items") })
+            TopAppBar(title = { Text("{Entities}") })
         },
         floatingActionButton = {
             FloatingActionButton(onClick = { /* show dialog */ }) {
@@ -2623,7 +2575,7 @@ fun ItemListScreen(viewModel: ItemViewModel = viewModel()) {
                 Text(text = "Error: ${uiState.error}", color = MaterialTheme.colorScheme.error)
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(uiState.items) { item ->
+                    items(uiState.{entities}) { {entity} ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2634,10 +2586,10 @@ fun ItemListScreen(viewModel: ItemViewModel = viewModel()) {
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Checkbox(
-                                    checked = item.completed,
+                                    checked = {entity}.{field2},
                                     onCheckedChange = { }
                                 )
-                                Text(text = item.name, modifier = Modifier.weight(1f))
+                                Text(text = {entity}.{field1}, modifier = Modifier.weight(1f))
                             }
                         }
                     }
@@ -2656,16 +2608,16 @@ SWIFTUI VIEW:
 ```swift
 import SwiftUI
 
-struct Item: Identifiable, Codable {
+struct {Entity}: Identifiable, Codable {
     let id: String
-    let name: String
-    var completed: Bool = false
+    let {field1}: String
+    var {field2}: Bool = false
 }
 
-struct ItemListView: View {
-    @StateObject private var viewModel = ItemViewModel()
+struct {Entity}ListView: View {
+    @StateObject private var viewModel = {Entity}ViewModel()
     @State private var showingAddSheet = false
-    @State private var newItemName = ""
+    @State private var new{Entity}{Field1} = ""
 
     var body: some View {
         NavigationView {
@@ -2677,24 +2629,24 @@ struct ItemListView: View {
                         Text("Error: \(error)")
                             .foregroundColor(.red)
                         Button("Retry") {
-                            viewModel.fetchItems()
+                            viewModel.fetch{Entities}()
                         }
                     }
                 } else {
                     List {
-                        ForEach(viewModel.items) { item in
+                        ForEach(viewModel.{entities}) { {entity} in
                             HStack {
-                                Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
-                                    .foregroundColor(item.completed ? .green : .gray)
-                                Text(item.name)
+                                Image(systemName: {entity}.{field2} ? "checkmark.circle.fill" : "circle")
+                                    .foregroundColor({entity}.{field2} ? .green : .gray)
+                                Text({entity}.{field1})
                                 Spacer()
                             }
                         }
-                        .onDelete(perform: viewModel.deleteItems)
+                        .onDelete(perform: viewModel.delete{Entities})
                     }
                 }
             }
-            .navigationTitle("Items")
+            .navigationTitle("{Entities}")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { showingAddSheet = true }) {
@@ -2703,36 +2655,36 @@ struct ItemListView: View {
                 }
             }
             .sheet(isPresented: $showingAddSheet) {
-                AddItemView(viewModel: viewModel)
+                Add{Entity}View(viewModel: viewModel)
             }
         }
         .onAppear {
-            viewModel.fetchItems()
+            viewModel.fetch{Entities}()
         }
     }
 }
 
-struct AddItemView: View {
+struct Add{Entity}View: View {
     @Environment(\.dismiss) var dismiss
-    @ObservedObject var viewModel: ItemViewModel
-    @State private var name = ""
+    @ObservedObject var viewModel: {Entity}ViewModel
+    @State private var {field1} = ""
 
     var body: some View {
         NavigationView {
             Form {
-                TextField("Item name", text: $name)
+                TextField("{Entity} {field1}", text: ${field1})
             }
-            .navigationTitle("New Item")
+            .navigationTitle("New {Entity}")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        viewModel.addItem(name: name)
+                        viewModel.add{Entity}({field1}: {field1})
                         dismiss()
                     }
-                    .disabled(name.isEmpty)
+                    .disabled({field1}.isEmpty)
                 }
             }
         }
@@ -2746,21 +2698,21 @@ import Foundation
 import Combine
 
 @MainActor
-class ItemViewModel: ObservableObject {
-    @Published var items: [Item] = []
+class {Entity}ViewModel: ObservableObject {
+    @Published var {entities}: [{Entity}] = []
     @Published var isLoading = false
     @Published var error: String?
 
     private let apiService = APIService()
     private var cancellables = Set<AnyCancellable>()
 
-    func fetchItems() {
+    func fetch{Entities}() {
         isLoading = true
         error = nil
 
         Task {
             do {
-                items = try await apiService.getItems()
+                {entities} = try await apiService.get{Entities}()
                 isLoading = false
             } catch {
                 self.error = error.localizedDescription
@@ -2769,41 +2721,41 @@ class ItemViewModel: ObservableObject {
         }
     }
 
-    func addItem(name: String) {
-        let newItem = Item(id: UUID().uuidString, name: name)
+    func add{Entity}({field1}: String) {
+        let new{Entity} = {Entity}(id: UUID().uuidString, {field1}: {field1})
 
         Task {
             do {
-                let savedItem = try await apiService.createItem(newItem)
-                items.append(savedItem)
+                let saved{Entity} = try await apiService.create{Entity}(new{Entity})
+                {entities}.append(saved{Entity})
             } catch {
                 self.error = error.localizedDescription
             }
         }
     }
 
-    func deleteItems(at offsets: IndexSet) {
-        items.remove(atOffsets: offsets)
+    func delete{Entities}(at offsets: IndexSet) {
+        {entities}.remove(atOffsets: offsets)
     }
 }
 
 class APIService {
     private let baseURL = URL(string: "https://api.example.com")!
 
-    func getItems() async throws -> [Item] {
-        let url = baseURL.appendingPathComponent("api/items")
+    func get{Entities}() async throws -> [{Entity}] {
+        let url = baseURL.appendingPathComponent("api/{entities}")
         let (data, _) = try await URLSession.shared.data(from: url)
-        return try JSONDecoder().decode([Item].self, from: data)
+        return try JSONDecoder().decode([{Entity}].self, from: data)
     }
 
-    func createItem(_ item: Item) async throws -> Item {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/items"))
+    func create{Entity}(_ {entity}: {Entity}) async throws -> {Entity} {
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/{entities}"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(item)
+        request.httpBody = try JSONEncoder().encode({entity})
 
         let (data, _) = try await URLSession.shared.data(for: request)
-        return try JSONDecoder().decode(Item.self, from: data)
+        return try JSONDecoder().decode({Entity}.self, from: data)
     }
 }
 ```
@@ -2818,48 +2770,48 @@ LARAVEL CONTROLLER:
 
 namespace App\Http\Controllers;
 
-use App\Models\Item;
+use App\Models\{Entity};
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
-class ItemController extends Controller
+class {Entity}Controller extends Controller
 {
     public function index(): JsonResponse
     {
-        $items = Item::orderBy('created_at', 'desc')->get();
-        return response()->json($items);
+        ${entities} = {Entity}::orderBy('created_at', 'desc')->get();
+        return response()->json(${entities});
     }
 
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'name' => 'required|string|max:255',
-            'completed' => 'boolean'
+            '{field1}' => 'required|string|max:255',
+            '{field2}' => 'boolean'
         ]);
 
-        $item = Item::create($validated);
-        return response()->json($item, 201);
+        ${entity} = {Entity}::create($validated);
+        return response()->json(${entity}, 201);
     }
 
-    public function show(Item $item): JsonResponse
+    public function show({Entity} ${entity}): JsonResponse
     {
-        return response()->json($item);
+        return response()->json(${entity});
     }
 
-    public function update(Request $request, Item $item): JsonResponse
+    public function update(Request $request, {Entity} ${entity}): JsonResponse
     {
         $validated = $request->validate([
-            'name' => 'sometimes|string|max:255',
-            'completed' => 'sometimes|boolean'
+            '{field1}' => 'sometimes|string|max:255',
+            '{field2}' => 'sometimes|boolean'
         ]);
 
-        $item->update($validated);
-        return response()->json($item);
+        ${entity}->update($validated);
+        return response()->json(${entity});
     }
 
-    public function destroy(Item $item): JsonResponse
+    public function destroy({Entity} ${entity}): JsonResponse
     {
-        $item->delete();
+        ${entity}->delete();
         return response()->json(null, 204);
     }
 }
@@ -2874,17 +2826,17 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class Item extends Model
+class {Entity} extends Model
 {
     use HasFactory;
 
     protected $fillable = [
-        'name',
-        'completed',
+        '{field1}',
+        '{field2}',
     ];
 
     protected $casts = [
-        'completed' => 'boolean',
+        '{field2}' => 'boolean',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];
@@ -2903,17 +2855,17 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('items', function (Blueprint $table) {
+        Schema::create('{entities}', function (Blueprint $table) {
             $table->id();
-            $table->string('name');
-            $table->boolean('completed')->default(false);
+            $table->string('{field1}');
+            $table->boolean('{field2}')->default(false);
             $table->timestamps();
         });
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('items');
+        Schema::dropIfExists('{entities}');
     }
 };
 ```
@@ -2927,80 +2879,80 @@ ASP.NET CORE WEB API CONTROLLER:
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
-namespace MyApp.Controllers;
+namespace {Project}.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class ItemsController : ControllerBase
+public class {Entities}Controller : ControllerBase
 {
     private readonly AppDbContext _context;
-    private readonly ILogger<ItemsController> _logger;
+    private readonly ILogger<{Entities}Controller> _logger;
 
-    public ItemsController(AppDbContext context, ILogger<ItemsController> logger)
+    public {Entities}Controller(AppDbContext context, ILogger<{Entities}Controller> logger)
     {
         _context = context;
         _logger = logger;
     }
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<Item>>> GetItems()
+    public async Task<ActionResult<IEnumerable<{Entity}>>> Get{Entities}()
     {
-        return await _context.Items.OrderByDescending(i => i.CreatedAt).ToListAsync();
+        return await _context.{Entities}.OrderByDescending(e => e.CreatedAt).ToListAsync();
     }
 
     [HttpGet("{id}")]
-    public async Task<ActionResult<Item>> GetItem(int id)
+    public async Task<ActionResult<{Entity}>> Get{Entity}(int id)
     {
-        var item = await _context.Items.FindAsync(id);
-        if (item == null)
+        var {entity} = await _context.{Entities}.FindAsync(id);
+        if ({entity} == null)
         {
             return NotFound();
         }
-        return item;
+        return {entity};
     }
 
     [HttpPost]
-    public async Task<ActionResult<Item>> CreateItem(ItemCreateDto dto)
+    public async Task<ActionResult<{Entity}>> Create{Entity}({Entity}CreateDto dto)
     {
-        var item = new Item
+        var {entity} = new {Entity}
         {
-            Name = dto.Name,
-            Completed = dto.Completed,
+            {Field1} = dto.{Field1},
+            {Field2} = dto.{Field2},
             CreatedAt = DateTime.UtcNow
         };
 
-        _context.Items.Add(item);
+        _context.{Entities}.Add({entity});
         await _context.SaveChangesAsync();
 
-        return CreatedAtAction(nameof(GetItem), new { id = item.Id }, item);
+        return CreatedAtAction(nameof(Get{Entity}), new { id = {entity}.Id }, {entity});
     }
 
     [HttpPut("{id}")]
-    public async Task<IActionResult> UpdateItem(int id, ItemUpdateDto dto)
+    public async Task<IActionResult> Update{Entity}(int id, {Entity}UpdateDto dto)
     {
-        var item = await _context.Items.FindAsync(id);
-        if (item == null)
+        var {entity} = await _context.{Entities}.FindAsync(id);
+        if ({entity} == null)
         {
             return NotFound();
         }
 
-        item.Name = dto.Name ?? item.Name;
-        item.Completed = dto.Completed ?? item.Completed;
+        {entity}.{Field1} = dto.{Field1} ?? {entity}.{Field1};
+        {entity}.{Field2} = dto.{Field2} ?? {entity}.{Field2};
 
         await _context.SaveChangesAsync();
         return NoContent();
     }
 
     [HttpDelete("{id}")]
-    public async Task<IActionResult> DeleteItem(int id)
+    public async Task<IActionResult> Delete{Entity}(int id)
     {
-        var item = await _context.Items.FindAsync(id);
-        if (item == null)
+        var {entity} = await _context.{Entities}.FindAsync(id);
+        if ({entity} == null)
         {
             return NotFound();
         }
 
-        _context.Items.Remove(item);
+        _context.{Entities}.Remove({entity});
         await _context.SaveChangesAsync();
         return NoContent();
     }
@@ -3012,46 +2964,46 @@ ASP.NET CORE MODEL & DBCONTEXT:
 using Microsoft.EntityFrameworkCore;
 using System.ComponentModel.DataAnnotations;
 
-namespace MyApp;
+namespace {Project};
 
-public class Item
+public class {Entity}
 {
     public int Id { get; set; }
 
     [Required]
     [MaxLength(255)]
-    public string Name { get; set; } = string.Empty;
+    public string {Field1} { get; set; } = string.Empty;
 
-    public bool Completed { get; set; }
+    public bool {Field2} { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
-public class ItemCreateDto
+public class {Entity}CreateDto
 {
     [Required]
-    public string Name { get; set; } = string.Empty;
-    public bool Completed { get; set; }
+    public string {Field1} { get; set; } = string.Empty;
+    public bool {Field2} { get; set; }
 }
 
-public class ItemUpdateDto
+public class {Entity}UpdateDto
 {
-    public string? Name { get; set; }
-    public bool? Completed { get; set; }
+    public string? {Field1} { get; set; }
+    public bool? {Field2} { get; set; }
 }
 
 public class AppDbContext : DbContext
 {
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
-    public DbSet<Item> Items { get; set; } = null!;
+    public DbSet<{Entity}> {Entities} { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.Entity<Item>(entity =>
+        modelBuilder.Entity<{Entity}>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.{Field1}).IsRequired().HasMaxLength(255);
             entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
         });
     }
@@ -3061,7 +3013,7 @@ public class AppDbContext : DbContext
 ASP.NET CORE PROGRAM.CS:
 ```csharp
 using Microsoft.EntityFrameworkCore;
-using MyApp;
+using {Project};
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -3107,79 +3059,79 @@ app.Run();
 
 RAILS CONTROLLER:
 ```ruby
-class Api::ItemsController < ApplicationController
-  before_action :set_item, only: [:show, :update, :destroy]
+class Api::{Entities}Controller < ApplicationController
+  before_action :set_{entity}, only: [:show, :update, :destroy]
 
   def index
-    @items = Item.order(created_at: :desc)
-    render json: @items
+    @{entities} = {Entity}.order(created_at: :desc)
+    render json: @{entities}
   end
 
   def show
-    render json: @item
+    render json: @{entity}
   end
 
   def create
-    @item = Item.new(item_params)
+    @{entity} = {Entity}.new({entity}_params)
 
-    if @item.save
-      render json: @item, status: :created
+    if @{entity}.save
+      render json: @{entity}, status: :created
     else
-      render json: { errors: @item.errors.full_messages }, status: :unprocessable_entity
+      render json: { errors: @{entity}.errors.full_messages }, status: :unprocessable_entity
     end
   end
 
   def update
-    if @item.update(item_params)
-      render json: @item
+    if @{entity}.update({entity}_params)
+      render json: @{entity}
     else
-      render json: { errors: @item.errors.full_messages }, status: :unprocessable_entity
+      render json: { errors: @{entity}.errors.full_messages }, status: :unprocessable_entity
     end
   end
 
   def destroy
-    @item.destroy
+    @{entity}.destroy
     head :no_content
   end
 
   private
 
-  def set_item
-    @item = Item.find(params[:id])
+  def set_{entity}
+    @{entity} = {Entity}.find(params[:id])
   rescue ActiveRecord::RecordNotFound
-    render json: { error: 'Item not found' }, status: :not_found
+    render json: { error: '{Entity} not found' }, status: :not_found
   end
 
-  def item_params
-    params.require(:item).permit(:name, :completed)
+  def {entity}_params
+    params.require(:{entity}).permit(:{field1}, :{field2})
   end
 end
 ```
 
 RAILS MODEL:
 ```ruby
-class Item < ApplicationRecord
-  validates :name, presence: true, length: { maximum: 255 }
+class {Entity} < ApplicationRecord
+  validates :{field1}, presence: true, length: { maximum: 255 }
 
-  scope :completed, -> { where(completed: true) }
-  scope :pending, -> { where(completed: false) }
+  scope :active, -> { where({field2}: true) }
+  scope :inactive, -> { where({field2}: false) }
   scope :recent, -> { order(created_at: :desc) }
 end
 ```
 
 RAILS MIGRATION:
 ```ruby
-class CreateItems < ActiveRecord::Migration[7.0]
+class Create{Entities} < ActiveRecord::Migration[7.0]
   def change
-    create_table :items do |t|
-      t.string :name, null: false
-      t.boolean :completed, default: false
+    create_table :{entities} do |t|
+      t.string :{field1}, null: false
+      t.boolean :{field2}, default: false
 
       t.timestamps
     end
 
-    add_index :items, :completed
-    add_index :items, :created_at
+    add_index :{entities}, :{field2}
+    add_index :{entities}, :created_at
   end
 end
 ```

@@ -40,8 +40,8 @@ CRITICAL RULES
 PACKAGE FROM FILE PATH
 ═══════════════════════════════════════════════════════════════════════════════
 
-backend/src/main/java/com/myapp/model/User.java
-→ package com.myapp.model;
+backend/src/main/java/com/{project}/model/{Entity}.java
+→ package com.{project}.model;
 
 Steps: Remove backend/src/main/java/ → Remove filename → Replace / with .
 

@@ -71,7 +71,7 @@ Fix: <instructions>pip install fastapi</instructions>
 
 ImportError:
 ```
-Error: ImportError: cannot import name 'User' from 'models'
+Error: ImportError: cannot import name '{Entity}' from 'models'
 Fix: Check __init__.py exports, verify class exists
 ```
 
@@ -135,7 +135,7 @@ Fix: import { useState } from 'react' (use named import)
 
 ⚠️ TYPESCRIPT PROPERTY ERRORS (TS2339 - CRITICAL):
 ```
-Error: Property 'stock' does not exist on type 'Product'
+Error: Property '{wrongField}' does not exist on type '{Entity}'
 ```
 
 FIX STRATEGY:
@@ -144,9 +144,9 @@ FIX STRATEGY:
 3. Change component to use CORRECT property name from types
 
 Example:
-- Error: Property 'stock' does not exist on type 'Product'
-- types/index.ts has: stockQuantity: number
-- Fix: Change product.stock → product.stockQuantity
+- Error: Property '{wrongField}' does not exist on type '{Entity}'
+- types/index.ts has: {correctField}: {type}
+- Fix: Change {entity}.{wrongField} → {entity}.{correctField}
 
 RULES FOR TS2339:
 - NEVER add fake properties to types just to fix errors
