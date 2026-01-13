@@ -1926,6 +1926,10 @@ CMD ["/bin/sh", "-c", "{dev_cmd}"]
                     # This makes nginx proxy to frontend dev server instead of serving static files
                     await self._update_nginx_conf_for_dev_mode(project_path, dev_port, sandbox_runner)
 
+                    # Fix hardcoded localhost URLs in frontend code
+                    # Replace http://localhost:8080/api with /api (relative URL)
+                    await self._fix_localhost_api_urls(dir_path, sandbox_runner)
+
                     return FixResult(
                         success=True,
                         message=f"Converted Dockerfile to dev mode (hot reload enabled) at {dockerfile_path}",
@@ -2044,6 +2048,86 @@ http {{
 
         except Exception as e:
             logger.warning(f"[DockerInfraFixer] Error updating nginx.conf for dev mode: {e}")
+            return False
+
+    async def _fix_localhost_api_urls(self, frontend_path: str, sandbox_runner: callable) -> bool:
+        """
+        Fix API URLs by setting environment variables for relative paths.
+
+        Instead of hardcoding URLs, we set environment variables to empty string
+        so the frontend uses relative paths, which nginx proxies to the backend.
+
+        Creates/updates .env file with:
+        - VITE_API_URL=
+        - VITE_API_BASE_URL=
+        - REACT_APP_API_URL=
+        - NEXT_PUBLIC_API_URL=
+
+        Args:
+            frontend_path: Path to frontend directory
+            sandbox_runner: Function to run commands
+
+        Returns:
+            True if environment was configured, False otherwise
+        """
+        try:
+            env_file_path = f"{frontend_path}/.env"
+
+            # Environment variables for different frameworks
+            # Empty value = use relative paths = nginx proxies to backend
+            env_content = '''# API Configuration - Empty values use relative paths (proxied by nginx)
+VITE_API_URL=
+VITE_API_BASE_URL=
+REACT_APP_API_URL=
+REACT_APP_API_BASE_URL=
+NEXT_PUBLIC_API_URL=
+NEXT_PUBLIC_API_BASE_URL=
+'''
+            # Check if .env exists and append/update
+            existing_env = self._read_file_from_sandbox(env_file_path, sandbox_runner)
+
+            if existing_env:
+                # Update existing .env - replace localhost URLs with empty
+                import re
+                updated_env = existing_env
+
+                # Replace any localhost API URLs with empty
+                patterns = [
+                    (r'VITE_API_URL=http://localhost[^\n]*', 'VITE_API_URL='),
+                    (r'VITE_API_BASE_URL=http://localhost[^\n]*', 'VITE_API_BASE_URL='),
+                    (r'REACT_APP_API_URL=http://localhost[^\n]*', 'REACT_APP_API_URL='),
+                    (r'REACT_APP_API_BASE_URL=http://localhost[^\n]*', 'REACT_APP_API_BASE_URL='),
+                    (r'NEXT_PUBLIC_API_URL=http://localhost[^\n]*', 'NEXT_PUBLIC_API_URL='),
+                    (r'NEXT_PUBLIC_API_BASE_URL=http://localhost[^\n]*', 'NEXT_PUBLIC_API_BASE_URL='),
+                    (r'API_URL=http://localhost[^\n]*', 'API_URL='),
+                    (r'API_BASE_URL=http://localhost[^\n]*', 'API_BASE_URL='),
+                ]
+
+                for pattern, replacement in patterns:
+                    updated_env = re.sub(pattern, replacement, updated_env)
+
+                # Add missing variables
+                if 'VITE_API_URL' not in updated_env:
+                    updated_env += '\nVITE_API_URL='
+                if 'VITE_API_BASE_URL' not in updated_env:
+                    updated_env += '\nVITE_API_BASE_URL='
+
+                env_content = updated_env
+
+            # Write .env file
+            import base64
+            encoded = base64.b64encode(env_content.encode()).decode()
+            exit_code, _ = sandbox_runner(f'echo "{encoded}" | base64 -d > "{env_file_path}"', None, 10)
+
+            if exit_code == 0:
+                logger.info(f"[DockerInfraFixer] Configured API environment variables in {env_file_path}")
+                return True
+            else:
+                logger.warning(f"[DockerInfraFixer] Failed to write {env_file_path}")
+                return False
+
+        except Exception as e:
+            logger.warning(f"[DockerInfraFixer] Error configuring API environment: {e}")
             return False
 
     async def _create_nginx_conf_in_build_context(self, error_message: str, project_path: str, sandbox_runner: callable) -> FixResult:
