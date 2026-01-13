@@ -170,18 +170,18 @@ RULE: Before writing ANY component, check types/index.ts!
    }
 
    // Usage in service:
-   const response = await api.get<PageResponse<Employee>>('/api/employees');
-   setEmployees(response.content);
+   const response = await api.get<PageResponse<{Entity}>>('/api/{entities}');
+   set{Entities}(response.content);
    setTotalPages(response.totalPages);
    setCurrentPage(response.number);
    ```
 
    ❌ WRONG - custom names that don't match backend:
    ```typescript
-   interface EmployeeListResponse {
-     employees: Employee[];  // WRONG! Spring uses 'content'
-     total: number;          // WRONG! Spring uses 'totalElements'
-     page: number;           // WRONG! Spring uses 'number'
+   interface {Entity}ListResponse {
+     {entities}: {Entity}[];  // WRONG! Spring uses 'content'
+     total: number;           // WRONG! Spring uses 'totalElements'
+     page: number;            // WRONG! Spring uses 'number'
    }
    ```
 

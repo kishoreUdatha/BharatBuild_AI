@@ -214,12 +214,12 @@ interface PageResponse<T> {
 }
 ```
 
-❌ WRONG - DO NOT PLAN THESE:
+❌ WRONG - DO NOT PLAN custom list response types:
 ```typescript
-interface EmployeeListResponse {
-  employees: Employee[];  // WRONG!
-  total: number;          // WRONG!
-  page: number;           // WRONG!
+interface {Entity}ListResponse {
+  {entities}: {Entity}[];  // WRONG! Spring uses 'content'
+  total: number;           // WRONG! Spring uses 'totalElements'
+  page: number;            // WRONG! Spring uses 'number'
 }
 ```
 
