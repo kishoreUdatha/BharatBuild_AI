@@ -384,6 +384,18 @@ PREVENT ERRORS BY PLANNING:
 3. ALL ICONS used must be listed (Plus, Minus, Trash2, Edit, etc.)
 4. SERVICE FUNCTIONS must match what components call
 
+5. ROUTING & NAVIGATION (CRITICAL FOR PREVIEW):
+   - React projects MUST use HashRouter (not BrowserRouter)
+   - All navigation MUST use Link component from react-router-dom
+   - NEVER use <a href="..."> for internal navigation
+   - NEVER use window.location for navigation
+
+6. API CONFIGURATION (CRITICAL - NO HARDCODED URLS):
+   - Frontend MUST use relative API paths: /api/...
+   - NEVER hardcode localhost or backend URLs in frontend code
+   - nginx.conf proxies /api/* to backend automatically
+   - Include src/services/api.ts for generic API helper
+
 ═══════════════════════════════════════════════════════════════════════════════
                               📋 RULES
 ═══════════════════════════════════════════════════════════════════════════════
