@@ -1930,6 +1930,9 @@ CMD ["/bin/sh", "-c", "{dev_cmd}"]
                     # Replace http://localhost:8080/api with /api (relative URL)
                     await self._fix_localhost_api_urls(dir_path, sandbox_runner)
 
+                    # Fix BrowserRouter to HashRouter for iframe preview compatibility
+                    await self._fix_browser_router(dir_path, sandbox_runner)
+
                     return FixResult(
                         success=True,
                         message=f"Converted Dockerfile to dev mode (hot reload enabled) at {dockerfile_path}",
@@ -2128,6 +2131,84 @@ NEXT_PUBLIC_API_BASE_URL=
 
         except Exception as e:
             logger.warning(f"[DockerInfraFixer] Error configuring API environment: {e}")
+            return False
+
+    async def _fix_browser_router(self, frontend_path: str, sandbox_runner: callable) -> bool:
+        """
+        Fix BrowserRouter to HashRouter for iframe preview compatibility.
+
+        BrowserRouter breaks in iframe previews due to path issues.
+        HashRouter uses URL hash (#/path) which works in any context.
+
+        Searches for main.tsx, index.tsx, App.tsx and fixes:
+        - import { BrowserRouter } → import { HashRouter }
+        - <BrowserRouter> → <HashRouter>
+        - </BrowserRouter> → </HashRouter>
+
+        Args:
+            frontend_path: Path to frontend directory
+            sandbox_runner: Function to run commands
+
+        Returns:
+            True if router was fixed, False otherwise
+        """
+        try:
+            import re
+
+            # Find entry point files that might contain router setup
+            entry_files = [
+                f"{frontend_path}/src/main.tsx",
+                f"{frontend_path}/src/index.tsx",
+                f"{frontend_path}/src/main.jsx",
+                f"{frontend_path}/src/index.jsx",
+                f"{frontend_path}/src/App.tsx",
+                f"{frontend_path}/src/App.jsx",
+            ]
+
+            fixed_any = False
+
+            for file_path in entry_files:
+                content = self._read_file_from_sandbox(file_path, sandbox_runner)
+                if not content:
+                    continue
+
+                # Check if file uses BrowserRouter
+                if 'BrowserRouter' not in content:
+                    continue
+
+                logger.info(f"[DockerInfraFixer] Found BrowserRouter in {file_path}, converting to HashRouter")
+
+                # Replace BrowserRouter with HashRouter
+                updated_content = content
+
+                # Fix imports
+                updated_content = re.sub(
+                    r'import\s*\{\s*([^}]*)\bBrowserRouter\b([^}]*)\}\s*from\s*[\'"]react-router-dom[\'"]',
+                    lambda m: f"import {{ {m.group(1)}HashRouter{m.group(2)}}} from 'react-router-dom'",
+                    updated_content
+                )
+
+                # Fix JSX tags
+                updated_content = updated_content.replace('<BrowserRouter>', '<HashRouter>')
+                updated_content = updated_content.replace('</BrowserRouter>', '</HashRouter>')
+                updated_content = updated_content.replace('<BrowserRouter ', '<HashRouter ')
+
+                if updated_content != content:
+                    # Write updated file
+                    import base64
+                    encoded = base64.b64encode(updated_content.encode()).decode()
+                    exit_code, _ = sandbox_runner(f'echo "{encoded}" | base64 -d > "{file_path}"', None, 10)
+
+                    if exit_code == 0:
+                        logger.info(f"[DockerInfraFixer] Fixed BrowserRouter → HashRouter in {file_path}")
+                        fixed_any = True
+                    else:
+                        logger.warning(f"[DockerInfraFixer] Failed to write {file_path}")
+
+            return fixed_any
+
+        except Exception as e:
+            logger.warning(f"[DockerInfraFixer] Error fixing BrowserRouter: {e}")
             return False
 
     async def _create_nginx_conf_in_build_context(self, error_message: str, project_path: str, sandbox_runner: callable) -> FixResult:
