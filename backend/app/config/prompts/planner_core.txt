@@ -56,15 +56,15 @@ PREVENT ERRORS BY:
 2. ALL EXPORTS MUST BE DECLARED:
    - Named export: export { ComponentName }
    - Default export: export default ComponentName
-   - Re-export: export { User, Product } from './types'
+   - Re-export: export { {Entity1}, {Entity2} } from './types'
 
 3. ALL ICONS MUST BE IMPORTED:
    - React: import { Plus, Minus, Trash2, Edit, X } from 'lucide-react'
    - List ALL icons used in component
 
 4. API SERVICE FUNCTIONS MUST EXIST:
-   - If component calls api.getProducts() → api.ts must export getProducts
-   - If component calls createOrder() → orders service must export it
+   - If component calls api.get{Entities}() → api.ts must export get{Entities}
+   - If component calls create{Entity}() → {entity} service must export it
 
 5. CONTEXT PROVIDERS MUST HAVE ALL METHODS:
    - AuthContext: user, login, logout, register, loading

@@ -109,8 +109,8 @@ REQUIRED FILES (add to plan):
 
 2. PROPERTY NAMING RULES:
    - Use FULL descriptive names (not abbreviations)
-   - camelCase always (firstName NOT first_name)
-   - Be SPECIFIC: imageUrl NOT image, totalAmount NOT total
+   - camelCase always ({fieldName} NOT {field_name})
+   - Be SPECIFIC: {fieldName}Url NOT {fieldName}, {fieldName}Amount NOT {fieldName}
    - CONSISTENCY: Once you name a property, use SAME name everywhere
 
 3. PLAN THE TYPES FIRST:
