@@ -1,162 +1,210 @@
 
-JAVA / SPRING BOOT RULES:
+JAVA / SPRING BOOT PLANNER RULES
 
-🚨🚨🚨 CRITICAL: NO LOMBOK 🚨🚨🚨
-- NEVER use @Data, @Getter, @Setter, @Builder, @NoArgsConstructor, @AllArgsConstructor
-- NEVER add lombok dependency to pom.xml
-- ALWAYS write explicit getters, setters, and constructors
-- This is NON-NEGOTIABLE - Lombok breaks the build!
+═══════════════════════════════════════════════════════════════════════════════
+CRITICAL RULES
+═══════════════════════════════════════════════════════════════════════════════
 
-CRITICAL: PACKAGE STRUCTURE DOCUMENT (REQUIRED!)
-For ALL Java projects, you MUST output a <package_structure> section that documents:
-1. The base package name (e.g., com.company.project)
-2. The exact package for EACH entity, enum, DTO, repository, service, controller
-3. The ID type for each entity (Long, Integer, UUID)
+1. NO LOMBOK - NEVER use @Data, @Getter, @Setter, @Builder
+2. NO SECURITY for student projects - skip spring-boot-starter-security
+3. ENUMS must be separate files, never inside entity
+4. SPRING BOOT 3.x uses jakarta.* (NOT javax.*)
 
-Example format:
+═══════════════════════════════════════════════════════════════════════════════
+PACKAGE STRUCTURE (REQUIRED IN PLAN OUTPUT)
+═══════════════════════════════════════════════════════════════════════════════
+
+For ALL Java projects, output a <package_structure> section:
+
 <package_structure>
-BASE_PACKAGE: com.goldmart
+BASE_PACKAGE: com.{projectname}
 ENTITIES:
-  - Order: com.goldmart.model.entity.Order (ID: Long)
-  - User: com.goldmart.model.entity.User (ID: Long)
-  - Product: com.goldmart.model.entity.Product (ID: Long)
+  - {Entity}: com.{projectname}.model.{Entity} (ID: Long)
 ENUMS:
-  - OrderStatus: com.goldmart.model.enums.OrderStatus
-  - UserRole: com.goldmart.model.enums.UserRole
+  - {EnumName}: com.{projectname}.model.enums.{EnumName}
 DTOS:
-  - OrderDto: com.goldmart.dto.OrderDto
-  - UserDto: com.goldmart.dto.UserDto
+  - {Entity}Dto: com.{projectname}.dto.{Entity}Dto
 REPOSITORIES:
-  - OrderRepository: com.goldmart.repository.OrderRepository extends JpaRepository<Order, Long>
-  - UserRepository: com.goldmart.repository.UserRepository extends JpaRepository<User, Long>
+  - {Entity}Repository: com.{projectname}.repository.{Entity}Repository
 SERVICES:
-  - OrderService: com.goldmart.service.OrderService
-  - UserService: com.goldmart.service.UserService
+  - {Entity}Service: com.{projectname}.service.{Entity}Service
 CONTROLLERS:
-  - OrderController: com.goldmart.controller.OrderController
-  - UserController: com.goldmart.controller.UserController
+  - {Entity}Controller: com.{projectname}.controller.{Entity}Controller
 </package_structure>
 
-This document is CRITICAL - the Writer Agent will use it to ensure consistent packages across ALL files!
+═══════════════════════════════════════════════════════════════════════════════
+PROJECT STRUCTURE (SIMPLE - NO SECURITY)
+═══════════════════════════════════════════════════════════════════════════════
 
-PROJECT STRUCTURE:
-```
 backend/
-├── src/
-│   ├── main/
-│   │   ├── java/com/company/project/
-│   │   │   ├── config/
-│   │   │   │   ├── SecurityConfig.java
-│   │   │   │   ├── WebConfig.java
-│   │   │   │   └── CorsConfig.java
-│   │   │   ├── controller/
-│   │   │   │   └── UserController.java
-│   │   │   ├── service/
-│   │   │   │   ├── UserService.java
-│   │   │   │   └── impl/UserServiceImpl.java
-│   │   │   ├── repository/
-│   │   │   │   └── UserRepository.java
-│   │   │   ├── model/
-│   │   │   │   ├── entity/
-│   │   │   │   │   └── User.java
-│   │   │   │   ├── dto/
-│   │   │   │   │   ├── UserRequest.java
-│   │   │   │   │   └── UserResponse.java
-│   │   │   │   └── enums/
-│   │   │   │       └── UserRole.java
-│   │   │   ├── security/
-│   │   │   │   ├── JwtUtil.java
-│   │   │   │   └── JwtAuthFilter.java
-│   │   │   ├── exception/
-│   │   │   │   └── GlobalExceptionHandler.java
-│   │   │   └── Application.java
-│   │   └── resources/
-│   │       ├── application.yml
-│   │       └── application-dev.yml
-│   └── test/
+├── src/main/java/com/{project}/
+│   ├── config/
+│   │   └── CorsConfig.java           # CORS only, no security
+│   ├── controller/
+│   │   └── {Entity}Controller.java
+│   ├── service/
+│   │   └── {Entity}Service.java
+│   ├── repository/
+│   │   └── {Entity}Repository.java
+│   ├── model/
+│   │   └── {Entity}.java
+│   ├── dto/
+│   │   └── {Entity}Dto.java
+│   ├── model/enums/                  # Enums MUST be separate files!
+│   │   └── {EnumName}.java
+│   └── Application.java
+├── src/main/resources/
+│   └── application.yml
 ├── pom.xml
-├── Dockerfile
-├── docker-compose.yml
-└── README.md
+└── Dockerfile
+
+═══════════════════════════════════════════════════════════════════════════════
+FILE PRIORITY ORDER
+═══════════════════════════════════════════════════════════════════════════════
+
+1. pom.xml
+2. application.yml
+3-5. Enums (separate files!)
+6-10. Entities
+11-15. DTOs
+16-20. Repositories
+21-25. Services
+26-30. Config (CorsConfig only)
+31-35. Controllers
+36. Application.java
+37. Dockerfile
+
+═══════════════════════════════════════════════════════════════════════════════
+POM.XML DEPENDENCIES (NO SECURITY!)
+═══════════════════════════════════════════════════════════════════════════════
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.0</version>
+    </parent>
+
+    <groupId>com.{project}</groupId>
+    <artifactId>{project}</artifactId>
+    <version>1.0.0</version>
+
+    <properties>
+        <java.version>17</java.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <!-- NO LOMBOK! NO SECURITY! -->
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
 ```
 
-FILE PRIORITY ORDER:
-- pom.xml: 1
-- application.yml: 2
-- Enums (UserRole.java, Status.java): 3-5
-- Entities (User.java): 6-10
-- DTOs: 11-15
-- Repositories: 16-20
-- Services: 21-25
-- Security (JwtUtil, JwtAuthFilter): 26-30
-- Config (SecurityConfig, WebConfig): 31-35
-- Controllers: 36-40
-- Application.java (main): 41
-- Dockerfile: 42
+═══════════════════════════════════════════════════════════════════════════════
+APPLICATION.YML
+═══════════════════════════════════════════════════════════════════════════════
 
-BUILD-CRITICAL RULES:
+```yaml
+server:
+  port: 8080
+
+spring:
+  application:
+    name: {project}
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:db}:${DB_PORT:5432}/${DB_NAME:appdb}
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:postgres}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+CRITICAL BUILD RULES
+═══════════════════════════════════════════════════════════════════════════════
 
 1. ENUMS MUST BE SEPARATE FILES!
-   WRONG: Inner enum in Entity class
+   WRONG:
    ```java
    public class Order {
-       public enum OrderStatus { PENDING, COMPLETED }  // WRONG!
+       public enum OrderStatus { PENDING }  // WRONG!
    }
    ```
-   CORRECT: Separate file
+   CORRECT:
    ```java
-   // enums/OrderStatus.java
+   // model/enums/OrderStatus.java
    public enum OrderStatus { PENDING, COMPLETED }
    ```
 
-2. pom.xml MUST have all dependencies:
-   ```xml
-   <dependencies>
-       <dependency>
-           <groupId>org.springframework.boot</groupId>
-           <artifactId>spring-boot-starter-web</artifactId>
-       </dependency>
-       <dependency>
-           <groupId>org.springframework.boot</groupId>
-           <artifactId>spring-boot-starter-data-jpa</artifactId>
-       </dependency>
-       <dependency>
-           <groupId>org.springframework.boot</groupId>
-           <artifactId>spring-boot-starter-security</artifactId>
-       </dependency>
-       <dependency>
-           <groupId>org.postgresql</groupId>
-           <artifactId>postgresql</artifactId>
-           <scope>runtime</scope>
-       </dependency>
-       <!-- NO LOMBOK - Use explicit getters/setters instead -->
-       <dependency>
-           <groupId>io.jsonwebtoken</groupId>
-           <artifactId>jjwt-api</artifactId>
-           <version>0.11.5</version>
-       </dependency>
-   </dependencies>
-   ```
+2. Entity fields MUST match Service calls:
+   - Service calls entity.getName() → Entity MUST have getName()
+   - Service calls repo.findByEmail() → Repository MUST have findByEmail()
 
-3. application.yml MUST have:
-   ```yaml
-   server:
-     port: 8080
-   spring:
-     datasource:
-       url: jdbc:postgresql://db:5432/mydb
-       username: ${DB_USER:postgres}
-       password: ${DB_PASSWORD:postgres}
-     jpa:
-       hibernate:
-         ddl-auto: update
-       show-sql: true
-   ```
+3. Method signatures MUST match across files:
+   - Service: public {Entity}Dto findById(Long id)
+   - Controller: {entity}Service.findById(id)
 
-4. Entity fields MUST match what Services use:
-   - If Service calls user.getEmail(), Entity MUST have email field
-   - If Service calls repo.findByEmail(), Repository MUST have that method
+4. Keep files under 300 lines
 
-5. Keep each file under 300 lines:
-   - Split large services into smaller ones
-   - Use separate DTOs for request/response
+═══════════════════════════════════════════════════════════════════════════════
+DOCKERFILE (Alpine = apk NOT apt-get)
+═══════════════════════════════════════════════════════════════════════════════
+
+```dockerfile
+FROM maven:3.9-eclipse-temurin-17-alpine AS build
+WORKDIR /app
+COPY pom.xml .
+RUN mvn dependency:go-offline -B
+COPY src src
+RUN mvn clean package -DskipTests
+
+FROM eclipse-temurin:17-jre-alpine
+WORKDIR /app
+RUN apk add --no-cache curl
+COPY --from=build /app/target/*.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+PLANNING CHECKLIST
+═══════════════════════════════════════════════════════════════════════════════
+
+[ ] Package structure documented
+[ ] All enums are separate files
+[ ] No security files (no SecurityConfig, no JWT files)
+[ ] No spring-boot-starter-security in pom.xml
+[ ] No lombok in pom.xml
+[ ] CorsConfig.java included
+[ ] Field names consistent across Entity/DTO/Service
+[ ] File priorities assigned correctly

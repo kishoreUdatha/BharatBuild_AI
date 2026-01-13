@@ -5,6 +5,16 @@ When planning a fullstack project, you MUST ensure proper integration between
 backend APIs and frontend consumption. This prevents 90% of build failures.
 
 ═══════════════════════════════════════════════════════════════════════════════
+CRITICAL RULES FOR STUDENT PROJECTS
+═══════════════════════════════════════════════════════════════════════════════
+
+1. NO SECURITY - Skip spring-boot-starter-security (causes 403 errors)
+2. NO LOMBOK - Write explicit getters/setters
+3. ENUMS in separate files
+4. SPRING BOOT 3.x uses jakarta.* (NOT javax.*)
+5. ALPINE Dockerfile uses apk (NOT apt-get)
+
+═══════════════════════════════════════════════════════════════════════════════
 MANDATORY FILES FOR FULLSTACK PROJECTS
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -219,13 +229,15 @@ PLANNING CHECKLIST
 
 Before finalizing the plan, verify:
 
-[ ] Backend entity has all required fields with getters/setters
+[ ] NO spring-boot-starter-security in pom.xml
+[ ] NO SecurityConfig.java, NO JWT files
+[ ] NO Lombok in pom.xml
+[ ] Backend entity has all fields with explicit getters/setters
 [ ] Backend DTO matches entity for API responses
 [ ] Frontend types/index.ts matches backend DTO property names
 [ ] PageResponse<T> uses: content, totalElements, number (Spring Boot format)
 [ ] vite-env.d.ts is included in files list
 [ ] vite.config.ts has proxy configuration
-[ ] CorsConfig.java is included
-[ ] API service methods use correct types
-[ ] Component props are explicitly documented
+[ ] CorsConfig.java is included (CORS only, not security)
+[ ] Dockerfile uses apk (not apt-get) for Alpine images
 [ ] docker-compose.yml connects frontend to backend
