@@ -2517,6 +2517,16 @@ Be thorough, specific, and ensure all tasks are actionable by automation agents.
             if plan.get("tech_stack") and "java" in plan.get("tech_stack", "").lower():
                 logger.warning("[PlannerAgent] No <package_structure> found for Java project - Writer may have package inconsistencies!")
 
+        # Extract entity_specs (CRITICAL for field name consistency across Entity/DTO/Service/Frontend)
+        entity_specs_match = re.search(r'<entity_specs>(.*?)</entity_specs>', plan_content, re.DOTALL)
+        if entity_specs_match:
+            plan["entity_specs"] = entity_specs_match.group(1).strip()
+            logger.info(f"[PlannerAgent] Extracted entity_specs for cross-file field consistency")
+        else:
+            # For fullstack projects, this is important
+            if plan.get("tech_stack") and ("java" in plan.get("tech_stack", "").lower() or "spring" in plan.get("tech_stack", "").lower()):
+                logger.warning("[PlannerAgent] No <entity_specs> found - Writer may generate inconsistent field names!")
+
         # Log file count for debugging
         files_count = len(plan.get("files", []))
         logger.info(f"[PlannerAgent] Parsed plan with {files_count} files")
@@ -2537,31 +2547,49 @@ Be thorough, specific, and ensure all tasks are actionable by automation agents.
             files_content: Raw content inside <files> tag
 
         Returns:
-            List of file dictionaries with path, priority, description
+            List of file dictionaries with path, priority, description, exports
         """
         import re
 
         files = []
 
-        # Match each <file path="..." priority="...">...</file>
-        file_pattern = r'<file\s+path=["\']([^"\']+)["\']\s+priority=["\'](\d+)["\']>\s*<description>(.*?)</description>\s*</file>'
+        # Match each <file>...</file> block and extract all nested tags
+        file_block_pattern = r'<file\s+([^>]+)>(.*?)</file>'
 
-        for match in re.finditer(file_pattern, files_content, re.DOTALL):
-            files.append({
-                "path": match.group(1).strip(),
-                "priority": int(match.group(2)),
-                "description": match.group(3).strip()
-            })
+        for match in re.finditer(file_block_pattern, files_content, re.DOTALL):
+            attrs = match.group(1)
+            content = match.group(2)
 
-        # Also try alternative format: <file path="..." priority="..."><description>...</description></file>
-        if not files:
-            alt_pattern = r'<file\s+path=["\']([^"\']+)["\'](?:\s+priority=["\'](\d+)["\'])?\s*>\s*(?:<description>)?(.*?)(?:</description>)?\s*</file>'
-            for match in re.finditer(alt_pattern, files_content, re.DOTALL):
-                priority = int(match.group(2)) if match.group(2) else len(files) + 1
+            # Extract path attribute
+            path_match = re.search(r'path=["\']([^"\']+)["\']', attrs)
+            path = path_match.group(1).strip() if path_match else ""
+
+            # Extract priority attribute (with safe conversion)
+            priority_match = re.search(r'priority=["\'](\d+)["\']', attrs)
+            try:
+                priority = int(priority_match.group(1)) if priority_match else len(files) + 1
+            except (ValueError, AttributeError):
+                priority = len(files) + 1
+
+            # Extract description
+            desc_match = re.search(r'<description>(.*?)</description>', content, re.DOTALL)
+            description = desc_match.group(1).strip() if desc_match else ""
+
+            # Extract exports (CRITICAL for cross-file imports)
+            exports_match = re.search(r'<exports>(.*?)</exports>', content, re.DOTALL)
+            exports = exports_match.group(1).strip() if exports_match else ""
+
+            # Extract depends_on
+            depends_match = re.search(r'<depends_on>(.*?)</depends_on>', content, re.DOTALL)
+            depends_on = depends_match.group(1).strip() if depends_match else ""
+
+            if path:
                 files.append({
-                    "path": match.group(1).strip(),
+                    "path": path,
                     "priority": priority,
-                    "description": match.group(3).strip() if match.group(3) else ""
+                    "description": description,
+                    "exports": exports,
+                    "depends_on": depends_on
                 })
 
         # Sort by priority

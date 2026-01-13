@@ -16,7 +16,7 @@ RULE: If entity_specs defines a field as {fieldName}: {Type}
 - Backend DTO: private {Type} {fieldName};
 - Backend Service: dto.set{FieldName}(entity.get{FieldName}());
 - Frontend types: {fieldName}: {tsType};
-- Frontend components: {item.{fieldName}}
+- Frontend components: {{item}.{fieldName}}
 
 ❌ NEVER invent or guess field names
 ❌ NEVER use different names than entity_specs defines
@@ -32,25 +32,23 @@ API responses and frontend TypeScript interfaces. FOLLOW THESE RULES:
 1. SPRING BOOT PAGINATION - Page<T> FORMAT (MANDATORY)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-When returning paginated data from Spring Boot, the response format is:
-
 BACKEND (Java Controller):
 ```java
 @GetMapping
-public ResponseEntity<Page<EmployeeDto>> getAll(
+public ResponseEntity<Page<{Entity}Dto>> getAll(
     @RequestParam(defaultValue = "0") int page,
     @RequestParam(defaultValue = "10") int size) {
     return ResponseEntity.ok(service.findAll(PageRequest.of(page, size)));
 }
 ```
 
-ACTUAL JSON RESPONSE from Spring Boot:
+ACTUAL JSON RESPONSE from Spring Boot Page<T>:
 ```json
 {
-  "content": [...],           // Array of items
-  "totalElements": 100,       // Total count
+  "content": [...],           // Array of items - ALWAYS use this name
+  "totalElements": 100,       // Total count - ALWAYS use this name
   "totalPages": 10,           // Number of pages
-  "number": 0,                // Current page (0-indexed!)
+  "number": 0,                // Current page (0-indexed!) - ALWAYS use this name
   "size": 10,                 // Items per page
   "first": true,              // Is first page
   "last": false,              // Is last page
@@ -60,9 +58,9 @@ ACTUAL JSON RESPONSE from Spring Boot:
 
 FRONTEND (TypeScript) - MUST MATCH EXACTLY:
 ```typescript
-// src/types/index.ts - CORRECT
-interface PageResponse<T> {
-  content: T[];               // NOT 'data', 'items', 'employees'
+// src/types/index.ts - PageResponse type (REQUIRED)
+export interface PageResponse<T> {
+  content: T[];               // NOT 'data', 'items', '{entities}'
   totalElements: number;      // NOT 'total', 'count'
   totalPages: number;
   number: number;             // NOT 'page', 'currentPage' (0-indexed!)
@@ -73,90 +71,84 @@ interface PageResponse<T> {
 }
 
 // Usage in service:
-const response = await api.get<PageResponse<Employee>>('/api/employees');
-setEmployees(response.content);        // NOT response.data
-setTotal(response.totalElements);      // NOT response.total
-setCurrentPage(response.number);       // NOT response.page
+const response = await api.get<PageResponse<{Entity}>>('/api/{entities}');
+set{Entities}(response.content);        // NOT response.data
+setTotal(response.totalElements);       // NOT response.total
+setCurrentPage(response.number);        // NOT response.page
 ```
 
-❌ WRONG - DO NOT DO THIS:
+❌ WRONG - DO NOT create custom list response types:
 ```typescript
-interface EmployeeListResponse {
-  employees: Employee[];     // WRONG! Spring uses 'content'
-  total: number;             // WRONG! Spring uses 'totalElements'
-  page: number;              // WRONG! Spring uses 'number'
+interface {Entity}ListResponse {
+  {entities}: {Entity}[];     // WRONG! Spring uses 'content'
+  total: number;              // WRONG! Spring uses 'totalElements'
+  page: number;               // WRONG! Spring uses 'number'
 }
 ```
 
 2. ENTITY/DTO TO TYPESCRIPT TYPE MAPPING
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-BACKEND Entity (Java):
+TYPE MAPPING RULES (Java -> TypeScript):
+- Long, Integer -> number
+- String -> string
+- BigDecimal, Double -> number
+- Boolean -> boolean
+- LocalDate, LocalDateTime -> string (ISO format)
+- List<T> -> T[]
+
+BACKEND Entity Pattern:
 ```java
 @Entity
-public class Employee {
-    @Id @GeneratedValue
+@Table(name = "{table_name}")
+public class {Entity} {
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-    private String firstName;
-    private String lastName;
-    private String email;
-    private String department;
-    private BigDecimal salary;
-    private LocalDate joinDate;
+    private {Type1} {field1};
+    private {Type2} {field2};
+    // ... fields from entity_specs
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
-    // getters and setters...
+    // getters and setters for EACH field...
 }
 ```
 
-BACKEND DTO (Java):
+BACKEND DTO Pattern:
 ```java
-public class EmployeeDto {
+public class {Entity}Dto {
     private Long id;
-    private String firstName;
-    private String lastName;
-    private String email;
-    private String department;
-    private BigDecimal salary;
-    private String joinDate;      // Formatted as ISO string
+    private {Type1} {field1};
+    private {Type2} {field2};
+    // ... same fields from entity_specs
     private String createdAt;
     private String updatedAt;
-    // getters and setters...
+    // getters and setters for EACH field...
 }
 ```
 
-FRONTEND Type (TypeScript) - MUST MATCH DTO:
+FRONTEND Type Pattern (MUST MATCH DTO):
 ```typescript
 // src/types/index.ts
-export interface Employee {
-  id: number;                 // Long -> number
-  firstName: string;          // String -> string (camelCase!)
-  lastName: string;
-  email: string;
-  department: string;
-  salary: number;             // BigDecimal -> number
-  joinDate: string;           // LocalDate -> string (ISO format)
-  createdAt: string;          // LocalDateTime -> string
+export interface {Entity} {
+  id: number;
+  {field1}: {tsType1};
+  {field2}: {tsType2};
+  // ... same fields from entity_specs (use TypeScript types)
+  createdAt: string;
   updatedAt: string;
 }
 
-// Request DTOs (for create/update)
-export interface CreateEmployeeRequest {
-  firstName: string;
-  lastName: string;
-  email: string;
-  department: string;
-  salary: number;
-  joinDate: string;
+// Request DTOs
+export interface Create{Entity}Request {
+  {field1}: {tsType1};
+  {field2}: {tsType2};
+  // ... fields for creation (exclude id, createdAt, updatedAt)
 }
 
-export interface UpdateEmployeeRequest {
-  firstName?: string;
-  lastName?: string;
-  email?: string;
-  department?: string;
-  salary?: number;
-  joinDate?: string;
+export interface Update{Entity}Request {
+  {field1}?: {tsType1};
+  {field2}?: {tsType2};
+  // ... optional fields for update
 }
 ```
 
@@ -167,7 +159,7 @@ FRONTEND API Service (src/services/api.ts):
 ```typescript
 import axios from 'axios';
 
-// Use environment variable or relative path for Vite proxy
+// Use relative path for Vite proxy OR env variable for Docker
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 const api = axios.create({
@@ -176,46 +168,37 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-// Add auth token to requests
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-
 export default api;
 ```
 
-FRONTEND Employee Service (src/services/employeeService.ts):
+FRONTEND Entity Service Pattern (src/services/{entity}Service.ts):
 ```typescript
 import api from './api';
-import { Employee, CreateEmployeeRequest, UpdateEmployeeRequest, PageResponse } from '../types';
+import { {Entity}, Create{Entity}Request, Update{Entity}Request, PageResponse } from '../types';
 
-export const employeeService = {
+export const {entity}Service = {
   getAll: async (page = 0, size = 10) => {
-    const response = await api.get<PageResponse<Employee>>(`/employees?page=${page}&size=${size}`);
-    return response.data;  // This IS the PageResponse object
+    const response = await api.get<PageResponse<{Entity}>>(`/{entities}?page=${page}&size=${size}`);
+    return response.data;
   },
 
   getById: async (id: number) => {
-    const response = await api.get<Employee>(`/employees/${id}`);
+    const response = await api.get<{Entity}>(`/{entities}/${id}`);
     return response.data;
   },
 
-  create: async (data: CreateEmployeeRequest) => {
-    const response = await api.post<Employee>('/employees', data);
+  create: async (data: Create{Entity}Request) => {
+    const response = await api.post<{Entity}>('/{entities}', data);
     return response.data;
   },
 
-  update: async (id: number, data: UpdateEmployeeRequest) => {
-    const response = await api.put<Employee>(`/employees/${id}`, data);
+  update: async (id: number, data: Update{Entity}Request) => {
+    const response = await api.put<{Entity}>(`/{entities}/${id}`, data);
     return response.data;
   },
 
   delete: async (id: number) => {
-    await api.delete(`/employees/${id}`);
+    await api.delete(`/{entities}/${id}`);
   },
 };
 ```
@@ -236,7 +219,7 @@ export default defineConfig({
     hmr: false,  // Required for Docker preview
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',  // Spring Boot port
+        target: 'http://localhost:8080',
         changeOrigin: true,
         secure: false,
       },
@@ -266,10 +249,9 @@ public class CorsConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
-            .allowedOrigins("http://localhost:3000", "http://localhost:5173")
+            .allowedOrigins("*")
             .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
-            .allowedHeaders("*")
-            .allowCredentials(true);
+            .allowedHeaders("*");
     }
 }
 ```
@@ -279,14 +261,11 @@ public class CorsConfig implements WebMvcConfigurer {
 
 ⚠️ CRITICAL: Alpine images use APK, not APT-GET!
 
-If using Alpine base images (node:20-alpine, maven:3.9-eclipse-temurin-17-alpine):
-- Use `apk add --no-cache curl` (NOT `apt-get install -y curl`)
-- NO apt-get, NO dpkg, NO /var/lib/apt
+Alpine base images (node:20-alpine, eclipse-temurin:17-jre-alpine):
+- Use: apk add --no-cache curl
+- NOT: apt-get install -y curl
 
-If using Debian/Ubuntu base images (node:20, maven:3.9-eclipse-temurin-17):
-- Use `apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*`
-
-ALPINE DOCKERFILE EXAMPLE (Java):
+BACKEND Dockerfile (Alpine):
 ```dockerfile
 FROM maven:3.9-eclipse-temurin-17-alpine as build
 WORKDIR /app
@@ -315,7 +294,6 @@ services:
       - "8080:8080"
     environment:
       - SPRING_PROFILES_ACTIVE=docker
-      - CORS_ORIGINS=http://localhost:3000,http://frontend:3000
 
   frontend:
     build: ./frontend
@@ -330,39 +308,27 @@ services:
 8. COMPONENT PROPS CONSISTENCY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-When creating components, define props interface FIRST:
+When creating components, define props interface using entity_specs fields:
 
 ```typescript
-// Define props interface
-interface EmployeeCardProps {
-  employee: Employee;
-  onEdit: (employee: Employee) => void;
+// Props interface - use {Entity} type from types/index.ts
+interface {Entity}CardProps {
+  {entity}: {Entity};
+  onEdit: ({entity}: {Entity}) => void;
   onDelete: (id: number) => void;
-  onView: (id: number) => void;
 }
 
-// Use props interface
-export default function EmployeeCard({ employee, onEdit, onDelete, onView }: EmployeeCardProps) {
+// Component - access fields from entity_specs
+export default function {Entity}Card({ {entity}, onEdit, onDelete }: {Entity}CardProps) {
   return (
     <div>
-      <h3>{employee.firstName} {employee.lastName}</h3>
-      <p>{employee.email}</p>
-      <button onClick={() => onEdit(employee)}>Edit</button>
-      <button onClick={() => onDelete(employee.id)}>Delete</button>
-      <button onClick={() => onView(employee.id)}>View</button>
+      <h3>{{entity}.{field1}}</h3>
+      <p>{{entity}.{field2}}</p>
+      <button onClick={() => onEdit({entity})}>Edit</button>
+      <button onClick={() => onDelete({entity}.id)}>Delete</button>
     </div>
   );
 }
-```
-
-When using component, pass ALL required props:
-```typescript
-<EmployeeCard
-  employee={employee}
-  onEdit={handleEdit}
-  onDelete={handleDelete}
-  onView={handleView}
-/>
 ```
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -371,10 +337,10 @@ VERIFICATION CHECKLIST
 
 Before generating ANY file in a fullstack project:
 
-[ ] PageResponse<T> uses: content, totalElements, number (NOT data, total, page)
+[ ] Read entity_specs from plan - use EXACT field names
+[ ] PageResponse<T> uses: content, totalElements, number (Spring Boot format)
 [ ] Frontend types match backend DTO property names EXACTLY
+[ ] Field names consistent across Entity/DTO/Service/Frontend
 [ ] vite-env.d.ts exists for import.meta.env support
-[ ] API service uses correct base URL configuration
-[ ] Component props interfaces match usage
-[ ] CORS is configured on backend
-[ ] Vite proxy is configured for /api routes
+[ ] API service uses /api base URL (for Vite proxy)
+[ ] Dockerfile uses apk (not apt-get) for Alpine images

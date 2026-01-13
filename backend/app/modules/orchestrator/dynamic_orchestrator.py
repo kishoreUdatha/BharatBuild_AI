@@ -265,7 +265,11 @@ class PlanXMLSchema:
             if files_elem is not None:
                 for file_elem in files_elem.findall('file'):
                     path = file_elem.get('path', '')
-                    priority = int(file_elem.get('priority', '99'))
+                    # Safe priority conversion - handle non-numeric values
+                    try:
+                        priority = int(file_elem.get('priority', '99'))
+                    except (ValueError, TypeError):
+                        priority = 99  # Default to low priority if parsing fails
                     depends_on = file_elem.get('depends_on', '')
 
                     # Get description from nested <description> tag
@@ -4835,6 +4839,22 @@ CRITICAL RULES:
 - Import using the EXACT packages above, NOT guessed packages!
 """
 
+        # CRITICAL FIX: Include entity_specs for field name consistency across all files
+        entity_specs_context = ""
+        if context.plan and context.plan.get('entity_specs'):
+            entity_specs_context = f"""
+⚠️ ENTITY FIELD SPECIFICATIONS (USE THESE EXACT FIELD NAMES!):
+{context.plan.get('entity_specs')}
+
+CRITICAL RULES:
+- Use EXACTLY the field names listed above in Entity, DTO, Service, and Frontend
+- Backend Entity must have: private {{Type}} {{fieldName}}; + get{{FieldName}}() + set{{FieldName}}()
+- Backend DTO must have: SAME field names as Entity
+- Backend Service convertToDto must map: ALL fields from entity_specs
+- Frontend types must have: SAME field names (with TypeScript types)
+- NEVER invent or guess field names - use ONLY what's in entity_specs!
+"""
+
         # CRITICAL FIX: For Java files, include package/import context from existing files
         java_files_context = ""
         if file_path.endswith('.java') and context.files_created:
@@ -4880,6 +4900,7 @@ User Request: {context.user_request}
 Project Type: {context.project_type or 'Web Application'}
 Tech Stack: {json.dumps(context.tech_stack) if context.tech_stack else 'React + TypeScript + Tailwind'}
 {package_structure_context}
+{entity_specs_context}
 {types_content}
 {java_files_context}
 FILES ALREADY CREATED (you can import from these):
