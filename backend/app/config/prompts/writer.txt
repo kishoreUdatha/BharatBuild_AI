@@ -126,6 +126,106 @@ If tsconfig.json has `"references": [{ "path": "./tsconfig.node.json" }]`, you M
 NEVER reference a file in tsconfig.json that you don't create!
 
 ═══════════════════════════════════════════════════════════════════════════════
+                    🔗 ROUTING & NAVIGATION (CRITICAL FOR PREVIEW)
+═══════════════════════════════════════════════════════════════════════════════
+
+⚠️ CRITICAL: Projects run in iframe preview - routing MUST work correctly!
+
+REACT ROUTER - USE HashRouter FOR PREVIEW COMPATIBILITY:
+```tsx
+// main.tsx - CORRECT way to set up routing
+import { HashRouter } from 'react-router-dom'
+import App from './App'
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <HashRouter>
+    <App />
+  </HashRouter>
+)
+```
+
+WHY HashRouter?
+- BrowserRouter breaks in iframe preview (path issues)
+- HashRouter uses URL hash (#/path) which works in any context
+- No server-side routing configuration needed
+
+NAVIGATION - ALWAYS USE Link COMPONENT:
+```tsx
+// CORRECT - Uses React Router Link
+import { Link } from 'react-router-dom'
+<Link to="/dashboard">Dashboard</Link>
+
+// WRONG - Raw anchor tags break SPA navigation
+<a href="/dashboard">Dashboard</a>  // ❌ Causes full page reload
+```
+
+PROGRAMMATIC NAVIGATION:
+```tsx
+// CORRECT - useNavigate hook
+import { useNavigate } from 'react-router-dom'
+const navigate = useNavigate()
+navigate('/path')
+
+// WRONG - window.location breaks preview
+window.location.href = '/path'  // ❌ Breaks in iframe
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+                    🌐 API URLs - USE RELATIVE PATHS ONLY
+═══════════════════════════════════════════════════════════════════════════════
+
+⚠️ CRITICAL: ALWAYS use relative API paths - nginx proxies /api/* to backend!
+
+CORRECT - RELATIVE PATHS:
+```tsx
+// Use relative path starting with /api/
+fetch('/api/' + endpoint)
+axios.get('/api/' + resource)
+```
+
+WRONG - NEVER HARDCODE HOST/PORT:
+```tsx
+fetch('http://localhost:8000/api/...')  // ❌ WRONG
+fetch('http://backend:8000/api/...')    // ❌ WRONG
+```
+
+GENERIC API SERVICE PATTERN:
+```tsx
+// src/services/api.ts - Generic helper for any endpoint
+const request = async (endpoint: string, options?: RequestInit) => {
+  const response = await fetch(`/api/${endpoint}`, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  })
+  if (!response.ok) throw new Error(`API error: ${response.status}`)
+  return response.json()
+}
+
+export const api = {
+  get: (endpoint: string) => request(endpoint),
+  post: (endpoint: string, data: any) => request(endpoint, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  put: (endpoint: string, data: any) => request(endpoint, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  delete: (endpoint: string) => request(endpoint, { method: 'DELETE' }),
+}
+
+// Usage in components:
+// api.get('users')        → GET /api/users
+// api.post('users', data) → POST /api/users
+// api.get('users/1')      → GET /api/users/1
+```
+
+WHY RELATIVE PATHS?
+- nginx.conf proxies /api/* to backend container
+- Works in Docker, preview, and production
+- No environment-specific configuration needed
+
+═══════════════════════════════════════════════════════════════════════════════
                          🐍 PYTHON GUIDELINES
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -3419,8 +3519,6 @@ services:
       - backend
     networks:
       - app-network
-    environment:
-      - VITE_API_URL=http://backend:8000
 
   backend:
     build:
