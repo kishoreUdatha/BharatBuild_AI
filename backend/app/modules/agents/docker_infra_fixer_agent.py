@@ -196,10 +196,10 @@ ERROR_PATTERNS: List[Tuple[str, InfraErrorType, str, Optional[str]]] = [
      "Target stage not found - remove 'target:' from docker-compose.yml build config",
      None),
 
-    # Alpine Linux command compatibility (groupadd/useradd not available on Alpine)
-    (r"groupadd:.*not found|useradd:.*not found|/bin/sh:.*groupadd|/bin/sh:.*useradd|groupadd: command not found|useradd: command not found",
+    # Alpine Linux command compatibility (apt-get/groupadd/useradd not available on Alpine)
+    (r"apt-get:.*not found|/bin/sh:.*apt-get|groupadd:.*not found|useradd:.*not found|/bin/sh:.*groupadd|/bin/sh:.*useradd|groupadd: command not found|useradd: command not found|apt-get: command not found",
      InfraErrorType.DOCKERFILE_ALPINE_COMMANDS,
-     "Alpine Linux uses addgroup/adduser instead of groupadd/useradd",
+     "Alpine Linux uses apk (not apt-get) and addgroup/adduser (not groupadd/useradd)",
      None),
 
     # Java compilation errors - javax.* imports in Spring Boot 3.x
@@ -1332,16 +1332,14 @@ http {{
         Fix Alpine Linux command compatibility issues in Dockerfile.
 
         Alpine uses:
+        - apk instead of apt-get
         - addgroup instead of groupadd
         - adduser instead of useradd
 
         Common patterns to fix:
-        - RUN groupadd -r appuser && useradd -r -g appuser appuser
-          → RUN addgroup -S appuser && adduser -S -G appuser appuser
-        - RUN groupadd --system appuser
-          → RUN addgroup -S appuser
-        - RUN useradd --system --gid appuser appuser
-          → RUN adduser -S -G appuser appuser
+        - apt-get update && apt-get install -y curl → apk add --no-cache curl
+        - groupadd -r appuser && useradd -r -g appuser appuser
+          → addgroup -S appuser && adduser -S -G appuser appuser
         """
         try:
             # Find all Dockerfiles
@@ -1352,6 +1350,7 @@ http {{
             ]
 
             fixed_files = []
+            fixes_applied = []
 
             for dockerfile_path in dockerfile_paths:
                 if not self._file_exists_in_sandbox(dockerfile_path, sandbox_runner):
@@ -1361,62 +1360,111 @@ http {{
                 if not content:
                     continue
 
-                # Check if this Dockerfile has groupadd/useradd commands
-                if 'groupadd' not in content and 'useradd' not in content:
+                # Check if this Dockerfile has apt-get/groupadd/useradd commands
+                if 'apt-get' not in content and 'groupadd' not in content and 'useradd' not in content:
                     continue
 
                 original_content = content
 
-                # Replace groupadd patterns with addgroup
-                # Pattern: groupadd -r groupname OR groupadd --system groupname
-                content = re.sub(
-                    r'groupadd\s+(?:-r|--system)\s+(\w+)',
-                    r'addgroup -S \1',
-                    content
-                )
+                # ===== APT-GET TO APK CONVERSIONS =====
+                if 'apt-get' in content:
+                    # Pattern: apt-get update && apt-get install -y pkg1 pkg2 ... && rm -rf /var/lib/apt/lists/*
+                    # → apk add --no-cache pkg1 pkg2 ...
+                    content = re.sub(
+                        r'apt-get\s+update\s*&&\s*apt-get\s+install\s+(?:--no-install-recommends\s+)?-y\s+([^&]+?)\s*&&\s*rm\s+-rf\s+/var/lib/apt/lists/\*',
+                        lambda m: f'apk add --no-cache {m.group(1).strip()}',
+                        content
+                    )
 
-                # Pattern: groupadd groupname (without flags)
-                content = re.sub(
-                    r'groupadd\s+(\w+)(?!\s)',
-                    r'addgroup -S \1',
-                    content
-                )
+                    # Pattern: apt-get update && apt-get install -y pkg1 pkg2 (without rm cleanup)
+                    content = re.sub(
+                        r'apt-get\s+update\s*&&\s*apt-get\s+install\s+(?:--no-install-recommends\s+)?-y\s+([^\n&]+)',
+                        lambda m: f'apk add --no-cache {m.group(1).strip()}',
+                        content
+                    )
 
-                # Replace useradd patterns with adduser
-                # Pattern: useradd -r -g groupname username OR useradd --system --gid groupname username
-                content = re.sub(
-                    r'useradd\s+(?:-r|--system)\s+(?:-g|--gid)\s+(\w+)\s+(\w+)',
-                    r'adduser -S -G \1 \2',
-                    content
-                )
+                    # Pattern: standalone apt-get install -y packages
+                    content = re.sub(
+                        r'apt-get\s+install\s+(?:--no-install-recommends\s+)?-y\s+([^\n&]+)',
+                        lambda m: f'apk add --no-cache {m.group(1).strip()}',
+                        content
+                    )
 
-                # Pattern: useradd -r username (system user without group)
-                content = re.sub(
-                    r'useradd\s+(?:-r|--system)\s+(\w+)(?!\s+-)',
-                    r'adduser -S \1',
-                    content
-                )
+                    # Pattern: standalone apt-get update (remove if it's the only thing left on the line)
+                    content = re.sub(
+                        r'RUN\s+apt-get\s+update\s*\n',
+                        '',
+                        content
+                    )
 
-                # Pattern: useradd --no-create-home --shell /sbin/nologin -g group user
-                content = re.sub(
-                    r'useradd\s+(?:--no-create-home\s+)?(?:--shell\s+\S+\s+)?(?:-g|--gid)\s+(\w+)\s+(\w+)',
-                    r'adduser -S -G \1 -H -D \2',
-                    content
-                )
+                    # Pattern: rm -rf /var/lib/apt/lists/* (not needed with apk --no-cache)
+                    content = re.sub(
+                        r'\s*&&\s*rm\s+-rf\s+/var/lib/apt/lists/\*',
+                        '',
+                        content
+                    )
 
-                # Pattern: useradd -u UID -g GID username
-                content = re.sub(
-                    r'useradd\s+(?:-u|--uid)\s+(\d+)\s+(?:-g|--gid)\s+(\w+)\s+(\w+)',
-                    r'adduser -S -u \1 -G \2 \3',
-                    content
-                )
+                    if 'apt-get' not in content:
+                        fixes_applied.append("apt-get→apk")
 
-                # Pattern: Simple useradd username
-                content = re.sub(
-                    r'useradd\s+(\w+)(?!\s+-)',
-                    r'adduser -S -D \1',
-                    content
-                )
+                # ===== GROUPADD TO ADDGROUP CONVERSIONS =====
+                if 'groupadd' in content:
+                    # Pattern: groupadd -r groupname OR groupadd --system groupname
+                    content = re.sub(
+                        r'groupadd\s+(?:-r|--system)\s+(\w+)',
+                        r'addgroup -S \1',
+                        content
+                    )
+
+                    # Pattern: groupadd groupname (without flags)
+                    content = re.sub(
+                        r'groupadd\s+(\w+)(?!\s)',
+                        r'addgroup -S \1',
+                        content
+                    )
+
+                    if 'groupadd' not in content:
+                        fixes_applied.append("groupadd→addgroup")
+
+                # ===== USERADD TO ADDUSER CONVERSIONS =====
+                if 'useradd' in content:
+                    # Pattern: useradd -r -g groupname username
+                    content = re.sub(
+                        r'useradd\s+(?:-r|--system)\s+(?:-g|--gid)\s+(\w+)\s+(\w+)',
+                        r'adduser -S -G \1 \2',
+                        content
+                    )
+
+                    # Pattern: useradd -r username
+                    content = re.sub(
+                        r'useradd\s+(?:-r|--system)\s+(\w+)(?!\s+-)',
+                        r'adduser -S \1',
+                        content
+                    )
+
+                    # Pattern: useradd --no-create-home --shell /sbin/nologin -g group user
+                    content = re.sub(
+                        r'useradd\s+(?:--no-create-home\s+)?(?:--shell\s+\S+\s+)?(?:-g|--gid)\s+(\w+)\s+(\w+)',
+                        r'adduser -S -G \1 -H -D \2',
+                        content
+                    )
+
+                    # Pattern: useradd -u UID -g GID username
+                    content = re.sub(
+                        r'useradd\s+(?:-u|--uid)\s+(\d+)\s+(?:-g|--gid)\s+(\w+)\s+(\w+)',
+                        r'adduser -S -u \1 -G \2 \3',
+                        content
+                    )
+
+                    # Pattern: Simple useradd username
+                    content = re.sub(
+                        r'useradd\s+(\w+)(?!\s+-)',
+                        r'adduser -S -D \1',
+                        content
+                    )
+
+                    if 'useradd' not in content:
+                        fixes_applied.append("useradd→adduser")
 
                 if content != original_content:
                     if self._write_file_to_sandbox(dockerfile_path, content, sandbox_runner):
@@ -1426,14 +1474,14 @@ http {{
             if fixed_files:
                 return FixResult(
                     success=True,
-                    message=f"Fixed Alpine commands (groupadd→addgroup, useradd→adduser) in: {', '.join(fixed_files)}",
+                    message=f"Fixed Alpine commands ({', '.join(fixes_applied)}) in: {', '.join(fixed_files)}",
                     file_modified=dockerfile_paths[0] if len(fixed_files) == 1 else None,
-                    changes_made="Replaced Debian user/group commands with Alpine equivalents"
+                    changes_made="Replaced Debian commands with Alpine equivalents"
                 )
 
             return FixResult(
                 success=False,
-                message="Could not find groupadd/useradd commands to fix in Dockerfiles"
+                message="Could not find apt-get/groupadd/useradd commands to fix in Dockerfiles"
             )
 
         except Exception as e:
