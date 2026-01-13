@@ -1928,12 +1928,19 @@ CMD ["/bin/sh", "-c", "{dev_cmd}"]
 
                     # Fix hardcoded localhost URLs in frontend code
                     # 1. Fix .env files
-                    await self._fix_localhost_api_urls(dir_path, sandbox_runner)
+                    logger.info(f"[DockerInfraFixer] Fixing .env files in {dir_path}")
+                    env_fixed = await self._fix_localhost_api_urls(dir_path, sandbox_runner)
+                    logger.info(f"[DockerInfraFixer] .env fix result: {env_fixed}")
+
                     # 2. Fix hardcoded URLs in source code (api.ts, services, etc.)
-                    await self._fix_hardcoded_api_urls_in_source(dir_path, sandbox_runner)
+                    logger.info(f"[DockerInfraFixer] Fixing hardcoded URLs in source files")
+                    source_fixed = await self._fix_hardcoded_api_urls_in_source(dir_path, sandbox_runner)
+                    logger.info(f"[DockerInfraFixer] Source URL fix result: {source_fixed}")
 
                     # Fix BrowserRouter to HashRouter for iframe preview compatibility
-                    await self._fix_browser_router(dir_path, sandbox_runner)
+                    logger.info(f"[DockerInfraFixer] Fixing BrowserRouter to HashRouter")
+                    router_fixed = await self._fix_browser_router(dir_path, sandbox_runner)
+                    logger.info(f"[DockerInfraFixer] Router fix result: {router_fixed}")
 
                     return FixResult(
                         success=True,
@@ -2157,16 +2164,40 @@ NEXT_PUBLIC_API_BASE_URL=
             import re
             import base64
 
-            # Find all source files
+            # Find all source files with full paths
             src_path = f"{frontend_path}/src"
+
+            # Use find with proper grouping to get full paths
             exit_code, output = sandbox_runner(
                 f'find "{src_path}" -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" \\) 2>/dev/null',
                 None, 30
             )
 
-            if exit_code != 0 or not output:
-                logger.debug(f"[DockerInfraFixer] No source files found in {src_path}")
-                return False
+            logger.info(f"[DockerInfraFixer] find exit_code={exit_code}, output_len={len(output) if output else 0}")
+
+            if exit_code != 0 or not output or not output.strip():
+                logger.warning(f"[DockerInfraFixer] No source files found in {src_path}, trying direct file check")
+                # Fallback: check common files directly
+                common_files = [
+                    f"{frontend_path}/src/services/api.ts",
+                    f"{frontend_path}/src/api/api.ts",
+                    f"{frontend_path}/src/lib/api.ts",
+                    f"{frontend_path}/src/utils/api.ts",
+                    f"{frontend_path}/src/api.ts",
+                    f"{frontend_path}/src/App.tsx",
+                    f"{frontend_path}/src/main.tsx",
+                ]
+                output = ""
+                for f in common_files:
+                    check_code, _ = sandbox_runner(f'test -f "{f}" && echo "{f}"', None, 5)
+                    if check_code == 0:
+                        output += f + "\n"
+
+                if not output.strip():
+                    logger.warning(f"[DockerInfraFixer] No source files found even with fallback")
+                    return False
+
+            logger.info(f"[DockerInfraFixer] Found source files: {output[:500]}")
 
             source_files = [f.strip() for f in output.strip().split('\n') if f.strip()]
             fixed_any = False
