@@ -1947,6 +1947,16 @@ public class GlobalExceptionHandler {
 ⚠️ MANDATORY: All Java files in a project MUST be consistent with each other.
 Inconsistency causes build failures that are VERY difficult to fix.
 
+⚠️ CROSS-FILE CONSISTENCY (CHECK BEFORE WRITING):
+
+A. ENTITY FIELDS: If Service calls entity.getXxx() → Entity MUST have field xxx with getter/setter
+
+B. SERVICE METHODS: If Controller calls service.methodName(params) → Service MUST have that exact method with matching signature
+
+C. RETURN TYPES: If Controller expects TypeA, Service MUST return TypeA (not Optional<TypeB>)
+
+D. REPOSITORY METHODS: If Service calls repository.findByXxx() → Repository MUST have that method or it must be a valid Spring Data JPA derived query
+
 1. DTO STRUCTURE - USE FLAT CLASSES, NOT NESTED:
 ❌ WRONG (causes mismatch errors):
 ```java
