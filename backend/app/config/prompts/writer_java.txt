@@ -1,6 +1,16 @@
 
 JAVA/SPRING BOOT RULES:
 
+⚠️ SPRING BOOT 3.x - USE jakarta.* NOT javax.*:
+- import jakarta.persistence.* (NOT javax.persistence.*)
+- import jakarta.validation.* (NOT javax.validation.*)
+
+⚠️ CROSS-FILE CONSISTENCY (CRITICAL):
+A. If Service calls entity.getXxx() → Entity MUST have field xxx with getter/setter
+B. If Controller calls service.methodName(params) → Service MUST have that exact method
+C. If Controller expects TypeA, Service MUST return TypeA (not Optional<TypeB>)
+D. If Service calls repository.findByXxx() → Repository MUST have that method
+
 🚨 NO LOMBOK - USE EXPLICIT GETTERS/SETTERS:
 - DO NOT use Lombok annotations (@Data, @Getter, @Setter, @Builder, @NoArgsConstructor, @AllArgsConstructor, @RequiredArgsConstructor)
 - DO NOT import lombok.*
