@@ -5,6 +5,24 @@ This prompt is loaded for fullstack projects with both frontend/ and backend/ fo
 These rules ensure PERFECT integration between backend APIs and frontend consumption.
 
 ═══════════════════════════════════════════════════════════════════════════════
+⚠️ MANDATORY: READ ENTITY_SPECS FROM PLAN FIRST!
+═══════════════════════════════════════════════════════════════════════════════
+
+BEFORE writing ANY file, find <entity_specs> in the plan context.
+Use EXACT field names from entity_specs across ALL files.
+
+RULE: If entity_specs defines a field as {fieldName}: {Type}
+- Backend Entity: private {Type} {fieldName};
+- Backend DTO: private {Type} {fieldName};
+- Backend Service: dto.set{FieldName}(entity.get{FieldName}());
+- Frontend types: {fieldName}: {tsType};
+- Frontend components: {item.{fieldName}}
+
+❌ NEVER invent or guess field names
+❌ NEVER use different names than entity_specs defines
+✅ ALWAYS copy exact field names from entity_specs
+
+═══════════════════════════════════════════════════════════════════════════════
 ⚠️ CRITICAL: BACKEND-FRONTEND TYPE SYNCHRONIZATION
 ═══════════════════════════════════════════════════════════════════════════════
 
