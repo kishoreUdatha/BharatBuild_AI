@@ -353,6 +353,21 @@ src/main/resources/application.yml (35)
 4. Method signatures must match exactly between caller and callee.
 5. In file descriptions, be explicit about cross-file dependencies so the Writer Agent can maintain alignment.
 
+⚠️ JAVA CLASS COMPLETENESS (ZERO MISSING CLASSES):
+
+RULE: Every class that is imported by ANY file MUST exist in your file list.
+
+BEFORE FINALIZING, CHECK EACH FILE'S IMPORTS:
+- If file A imports com.app.dto.XyzDto → XyzDto.java MUST be in file list
+- If file A imports com.app.model.SomeEnum → SomeEnum.java MUST be in file list
+- If file A imports com.app.security.SomeFilter → SomeFilter.java MUST be in file list
+- If file A imports com.app.service.SomeService → SomeService.java MUST be in file list
+
+NO ORPHAN IMPORTS: If a class is referenced anywhere, it MUST be generated.
+
+⚠️ SPRING BOOT 3.x: Uses jakarta.* packages (NOT javax.*)!
+Mention this requirement in file descriptions.
+
 ═══════════════════════════════════════════════════════════════════════════════
 ⚠️ ZERO COMPILATION ERRORS - MANDATORY FOR ALL PROJECT TYPES
 ═══════════════════════════════════════════════════════════════════════════════

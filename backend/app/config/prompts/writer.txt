@@ -34,6 +34,12 @@ BEFORE WRITING ANY FILE, VERIFY:
    - Named import { X } → use: export { X } or export const X
    - Default import X → use: export default X
 
+6. JAVA FILES - SPRING BOOT 3.x USES jakarta.* (NOT javax.*):
+   - Use: import jakarta.persistence.*
+   - Use: import jakarta.validation.*
+   - NEVER use: import javax.persistence.* (WRONG - causes compilation errors)
+   - NEVER use: import javax.validation.* (WRONG - causes compilation errors)
+
 ═══════════════════════════════════════════════════════════════════════════════
                               📋 INPUT FORMAT
 ═══════════════════════════════════════════════════════════════════════════════

@@ -64,6 +64,8 @@ class InfraErrorType(Enum):
     DOCKERFILE_MISSING = "dockerfile_missing"  # Cannot locate specified Dockerfile
     DOCKERFILE_TARGET_MISSING = "dockerfile_target_missing"  # target stage not found in Dockerfile
     DOCKERFILE_ALPINE_COMMANDS = "dockerfile_alpine_commands"  # groupadd/useradd not found on Alpine
+    # Java
+    JAVA_JAVAX_IMPORT = "java_javax_import"  # javax.* imports in Spring Boot 3.x (should be jakarta.*)
     # Docker Compose
     COMPOSE_SYNTAX = "compose_syntax"
     COMPOSE_DEPENDS_ON = "compose_depends_on"
@@ -198,6 +200,12 @@ ERROR_PATTERNS: List[Tuple[str, InfraErrorType, str, Optional[str]]] = [
     (r"groupadd:.*not found|useradd:.*not found|/bin/sh:.*groupadd|/bin/sh:.*useradd|groupadd: command not found|useradd: command not found",
      InfraErrorType.DOCKERFILE_ALPINE_COMMANDS,
      "Alpine Linux uses addgroup/adduser instead of groupadd/useradd",
+     None),
+
+    # Java compilation errors - javax.* imports in Spring Boot 3.x
+    (r"package javax\.persistence does not exist|package javax\.validation does not exist|cannot find symbol.*javax\.persistence|cannot find symbol.*javax\.validation",
+     InfraErrorType.JAVA_JAVAX_IMPORT,
+     "Spring Boot 3.x requires jakarta.* imports (not javax.*)",
      None),
 
     # Docker Compose errors
@@ -336,6 +344,7 @@ class DockerInfraFixerAgent:
             InfraErrorType.DOCKERFILE_MISSING,  # Missing Dockerfile (e.g., nginx with build: .)
             InfraErrorType.DOCKERFILE_TARGET_MISSING,  # Target stage not found (remove 'target:')
             InfraErrorType.DOCKERFILE_ALPINE_COMMANDS,  # Alpine uses addgroup/adduser
+            InfraErrorType.JAVA_JAVAX_IMPORT,  # javax.* → jakarta.* for Spring Boot 3.x
         }
         return error_type in fixable_types
 
@@ -439,6 +448,7 @@ class DockerInfraFixerAgent:
             InfraErrorType.DOCKERFILE_MISSING: lambda sr: self._fix_missing_dockerfile(error_message, project_path, sr),
             InfraErrorType.DOCKERFILE_TARGET_MISSING: lambda sr: self._fix_missing_target(error_message, project_path, sr),
             InfraErrorType.DOCKERFILE_ALPINE_COMMANDS: lambda sr: self._fix_alpine_commands(error_message, project_path, sr),
+            InfraErrorType.JAVA_JAVAX_IMPORT: lambda sr: self._fix_java_javax_import_error(project_path, sr),
         }
 
         handler = fix_handlers.get(error.error_type)
@@ -2336,6 +2346,128 @@ NEXT_PUBLIC_API_BASE_URL=
         except Exception as e:
             logger.warning(f"[DockerInfraFixer] Error fixing BrowserRouter: {e}")
             return False
+
+    async def _fix_javax_to_jakarta(self, backend_path: str, sandbox_runner: callable) -> bool:
+        """
+        Fix javax.* imports to jakarta.* for Spring Boot 3.x compatibility.
+
+        Spring Boot 3.x uses Jakarta EE 9+ which moved from javax.* to jakarta.* namespace.
+        This fixes common import issues in Java files.
+
+        Args:
+            backend_path: Path to backend directory containing Java files
+            sandbox_runner: Function to run commands
+
+        Returns:
+            True if any files were fixed, False otherwise
+        """
+        try:
+            import re
+            import base64
+
+            # Find all Java files
+            exit_code, output = sandbox_runner(
+                f'find "{backend_path}" -name "*.java" -type f 2>/dev/null',
+                None, 30
+            )
+
+            if exit_code != 0 or not output or not output.strip():
+                logger.info(f"[DockerInfraFixer] No Java files found in {backend_path}")
+                return False
+
+            java_files = [f.strip() for f in output.strip().split('\n') if f.strip()]
+            fixed_any = False
+
+            # javax → jakarta replacements for Spring Boot 3.x
+            replacements = [
+                (r'import\s+javax\.persistence\.', 'import jakarta.persistence.'),
+                (r'import\s+javax\.validation\.', 'import jakarta.validation.'),
+                (r'import\s+javax\.servlet\.', 'import jakarta.servlet.'),
+                (r'import\s+javax\.annotation\.', 'import jakarta.annotation.'),
+                (r'import\s+javax\.transaction\.', 'import jakarta.transaction.'),
+            ]
+
+            for file_path in java_files:
+                content = self._read_file_from_sandbox(file_path, sandbox_runner)
+                if not content:
+                    continue
+
+                # Skip if no javax imports
+                if 'import javax.' not in content:
+                    continue
+
+                original_content = content
+                updated_content = content
+
+                for pattern, replacement in replacements:
+                    updated_content = re.sub(pattern, replacement, updated_content)
+
+                if updated_content != original_content:
+                    encoded = base64.b64encode(updated_content.encode()).decode()
+                    exit_code, _ = sandbox_runner(
+                        f'echo "{encoded}" | base64 -d > "{file_path}"',
+                        None, 10
+                    )
+
+                    if exit_code == 0:
+                        logger.info(f"[DockerInfraFixer] Fixed javax→jakarta imports in {file_path}")
+                        fixed_any = True
+                    else:
+                        logger.warning(f"[DockerInfraFixer] Failed to write {file_path}")
+
+            if fixed_any:
+                logger.info(f"[DockerInfraFixer] Fixed javax→jakarta imports in Java files")
+
+            return fixed_any
+
+        except Exception as e:
+            logger.warning(f"[DockerInfraFixer] Error fixing javax imports: {e}")
+            return False
+
+    async def _fix_java_javax_import_error(self, project_path: str, sandbox_runner: callable) -> FixResult:
+        """
+        Handle javax.* import errors by converting to jakarta.* for Spring Boot 3.x.
+
+        Args:
+            project_path: Path to the project
+            sandbox_runner: Function to run commands
+
+        Returns:
+            FixResult indicating success or failure
+        """
+        try:
+            # Try to fix in backend folder first, then root
+            backend_paths = [
+                f"{project_path}/backend",
+                f"{project_path}/src",
+                project_path
+            ]
+
+            for backend_path in backend_paths:
+                # Check if path has Java files
+                exit_code, output = sandbox_runner(
+                    f'find "{backend_path}" -name "*.java" -type f 2>/dev/null | head -1',
+                    None, 10
+                )
+                if exit_code == 0 and output and output.strip():
+                    fixed = await self._fix_javax_to_jakarta(backend_path, sandbox_runner)
+                    if fixed:
+                        return FixResult(
+                            success=True,
+                            message="Fixed javax.* imports to jakarta.* for Spring Boot 3.x compatibility"
+                        )
+
+            return FixResult(
+                success=False,
+                message="No Java files with javax.* imports found to fix"
+            )
+
+        except Exception as e:
+            logger.error(f"[DockerInfraFixer] Error fixing javax imports: {e}")
+            return FixResult(
+                success=False,
+                message=f"Error fixing javax imports: {e}"
+            )
 
     async def _create_nginx_conf_in_build_context(self, error_message: str, project_path: str, sandbox_runner: callable) -> FixResult:
         """
