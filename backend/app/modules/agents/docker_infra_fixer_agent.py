@@ -1927,8 +1927,10 @@ CMD ["/bin/sh", "-c", "{dev_cmd}"]
                     await self._update_nginx_conf_for_dev_mode(project_path, dev_port, sandbox_runner)
 
                     # Fix hardcoded localhost URLs in frontend code
-                    # Replace http://localhost:8080/api with /api (relative URL)
+                    # 1. Fix .env files
                     await self._fix_localhost_api_urls(dir_path, sandbox_runner)
+                    # 2. Fix hardcoded URLs in source code (api.ts, services, etc.)
+                    await self._fix_hardcoded_api_urls_in_source(dir_path, sandbox_runner)
 
                     # Fix BrowserRouter to HashRouter for iframe preview compatibility
                     await self._fix_browser_router(dir_path, sandbox_runner)
@@ -2131,6 +2133,99 @@ NEXT_PUBLIC_API_BASE_URL=
 
         except Exception as e:
             logger.warning(f"[DockerInfraFixer] Error configuring API environment: {e}")
+            return False
+
+    async def _fix_hardcoded_api_urls_in_source(self, frontend_path: str, sandbox_runner: callable) -> bool:
+        """
+        Fix hardcoded localhost API URLs in source code files.
+
+        Replaces patterns like:
+        - http://localhost:8080/api/... → /api/...
+        - http://localhost:8000/api/... → /api/...
+        - http://localhost:3000/api/... → /api/...
+
+        Scans all .ts, .tsx, .js, .jsx files in src directory.
+
+        Args:
+            frontend_path: Path to frontend directory
+            sandbox_runner: Function to run commands
+
+        Returns:
+            True if any files were fixed, False otherwise
+        """
+        try:
+            import re
+            import base64
+
+            # Find all source files
+            src_path = f"{frontend_path}/src"
+            exit_code, output = sandbox_runner(
+                f'find "{src_path}" -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" \\) 2>/dev/null',
+                None, 30
+            )
+
+            if exit_code != 0 or not output:
+                logger.debug(f"[DockerInfraFixer] No source files found in {src_path}")
+                return False
+
+            source_files = [f.strip() for f in output.strip().split('\n') if f.strip()]
+            fixed_any = False
+
+            # Pattern to match hardcoded localhost API URLs
+            # Matches: http://localhost:PORT/api or http://localhost:PORT (when used as base URL)
+            localhost_pattern = re.compile(
+                r'''(['"`])http://localhost:\d+(/api)?(['"`])''',
+                re.IGNORECASE
+            )
+
+            # Also match when assigned to variables or in fetch/axios calls
+            url_patterns = [
+                # Direct URL strings: "http://localhost:8080/api/employees"
+                (r'([\'"`])http://localhost:\d+/api/', r'\1/api/'),
+                # Base URL assignments: "http://localhost:8080"
+                (r'([\'"`])http://localhost:\d+([\'"`])', r'\1\2'),
+                # Template literals: `http://localhost:8080/api/${id}`
+                (r'`http://localhost:\d+/api/', r'`/api/'),
+                (r'`http://localhost:\d+`', r'``'),
+            ]
+
+            for file_path in source_files:
+                content = self._read_file_from_sandbox(file_path, sandbox_runner)
+                if not content:
+                    continue
+
+                # Check if file has localhost URLs
+                if 'localhost' not in content.lower():
+                    continue
+
+                original_content = content
+                updated_content = content
+
+                # Apply all patterns
+                for pattern, replacement in url_patterns:
+                    updated_content = re.sub(pattern, replacement, updated_content)
+
+                if updated_content != original_content:
+                    # Write updated file
+                    encoded = base64.b64encode(updated_content.encode()).decode()
+                    exit_code, _ = sandbox_runner(
+                        f'echo "{encoded}" | base64 -d > "{file_path}"',
+                        None, 10
+                    )
+
+                    if exit_code == 0:
+                        logger.info(f"[DockerInfraFixer] Fixed hardcoded localhost URLs in {file_path}")
+                        fixed_any = True
+                    else:
+                        logger.warning(f"[DockerInfraFixer] Failed to write {file_path}")
+
+            if fixed_any:
+                logger.info(f"[DockerInfraFixer] Fixed hardcoded API URLs in source files")
+
+            return fixed_any
+
+        except Exception as e:
+            logger.warning(f"[DockerInfraFixer] Error fixing hardcoded API URLs: {e}")
             return False
 
     async def _fix_browser_router(self, frontend_path: str, sandbox_runner: callable) -> bool:
