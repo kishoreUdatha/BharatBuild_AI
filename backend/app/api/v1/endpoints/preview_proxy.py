@@ -114,11 +114,12 @@ def get_router_base_fix_script(project_id: str) -> str:
     Generate a script that fixes React Router / Vue Router path issues.
 
     Problem: Browser URL is /api/v1/preview/{project_id}/ but app routes expect /
-    Solution: Use history.replaceState to make React Router see / instead of the full path
+    Solution: Intercept location reads to return stripped paths
 
     This script:
-    1. Replaces initial URL state to strip preview prefix
+    1. Patches window.location to return stripped paths
     2. Patches pushState/replaceState to handle prefix transparently
+    3. Patches popstate event to work with stripped paths
     """
     prefix = f"/api/v1/preview/{project_id}"
     return f'''<script data-bb-router-fix="true">
@@ -132,8 +133,7 @@ def get_router_base_fix_script(project_id: str) -> str:
   // Strip prefix from path for router
   function stripPrefix(path) {{
     if (path && path.startsWith(PREFIX)) {{
-      var stripped = path.slice(PREFIX.length) || "/";
-      return stripped;
+      return path.slice(PREFIX.length) || "/";
     }}
     return path;
   }}
@@ -146,39 +146,85 @@ def get_router_base_fix_script(project_id: str) -> str:
     return path;
   }}
 
-  // Fix initial URL - make router see "/" instead of "/api/v1/preview/xxx/"
+  // Store original location descriptor
+  var originalLocation = window.location;
+
+  // Create location proxy that strips prefix from pathname
   try {{
-    var currentPath = window.location.pathname;
-    var strippedPath = stripPrefix(currentPath);
-    if (strippedPath !== currentPath) {{
-      // Replace state without triggering navigation
-      window.history.replaceState(
-        window.history.state,
-        "",
-        strippedPath + window.location.search + window.location.hash
-      );
-    }}
+    var locationProxy = new Proxy(originalLocation, {{
+      get: function(target, prop) {{
+        if (prop === "pathname") {{
+          return stripPrefix(target.pathname);
+        }}
+        if (prop === "href") {{
+          var href = target.href;
+          var url = new URL(href);
+          url.pathname = stripPrefix(url.pathname);
+          return url.href;
+        }}
+        if (prop === "toString") {{
+          return function() {{
+            var url = new URL(target.href);
+            url.pathname = stripPrefix(url.pathname);
+            return url.href;
+          }};
+        }}
+        var value = target[prop];
+        if (typeof value === "function") {{
+          return value.bind(target);
+        }}
+        return value;
+      }},
+      set: function(target, prop, value) {{
+        if (prop === "href" || prop === "pathname") {{
+          // Add prefix when setting
+          if (prop === "pathname") {{
+            target.pathname = addPrefix(value);
+          }} else {{
+            target.href = value;
+          }}
+          return true;
+        }}
+        target[prop] = value;
+        return true;
+      }}
+    }});
+
+    // Override window.location with proxy
+    Object.defineProperty(window, "location", {{
+      get: function() {{ return locationProxy; }},
+      configurable: true
+    }});
   }} catch (e) {{
-    console.warn("[BharatBuild] Router fix: initial state error", e);
+    console.warn("[BharatBuild] Could not proxy location:", e);
   }}
 
-  // Patch pushState to handle prefix
+  // Patch pushState
   var originalPushState = window.history.pushState;
   window.history.pushState = function(state, title, url) {{
-    if (url) {{
+    if (url && typeof url === "string") {{
       url = addPrefix(url);
     }}
     return originalPushState.call(this, state, title, url);
   }};
 
-  // Patch replaceState to handle prefix
+  // Patch replaceState
   var originalReplaceState = window.history.replaceState;
   window.history.replaceState = function(state, title, url) {{
-    if (url) {{
+    if (url && typeof url === "string") {{
       url = addPrefix(url);
     }}
     return originalReplaceState.call(this, state, title, url);
   }};
+
+  // Handle popstate (back/forward buttons)
+  window.addEventListener("popstate", function(e) {{
+    // Dispatch a custom event with stripped path for routers to handle
+    var event = new CustomEvent("locationchange", {{
+      detail: {{ pathname: stripPrefix(originalLocation.pathname) }}
+    }});
+    window.dispatchEvent(event);
+  }});
 
   console.log("[BharatBuild] Router fix active for: " + PREFIX);
 }})();
