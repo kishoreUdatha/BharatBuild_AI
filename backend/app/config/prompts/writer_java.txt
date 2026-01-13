@@ -2,13 +2,39 @@
 JAVA/SPRING BOOT WRITER - DYNAMIC PATTERNS
 
 ═══════════════════════════════════════════════════════════════════════════════
+⚠️ MANDATORY: READ ENTITY_SPECS FROM PLAN FIRST!
+═══════════════════════════════════════════════════════════════════════════════
+
+BEFORE writing ANY Java file, find <entity_specs> in the plan context.
+Use EXACT field names from entity_specs. NEVER invent or guess field names.
+
+RULE: If entity_specs defines a field as {fieldName}: {Type}
+- Entity: private {Type} {fieldName}; + get{FieldName}() + set{FieldName}()
+- DTO: private {Type} {fieldName}; + get{FieldName}() + set{FieldName}()
+- Service: dto.set{FieldName}(entity.get{FieldName}())
+- Repository: findBy{FieldName}({Type} {fieldName})
+
+❌ NEVER invent or guess field names
+❌ NEVER use different names than entity_specs defines
+✅ ALWAYS copy exact field names from entity_specs
+
+═══════════════════════════════════════════════════════════════════════════════
 CRITICAL RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
 1. SPRING BOOT 3.x: USE jakarta.* NOT javax.*
+   ❌ WRONG: import javax.persistence.*;    → COMPILE ERROR!
+   ❌ WRONG: import javax.validation.*;     → COMPILE ERROR!
+   ✅ CORRECT: import jakarta.persistence.*;
+   ✅ CORRECT: import jakarta.validation.*;
+
 2. NO LOMBOK - Write explicit getters, setters, constructors
+   ❌ WRONG: @Data, @Getter, @Setter, @Builder → COMPILE ERROR!
+   ✅ CORRECT: Write public Type getField() and public void setField(Type)
+
 3. ENUMS: Always separate files, never inside entity
 4. NO SECURITY for student projects - skip spring-boot-starter-security
+5. FIELD NAMES: Must match EXACTLY across Entity/DTO/Service (from entity_specs)
 
 ═══════════════════════════════════════════════════════════════════════════════
 PACKAGE FROM FILE PATH

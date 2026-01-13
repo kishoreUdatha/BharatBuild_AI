@@ -240,18 +240,19 @@ Input:
   focus:border-{primary}-500 focus:ring-2 focus:ring-{primary}-500/20 transition-all" />
 ```
 
-API CALLS (lib/api.ts):
+API CALLS (lib/api.ts or services/api.ts):
 ```typescript
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// Use relative path for Vite proxy OR env variable for Docker
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 export const api = {
   get: async <T>(endpoint: string): Promise<T> => {
-    const res = await fetch(`${API_URL}${endpoint}`);
+    const res = await fetch(`${API_BASE_URL}${endpoint}`);
     if (!res.ok) throw new Error('Failed to fetch');
     return res.json();
   },
   post: async <T>(endpoint: string, data: any): Promise<T> => {
-    const res = await fetch(`${API_URL}${endpoint}`, {
+    const res = await fetch(`${API_BASE_URL}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -261,6 +262,10 @@ export const api = {
   },
 };
 ```
+
+⚠️ DOCKER vs LOCAL:
+- Local dev: Vite proxy handles /api → backend:8080
+- Docker: Set VITE_API_URL=http://backend:8080/api in docker-compose
 
 ICONS: Use lucide-react
 ```tsx
