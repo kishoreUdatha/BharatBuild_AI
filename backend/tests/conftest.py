@@ -10,12 +10,16 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from faker import Faker
 
-# Set testing environment
+# Set testing environment - ALL required env vars must be set BEFORE importing app
 os.environ['TESTING'] = 'true'
 os.environ['DATABASE_URL'] = 'sqlite+aiosqlite:///./test.db'
 os.environ['SECRET_KEY'] = 'test-secret-key-for-testing-only'
 os.environ['JWT_SECRET_KEY'] = 'test-jwt-secret-key-for-testing'
 os.environ['ANTHROPIC_API_KEY'] = 'test-api-key'
+os.environ['REDIS_URL'] = 'redis://localhost:6379/0'
+os.environ['CELERY_BROKER_URL'] = 'redis://localhost:6379/0'
+os.environ['CELERY_RESULT_BACKEND'] = 'redis://localhost:6379/1'
+os.environ['USER_PROJECTS_PATH'] = '/tmp/projects'
 
 from app.main import app
 from app.core.database import Base, get_db
@@ -127,3 +131,14 @@ def admin_auth_headers(admin_user: User) -> dict:
     }
     token = create_access_token(token_data)
     return {'Authorization': f'Bearer {token}'}
+
+
+@pytest.fixture
+def test_user_data() -> dict:
+    """Test user registration data"""
+    return {
+        'email': fake.email(),
+        'password': 'testpassword123',
+        'full_name': fake.name(),
+        'role': 'student'
+    }
