@@ -619,6 +619,29 @@ class TestAgentPromptConstruction:
         except ImportError:
             pytest.skip("PlannerAgent not available")
 
+    def test_planner_no_security_templates(self):
+        """Test PlannerAgent SYSTEM_PROMPT has NO security templates (student projects)"""
+        from app.modules.agents.planner_agent import PlannerAgent
+
+        agent = PlannerAgent()
+        prompt = agent.SYSTEM_PROMPT
+
+        # Security templates should NOT be in the fallback prompt
+        security_patterns = [
+            "SecurityConfig.java",
+            "JwtAuthenticationFilter.java",
+            "JwtUtil.java",
+            "JwtAuthenticationEntryPoint.java",
+            "spring-boot-starter-security"
+        ]
+
+        for pattern in security_patterns:
+            assert pattern not in prompt, \
+                f"SYSTEM_PROMPT should NOT contain '{pattern}' - NO SECURITY for student projects"
+
+        # CorsConfig should be present instead
+        assert "CorsConfig" in prompt, "SYSTEM_PROMPT should use CorsConfig instead of SecurityConfig"
+
     def test_writer_constructs_valid_prompts(self):
         """Test WriterAgent constructs valid prompts"""
         try:
