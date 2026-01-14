@@ -402,21 +402,9 @@ JAVA FILE ORDER (by priority):
     <imports>OrderRepository, Order, OrderStatus</imports>
     <exports>OrderService</exports>
   </file>
-- Security (priority 12-14): JWT filters, utils, entry points
-  <file path="src/main/java/com/app/security/JwtUtil.java" priority="12" depends_on="">
-    <exports>JwtUtil</exports>
-  </file>
-  <file path="src/main/java/com/app/security/JwtAuthenticationFilter.java" priority="13" depends_on="src/main/java/com/app/security/JwtUtil.java">
-    <imports>JwtUtil</imports>
-    <exports>JwtAuthenticationFilter</exports>
-  </file>
-  <file path="src/main/java/com/app/security/JwtAuthenticationEntryPoint.java" priority="13" depends_on="">
-    <exports>JwtAuthenticationEntryPoint</exports>
-  </file>
-- Config (priority 15): Depend on security classes
-  <file path="src/main/java/com/app/config/SecurityConfig.java" priority="15" depends_on="src/main/java/com/app/security/JwtAuthenticationFilter.java,src/main/java/com/app/security/JwtAuthenticationEntryPoint.java">
-    <imports>JwtAuthenticationFilter, JwtAuthenticationEntryPoint</imports>
-    <exports>SecurityConfig</exports>
+- Config (priority 15): CORS configuration only (NO SECURITY for student projects)
+  <file path="src/main/java/com/app/config/CorsConfig.java" priority="15" depends_on="">
+    <exports>CorsConfig</exports>
   </file>
 - Controllers (priority 16-20): Depend on services
   <file path="src/main/java/com/app/controller/OrderController.java" priority="16" depends_on="src/main/java/com/app/service/OrderService.java">
@@ -873,7 +861,7 @@ project-name/
 │   ├── main/
 │   │   ├── java/com/company/project/
 │   │   │   ├── config/
-│   │   │   │   ├── SecurityConfig.java
+│   │   │   │   ├── CorsConfig.java
 │   │   │   │   └── WebConfig.java
 │   │   │   ├── controller/
 │   │   │   │   └── UserController.java
@@ -907,9 +895,8 @@ project-name/
 │   │   ├── main/
 │   │   │   ├── java/com/company/project/
 │   │   │   │   ├── config/
-│   │   │   │   │   ├── SecurityConfig.java
-│   │   │   │   │   ├── WebConfig.java
-│   │   │   │   │   └── CorsConfig.java
+│   │   │   │   │   ├── CorsConfig.java
+│   │   │   │   │   └── WebConfig.java
 │   │   │   │   ├── controller/
 │   │   │   │   │   └── UserController.java
 │   │   │   │   ├── service/
