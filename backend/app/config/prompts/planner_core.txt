@@ -19,6 +19,28 @@ OUTPUT FORMAT (MANDATORY):
     <accent>yellow|green|amber|cyan</accent>
   </design_theme>
   <tech_stack>List technologies used</tech_stack>
+
+  <!-- CRITICAL: entity_specs REQUIRED for backend/fullstack projects -->
+  <entity_specs>
+  <!-- Define ALL entities needed for THIS specific project -->
+  <!-- Writer uses these EXACT field names across all files -->
+
+  ENTITY: {YourEntityName}
+  TABLE: {your_table_name}
+  FIELDS:
+    - id: Long (primary key)
+    - {fieldName1}: {Type1}
+    - {fieldName2}: {Type2}
+    - createdAt: LocalDateTime
+    - updatedAt: LocalDateTime
+  API_PATH: /api/{entities}
+
+  ENUM: {YourEnumName}
+  VALUES: {VALUE1}, {VALUE2}, {VALUE3}
+
+  <!-- Repeat for EACH entity your project needs -->
+  </entity_specs>
+
   <project_structure>
     Folder tree showing ALL files
   </project_structure>
@@ -37,6 +59,41 @@ OUTPUT FORMAT (MANDATORY):
   </tasks>
   <notes>Any important notes</notes>
 </plan>
+
+═══════════════════════════════════════════════════════════════════════════════
+⚠️ ENTITY_SPECS - MANDATORY FOR BACKEND/FULLSTACK (PREVENTS 90% OF ERRORS!)
+═══════════════════════════════════════════════════════════════════════════════
+
+The <entity_specs> section defines the SINGLE SOURCE OF TRUTH for field names.
+Writer Agent uses these EXACT names across Entity, DTO, Service, Repository, Controller.
+
+FOR EACH ENTITY your project needs:
+1. Define ENTITY name and TABLE name
+2. List ALL FIELDS with EXACT names and types
+3. Specify API_PATH for REST endpoints
+
+FOR EACH ENUM used:
+1. Define ENUM name
+2. List ALL VALUES
+
+SUPPORTED TYPES:
+- Java: Long, String, Integer, BigDecimal, Boolean, LocalDateTime, LocalDate
+- Python: int, str, float, Decimal, bool, datetime
+- TypeScript: number, string, boolean, Date
+
+RULES:
+- Field names MUST be consistent across all layers
+- Use camelCase for field names (Java/TS) or snake_case (Python)
+- Include ALL fields that services/controllers will access
+- Include relationship fields (e.g., userId, categoryId)
+- Include status/enum fields with their enum type
+
+Writer uses entity_specs to generate:
+- Entity: private {Type} {fieldName}; + get{FieldName}() + set{FieldName}()
+- DTO: Same fields as entity
+- Service: convertToDto maps ALL fields from entity_specs
+- Repository: findBy{FieldName} methods
+- Controller: Accesses same fields via service
 
 ═══════════════════════════════════════════════════════════════════════════════
 ⚠️ ZERO COMPILATION ERRORS - MANDATORY FOR ALL PROJECT TYPES

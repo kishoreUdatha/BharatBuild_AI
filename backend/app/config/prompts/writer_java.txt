@@ -455,22 +455,47 @@ EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]
 
 ═══════════════════════════════════════════════════════════════════════════════
-CROSS-FILE RULES
+CROSS-FILE RULES (CRITICAL - PREVENTS COMPILATION ERRORS!)
 ═══════════════════════════════════════════════════════════════════════════════
 
-1. Field names MUST match: Entity.name → Dto.name → Service uses getName()
-2. Repository method = Service call (exact match)
-3. Service method = Controller call (exact match)
-4. Return types MUST match across files
+1. FIELD CONSISTENCY (Entity ↔ DTO ↔ Service):
+   - Entity has: private {Type} {fieldName}; + get{FieldName}() + set{FieldName}()
+   - DTO has: SAME fields with SAME names and types
+   - Service convertToDto: dto.set{FieldName}(entity.get{FieldName}()) for ALL fields
+   - Service convertToEntity: entity.set{FieldName}(dto.get{FieldName}()) for ALL fields
+
+2. SERVICE ↔ CONTROLLER METHOD SIGNATURES (MUST MATCH EXACTLY!):
+   Controller calls:                    Service MUST have:
+   ─────────────────────────────────    ────────────────────────────────────
+   {entity}Service.findAll()          → List<{Entity}Dto> findAll()
+   {entity}Service.findAll(Pageable)  → Page<{Entity}Dto> findAll(Pageable)
+   {entity}Service.findById(Long)     → {Entity}Dto findById(Long id)
+   {entity}Service.create({Entity}Dto)→ {Entity}Dto create({Entity}Dto dto)
+   {entity}Service.update(Long, Dto)  → {Entity}Dto update(Long id, {Entity}Dto dto)
+   {entity}Service.delete(Long)       → void delete(Long id)
+
+3. TYPE CONSISTENCY (CRITICAL!):
+   - Money/Price: ALWAYS use BigDecimal (NOT Double, NOT double)
+   - IDs: ALWAYS use Long (NOT Integer, NOT int)
+   - Dates: ALWAYS use LocalDateTime (NOT String, NOT Date)
+   - Quantities: Use Integer (NOT int for nullability)
+
+4. REPOSITORY METHODS:
+   - Service calls repository.findByXxx() → Repository MUST declare: Optional<Entity> findByXxx()
+   - Never call methods that don't exist in Repository interface
 
 ═══════════════════════════════════════════════════════════════════════════════
-CHECKLIST
+CHECKLIST (VERIFY BEFORE OUTPUTTING CODE!)
 ═══════════════════════════════════════════════════════════════════════════════
 
 [ ] Package from file path
 [ ] jakarta.* imports (NOT javax.*)
-[ ] NO Lombok
-[ ] Every field has getter AND setter
-[ ] Constructor injection
+[ ] NO Lombok - explicit getters/setters for ALL fields
+[ ] Every field from entity_specs has getter AND setter
+[ ] Constructor injection (not @Autowired)
 [ ] Enums in separate files
 [ ] NO spring-boot-starter-security
+[ ] Service has ALL 6 standard methods (findAll x2, findById, create, update, delete)
+[ ] convertToDto maps ALL fields from entity_specs
+[ ] convertToEntity maps ALL fields (except id, createdAt, updatedAt)
+[ ] Types consistent: BigDecimal for money, Long for IDs, LocalDateTime for dates

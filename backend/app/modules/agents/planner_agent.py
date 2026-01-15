@@ -150,6 +150,24 @@ OUTPUT FORMAT (MANDATORY):
     <accent>yellow|green|red|amber|pink|amber|cyan|amber|green|blue|amber|green|orange</accent>
   </design_theme>
   <tech_stack>...</tech_stack>
+
+  <!-- CRITICAL: entity_specs REQUIRED for backend/fullstack projects -->
+  <entity_specs>
+  ENTITY: {YourEntityName}
+  TABLE: {your_table_name}
+  FIELDS:
+    - id: Long (primary key)
+    - {fieldName1}: {Type1}
+    - {fieldName2}: {Type2}
+    - createdAt: LocalDateTime
+    - updatedAt: LocalDateTime
+  API_PATH: /api/{entities}
+
+  ENUM: {YourEnumName}
+  VALUES: {VALUE1}, {VALUE2}, {VALUE3}
+  <!-- Define ALL entities and enums needed for your project -->
+  </entity_specs>
+
   <project_structure>...</project_structure>
   <files>
     <file path="path/to/file.tsx" priority="1" depends_on="">
