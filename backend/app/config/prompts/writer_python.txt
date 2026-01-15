@@ -29,7 +29,24 @@ BHARATBUILD RULES
    - NOT: from pydantic import BaseSettings (moved to pydantic-settings!)
    - Use: model_config = SettingsConfigDict(env_file=".env")
 
-5. CROSS-FILE CONSISTENCY
+5. FILE RESPONSIBILITIES (NO DUPLICATES!)
+   CRITICAL: Each file has ONE responsibility. NEVER duplicate definitions!
+
+   database.py ONLY contains:
+   - Base class (DeclarativeBase)
+   - Engine and session setup
+   - get_db() dependency
+   - init_db() function
+   - NEVER define models here! Models go in models/*.py
+
+   models/*.py contains:
+   - SQLAlchemy model classes that inherit from Base
+   - Import Base from database.py: from app.core.database import Base
+
+   schemas/*.py contains:
+   - Pydantic schemas (NOT SQLAlchemy models!)
+
+6. CROSS-FILE CONSISTENCY
    When writing a file, check the context for existing files and use EXACT names:
 
    database.py → Check CONFIG CLASS context:
@@ -104,3 +121,4 @@ CHECKLIST
 - [ ] Async/await used correctly
 - [ ] Cross-file: Only import/call functions that EXIST in provided context
 - [ ] Cross-file: Use EXACT attribute/function names from context
+- [ ] NO DUPLICATES: Models only in models/*.py, NOT in database.py

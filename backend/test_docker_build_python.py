@@ -152,11 +152,13 @@ CRITICAL: Match Service method signatures exactly:
 """
             dependency_context = schema_context + "\n" + service_context
 
-        # For main.py: include database.py code
+        # For main.py: include database.py AND config.py code
         if 'main.py' in file_path:
+            db_context = ""
+            config_context = ""
             for path, code in generated_files.items():
                 if 'database.py' in path:
-                    dependency_context = f"""
+                    db_context = f"""
 DATABASE MODULE (use EXACT function names from this file):
 ```python
 {code}
@@ -164,9 +166,21 @@ DATABASE MODULE (use EXACT function names from this file):
 
 CRITICAL: Import and use the EXACT function names defined in database.py above.
 - If database.py has 'init_db', import and call 'init_db' NOT 'create_tables'
-- If database.py has 'create_tables', import and call 'create_tables' NOT 'init_db'
 - Match function names EXACTLY as they appear in the database module
 """
+                if 'config.py' in path:
+                    config_context = f"""
+CONFIG CLASS (use EXACT attribute names from this file):
+```python
+{code}
+```
+
+CRITICAL: Use the EXACT field names from Settings class above.
+- If config has 'backend_cors_origins', use 'settings.backend_cors_origins' NOT 'settings.allowed_origins'
+- If config has 'cors_origins', use 'settings.cors_origins'
+- Match attribute names EXACTLY as they appear in the Settings class
+"""
+            dependency_context = db_context + "\n" + config_context
 
         user_prompt = f"""Generate this file:
 

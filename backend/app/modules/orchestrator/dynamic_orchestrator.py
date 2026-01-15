@@ -5001,6 +5001,18 @@ CRITICAL RULES:
                         )
                         logger.info(f"[Writer] Including database.py: {created_path} for main.py generation")
 
+                    # Config → Main: Pass config so main uses correct CORS field names
+                    if is_main_file and ('config.py' in created_path or '/config/' in created_path):
+                        python_context_parts.append(
+                            f"\n🔗 CONFIG CLASS (use EXACT attribute names from this file):\n"
+                            f"```python\n{created_content}\n```\n"
+                            f"CRITICAL: Use the EXACT field names from Settings class above.\n"
+                            f"- If config has 'backend_cors_origins', use 'settings.backend_cors_origins'\n"
+                            f"- Do NOT invent field names like 'allowed_origins' if not defined\n"
+                            f"- Match attribute names EXACTLY as they appear in the Settings class"
+                        )
+                        logger.info(f"[Writer] Including config.py: {created_path} for main.py generation")
+
                     # Schema + Service → Routes: Pass both so routes imports correct classes/methods
                     if is_routes_file:
                         if 'schemas/' in created_path or 'schema' in created_path.lower():
