@@ -43,8 +43,96 @@ class WriterAgent(BaseAgent):
     - Parse <explain> tags for UI updates
     - Mark steps as complete in real-time
     - Provide incremental progress updates
+
+    Optimization:
+    - Detects technology from file path and context
+    - Loads only relevant prompt sections
+    - Reduces API costs and improves response quality
     """
 
+    # Prompt directory
+    PROMPTS_DIR = Path(__file__).parent.parent.parent / "config" / "prompts"
+
+    # Technology detection keywords
+    TECH_KEYWORDS = {
+        "react": ["react", "vite", "tsx", "jsx", "frontend", "tailwind", "next.js", "nextjs"],
+        "python": ["fastapi", "django", "flask", "python", "uvicorn", "sqlalchemy", ".py"],
+        "java": ["spring", "java", "maven", "gradle", "spring boot", "springboot", ".java", "pom.xml"],
+        "node": ["express", "node", "nestjs", "prisma"],
+    }
+
+    @classmethod
+    def _load_prompt_file(cls, filename: str) -> str:
+        """Load a prompt file from the prompts directory"""
+        filepath = cls.PROMPTS_DIR / filename
+        if filepath.exists():
+            return filepath.read_text(encoding="utf-8")
+        logger.warning(f"[WriterAgent] Prompt file not found: {filepath}")
+        return ""
+
+    @classmethod
+    def _detect_technologies(cls, file_path: str, context: str = "") -> List[str]:
+        """Detect technologies from file path and context"""
+        combined = (file_path + " " + context).lower()
+        detected = []
+
+        for tech, keywords in cls.TECH_KEYWORDS.items():
+            if any(kw in combined for kw in keywords):
+                detected.append(tech)
+
+        # Default to react if nothing detected
+        if not detected:
+            detected = ["react"]
+
+        logger.info(f"[WriterAgent] Detected technologies: {detected}")
+        return detected
+
+    @classmethod
+    def _build_dynamic_prompt(cls, file_path: str = "", context: str = "") -> str:
+        """Build prompt dynamically based on detected technologies"""
+        # Always load core prompt
+        core_prompt = cls._load_prompt_file("writer_core.txt")
+
+        if not core_prompt:
+            logger.warning("[WriterAgent] Core prompt not found! Using SYSTEM_PROMPT fallback.")
+            return cls.SYSTEM_PROMPT  # Fall back to the hardcoded prompt
+
+        # Detect technologies and load relevant prompts
+        detected_techs = cls._detect_technologies(file_path, context)
+
+        tech_prompts = []
+        prompt_mapping = {
+            "react": "writer_react.txt",
+            "python": "writer_python.txt",
+            "java": "writer_java.txt",
+        }
+
+        for tech in detected_techs:
+            if tech in prompt_mapping:
+                tech_prompt = cls._load_prompt_file(prompt_mapping[tech])
+                if tech_prompt:
+                    tech_prompts.append(f"\n{'='*60}\n{tech.upper()} SPECIFIC RULES:\n{'='*60}\n{tech_prompt}")
+
+        # Combine prompts
+        full_prompt = core_prompt
+        if tech_prompts:
+            full_prompt += "\n" + "\n".join(tech_prompts)
+
+        # Add fullstack integration prompt when frontend + backend detected
+        is_fullstack = ("react" in detected_techs and ("java" in detected_techs or "python" in detected_techs))
+        if is_fullstack:
+            fullstack_prompt = cls._load_prompt_file("writer_fullstack.txt")
+            if fullstack_prompt:
+                full_prompt += f"\n{'='*60}\nFULLSTACK INTEGRATION RULES:\n{'='*60}\n{fullstack_prompt}"
+                logger.info("[WriterAgent] Added fullstack integration rules")
+
+        # Log prompt size for debugging
+        token_estimate = len(full_prompt) // 4
+        logger.info(f"[WriterAgent] Dynamic prompt size: ~{token_estimate} tokens")
+
+        return full_prompt
+
+    # FALLBACK: Keep the original SYSTEM_PROMPT for backwards compatibility
     SYSTEM_PROMPT = """You are the WRITER AGENT - Elite Code Generator for BharatBuild AI.
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -2272,7 +2360,7 @@ Think: Premium, Beautiful, Production-Ready - like code from Apple, Stripe, or V
                 "step_by_step_execution",
                 "bolt_new_architecture"
             ],
-            model="haiku"  # Fast model for quick iterations
+            model="sonnet"  # Sonnet for better code quality
         )
 
     async def process(
@@ -2305,10 +2393,17 @@ Think: Premium, Beautiful, Production-Ready - like code from Apple, Stripe, or V
                 context=context
             )
 
+            # Build dynamic system prompt based on detected technology
+            # Pass step_prompt for tech detection (contains file paths, descriptions)
+            dynamic_system_prompt = self._build_dynamic_prompt(
+                file_path=str(step_data.get("deliverables", [""])[0]) if step_data.get("deliverables") else "",
+                context=step_prompt
+            )
+
             # Call Claude with Bolt.new format
             # Use higher max_tokens to prevent file truncation
             response = await self._call_claude(
-                system_prompt=self.SYSTEM_PROMPT,
+                system_prompt=dynamic_system_prompt,
                 user_prompt=step_prompt,
                 max_tokens=16384,  # Increased from 4096 to prevent truncation
                 temperature=0.3  # Lower temperature for consistent code

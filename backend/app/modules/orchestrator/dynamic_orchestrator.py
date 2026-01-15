@@ -4874,36 +4874,158 @@ CRITICAL RULES:
         java_files_context = ""
         if file_path.endswith('.java') and context.files_created:
             java_context_parts = []
+            full_dependency_files = []  # For cross-file consistency
+
+            # Detect file type for dependency injection
+            is_service_file = 'Service.java' in file_path or '/service/' in file_path
+            is_controller_file = 'Controller.java' in file_path or '/controller/' in file_path
+
+            # Extract entity name (e.g., "Order" from "OrderService.java" or "OrderController.java")
+            entity_name = None
+            if is_service_file:
+                file_name = file_path.split('/')[-1].replace('.java', '')
+                entity_name = file_name.replace('Service', '').replace('Impl', '')
+            elif is_controller_file:
+                file_name = file_path.split('/')[-1].replace('.java', '')
+                entity_name = file_name.replace('Controller', '')
+
             for created_file in context.files_created[-25:]:  # Last 25 files
                 created_path = created_file.get('path', '')
                 created_content = created_file.get('content', '')
 
                 if created_path.endswith('.java') and created_content:
-                    # Extract package, imports, and class signature
-                    lines = created_content.split('\n')
-                    key_lines = []
-                    for line in lines[:60]:
-                        stripped = line.strip()
-                        if stripped.startswith('package ') or \
-                           stripped.startswith('import ') or \
-                           stripped.startswith('public class ') or \
-                           stripped.startswith('public interface ') or \
-                           stripped.startswith('public enum ') or \
-                           stripped.startswith('@Entity') or \
-                           stripped.startswith('@Repository') or \
-                           stripped.startswith('@Service') or \
-                           'extends ' in stripped or \
-                           'implements ' in stripped:
-                            key_lines.append(stripped)
+                    # CRITICAL: Include FULL Repository code when generating Service
+                    # This prevents Service from calling Repository methods that don't exist
+                    is_matching_repo = (
+                        is_service_file and
+                        entity_name and
+                        'Repository.java' in created_path and
+                        entity_name in created_path
+                    )
 
-                    if key_lines:
-                        java_context_parts.append(f"\n📄 {created_path}:\n" + '\n'.join(key_lines[:15]))
+                    # CRITICAL: Include FULL Service code when generating Controller
+                    # This prevents Controller from calling Service methods that don't exist
+                    # or using wrong return types (e.g., Optional<T> vs T)
+                    is_matching_service = (
+                        is_controller_file and
+                        entity_name and
+                        'Service.java' in created_path and
+                        entity_name in created_path and
+                        'Impl' not in created_path  # Prefer interface over impl
+                    )
 
+                    if is_matching_repo:
+                        # Include FULL Repository interface (not just signature)
+                        full_dependency_files.append(
+                            f"\n🔗 REPOSITORY INTERFACE (use ONLY these methods):\n"
+                            f"📄 {created_path}:\n```java\n{created_content}\n```"
+                        )
+                        logger.info(f"[Writer] Including full Repository: {created_path} for Service generation")
+                    elif is_matching_service:
+                        # Include FULL Service class (for Controller to match signatures)
+                        full_dependency_files.append(
+                            f"\n🔗 SERVICE CLASS (use ONLY these methods with EXACT return types):\n"
+                            f"📄 {created_path}:\n```java\n{created_content}\n```\n"
+                            f"CRITICAL: Match Service method signatures exactly:\n"
+                            f"- If Service returns Optional<T>, handle with .map()/.orElse()\n"
+                            f"- Only call methods that exist in the Service above"
+                        )
+                        logger.info(f"[Writer] Including full Service: {created_path} for Controller generation")
+                    else:
+                        # For other files, extract only signatures
+                        lines = created_content.split('\n')
+                        key_lines = []
+                        for line in lines[:60]:
+                            stripped = line.strip()
+                            if stripped.startswith('package ') or \
+                               stripped.startswith('import ') or \
+                               stripped.startswith('public class ') or \
+                               stripped.startswith('public interface ') or \
+                               stripped.startswith('public enum ') or \
+                               stripped.startswith('@Entity') or \
+                               stripped.startswith('@Repository') or \
+                               stripped.startswith('@Service') or \
+                               'extends ' in stripped or \
+                               'implements ' in stripped:
+                                key_lines.append(stripped)
+
+                        if key_lines:
+                            java_context_parts.append(f"\n📄 {created_path}:\n" + '\n'.join(key_lines[:15]))
+
+            # Build context: Full dependencies first, then summaries
+            context_sections = []
+            if full_dependency_files:
+                context_sections.append('\n'.join(full_dependency_files))
             if java_context_parts:
-                java_files_context = f"""
-EXISTING JAVA FILES (use these EXACT packages and imports):
-{''.join(java_context_parts[:15])}
-"""
+                context_sections.append(
+                    f"EXISTING JAVA FILES (use these EXACT packages and imports):"
+                    f"{''.join(java_context_parts[:15])}"
+                )
+
+            if context_sections:
+                java_files_context = '\n'.join(context_sections)
+
+        # CRITICAL FIX: For Python files, include cross-file context for consistency
+        python_files_context = ""
+        if file_path.endswith('.py') and context.files_created:
+            python_context_parts = []
+
+            # Detect file type for dependency injection
+            is_database_file = 'database.py' in file_path or '/database/' in file_path
+            is_main_file = 'main.py' in file_path or '__main__.py' in file_path
+            is_routes_file = 'routes/' in file_path or '/api/' in file_path
+
+            for created_file in context.files_created[-25:]:  # Last 25 files
+                created_path = created_file.get('path', '')
+                created_content = created_file.get('content', '')
+
+                if created_path.endswith('.py') and created_content:
+                    # Config → Database: Pass config so database uses correct field names
+                    if is_database_file and ('config.py' in created_path or '/config/' in created_path):
+                        python_context_parts.append(
+                            f"\n🔗 CONFIG CLASS (use EXACT attribute names from this file):\n"
+                            f"```python\n{created_content}\n```\n"
+                            f"CRITICAL: Use the EXACT field names from Settings class above.\n"
+                            f"If config has 'database_url', use 'settings.database_url' NOT 'settings.DATABASE_URL'"
+                        )
+                        logger.info(f"[Writer] Including config: {created_path} for database.py generation")
+
+                    # Database → Main: Pass database so main uses correct function names
+                    if is_main_file and 'database.py' in created_path:
+                        python_context_parts.append(
+                            f"\n🔗 DATABASE MODULE (use EXACT function names from this file):\n"
+                            f"```python\n{created_content}\n```\n"
+                            f"CRITICAL: Import and use the EXACT function names defined above.\n"
+                            f"- If database has 'init_db', import 'init_db' NOT 'create_tables'\n"
+                            f"- Match function signatures exactly"
+                        )
+                        logger.info(f"[Writer] Including database.py: {created_path} for main.py generation")
+
+                    # Schema + Service → Routes: Pass both so routes imports correct classes/methods
+                    if is_routes_file:
+                        if 'schemas/' in created_path or 'schema' in created_path.lower():
+                            python_context_parts.append(
+                                f"\n🔗 SCHEMA CLASSES (import ONLY these exact class names):\n"
+                                f"```python\n{created_content}\n```\n"
+                                f"CRITICAL: Only import schema classes that are DEFINED above.\n"
+                                f"- Do NOT import 'PaginatedResponse' unless it exists in the schema file\n"
+                                f"- Use List[Response] for list endpoints if no pagination schema exists"
+                            )
+                            logger.info(f"[Writer] Including schema: {created_path} for routes generation")
+
+                        if 'service' in created_path.lower():
+                            python_context_parts.append(
+                                f"\n🔗 SERVICE CLASS (use ONLY these methods with EXACT signatures):\n"
+                                f"```python\n{created_content}\n```\n"
+                                f"CRITICAL: Match Service method signatures exactly:\n"
+                                f"- Use the exact method names from the service\n"
+                                f"- Match return types (if service returns Optional, handle it)\n"
+                                f"- Only call methods that exist in the service above"
+                            )
+                            logger.info(f"[Writer] Including service: {created_path} for routes generation")
+
+            if python_context_parts:
+                python_files_context = '\n'.join(python_context_parts)
 
         user_prompt = f"""
 FILE TO GENERATE:
@@ -4918,6 +5040,7 @@ Tech Stack: {json.dumps(context.tech_stack) if context.tech_stack else 'React + 
 {entity_specs_context}
 {types_content}
 {java_files_context}
+{python_files_context}
 FILES ALREADY CREATED (you can import from these):
 {chr(10).join(available_exports) if available_exports else "None yet - this may be a leaf file with no dependencies"}
 {dependency_context}

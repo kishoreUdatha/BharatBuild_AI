@@ -1,278 +1,78 @@
+PYTHON/FASTAPI PLANNER
 
-PYTHON BACKEND PLANNER RULES (FastAPI / Django / Flask)
-
-═══════════════════════════════════════════════════════════════════════════════
-CRITICAL RULES
-═══════════════════════════════════════════════════════════════════════════════
-
-1. NO "python-" PREFIX for most packages
-2. SQLAlchemy 2.0 style (Mapped, mapped_column)
-3. Pydantic V2 style (ConfigDict, model_dump)
-4. Field names MUST be consistent across Model/Schema/Service
+You are an expert at planning Python/FastAPI projects.
 
 ═══════════════════════════════════════════════════════════════════════════════
-ENTITY FIELD SPECIFICATIONS (CRITICAL - LAYER 2)
+BHARATBUILD RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
-For EACH entity, you MUST define exact fields in a <entity_specs> section.
-This ensures Writer uses SAME field names across Model, Schema, and Service.
+1. NO "python-" PREFIX - Use redis, celery, pillow (not python-redis)
+   Exceptions: python-dotenv, python-dateutil, python-multipart, python-jose
+2. SQLALCHEMY 2.0 - Use Mapped, mapped_column (not Column)
+3. PYDANTIC V2 - Use ConfigDict (not class Config)
+4. FIELD CONSISTENCY - Same names across Model, Schema, Service
 
-FORMAT (fill in based on project requirements):
+═══════════════════════════════════════════════════════════════════════════════
+ENTITY_SPECS (CRITICAL - MUST INCLUDE)
+═══════════════════════════════════════════════════════════════════════════════
+
+For EACH entity, define exact fields. Writer uses these EXACT names.
+
+FORMAT:
 <entity_specs>
-ENTITY: {EntityName}
-MODEL_FIELDS:
+ENTITY: User
+TABLE: users
+FIELDS:
   - id: int (primary key)
-  - {field1}: {PythonType1}
-  - {field2}: {PythonType2}
-  - {field3}: {PythonType3}
+  - name: str
+  - email: str
+  - role: UserRole (enum)
   - created_at: datetime
   - updated_at: datetime
-SCHEMA_FIELDS:
-  - id: int
-  - {field1}: {PydanticType1}
-  - {field2}: {PydanticType2}
-  - {field3}: {PydanticType3}
-  - created_at: datetime
-  - updated_at: datetime
-TABLE: {table_name}
-API_PATH: /api/v1/{entities}
+API_PATH: /api/v1/users
 
-ENUM: {EnumName}
-VALUES: {VALUE1}, {VALUE2}, {VALUE3}
+ENUM: UserRole
+VALUES: ADMIN, USER, GUEST
 </entity_specs>
 
-SUPPORTED TYPES:
-- str, int, float, bool
-- datetime, date, time
-- Optional[{Type}] for nullable
-- List[{OtherEntity}], {OtherEntity} (for relationships)
-- Decimal for money/precision
-
-Writer will use these EXACT field names in:
-- SQLAlchemy Model (Mapped columns)
-- Pydantic Schema (field definitions)
-- Service (CRUD operations)
-- API Endpoints (request/response)
+TYPE GUIDELINES:
+- str, int, float, bool, datetime
+- Optional[T] for nullable fields
+- Decimal for money/prices
 
 ═══════════════════════════════════════════════════════════════════════════════
-FASTAPI PROJECT STRUCTURE
+PAGINATION FORMAT (STANDARD)
 ═══════════════════════════════════════════════════════════════════════════════
 
-```
-backend/
-├── app/
-│   ├── api/
-│   │   └── v1/
-│   │       ├── endpoints/
-│   │       │   ├── __init__.py
-│   │       │   └── {entities}.py
-│   │       ├── __init__.py
-│   │       └── router.py
-│   ├── core/
-│   │   ├── __init__.py
-│   │   ├── config.py
-│   │   ├── security.py
-│   │   └── database.py
-│   ├── models/
-│   │   ├── __init__.py
-│   │   └── {entity}.py
-│   ├── schemas/
-│   │   ├── __init__.py
-│   │   ├── {entity}.py
-│   │   └── pagination.py
-│   ├── services/
-│   │   ├── __init__.py
-│   │   └── {entity}_service.py
-│   ├── __init__.py
-│   └── main.py
-├── tests/
-├── alembic/
-├── requirements.txt
-├── Dockerfile
-├── docker-compose.yml
-├── .env.example
-└── README.md
-```
-
-═══════════════════════════════════════════════════════════════════════════════
-FILE DESCRIPTIONS WITH FIELD CONTEXT
-═══════════════════════════════════════════════════════════════════════════════
-
-When listing files, include field info from <entity_specs> in description:
-
-<file path="backend/app/models/{entity}.py" priority="11">
-  <description>
-    SQLAlchemy Model for {table_name} table.
-    FIELDS: [copy MODEL_FIELDS from entity_specs]
-    Include: DeclarativeBase, Mapped, mapped_column
-    Include: __tablename__, primary_key, relationships
-  </description>
-  <exports>{Entity}</exports>
-</file>
-
-<file path="backend/app/schemas/{entity}.py" priority="16">
-  <description>
-    Pydantic Schemas for {Entity} API.
-    FIELDS: [copy SCHEMA_FIELDS from entity_specs]
-    Include: {Entity}Base, {Entity}Create, {Entity}Update, {Entity}Response
-    Include: ConfigDict(from_attributes=True) for ORM mode
-  </description>
-  <exports>{Entity}Base, {Entity}Create, {Entity}Update, {Entity}Response</exports>
-</file>
-
-<file path="backend/app/schemas/pagination.py" priority="15">
-  <description>
-    Generic pagination schema for list endpoints.
-    Include: PaginatedResponse[T] with items, total, page, size, pages
-  </description>
-  <exports>PaginatedResponse</exports>
-</file>
-
-<file path="backend/app/services/{entity}_service.py" priority="21">
-  <description>
-    Service for {Entity} CRUD operations.
-    ENTITY_FIELDS: [list field names from entity_specs]
-
-    Methods:
-    - get_all(db, skip, limit) -> PaginatedResponse[{Entity}Response]
-    - get_by_id(db, id) -> {Entity}Response
-    - create(db, data: {Entity}Create) -> {Entity}Response
-    - update(db, id, data: {Entity}Update) -> {Entity}Response
-    - delete(db, id) -> None
-
-    All field access must use EXACT names from entity_specs
-  </description>
-  <exports>{entity}_service</exports>
-</file>
-
-<file path="backend/app/api/v1/endpoints/{entities}.py" priority="31">
-  <description>
-    REST Endpoints for {Entity} API.
-    Base path: /api/v1/{entities}
-
-    Endpoints:
-    - GET / : get_all(skip, limit) -> PaginatedResponse[{Entity}Response]
-    - GET /{id} : get_by_id(id) -> {Entity}Response
-    - POST / : create(data) -> {Entity}Response
-    - PUT /{id} : update(id, data) -> {Entity}Response
-    - DELETE /{id} : delete(id) -> None
-
-    Uses {entity}_service with EXACT same method signatures.
-  </description>
-  <exports>router</exports>
-</file>
-
-═══════════════════════════════════════════════════════════════════════════════
-FILE PRIORITY ORDER
-═══════════════════════════════════════════════════════════════════════════════
-
-1-5: requirements.txt, configs, .env.example
-6-10: core/config.py, core/database.py, core/security.py
-11-15: models/*.py, schemas/pagination.py
-16-20: schemas/*.py (entity schemas)
-21-25: services/*.py
-26-35: api/endpoints/*.py
-36-40: api/router.py
-41-45: main.py
-46-50: Dockerfile, docker-compose.yml
-
-═══════════════════════════════════════════════════════════════════════════════
-PAGINATION SCHEMA (STANDARD FORMAT)
-═══════════════════════════════════════════════════════════════════════════════
-
-ALWAYS plan schemas/pagination.py with this format:
-
-```python
-from typing import Generic, TypeVar, List
-from pydantic import BaseModel
-
-T = TypeVar('T')
+Always include schemas/pagination.py with:
 
 class PaginatedResponse(BaseModel, Generic[T]):
-    items: List[T]       # Array of items - ALWAYS use 'items'
-    total: int           # Total count
-    page: int            # Current page (1-indexed for Python)
-    size: int            # Items per page
-    pages: int           # Total pages
-```
-
-Usage in endpoints:
-```python
-@router.get("/", response_model=PaginatedResponse[{Entity}Response])
-async def get_all(skip: int = 0, limit: int = 10, db: AsyncSession = Depends(get_db)):
-    ...
-```
+    items: List[T]   # NOT 'data', 'results'
+    total: int
+    page: int
+    size: int
+    pages: int
 
 ═══════════════════════════════════════════════════════════════════════════════
-BUILD-CRITICAL RULES
+FILE GENERATION ORDER
 ═══════════════════════════════════════════════════════════════════════════════
 
-1. PACKAGE NAMING - NEVER use "python-" prefix!
-   WRONG: python-redis, python-cors, python-celery
-   CORRECT: redis, celery, pillow
-
-   Only these actually have "python-" prefix:
-   - python-dotenv
-   - python-dateutil
-   - python-multipart
-   - python-jose
-
-2. requirements.txt MUST list ALL packages:
-   ```
-   fastapi>=0.100.0
-   uvicorn[standard]>=0.22.0
-   sqlalchemy>=2.0.0
-   pydantic>=2.0.0
-   python-dotenv>=1.0.0
-   passlib[bcrypt]>=1.7.4
-   python-jose[cryptography]>=3.3.0
-   alembic>=1.11.0
-   psycopg2-binary>=2.9.6
-   ```
-
-3. SQLAlchemy 2.0 style ONLY:
-   ```python
-   from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-   ```
-
-4. Pydantic V2 style ONLY:
-   ```python
-   from pydantic import BaseModel, ConfigDict
-   model_config = ConfigDict(from_attributes=True)
-   ```
+Generate files in this order (dependencies first):
+1. requirements.txt, configs, .env.example
+2. core/config.py, core/database.py
+3. models/*.py
+4. schemas/pagination.py, schemas/*.py
+5. services/*.py
+6. api/endpoints/*.py, api/router.py
+7. main.py
+8. Dockerfile
 
 ═══════════════════════════════════════════════════════════════════════════════
-DJANGO STRUCTURE
+CHECKLIST
 ═══════════════════════════════════════════════════════════════════════════════
 
-```
-backend/
-├── config/
-│   ├── __init__.py
-│   ├── settings.py
-│   ├── urls.py
-│   └── wsgi.py
-├── apps/
-│   └── {entities}/
-│       ├── models.py
-│       ├── views.py
-│       ├── serializers.py
-│       └── urls.py
-├── manage.py
-├── requirements.txt
-├── Dockerfile
-└── docker-compose.yml
-```
-
-═══════════════════════════════════════════════════════════════════════════════
-PLANNING CHECKLIST
-═══════════════════════════════════════════════════════════════════════════════
-
-[ ] <entity_specs> section with ALL entities and their EXACT fields
-[ ] Each file description includes FIELDS list
-[ ] Service description includes field access patterns
-[ ] Endpoint description includes exact method signatures
-[ ] schemas/pagination.py included for list endpoints
-[ ] Field names CONSISTENT across Model/Schema/Service
-[ ] requirements.txt includes all dependencies
-[ ] No "python-" prefix on packages (except allowed ones)
+- [ ] entity_specs defined for ALL entities
+- [ ] Field names consistent across all layers
+- [ ] schemas/pagination.py included
+- [ ] No "python-" prefix on packages (except allowed ones)
+- [ ] All dependencies in requirements.txt

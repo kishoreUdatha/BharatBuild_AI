@@ -1212,7 +1212,8 @@ class DockerExecutor:
                                 project_path=project_path,
                                 error_message=full_context,
                                 command=command,
-                                user_id=user_id
+                                user_id=user_id,
+                                trigger_source="error_monitor_thread"
                             )
 
                     except Exception as e:
@@ -1235,7 +1236,8 @@ class DockerExecutor:
         project_path: Path,
         error_message: str,
         command: Optional[str] = None,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        trigger_source: str = "unknown"
     ) -> None:
         """
         PRODUCTION-READY Auto-Fix System for 100k+ Users
@@ -1252,7 +1254,27 @@ class DockerExecutor:
         - Fix caching (don't fix same error twice)
         - Full metrics and logging
         - Pending error queue for errors that arrive during a fix
+
+        Args:
+            trigger_source: Where this fix was triggered from (for debugging duplicate runs)
+                - "proactive_validation": From _validate_imports_proactively
+                - "error_monitor_thread": From the error monitoring thread
+                - "queued_error": From processing pending errors after a fix completes
+                - "exit_code_failure": From non-zero exit code
+                - "pattern_match": From error pattern detection
+                - "critical_error": From critical error detection
+                - "command_failure": From command execution failure
+                - "file_not_found": From FileNotFoundError
+                - "permission_error": From PermissionError
+                - "exception": From generic exception handler
         """
+        # Generate unique run ID for log correlation
+        import uuid
+        run_id = str(uuid.uuid4())[:8]
+        logger.info(f"[DockerExecutor:{project_id}] [RUN:{run_id}] ========== AUTO-FIX TRIGGERED ==========")
+        logger.info(f"[DockerExecutor:{project_id}] [RUN:{run_id}] TRIGGER_SOURCE: {trigger_source}")
+        logger.info(f"[DockerExecutor:{project_id}] [RUN:{run_id}] Command: {command}")
+        logger.info(f"[DockerExecutor:{project_id}] [RUN:{run_id}] Error preview: {error_message[:200] if error_message else 'None'}...")
         # Extract user_id from project_path if not provided
         # Path structure: C:\tmp\sandbox\workspace\{user_id}\{project_id}
         if not user_id:
@@ -1309,6 +1331,7 @@ class DockerExecutor:
             # Atomically mark fix as in progress BEFORE releasing the lock
             # This prevents another thread from also passing the check
             self._fix_in_progress[project_id] = True
+            logger.info(f"[DockerExecutor:{project_id}] [RUN:{run_id}] Fix lock acquired, starting fix...")
 
         async def run_production_auto_fix():
             """
@@ -1319,7 +1342,7 @@ class DockerExecutor:
             """
             try:
                 # Fix already marked as in progress above (atomically with lock)
-                logger.info(f"[DockerExecutor:{project_id}] [SIMPLE] Auto-fix triggered")
+                logger.info(f"[DockerExecutor:{project_id}] [RUN:{run_id}] [SIMPLE] Auto-fix STARTED (trigger={trigger_source})")
 
                 # First, let SimpleFixer decide if this is a real error
                 should_fix = await simple_fixer.should_fix(None, error_message)
@@ -1369,17 +1392,23 @@ class DockerExecutor:
 
                 # Process pending errors outside the lock to avoid deadlock
                 if pending:
-                    logger.info(f"[DockerExecutor:{project_id}] Processing {len(pending)} queued errors")
+                    logger.info(f"[DockerExecutor:{project_id}] [RUN:{run_id}] ========== QUEUED ERRORS DETECTED ==========")
+                    logger.info(f"[DockerExecutor:{project_id}] [RUN:{run_id}] Found {len(pending)} queued errors after fix completed")
+                    logger.info(f"[DockerExecutor:{project_id}] [RUN:{run_id}] This will trigger ANOTHER fixer run!")
                     for queued_error in pending[:3]:  # Limit to 3 queued errors to avoid infinite loops
                         # Schedule the queued error to be processed
+                        logger.info(f"[DockerExecutor:{project_id}] [RUN:{run_id}] Triggering fix for queued error: {queued_error['error'][:100]}...")
                         self._trigger_auto_fix_background(
                             project_id=project_id,
                             project_path=queued_error['project_path'],
                             error_message=queued_error['error'],
                             command=queued_error.get('command'),
                             user_id=queued_error.get('user_id'),
+                            trigger_source="queued_error"
                         )
                         break  # Only process one at a time
+                else:
+                    logger.info(f"[DockerExecutor:{project_id}] [RUN:{run_id}] No queued errors, fix cycle complete")
 
         # Create background task - handle both async and threaded contexts
         try:
@@ -1711,7 +1740,8 @@ class DockerExecutor:
             project_path=project_path,
             error_message=error_message,
             command="proactive_import_validation",
-            user_id=user_id
+            user_id=user_id,
+            trigger_source="proactive_validation"
         )
 
         return False
@@ -3343,7 +3373,8 @@ class DockerExecutor:
                                                     project_path=project_path,
                                                     error_message=full_context,
                                                     command=command,
-                                                    user_id=getattr(executor_self, '_current_user_id', None)
+                                                    user_id=getattr(executor_self, '_current_user_id', None),
+                                                    trigger_source="reader_thread_critical"
                                                 )
                             except Exception as e:
                                 logger.debug(f"[DockerExecutor:{project_id}] Reader thread error: {e}")
@@ -3473,13 +3504,13 @@ class DockerExecutor:
                         log_bus.add_build_error(message=f"{error_msg}\n\nFull Output:\n{full_context}")
                         # DYNAMIC: Send FULL output to Claude for analysis - no pattern matching needed!
                         logger.info(f"[DockerExecutor:{project_id}] DYNAMIC AUTO-FIX triggered (exit_code={exit_code})")
-                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None))
+                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None), trigger_source="exit_code_failure")
                     elif has_error and not port_conflict_detected:
                         full_context = '\n'.join(error_buffer[-50:])
                         log_bus.add_build_error(message=f"Errors detected:\n\n{full_context}")
                         # DYNAMIC: Pattern-detected errors also sent to Claude for smart fixing
                         logger.info(f"[DockerExecutor:{project_id}] DYNAMIC AUTO-FIX triggered (pattern match)")
-                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None))
+                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None), trigger_source="pattern_match")
 
                 else:
                     process = await asyncio.create_subprocess_shell(
@@ -3522,7 +3553,7 @@ class DockerExecutor:
                                         full_context = '\n'.join(error_buffer[-50:])
                                         log_bus.add_build_error(message=f"Critical error detected:\n\n{full_context}")
                                         # Trigger auto-fix immediately for critical errors
-                                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None))
+                                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None), trigger_source="critical_error")
                                         logger.info(f"[DockerExecutor:{project_id}] Critical error triggered auto-fix: {output[:100]}")
                                 # Detect port conflicts for auto-retry
                                 if self._is_port_conflict(output):
@@ -3600,12 +3631,12 @@ class DockerExecutor:
                         full_context = '\n'.join(error_buffer[-50:]) or f"No output. Command: {command}"
                         log_bus.add_build_error(message=f"{error_msg}\n\nFull Output:\n{full_context}")
                         # Trigger auto-fix in background
-                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None))
+                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None), trigger_source="command_failure")
                     elif has_error and not port_conflict_detected:
                         full_context = '\n'.join(error_buffer[-50:])
                         log_bus.add_build_error(message=f"Errors detected:\n\n{full_context}")
                         # Trigger auto-fix in background
-                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None))
+                        self._trigger_auto_fix_background(project_id, project_path, full_context, command, getattr(self, '_current_user_id', None), trigger_source="error_detected")
 
             except FileNotFoundError as e:
                 error_msg = f"Command not found: {command}. Error: {str(e)}"
@@ -3613,7 +3644,7 @@ class DockerExecutor:
                 log_bus.add_build_error(message=error_msg)
                 logger.error(f"[DockerExecutor:{project_id}] Command not found: {error_msg}")
                 # Trigger auto-fix in background
-                self._trigger_auto_fix_background(project_id, project_path, error_msg, command, getattr(self, '_current_user_id', None))
+                self._trigger_auto_fix_background(project_id, project_path, error_msg, command, getattr(self, '_current_user_id', None), trigger_source="file_not_found")
 
             except PermissionError as e:
                 error_msg = f"Permission denied running: {command}. Error: {str(e)}"
@@ -3621,7 +3652,7 @@ class DockerExecutor:
                 log_bus.add_build_error(message=error_msg)
                 logger.error(f"[DockerExecutor:{project_id}] Permission error: {error_msg}")
                 # Trigger auto-fix in background
-                self._trigger_auto_fix_background(project_id, project_path, error_msg, command, getattr(self, '_current_user_id', None))
+                self._trigger_auto_fix_background(project_id, project_path, error_msg, command, getattr(self, '_current_user_id', None), trigger_source="permission_error")
 
             except Exception as e:
                 import traceback
@@ -3639,7 +3670,7 @@ class DockerExecutor:
                 log_bus.add_build_error(message=context_msg)
                 logger.error(f"[DockerExecutor:{project_id}] Exception: {error_msg}, context lines: {len(error_buffer)}, traceback: {tb[:500]}")
                 # Trigger auto-fix in background
-                self._trigger_auto_fix_background(project_id, project_path, context_msg, command, getattr(self, '_current_user_id', None))
+                self._trigger_auto_fix_background(project_id, project_path, context_msg, command, getattr(self, '_current_user_id', None), trigger_source="exception")
 
     async def stop_direct(self, project_id: str) -> bool:
         """Stop a directly running process and all its children (Windows-compatible)"""

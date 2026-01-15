@@ -1,126 +1,63 @@
+REACT/VITE/TYPESCRIPT PLANNER
 
-REACT + VITE + TYPESCRIPT + TAILWIND RULES:
+You are an expert at planning React/Vite/TypeScript projects.
 
-PROJECT STRUCTURE:
-```
-frontend/
-├── src/
-│   ├── components/
-│   │   ├── ui/           # Reusable UI (Button, Input, Modal)
-│   │   ├── layout/       # Layout (Header, Footer, Sidebar)
-│   │   └── features/     # Feature-specific components
-│   ├── hooks/            # Custom React hooks
-│   ├── lib/              # API client, utilities
-│   ├── pages/            # Page components
-│   ├── store/            # State management (Zustand)
-│   ├── types/            # TypeScript interfaces
-│   ├── App.tsx
-│   ├── main.tsx
-│   └── index.css
-├── public/
-├── package.json
-├── vite.config.ts
-├── tailwind.config.js
-├── postcss.config.js
-├── tsconfig.json
-├── tsconfig.node.json
-├── index.html
-├── Dockerfile
-└── .env.example
-```
+═══════════════════════════════════════════════════════════════════════════════
+BHARATBUILD RULES
+═══════════════════════════════════════════════════════════════════════════════
 
-REQUIRED CONFIG FILES (priority 1-5):
+1. VITE CONFIG - Must include base: './' and hmr: false for preview
+2. TAILWIND - No plugins (plugins: []) unless added to package.json
+3. TSCONFIG - "include" must be ["src"] only, never include vite.config.ts
+4. CAMELCASE - All types use camelCase (departureTime, not departure_time)
+5. DEFAULT EXPORTS - Use export default for components
+6. NO "import React" - React 17+ doesn't need it
 
-1. package.json - ALL imports must be listed as dependencies
-2. vite.config.ts - MUST include `base: './'` for preview to work
-3. tailwind.config.js - Use `plugins: []` (EMPTY!) unless adding to package.json
-4. postcss.config.js - Required for Tailwind
-5. tsconfig.json - TypeScript config
-6. tsconfig.node.json - Required for Vite (must create if tsconfig.json references it)
-7. index.html - Entry HTML file
+═══════════════════════════════════════════════════════════════════════════════
+REQUIRED FILES
+═══════════════════════════════════════════════════════════════════════════════
 
-FILE PRIORITY ORDER:
-- package.json, configs: 1-5
-- types/*.ts: 6-10
-- lib/api.ts, lib/utils.ts: 11-15
-- components/ui/*: 16-20
-- components/layout/*: 21-25
-- components/features/*: 26-35
-- pages/*: 36-45
-- hooks/*: 46-50
-- store/*: 51-55
-- App.tsx: 56
-- main.tsx: 57
-- index.css: 58
+Always include these config files:
+1. package.json - All imports must be listed
+2. vite.config.ts - With base: './'
+3. tailwind.config.js - With plugins: []
+4. postcss.config.js
+5. tsconfig.json
+6. tsconfig.node.json (if tsconfig.json references it)
+7. index.html
+8. src/vite-env.d.ts - Required for import.meta.env
 
-BUILD-CRITICAL RULES:
+═══════════════════════════════════════════════════════════════════════════════
+FILE GENERATION ORDER
+═══════════════════════════════════════════════════════════════════════════════
 
-1. vite.config.ts MUST have:
-   ```typescript
-   export default defineConfig({
-     base: './',  // REQUIRED for preview!
-     plugins: [react()],
-     server: {
-       host: '0.0.0.0',
-       port: 3000,
-       hmr: false  // REQUIRED - prevents WebSocket errors in preview
-     }
-   })
-   ```
+Generate files in this order (dependencies first):
+1. Config files (package.json, vite.config.ts, etc.)
+2. Types (types/index.ts)
+3. Utilities (lib/api.ts, lib/utils.ts)
+4. UI Components (components/ui/*)
+5. Layout Components (components/layout/*)
+6. Feature Components (components/features/*)
+7. Pages (pages/*)
+8. Hooks (hooks/*)
+9. Store (store/*)
+10. App.tsx, main.tsx, index.css
 
-2. tailwind.config.js:
-   - NEVER use plugins like @tailwindcss/forms unless in package.json
-   - Use `plugins: []` by default
+═══════════════════════════════════════════════════════════════════════════════
+TYPE CONSISTENCY
+═══════════════════════════════════════════════════════════════════════════════
 
-3. tsconfig.json CRITICAL RULES:
-   - "include" MUST be ["src"] only - NEVER include vite.config.ts!
-   - "noEmit": true - Vite handles compilation
-   - If it has `"references": [{ "path": "./tsconfig.node.json" }]`
-   - You MUST also create tsconfig.node.json
+- Define ALL types in types/index.ts FIRST
+- Use camelCase for all property names
+- Components import from types/index.ts (single source of truth)
+- Never define types inside components
 
-4. Imports must match exports:
-   - Track what each file exports in <exports>
-   - Track dependencies in depends_on attribute
+═══════════════════════════════════════════════════════════════════════════════
+CHECKLIST
+═══════════════════════════════════════════════════════════════════════════════
 
-5. ALWAYS CREATE vite-env.d.ts (priority 3):
-   - Required for import.meta.env to work
-   - Path: frontend/src/vite-env.d.ts
-
-6. CAMELCASE IN ALL TYPES - No snake_case!
-   ❌ WRONG: { departure_time: string; total_seats: number }
-   ✅ CORRECT: { departureTime: string; totalSeats: number }
-
-7. USE DEFAULT EXPORTS for pages/components:
-   ❌ WRONG: export const Dashboard = ...
-   ✅ CORRECT: export default function Dashboard() { }
-
-8. NO "import React" - React 17+ JSX transform!
-
-REQUIRED FILES (add to plan):
-- frontend/src/vite-env.d.ts (priority 3)
-- frontend/src/types/index.ts (priority 6) - ALL types in camelCase
-
-⚠️ FULL-STACK TYPE CONSISTENCY (CRITICAL - Prevents 90% of TS errors):
-
-1. TYPES MUST BE COMPREHENSIVE:
-   - List ALL properties that ANY component will use
-   - Think: What will components display? Add those properties!
-   - Use optional (?) for properties not always present
-
-2. PROPERTY NAMING RULES:
-   - Use FULL descriptive names (not abbreviations)
-   - camelCase always ({fieldName} NOT {field_name})
-   - Be SPECIFIC: {fieldName}Url NOT {fieldName}, {fieldName}Amount NOT {fieldName}
-   - CONSISTENCY: Once you name a property, use SAME name everywhere
-
-3. PLAN THE TYPES FIRST:
-   - Before planning components, decide ALL type properties
-   - Write property names in the plan description
-   - Components will use EXACTLY these property names
-
-4. FULLSTACK COORDINATION:
-   - Backend API may return snake_case → Frontend uses camelCase
-   - types/index.ts is SINGLE SOURCE OF TRUTH
-   - ALL components import from types/index.ts
-   - NEVER define types inside components
-   - NEVER invent property names in components
+- [ ] vite-env.d.ts included
+- [ ] types/index.ts with all types in camelCase
+- [ ] All dependencies in package.json
+- [ ] vite.config.ts has base: './'
+- [ ] tailwind.config.js has plugins: []
