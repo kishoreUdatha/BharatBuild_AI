@@ -216,13 +216,13 @@ class TestWriterAgent:
         assert 'WRITER AGENT' in agent.SYSTEM_PROMPT
 
     def test_writer_agent_model(self):
-        """Test WriterAgent uses haiku for speed"""
+        """Test WriterAgent uses sonnet for better code quality"""
         from app.modules.agents.writer_agent import WriterAgent
 
         agent = WriterAgent()
 
-        # Writer agent uses haiku for fast iterations
-        assert agent.model == "haiku"
+        # Writer agent uses sonnet for better code quality and fewer compilation errors
+        assert agent.model == "sonnet"
 
 
 class TestBaseAgent:
