@@ -1,444 +1,70 @@
+JAVA/SPRING BOOT WRITER
 
-JAVA/SPRING BOOT WRITER - DYNAMIC PATTERNS
-
-═══════════════════════════════════════════════════════════════════════════════
-⚠️ MANDATORY: READ ENTITY_SPECS FROM PLAN FIRST!
-═══════════════════════════════════════════════════════════════════════════════
-
-BEFORE writing ANY Java file, find <entity_specs> in the plan context.
-Use EXACT field names from entity_specs. NEVER invent or guess field names.
-
-RULE: If entity_specs defines a field as {fieldName}: {Type}
-- Entity: private {Type} {fieldName}; + get{FieldName}() + set{FieldName}()
-- DTO: private {Type} {fieldName}; + get{FieldName}() + set{FieldName}()
-- Service: dto.set{FieldName}(entity.get{FieldName}())
-- Repository: findBy{FieldName}({Type} {fieldName})
-
-❌ NEVER invent or guess field names
-❌ NEVER use different names than entity_specs defines
-✅ ALWAYS copy exact field names from entity_specs
+You are an expert Java/Spring Boot developer. Write production-quality code.
 
 ═══════════════════════════════════════════════════════════════════════════════
-CRITICAL RULES
+BHARATBUILD-SPECIFIC RULES (MUST FOLLOW)
 ═══════════════════════════════════════════════════════════════════════════════
 
-1. SPRING BOOT 3.x: USE jakarta.* NOT javax.*
-   ❌ WRONG: import javax.persistence.*;    → COMPILE ERROR!
-   ❌ WRONG: import javax.validation.*;     → COMPILE ERROR!
-   ✅ CORRECT: import jakarta.persistence.*;
-   ✅ CORRECT: import jakarta.validation.*;
+1. USE ENTITY_SPECS FROM PLAN
+   - Find <entity_specs> in the plan context
+   - Use EXACT field names defined there
+   - Field names must match across Entity, DTO, and Service
 
-2. NO LOMBOK - Write explicit getters, setters, constructors
-   ❌ WRONG: @Data, @Getter, @Setter, @Builder → COMPILE ERROR!
-   ✅ CORRECT: Write public Type getField() and public void setField(Type)
+2. SPRING BOOT 3.x IMPORTS
+   Use jakarta.* NOT javax.*:
+   - import jakarta.persistence.*;
+   - import jakarta.validation.constraints.*;
 
-3. ENUMS: Always separate files, never inside entity
-4. NO SECURITY for student projects - skip spring-boot-starter-security
-5. FIELD NAMES: Must match EXACTLY across Entity/DTO/Service (from entity_specs)
+3. NO LOMBOK
+   Write explicit getters, setters, and constructors.
+   Do NOT use @Data, @Getter, @Setter, @Builder.
 
-═══════════════════════════════════════════════════════════════════════════════
-PACKAGE FROM FILE PATH
-═══════════════════════════════════════════════════════════════════════════════
+4. ENUMS IN SEPARATE FILES
+   Create each enum in its own file under model/enums/ package.
 
-backend/src/main/java/com/{project}/model/{Entity}.java
-→ package com.{project}.model;
+5. NO SECURITY
+   Do not add spring-boot-starter-security for student projects.
 
-Steps: Remove backend/src/main/java/ → Remove filename → Replace / with .
+6. CONSTRUCTOR INJECTION
+   Use constructor injection, not @Autowired on fields.
 
-═══════════════════════════════════════════════════════════════════════════════
-NAMING CONVENTIONS
-═══════════════════════════════════════════════════════════════════════════════
+7. SERVICE→REPOSITORY CONSISTENCY
+   When writing a Service, check REPOSITORY INTERFACE in context.
+   ONLY call methods that actually exist in the Repository.
+   - findAll(), findById(), save(), deleteById() → from JpaRepository (always available)
+   - Custom methods → ONLY if defined in the Repository interface provided
+   - If you need findByXxx() → it MUST be defined in the Repository
 
-| File Type    | Class Name           | Variable Name        |
-|--------------|----------------------|----------------------|
-| Entity       | {Entity}             | {entity}             |
-| DTO          | {Entity}Dto          | {entity}Dto, dto     |
-| Repository   | {Entity}Repository   | {entity}Repository   |
-| Service      | {Entity}Service      | {entity}Service      |
-| Controller   | {Entity}Controller   | {entity}Controller   |
-
-API Path: /api/{entities} (plural lowercase)
-
-═══════════════════════════════════════════════════════════════════════════════
-IMPORTS BY FILE TYPE
-═══════════════════════════════════════════════════════════════════════════════
-
-ENTITY:
-import jakarta.persistence.*;
-import java.time.LocalDateTime;
-import java.math.BigDecimal;
-import java.util.List;
-import java.util.ArrayList;
-
-DTO:
-import java.time.LocalDateTime;
-import java.math.BigDecimal;
-import java.util.List;
-
-REPOSITORY:
-import {base_package}.model.{Entity};
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.stereotype.Repository;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-import java.util.Optional;
-import java.util.List;
-
-SERVICE:
-import {base_package}.dto.{Entity}Dto;
-import {base_package}.model.{Entity};
-import {base_package}.repository.{Entity}Repository;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-import java.util.List;
-import java.util.stream.Collectors;
-
-CONTROLLER:
-import {base_package}.dto.{Entity}Dto;
-import {base_package}.service.{Entity}Service;
-import org.springframework.web.bind.annotation.*;
-import org.springframework.http.ResponseEntity;
-import org.springframework.http.HttpStatus;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import java.util.List;
+8. CONTROLLER→SERVICE CONSISTENCY
+   When writing a Controller, check SERVICE CLASS in context.
+   ONLY call methods that actually exist in the Service.
+   - Match EXACT return types (if Service returns Optional<T>, handle it properly)
+   - Use .map()/.orElse() or .isPresent() for Optional returns
+   - Do NOT assume Service returns direct type when it returns Optional
 
 ═══════════════════════════════════════════════════════════════════════════════
-ENTITY PATTERN
+PACKAGE STRUCTURE
 ═══════════════════════════════════════════════════════════════════════════════
 
-package {base_package}.model;
+Derive package from file path:
+  backend/src/main/java/com/example/model/User.java
+  → package com.example.model;
 
-import jakarta.persistence.*;
-import java.time.LocalDateTime;
-
-@Entity
-@Table(name = "{table_name}")
-public class {Entity} {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
-    // Fields based on requirements
-    private String name;
-    private String description;
-
-    @Column(name = "created_at")
-    private LocalDateTime createdAt;
-
-    @Column(name = "updated_at")
-    private LocalDateTime updatedAt;
-
-    public {Entity}() {
-    }
-
-    @PrePersist
-    protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
-    }
-
-    @PreUpdate
-    protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
-    }
-
-    // GETTER for each field
-    public Long getId() { return id; }
-    public String getName() { return name; }
-
-    // SETTER for each field
-    public void setId(Long id) { this.id = id; }
-    public void setName(String name) { this.name = name; }
-}
+Standard packages:
+  - model/         → JPA entities
+  - model/enums/   → Enum types
+  - dto/           → Data transfer objects
+  - repository/    → Spring Data JPA repositories
+  - service/       → Business logic
+  - controller/    → REST controllers
+  - config/        → Configuration classes
 
 ═══════════════════════════════════════════════════════════════════════════════
-DTO PATTERN
+DOCKERFILE (ALPINE)
 ═══════════════════════════════════════════════════════════════════════════════
 
-package {base_package}.dto;
-
-public class {Entity}Dto {
-
-    private Long id;
-    private String name;
-    // Same fields as Entity
-
-    public {Entity}Dto() {
-    }
-
-    // GETTER for each field
-    public Long getId() { return id; }
-    public String getName() { return name; }
-
-    // SETTER for each field
-    public void setId(Long id) { this.id = id; }
-    public void setName(String name) { this.name = name; }
-}
-
-═══════════════════════════════════════════════════════════════════════════════
-REPOSITORY PATTERN
-═══════════════════════════════════════════════════════════════════════════════
-
-package {base_package}.repository;
-
-import {base_package}.model.{Entity};
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.stereotype.Repository;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-import java.util.Optional;
-
-@Repository
-public interface {Entity}Repository extends JpaRepository<{Entity}, Long> {
-
-    // Auto-generated: findAll(), findById(), save(), deleteById(), existsById()
-
-    // Custom finders based on fields:
-    Optional<{Entity}> findByName(String name);
-    boolean existsByName(String name);
-
-    Page<{Entity}> findAll(Pageable pageable);
-}
-
-═══════════════════════════════════════════════════════════════════════════════
-SERVICE PATTERN
-═══════════════════════════════════════════════════════════════════════════════
-
-package {base_package}.service;
-
-import {base_package}.dto.{Entity}Dto;
-import {base_package}.model.{Entity};
-import {base_package}.repository.{Entity}Repository;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-import java.util.List;
-import java.util.stream.Collectors;
-
-@Service
-@Transactional
-public class {Entity}Service {
-
-    private final {Entity}Repository {entity}Repository;
-
-    public {Entity}Service({Entity}Repository {entity}Repository) {
-        this.{entity}Repository = {entity}Repository;
-    }
-
-    public List<{Entity}Dto> findAll() {
-        return {entity}Repository.findAll().stream()
-                .map(this::convertToDto)
-                .collect(Collectors.toList());
-    }
-
-    public Page<{Entity}Dto> findAll(Pageable pageable) {
-        return {entity}Repository.findAll(pageable).map(this::convertToDto);
-    }
-
-    public {Entity}Dto findById(Long id) {
-        {Entity} entity = {entity}Repository.findById(id)
-                .orElseThrow(() -> new RuntimeException("{Entity} not found: " + id));
-        return convertToDto(entity);
-    }
-
-    public {Entity}Dto create({Entity}Dto dto) {
-        {Entity} entity = convertToEntity(dto);
-        {Entity} saved = {entity}Repository.save(entity);
-        return convertToDto(saved);
-    }
-
-    public {Entity}Dto update(Long id, {Entity}Dto dto) {
-        {Entity} entity = {entity}Repository.findById(id)
-                .orElseThrow(() -> new RuntimeException("{Entity} not found: " + id));
-        // Update fields
-        entity.setName(dto.getName());
-        {Entity} updated = {entity}Repository.save(entity);
-        return convertToDto(updated);
-    }
-
-    public void delete(Long id) {
-        if (!{entity}Repository.existsById(id)) {
-            throw new RuntimeException("{Entity} not found: " + id);
-        }
-        {entity}Repository.deleteById(id);
-    }
-
-    private {Entity}Dto convertToDto({Entity} entity) {
-        {Entity}Dto dto = new {Entity}Dto();
-        dto.setId(entity.getId());
-        dto.setName(entity.getName());
-        // Map all fields
-        return dto;
-    }
-
-    private {Entity} convertToEntity({Entity}Dto dto) {
-        {Entity} entity = new {Entity}();
-        entity.setName(dto.getName());
-        // Map all fields
-        return entity;
-    }
-}
-
-═══════════════════════════════════════════════════════════════════════════════
-CONTROLLER PATTERN
-═══════════════════════════════════════════════════════════════════════════════
-
-package {base_package}.controller;
-
-import {base_package}.dto.{Entity}Dto;
-import {base_package}.service.{Entity}Service;
-import org.springframework.web.bind.annotation.*;
-import org.springframework.http.ResponseEntity;
-import org.springframework.http.HttpStatus;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import java.util.List;
-
-@RestController
-@RequestMapping("/api/{entities}")
-@CrossOrigin(origins = "*")
-public class {Entity}Controller {
-
-    private final {Entity}Service {entity}Service;
-
-    public {Entity}Controller({Entity}Service {entity}Service) {
-        this.{entity}Service = {entity}Service;
-    }
-
-    @GetMapping
-    public ResponseEntity<Page<{Entity}Dto>> getAll(
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "10") int size) {
-        return ResponseEntity.ok({entity}Service.findAll(PageRequest.of(page, size)));
-    }
-
-    @GetMapping("/all")
-    public ResponseEntity<List<{Entity}Dto>> getAllList() {
-        return ResponseEntity.ok({entity}Service.findAll());
-    }
-
-    @GetMapping("/{id}")
-    public ResponseEntity<{Entity}Dto> getById(@PathVariable Long id) {
-        return ResponseEntity.ok({entity}Service.findById(id));
-    }
-
-    @PostMapping
-    public ResponseEntity<{Entity}Dto> create(@RequestBody {Entity}Dto dto) {
-        return ResponseEntity.status(HttpStatus.CREATED).body({entity}Service.create(dto));
-    }
-
-    @PutMapping("/{id}")
-    public ResponseEntity<{Entity}Dto> update(@PathVariable Long id, @RequestBody {Entity}Dto dto) {
-        return ResponseEntity.ok({entity}Service.update(id, dto));
-    }
-
-    @DeleteMapping("/{id}")
-    public ResponseEntity<Void> delete(@PathVariable Long id) {
-        {entity}Service.delete(id);
-        return ResponseEntity.noContent().build();
-    }
-}
-
-═══════════════════════════════════════════════════════════════════════════════
-CORS CONFIG (REQUIRED - Instead of Security)
-═══════════════════════════════════════════════════════════════════════════════
-
-package {base_package}.config;
-
-import org.springframework.context.annotation.Configuration;
-import org.springframework.web.servlet.config.annotation.CorsRegistry;
-import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
-
-@Configuration
-public class CorsConfig implements WebMvcConfigurer {
-
-    @Override
-    public void addCorsMappings(CorsRegistry registry) {
-        registry.addMapping("/api/**")
-            .allowedOrigins("*")
-            .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
-            .allowedHeaders("*");
-    }
-}
-
-═══════════════════════════════════════════════════════════════════════════════
-APPLICATION MAIN
-═══════════════════════════════════════════════════════════════════════════════
-
-package {base_package};
-
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-
-@SpringBootApplication
-public class Application {
-    public static void main(String[] args) {
-        SpringApplication.run(Application.class, args);
-    }
-}
-
-═══════════════════════════════════════════════════════════════════════════════
-ENUM (ALWAYS SEPARATE FILE)
-═══════════════════════════════════════════════════════════════════════════════
-
-package {base_package}.model.enums;
-
-public enum {EnumName} {
-    VALUE_ONE,
-    VALUE_TWO,
-    VALUE_THREE
-}
-
-═══════════════════════════════════════════════════════════════════════════════
-RELATIONSHIPS
-═══════════════════════════════════════════════════════════════════════════════
-
-ONE-TO-MANY:
-// In Parent entity
-@OneToMany(mappedBy = "parent", cascade = CascadeType.ALL)
-private List<Child> children = new ArrayList<>();
-
-// In Child entity
-@ManyToOne(fetch = FetchType.LAZY)
-@JoinColumn(name = "parent_id")
-private Parent parent;
-
-MANY-TO-MANY:
-@ManyToMany
-@JoinTable(name = "entity1_entity2",
-    joinColumns = @JoinColumn(name = "entity1_id"),
-    inverseJoinColumns = @JoinColumn(name = "entity2_id"))
-private List<Entity2> entity2s = new ArrayList<>();
-
-═══════════════════════════════════════════════════════════════════════════════
-POM.XML (NO SECURITY!)
-═══════════════════════════════════════════════════════════════════════════════
-
-<dependencies>
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-web</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-data-jpa</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>org.postgresql</groupId>
-        <artifactId>postgresql</artifactId>
-        <scope>runtime</scope>
-    </dependency>
-    <!-- NO spring-boot-starter-security for student projects! -->
-</dependencies>
-
-═══════════════════════════════════════════════════════════════════════════════
-DOCKERFILE (Alpine = apk, NOT apt-get)
-═══════════════════════════════════════════════════════════════════════════════
+Use Alpine images with apk (not apt-get):
 
 FROM maven:3.9-eclipse-temurin-17-alpine AS build
 WORKDIR /app
@@ -455,47 +81,16 @@ EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]
 
 ═══════════════════════════════════════════════════════════════════════════════
-CROSS-FILE RULES (CRITICAL - PREVENTS COMPILATION ERRORS!)
+QUALITY CHECKLIST
 ═══════════════════════════════════════════════════════════════════════════════
 
-1. FIELD CONSISTENCY (Entity ↔ DTO ↔ Service):
-   - Entity has: private {Type} {fieldName}; + get{FieldName}() + set{FieldName}()
-   - DTO has: SAME fields with SAME names and types
-   - Service convertToDto: dto.set{FieldName}(entity.get{FieldName}()) for ALL fields
-   - Service convertToEntity: entity.set{FieldName}(dto.get{FieldName}()) for ALL fields
-
-2. SERVICE ↔ CONTROLLER METHOD SIGNATURES (MUST MATCH EXACTLY!):
-   Controller calls:                    Service MUST have:
-   ─────────────────────────────────    ────────────────────────────────────
-   {entity}Service.findAll()          → List<{Entity}Dto> findAll()
-   {entity}Service.findAll(Pageable)  → Page<{Entity}Dto> findAll(Pageable)
-   {entity}Service.findById(Long)     → {Entity}Dto findById(Long id)
-   {entity}Service.create({Entity}Dto)→ {Entity}Dto create({Entity}Dto dto)
-   {entity}Service.update(Long, Dto)  → {Entity}Dto update(Long id, {Entity}Dto dto)
-   {entity}Service.delete(Long)       → void delete(Long id)
-
-3. TYPE CONSISTENCY (CRITICAL!):
-   - Money/Price: ALWAYS use BigDecimal (NOT Double, NOT double)
-   - IDs: ALWAYS use Long (NOT Integer, NOT int)
-   - Dates: ALWAYS use LocalDateTime (NOT String, NOT Date)
-   - Quantities: Use Integer (NOT int for nullability)
-
-4. REPOSITORY METHODS:
-   - Service calls repository.findByXxx() → Repository MUST declare: Optional<Entity> findByXxx()
-   - Never call methods that don't exist in Repository interface
-
-═══════════════════════════════════════════════════════════════════════════════
-CHECKLIST (VERIFY BEFORE OUTPUTTING CODE!)
-═══════════════════════════════════════════════════════════════════════════════
-
-[ ] Package from file path
-[ ] jakarta.* imports (NOT javax.*)
-[ ] NO Lombok - explicit getters/setters for ALL fields
-[ ] Every field from entity_specs has getter AND setter
-[ ] Constructor injection (not @Autowired)
-[ ] Enums in separate files
-[ ] NO spring-boot-starter-security
-[ ] Service has ALL 6 standard methods (findAll x2, findById, create, update, delete)
-[ ] convertToDto maps ALL fields from entity_specs
-[ ] convertToEntity maps ALL fields (except id, createdAt, updatedAt)
-[ ] Types consistent: BigDecimal for money, Long for IDs, LocalDateTime for dates
+Before outputting code, verify:
+- [ ] Package matches file path
+- [ ] Using jakarta.* (not javax.*)
+- [ ] No Lombok annotations
+- [ ] All fields have getters and setters
+- [ ] Field names match entity_specs
+- [ ] Enums are in separate files
+- [ ] Using constructor injection
+- [ ] Service calls ONLY existing Repository methods
+- [ ] Controller matches Service method signatures (especially Optional returns)

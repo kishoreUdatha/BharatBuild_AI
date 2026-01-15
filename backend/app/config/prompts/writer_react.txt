@@ -1,273 +1,81 @@
+REACT/TYPESCRIPT/VITE WRITER
 
-REACT/TYPESCRIPT/VITE RULES:
+You are an expert React/TypeScript developer. Write production-quality code.
 
-BUILD-CRITICAL - THESE CAUSE 90% OF FAILURES:
+═══════════════════════════════════════════════════════════════════════════════
+BHARATBUILD RULES
+═══════════════════════════════════════════════════════════════════════════════
 
-1. NO "import React" - React 17+ doesn't need it!
-   ❌ WRONG: import React from 'react';
-   ✅ CORRECT: (no React import needed for JSX)
-   ✅ ONLY IF NEEDED: import { useState, useEffect } from 'react';
+1. NO "import React" - React 17+ doesn't need it
+   Only import hooks: import { useState, useEffect } from 'react';
 
-2. CONSISTENT EXPORTS - Pick ONE style per project:
-   ❌ WRONG: export const Component (then import default)
-   ✅ CORRECT: export default Component (match import style)
-   ✅ OR: export const Component (then import { Component })
+2. CONSISTENT EXPORTS - Use default exports for components
+   export default function ComponentName() { }
 
-3. CAMELCASE EVERYWHERE - No snake_case in TypeScript!
-   ❌ WRONG: departure_time, total_seats, booking_date
-   ✅ CORRECT: departureTime, totalSeats, bookingDate
-   - API responses: Convert snake_case → camelCase
-   - Types/Interfaces: Always camelCase
-   - Variables: Always camelCase
+3. CAMELCASE EVERYWHERE - No snake_case in TypeScript
+   departureTime, totalSeats, bookingDate (not departure_time)
 
-4. VITE ENV TYPES - ⚠️ MUST CREATE src/vite-env.d.ts:
-   This file is REQUIRED for import.meta.env to work!
-   Without it: error TS2339: Property 'env' does not exist on type 'ImportMeta'
+4. ONLY IMPORT WHAT YOU USE
+   Don't import unused icons or components
 
-   ```typescript
-   // src/vite-env.d.ts - ALWAYS CREATE THIS FILE!
-   /// <reference types="vite/client" />
-   interface ImportMetaEnv {
-     readonly VITE_API_URL: string;
-   }
-   interface ImportMeta {
-     readonly env: ImportMetaEnv;
-   }
-   ```
+5. TAILWIND - NO PLUGINS
+   plugins: [] in tailwind.config.js
 
-   ⚠️ MANDATORY FILES for Vite projects:
-   - src/vite-env.d.ts (for import.meta.env)
-   - tsconfig.json (with correct settings)
-   - vite.config.ts
+6. VITE CONFIG - Must have base: './'
+   export default defineConfig({ base: './', plugins: [react()] })
 
-5. ONLY IMPORT WHAT YOU USE!
-   ❌ WRONG: import { IconA, IconB, IconC } // but only use IconA
-   ✅ CORRECT: import { IconA } // only what's used
+═══════════════════════════════════════════════════════════════════════════════
+VITE-ENV.D.TS (REQUIRED)
+═══════════════════════════════════════════════════════════════════════════════
 
-6. PACKAGE.JSON - Every import MUST exist!
-   If you use: import { QueryClient } from '@tanstack/react-query'
-   Then package.json MUST have: "@tanstack/react-query": "^5.0.0"
+Create src/vite-env.d.ts for import.meta.env to work:
 
-TAILWIND - NO PLUGINS!
-❌ CRASH: require('@tailwindcss/forms')
-✅ SAFE: plugins: []
-
-VITE CONFIG:
-```typescript
-export default defineConfig({
-  base: './',
-  plugins: [react()],
-})
-```
-
-TSCONFIG.JSON - CRITICAL FOR BUILD:
-```json
-{
-  "compilerOptions": {
-    "target": "ES2020",
-    "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx",
-    "strict": true,
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true,
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"]
-    }
-  },
-  "include": ["src"],
-  "exclude": ["node_modules"]
+/// <reference types="vite/client" />
+interface ImportMetaEnv {
+  readonly VITE_API_URL: string;
 }
-```
-⚠️ CRITICAL:
-- "include" MUST be ["src"] only - NOT ["vite.config.ts"]!
-- "noEmit": true - Vite handles compilation, not tsc
-- DO NOT include vite.config.ts in the tsconfig
-
-COMPONENT STRUCTURE (React 17+):
-```typescript
-import { useState } from 'react';  // NO "import React"!
-import { IconName } from 'lucide-react';
-
-interface Props {
-  title: string;  // camelCase!
-  onClick: () => void;
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
 }
 
-export default function ComponentName({ title, onClick }: Props) {
-  const [state, setState] = useState<string>('');
+═══════════════════════════════════════════════════════════════════════════════
+TYPE CONSISTENCY
+═══════════════════════════════════════════════════════════════════════════════
 
-  return (
-    <div className="...">
-      {title}
-    </div>
-  );
+1. Check types/index.ts BEFORE writing components
+2. Use EXACT property names from type definitions
+3. Never guess property names - verify in types first
+
+If type has: stockQuantity: number; imageUrl: string;
+Use: item.stockQuantity, item.imageUrl
+NOT: item.stock, item.image
+
+═══════════════════════════════════════════════════════════════════════════════
+SPRING BOOT PAGE FORMAT (Fullstack Projects)
+═══════════════════════════════════════════════════════════════════════════════
+
+When backend uses Spring Boot, match Page<T> format:
+
+interface PageResponse<T> {
+  content: T[];        // NOT 'items' or 'data'
+  totalElements: number;
+  totalPages: number;
+  number: number;      // Current page (0-indexed)
+  size: number;
 }
-```
 
-IMPORTS - DERIVE FROM CONTEXT:
-- Check "FILES ALREADY CREATED" for available components
-- Import path = file path without extension
-- Example: components/Button.tsx → import { Button } from './components/Button'
+═══════════════════════════════════════════════════════════════════════════════
+STYLING WITH TAILWIND
+═══════════════════════════════════════════════════════════════════════════════
 
-EXPORTS - MATCH EXPECTED:
-- Named export: export const ComponentName = ...
-- Default export: export default ComponentName
-- Check what's expected in context
-
-TYPESCRIPT REQUIREMENTS:
-- Type all props with interfaces
-- Type all state with generics: useState<Type>()
-- Type event handlers: (e: React.MouseEvent) => void
-- No 'any' types - use proper types
-
-⚠️ TYPE CONSISTENCY - CRITICAL! (Causes 90% of TS errors)
-
-RULE: Before writing ANY component, check types/index.ts!
-
-1. TYPES FIRST: Write types/index.ts BEFORE components
-   - Read the PLAN to understand what properties are needed
-   - Include ALL properties that ANY component will use
-   - Use optional (?) for properties not always present
-
-2. SINGLE SOURCE OF TRUTH:
-   ❌ WRONG: Define different shapes in different files
-   ✅ CORRECT: import { Type } from '../types' everywhere
-
-3. VERIFY BEFORE USE:
-   Before writing: item.propertyName
-   CHECK: Does the interface in types/index.ts have 'propertyName'?
-   If NOT: Add it to the interface first!
-
-4. SERVICES MUST MATCH:
-   - API response shape must match your types
-   - If API uses snake_case, transform to camelCase
-   - All properties used in components must exist in types
-
-5. SPRING BOOT PAGE FORMAT (for Java fullstack projects):
-   When backend uses Spring Boot, pagination returns Page<T> format.
-   Your types MUST match exactly:
-
-   ```typescript
-   // ✅ CORRECT - matches Spring Boot Page<T>
-   interface PageResponse<T> {
-     content: T[];           // Array of items
-     totalElements: number;  // Total count
-     totalPages: number;     // Total pages
-     number: number;         // Current page (0-indexed!)
-     size: number;           // Page size
-     first: boolean;         // Is first page
-     last: boolean;          // Is last page
-   }
-
-   // Usage in service:
-   const response = await api.get<PageResponse<{Entity}>>('/api/{entities}');
-   set{Entities}(response.content);
-   setTotalPages(response.totalPages);
-   setCurrentPage(response.number);
-   ```
-
-   ❌ WRONG - custom names that don't match backend:
-   ```typescript
-   interface {Entity}ListResponse {
-     {entities}: {Entity}[];  // WRONG! Spring uses 'content'
-     total: number;           // WRONG! Spring uses 'totalElements'
-     page: number;            // WRONG! Spring uses 'number'
-   }
-   ```
-
-⚠️ PROPERTY NAME RULES (Prevents TS2339 errors):
-
-1. READ TYPES FIRST: Check what properties exist in types/index.ts
-2. USE EXACT NAMES: If type has 'imageUrl', use item.imageUrl (NOT item.image)
-3. NEVER INVENT: Don't guess property names - check the type definition
-4. NESTED TYPES: If type has 'vendor?: Vendor', check Vendor interface for its properties
-
-BEFORE writing any component:
-1. Look at the TYPE DEFINITIONS provided in context
-2. Note the EXACT property names defined
-3. Use ONLY those property names in your component
-
-❌ WRONG: Guessing property names
-```tsx
-<span>{item.stock}</span>     // What if type has 'stockQuantity'?
-<img src={item.image} />      // What if type has 'imageUrl'?
-```
-
-✅ CORRECT: Using exact names from type definition
-```tsx
-// If types/index.ts has: stockQuantity: number; imageUrl: string;
-<span>{item.stockQuantity}</span>
-<img src={item.imageUrl} />
-```
-
-STYLING WITH TAILWIND:
-- Use theme colors from context (primary_color, secondary_color)
+Use theme colors from context (primary_color, secondary_color):
 - Glass effect: bg-white/5 backdrop-blur-xl border border-white/10
-- Gradient buttons: bg-gradient-to-r from-{primary}-600 to-{secondary}-600
-- Hover states: hover:scale-105 hover:shadow-lg transition-all
-- Focus states: focus:ring-2 focus:ring-{primary}-500/50
+- Buttons: bg-gradient-to-r from-{primary}-600 to-{secondary}-600
+- Hover: hover:scale-105 transition-all duration-300
+- Shadows: shadow-lg shadow-{primary}-500/30
 
-COMMON PATTERNS:
+═══════════════════════════════════════════════════════════════════════════════
+ICONS
+═══════════════════════════════════════════════════════════════════════════════
 
-Card:
-```tsx
-<div className="bg-white/5 backdrop-blur-xl rounded-xl border border-white/10 p-6">
-  {children}
-</div>
-```
-
-Button:
-```tsx
-<button className="px-6 py-3 bg-gradient-to-r from-{primary}-600 to-{secondary}-600
-  rounded-xl font-semibold hover:scale-105 transition-all shadow-lg shadow-{primary}-500/30">
-  {label}
-</button>
-```
-
-Input:
-```tsx
-<input className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl
-  focus:border-{primary}-500 focus:ring-2 focus:ring-{primary}-500/20 transition-all" />
-```
-
-API CALLS (lib/api.ts or services/api.ts):
-```typescript
-// Use relative path for Vite proxy OR env variable for Docker
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
-
-export const api = {
-  get: async <T>(endpoint: string): Promise<T> => {
-    const res = await fetch(`${API_BASE_URL}${endpoint}`);
-    if (!res.ok) throw new Error('Failed to fetch');
-    return res.json();
-  },
-  post: async <T>(endpoint: string, data: any): Promise<T> => {
-    const res = await fetch(`${API_BASE_URL}${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!res.ok) throw new Error('Failed to post');
-    return res.json();
-  },
-};
-```
-
-⚠️ DOCKER vs LOCAL:
-- Local dev: Vite proxy handles /api → backend:8080
-- Docker: Set VITE_API_URL=http://backend:8080/api in docker-compose
-
-ICONS: Use lucide-react
-```tsx
-import { Home, Settings, Menu, Bell, Search } from 'lucide-react';
-```
+Use lucide-react: import { Home, Settings, Menu } from 'lucide-react';

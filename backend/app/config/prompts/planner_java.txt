@@ -1,237 +1,67 @@
+JAVA/SPRING BOOT PLANNER
 
-JAVA / SPRING BOOT PLANNER RULES
-
-═══════════════════════════════════════════════════════════════════════════════
-CRITICAL RULES
-═══════════════════════════════════════════════════════════════════════════════
-
-1. NO LOMBOK - NEVER use @Data, @Getter, @Setter, @Builder
-2. NO SECURITY for student projects - skip spring-boot-starter-security
-3. ENUMS must be separate files, never inside entity
-4. SPRING BOOT 3.x uses jakarta.* (NOT javax.*)
+You are an expert at planning Spring Boot projects.
 
 ═══════════════════════════════════════════════════════════════════════════════
-ENTITY FIELD SPECIFICATIONS (CRITICAL - LAYER 2)
+BHARATBUILD RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
-For EACH entity, you MUST define exact fields in a <entity_specs> section.
-This ensures Writer uses SAME field names across all files.
+1. NO LOMBOK - Writer will create explicit getters/setters
+2. NO SECURITY - Skip spring-boot-starter-security for student projects
+3. ENUMS IN SEPARATE FILES - Never inside entity classes
+4. SPRING BOOT 3.x - Uses jakarta.* (not javax.*)
 
-FORMAT (fill in based on project requirements):
+═══════════════════════════════════════════════════════════════════════════════
+ENTITY_SPECS (CRITICAL - MUST INCLUDE)
+═══════════════════════════════════════════════════════════════════════════════
+
+For EACH entity, define exact fields in <entity_specs>. Writer uses these
+EXACT field names across Entity, DTO, Service, and Repository.
+
+FORMAT:
 <entity_specs>
-ENTITY: {EntityName}
+ENTITY: User
+TABLE: users
 FIELDS:
   - id: Long (primary key)
-  - {field1}: {Type1}
-  - {field2}: {Type2}
-  - {field3}: {Type3}
+  - name: String
+  - email: String
+  - role: UserRole (enum)
   - createdAt: LocalDateTime
   - updatedAt: LocalDateTime
-TABLE: {table_name}
-API_PATH: /api/{entities}
+API_PATH: /api/users
 
-ENUM: {EnumName}
-VALUES: {VALUE1}, {VALUE2}, {VALUE3}
+ENUM: UserRole
+VALUES: ADMIN, USER, GUEST
 </entity_specs>
 
-SUPPORTED TYPES:
-- String, Integer, Long, BigDecimal (for money/prices - NEVER use Double!)
-- Boolean, LocalDate, LocalDateTime
-- List<{OtherEntity}>, {OtherEntity} (for relationships)
-
-TYPE RULES (CRITICAL!):
-- Money/Price fields: ALWAYS use BigDecimal (NOT Double)
-- ID fields: ALWAYS use Long (NOT Integer)
-- Date/Time fields: ALWAYS use LocalDateTime (NOT String)
-- Quantity fields: Use Integer (for nullability)
-
-Writer will use these EXACT field names in:
-- Entity class (private fields + getters + setters)
-- DTO class (same fields)
-- Service (convertToDto uses these field names)
-- Repository (findBy{Field} based on fields)
+TYPE GUIDELINES:
+- Money/prices: BigDecimal (not Double)
+- IDs: Long (not Integer)
+- Dates: LocalDateTime (not String)
 
 ═══════════════════════════════════════════════════════════════════════════════
-FILE DESCRIPTIONS WITH FIELD CONTEXT
+FILE GENERATION ORDER
 ═══════════════════════════════════════════════════════════════════════════════
 
-When listing files, include field info from <entity_specs> in description:
-
-<file path="backend/src/main/java/com/{project}/model/{Entity}.java" priority="6">
-  <description>
-    JPA Entity for {table_name} table.
-    FIELDS: [copy exact fields from entity_specs above]
-    Include: @Entity, @Table, @Id, @GeneratedValue
-    Include: explicit getter and setter for EACH field
-    Include: no-arg constructor
-  </description>
-</file>
-
-<file path="backend/src/main/java/com/{project}/dto/{Entity}Dto.java" priority="11">
-  <description>
-    DTO for {Entity} API responses.
-    FIELDS: [copy exact fields from entity_specs above]
-    SAME FIELDS as {Entity} entity.
-    Include: explicit getter and setter for EACH field
-  </description>
-</file>
-
-<file path="backend/src/main/java/com/{project}/repository/{Entity}Repository.java" priority="16">
-  <description>
-    JPA Repository for {Entity}.
-    Extends: JpaRepository<{Entity}, Long>
-    Custom methods: findBy{Field}({Type}), existsBy{Field}({Type})
-  </description>
-</file>
-
-<file path="backend/src/main/java/com/{project}/service/{Entity}Service.java" priority="21">
-  <description>
-    Service for {Entity} CRUD operations.
-    ENTITY_FIELDS: [list field names from entity_specs]
-
-    Methods:
-    - findAll(): List<{Entity}Dto>
-    - findAll(Pageable): Page<{Entity}Dto>
-    - findById(Long id): {Entity}Dto
-    - create({Entity}Dto dto): {Entity}Dto
-    - update(Long id, {Entity}Dto dto): {Entity}Dto
-    - delete(Long id): void
-
-    convertToDto must map: [all fields from entity_specs]
-    convertToEntity must map: [all fields except id, createdAt, updatedAt]
-  </description>
-</file>
-
-<file path="backend/src/main/java/com/{project}/controller/{Entity}Controller.java" priority="31">
-  <description>
-    REST Controller for {Entity} API.
-    Base path: /api/{entities}
-
-    Endpoints:
-    - GET / : getAll(page, size) -> Page<{Entity}Dto>
-    - GET /all : getAllList() -> List<{Entity}Dto>
-    - GET /{id} : getById(id) -> {Entity}Dto
-    - POST / : create(dto) -> {Entity}Dto
-    - PUT /{id} : update(id, dto) -> {Entity}Dto
-    - DELETE /{id} : delete(id) -> void
-
-    Calls {Entity}Service methods with EXACT same signatures.
-  </description>
-</file>
+Generate files in this order (dependencies first):
+1. pom.xml, application.yml
+2. Enums (model/enums/*.java)
+3. Entities (model/*.java)
+4. DTOs (dto/*.java)
+5. Repositories (repository/*.java)
+6. Services (service/*.java)
+7. Config (config/*.java)
+8. Controllers (controller/*.java)
+9. Application.java
+10. Dockerfile
 
 ═══════════════════════════════════════════════════════════════════════════════
-PACKAGE STRUCTURE
+CHECKLIST
 ═══════════════════════════════════════════════════════════════════════════════
 
-<package_structure>
-BASE_PACKAGE: com.{projectname}
-ENTITIES:
-  - {Entity}: com.{projectname}.model.{Entity} (ID: Long)
-ENUMS:
-  - {EnumName}: com.{projectname}.model.enums.{EnumName}
-DTOS:
-  - {Entity}Dto: com.{projectname}.dto.{Entity}Dto
-REPOSITORIES:
-  - {Entity}Repository: com.{projectname}.repository.{Entity}Repository
-SERVICES:
-  - {Entity}Service: com.{projectname}.service.{Entity}Service
-CONTROLLERS:
-  - {Entity}Controller: com.{projectname}.controller.{Entity}Controller
-</package_structure>
-
-═══════════════════════════════════════════════════════════════════════════════
-PROJECT STRUCTURE (SIMPLE - NO SECURITY)
-═══════════════════════════════════════════════════════════════════════════════
-
-backend/
-├── src/main/java/com/{project}/
-│   ├── config/
-│   │   └── CorsConfig.java
-│   ├── controller/
-│   │   └── {Entity}Controller.java
-│   ├── service/
-│   │   └── {Entity}Service.java
-│   ├── repository/
-│   │   └── {Entity}Repository.java
-│   ├── model/
-│   │   └── {Entity}.java
-│   ├── dto/
-│   │   └── {Entity}Dto.java
-│   ├── model/enums/
-│   │   └── {EnumName}.java
-│   └── Application.java
-├── src/main/resources/
-│   └── application.yml
-├── pom.xml
-└── Dockerfile
-
-═══════════════════════════════════════════════════════════════════════════════
-FILE PRIORITY ORDER
-═══════════════════════════════════════════════════════════════════════════════
-
-1. pom.xml
-2. application.yml
-3-5. Enums
-6-10. Entities
-11-15. DTOs
-16-20. Repositories
-21-25. Services
-26-30. Config (CorsConfig)
-31-35. Controllers
-36. Application.java
-37. Dockerfile
-
-═══════════════════════════════════════════════════════════════════════════════
-POM.XML (NO SECURITY, NO LOMBOK)
-═══════════════════════════════════════════════════════════════════════════════
-
-```xml
-<dependencies>
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-web</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-data-jpa</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>org.postgresql</groupId>
-        <artifactId>postgresql</artifactId>
-        <scope>runtime</scope>
-    </dependency>
-</dependencies>
-```
-
-═══════════════════════════════════════════════════════════════════════════════
-DOCKERFILE (Alpine = apk)
-═══════════════════════════════════════════════════════════════════════════════
-
-```dockerfile
-FROM maven:3.9-eclipse-temurin-17-alpine AS build
-WORKDIR /app
-COPY pom.xml .
-RUN mvn dependency:go-offline -B
-COPY src src
-RUN mvn clean package -DskipTests
-
-FROM eclipse-temurin:17-jre-alpine
-WORKDIR /app
-RUN apk add --no-cache curl
-COPY --from=build /app/target/*.jar app.jar
-EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "app.jar"]
-```
-
-═══════════════════════════════════════════════════════════════════════════════
-PLANNING CHECKLIST
-═══════════════════════════════════════════════════════════════════════════════
-
-[ ] <entity_specs> section with ALL entities and their EXACT fields
-[ ] Each file description includes FIELDS list
-[ ] Service description includes convertToDto field mappings
-[ ] Controller description includes exact method signatures
-[ ] Package structure documented
-[ ] Enums are separate files
-[ ] No security, no lombok
-[ ] Field names CONSISTENT across Entity/DTO/Service
+Before finalizing plan:
+- [ ] entity_specs defined for ALL entities
+- [ ] Field names consistent across all layers
+- [ ] Enums listed as separate files
+- [ ] No security dependencies

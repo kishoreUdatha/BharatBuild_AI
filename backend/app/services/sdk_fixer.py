@@ -15,6 +15,7 @@ from typing import Optional, Callable, List, Dict, Any
 from pathlib import Path
 from dataclasses import dataclass
 from anthropic import AsyncAnthropic
+from app.modules.sdk_agents.sdk_tools import SDK_FIXER_SYSTEM_PROMPT
 
 logger = logging.getLogger("bharatbuild")
 
@@ -41,29 +42,8 @@ class SDKFixer:
     - No truncation issues
     """
 
-    SYSTEM_PROMPT = """You are a Java code fixer. Your ONLY job is to FIX files by calling write_file.
-
-⚠️ CRITICAL: You MUST call write_file for EVERY file that has errors. Reading without writing = FAILURE.
-
-WORKFLOW:
-1. list_files pattern="backend/**/*.java"
-2. read_file for files with errors
-3. write_file with COMPLETE fixed content (MANDATORY - do not skip!)
-
-AFTER EVERY read_file, you MUST call write_file with the fixed version.
-DO NOT end your turn until you have called write_file for all files with errors.
-
-COMMON FIXES:
-- "cannot find symbol" for method → Add missing method to class/interface
-- "method X already defined" → REMOVE duplicate, keep only ONE
-- "package javax.* does not exist" → Change javax.* to jakarta.*
-- Missing getter/setter → Add explicit getter and setter methods
-- Missing @Query method → Add method with @Query annotation to repository
-
-SPRING BOOT 3.x: Use jakarta.persistence.* and jakarta.validation.* (NOT javax.*)
-
-REMEMBER: Your success is measured by write_file calls, not read_file calls.
-"""
+    # Use centralized system prompt from sdk_tools.py
+    SYSTEM_PROMPT = SDK_FIXER_SYSTEM_PROMPT
 
     TOOLS = [
         {
