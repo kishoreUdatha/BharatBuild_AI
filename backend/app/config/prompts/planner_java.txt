@@ -35,9 +35,15 @@ VALUES: {VALUE1}, {VALUE2}, {VALUE3}
 </entity_specs>
 
 SUPPORTED TYPES:
-- String, Integer, Long, Double, BigDecimal
+- String, Integer, Long, BigDecimal (for money/prices - NEVER use Double!)
 - Boolean, LocalDate, LocalDateTime
 - List<{OtherEntity}>, {OtherEntity} (for relationships)
+
+TYPE RULES (CRITICAL!):
+- Money/Price fields: ALWAYS use BigDecimal (NOT Double)
+- ID fields: ALWAYS use Long (NOT Integer)
+- Date/Time fields: ALWAYS use LocalDateTime (NOT String)
+- Quantity fields: Use Integer (for nullability)
 
 Writer will use these EXACT field names in:
 - Entity class (private fields + getters + setters)
