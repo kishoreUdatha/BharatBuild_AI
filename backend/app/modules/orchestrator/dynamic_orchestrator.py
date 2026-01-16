@@ -1996,6 +1996,7 @@ class DynamicOrchestrator:
             'complexity': None,
             'tech_stack': None,
             'design_theme': None,  # NEW: Color theme from Planner
+            'entity_specs': None,  # CRITICAL: Entity specs for cross-file consistency
             'features': []
         }
 
@@ -2190,6 +2191,15 @@ class DynamicOrchestrator:
                 if design_theme:
                     result['design_theme'] = design_theme
                     logger.info(f"[lxml DOM Parser] Extracted design_theme: {design_theme}")
+
+            # CRITICAL FIX: Extract entity_specs for cross-file consistency
+            # This provides field names, types, relationships to the Writer
+            entity_specs_elem = dom.find('entity_specs')
+            if entity_specs_elem is not None:
+                entity_specs_text = etree.tostring(entity_specs_elem, encoding='unicode', method='text').strip()
+                if entity_specs_text:
+                    result['entity_specs'] = entity_specs_text
+                    logger.info(f"[lxml DOM Parser] [CRITICAL] Extracted entity_specs ({len(entity_specs_text)} chars) for cross-file consistency")
 
         except Exception as e:
             logger.error(f"[lxml DOM Parser] Error parsing lxml DOM: {e}")
@@ -3766,6 +3776,7 @@ Ensure every import in every file has a corresponding file in the plan.
             "tasks": parsed_data.get('tasks', []),  # Legacy: task list for backward compatibility
             "features": parsed_data.get('features', []),
             "design_theme": parsed_data.get('design_theme'),  # NEW: Color theme for Writer
+            "entity_specs": parsed_data.get('entity_specs'),  # CRITICAL: Cross-file consistency data
         }
 
         # Determine if we're using file-based or task-based plan
@@ -4970,10 +4981,21 @@ CRITICAL RULES:
                     logger.info(f"[Writer] Including Entity for Service: {entity['path']}")
 
                 for repo in find_related(categorized_files['repositories'], entity_name):
+                    # Extract repository methods for explicit contract
+                    repo_methods = [line.strip() for line in repo['content'].split('\n')
+                                   if ('List<' in line or 'Optional<' in line or 'Page<' in line or 'Long ' in line or 'boolean ' in line or 'void ' in line)
+                                   and '(' in line and ';' in line]
+                    method_list = '\n'.join(f"  - {m}" for m in repo_methods[:15]) if repo_methods else "  (standard JpaRepository methods + see below)"
+
                     full_dependency_files.append(
-                        f"\n🔗 REPOSITORY (use ONLY methods defined here):\n"
-                        f"📄 {repo['path']}:\n```java\n{repo['content']}\n```\n"
-                        f"CRITICAL: Only call repository methods that exist above!"
+                        f"\n🔗 REPOSITORY INTERFACE - STRICT CONTRACT:\n"
+                        f"📄 {repo['path']}\n\n"
+                        f"⚠️ AVAILABLE METHODS:\n"
+                        f"  STANDARD JpaRepository: findAll(), findById(id), save(entity), deleteById(id), existsById(id)\n"
+                        f"  CUSTOM METHODS:\n{method_list}\n\n"
+                        f"```java\n{repo['content']}\n```\n\n"
+                        f"🚫 FORBIDDEN: Do NOT call findByXxxAndYyy() unless defined above!\n"
+                        f"✅ Service should define simple CRUD methods: findAll, findById, create, update, delete"
                     )
                     logger.info(f"[Writer] Including Repository for Service: {repo['path']}")
 
@@ -4999,15 +5021,32 @@ CRITICAL RULES:
                         f"📄 {repo['path']}:\n```java\n{repo['content']}\n```"
                     )
 
-            # 4. Controller generation: Pass Service + Entity
+            # 4. Controller generation: Pass Service + Entity + DTOs
             if is_controller and entity_name:
                 for svc in find_related(categorized_files['services'], entity_name):
+                    # Extract method signatures for explicit contract
+                    method_lines = [line.strip() for line in svc['content'].split('\n')
+                                   if ('public ' in line or 'List<' in line or 'Optional<' in line or 'Page<' in line)
+                                   and '(' in line and ')' in line and '{' not in line]
+                    method_list = '\n'.join(f"  - {m}" for m in method_lines[:15]) if method_lines else "  (see full code below)"
+
                     full_dependency_files.append(
-                        f"\n🔗 SERVICE (use ONLY these methods with EXACT return types):\n"
-                        f"📄 {svc['path']}:\n```java\n{svc['content']}\n```\n"
-                        f"CRITICAL: Match method signatures exactly (Optional, Page, etc)!"
+                        f"\n🔗 SERVICE INTERFACE - STRICT CONTRACT:\n"
+                        f"📄 {svc['path']}\n\n"
+                        f"⚠️ AVAILABLE METHODS (use ONLY these, DO NOT invent others):\n{method_list}\n\n"
+                        f"```java\n{svc['content']}\n```\n\n"
+                        f"🚫 FORBIDDEN: Do NOT call methods like getXxxByName(), searchXxx(), countXxx() unless listed above!\n"
+                        f"✅ REQUIRED: Use EXACT method names and return types from the interface above!"
                     )
                     logger.info(f"[Writer] Including Service for Controller: {svc['path']}")
+
+                # Also include DTOs so Controller knows what request/response types exist
+                for dto in find_related(categorized_files['dtos'], entity_name):
+                    full_dependency_files.append(
+                        f"\n🔗 DTO (use this for request/response):\n"
+                        f"📄 {dto['path']}:\n```java\n{dto['content']}\n```"
+                    )
+                    logger.info(f"[Writer] Including DTO for Controller: {dto['path']}")
 
                 for entity in find_related(categorized_files['entities'], entity_name):
                     full_dependency_files.append(
