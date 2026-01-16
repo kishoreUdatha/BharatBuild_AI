@@ -4870,97 +4870,194 @@ CRITICAL RULES:
 - NEVER invent or guess field names - use ONLY what's in entity_specs!
 """
 
-        # CRITICAL FIX: For Java files, include package/import context from existing files
+        # CRITICAL FIX: For Java files, include comprehensive cross-file context
+        # This is FULLY DYNAMIC - no hardcoded entity names or field names
         java_files_context = ""
         if file_path.endswith('.java') and context.files_created:
+            full_dependency_files = []
             java_context_parts = []
-            full_dependency_files = []  # For cross-file consistency
 
-            # Detect file type for dependency injection
-            is_service_file = 'Service.java' in file_path or '/service/' in file_path
-            is_controller_file = 'Controller.java' in file_path or '/controller/' in file_path
+            # Detect file type from path (dynamic - works for any entity)
+            file_name = file_path.split('/')[-1].replace('.java', '')
+            file_path_lower = file_path.lower()
 
-            # Extract entity name (e.g., "Order" from "OrderService.java" or "OrderController.java")
-            entity_name = None
-            if is_service_file:
-                file_name = file_path.split('/')[-1].replace('.java', '')
-                entity_name = file_name.replace('Service', '').replace('Impl', '')
-            elif is_controller_file:
-                file_name = file_path.split('/')[-1].replace('.java', '')
-                entity_name = file_name.replace('Controller', '')
+            is_repository = 'repository' in file_path_lower
+            is_service_impl = 'serviceimpl' in file_path_lower or ('/impl/' in file_path_lower and 'service' in file_path_lower)
+            is_service = 'service' in file_path_lower and not is_service_impl
+            is_controller = 'controller' in file_path_lower
+            is_dto = '/dto/' in file_path_lower or 'dto' in file_name.lower() or 'request' in file_name.lower() or 'response' in file_name.lower()
+            is_security = '/security/' in file_path_lower or 'config/security' in file_path_lower
+            is_config = '/config/' in file_path_lower
 
-            for created_file in context.files_created[-25:]:  # Last 25 files
-                created_path = created_file.get('path', '')
-                created_content = created_file.get('content', '')
+            # Extract entity name dynamically from file name
+            entity_name = file_name
+            for suffix in ['ServiceImpl', 'Service', 'Repository', 'Controller', 'Dto', 'DTO', 'Request', 'Response', 'Config']:
+                entity_name = entity_name.replace(suffix, '')
+            for prefix in ['Create', 'Update', 'Delete', 'Get']:
+                if entity_name.startswith(prefix):
+                    entity_name = entity_name[len(prefix):]
+            entity_name = entity_name.strip()
 
-                if created_path.endswith('.java') and created_content:
-                    # CRITICAL: Include FULL Repository code when generating Service
-                    # This prevents Service from calling Repository methods that don't exist
-                    is_matching_repo = (
-                        is_service_file and
-                        entity_name and
-                        'Repository.java' in created_path and
-                        entity_name in created_path
+            # Categorize all created files by type and entity (dynamic)
+            categorized_files = {
+                'entities': [],      # All entity classes
+                'repositories': [],  # All repositories
+                'services': [],      # All service interfaces
+                'service_impls': [], # All service implementations
+                'controllers': [],   # All controllers
+                'dtos': [],          # All DTOs
+                'security': [],      # All security files
+                'configs': [],       # All config files
+            }
+
+            for created_file in context.files_created[-50:]:  # Look at more files for complex apps
+                cp = created_file.get('path', '')
+                cc = created_file.get('content', '')
+                if not cp.endswith('.java') or not cc:
+                    continue
+
+                cp_lower = cp.lower()
+                cf_name = cp.split('/')[-1].replace('.java', '')
+
+                file_info = {'path': cp, 'content': cc, 'name': cf_name}
+
+                # Categorize dynamically based on path patterns
+                if '/model/' in cp_lower or '/entity/' in cp_lower:
+                    if 'enum' not in cp_lower:
+                        categorized_files['entities'].append(file_info)
+                elif 'repository' in cp_lower:
+                    categorized_files['repositories'].append(file_info)
+                elif 'serviceimpl' in cp_lower or ('/impl/' in cp_lower and 'service' in cp_lower):
+                    categorized_files['service_impls'].append(file_info)
+                elif 'service' in cp_lower:
+                    categorized_files['services'].append(file_info)
+                elif 'controller' in cp_lower:
+                    categorized_files['controllers'].append(file_info)
+                elif '/dto/' in cp_lower or 'dto' in cf_name.lower() or 'request' in cf_name.lower() or 'response' in cf_name.lower():
+                    categorized_files['dtos'].append(file_info)
+                elif '/security/' in cp_lower:
+                    categorized_files['security'].append(file_info)
+                elif '/config/' in cp_lower:
+                    categorized_files['configs'].append(file_info)
+
+            # Helper function to find related files by entity name
+            def find_related(file_list, target_entity):
+                """Find files related to target entity (dynamic matching)"""
+                related = []
+                for f in file_list:
+                    # Check if entity name appears in file name or path
+                    if target_entity and target_entity.lower() in f['name'].lower():
+                        related.append(f)
+                return related
+
+            # 1. Repository generation: Pass matching Entity
+            if is_repository and entity_name:
+                for entity in find_related(categorized_files['entities'], entity_name):
+                    full_dependency_files.append(
+                        f"\n🔗 ENTITY CLASS (use field names from this class for query methods):\n"
+                        f"📄 {entity['path']}:\n```java\n{entity['content']}\n```\n"
+                        f"CRITICAL: Query method names must match entity field names exactly!"
+                    )
+                    logger.info(f"[Writer] Including Entity for Repository: {entity['path']}")
+
+            # 2. Service Interface generation: Pass Entity + Repository
+            if is_service and entity_name:
+                for entity in find_related(categorized_files['entities'], entity_name):
+                    full_dependency_files.append(
+                        f"\n🔗 ENTITY CLASS:\n"
+                        f"📄 {entity['path']}:\n```java\n{entity['content']}\n```"
+                    )
+                    logger.info(f"[Writer] Including Entity for Service: {entity['path']}")
+
+                for repo in find_related(categorized_files['repositories'], entity_name):
+                    full_dependency_files.append(
+                        f"\n🔗 REPOSITORY (use ONLY methods defined here):\n"
+                        f"📄 {repo['path']}:\n```java\n{repo['content']}\n```\n"
+                        f"CRITICAL: Only call repository methods that exist above!"
+                    )
+                    logger.info(f"[Writer] Including Repository for Service: {repo['path']}")
+
+            # 3. ServiceImpl generation: Pass Service Interface + Entity + Repository
+            if is_service_impl and entity_name:
+                for svc in find_related(categorized_files['services'], entity_name):
+                    full_dependency_files.append(
+                        f"\n🔗 SERVICE INTERFACE (implement ALL methods EXACTLY):\n"
+                        f"📄 {svc['path']}:\n```java\n{svc['content']}\n```\n"
+                        f"CRITICAL: Implement EVERY method with EXACT signatures and @Override!"
+                    )
+                    logger.info(f"[Writer] Including Service Interface for ServiceImpl: {svc['path']}")
+
+                for entity in find_related(categorized_files['entities'], entity_name):
+                    full_dependency_files.append(
+                        f"\n🔗 ENTITY (use these getters/setters):\n"
+                        f"📄 {entity['path']}:\n```java\n{entity['content']}\n```"
                     )
 
-                    # CRITICAL: Include FULL Service code when generating Controller
-                    # This prevents Controller from calling Service methods that don't exist
-                    # or using wrong return types (e.g., Optional<T> vs T)
-                    is_matching_service = (
-                        is_controller_file and
-                        entity_name and
-                        'Service.java' in created_path and
-                        entity_name in created_path and
-                        'Impl' not in created_path  # Prefer interface over impl
+                for repo in find_related(categorized_files['repositories'], entity_name):
+                    full_dependency_files.append(
+                        f"\n🔗 REPOSITORY (call only these methods):\n"
+                        f"📄 {repo['path']}:\n```java\n{repo['content']}\n```"
                     )
 
-                    if is_matching_repo:
-                        # Include FULL Repository interface (not just signature)
-                        full_dependency_files.append(
-                            f"\n🔗 REPOSITORY INTERFACE (use ONLY these methods):\n"
-                            f"📄 {created_path}:\n```java\n{created_content}\n```"
-                        )
-                        logger.info(f"[Writer] Including full Repository: {created_path} for Service generation")
-                    elif is_matching_service:
-                        # Include FULL Service class (for Controller to match signatures)
-                        full_dependency_files.append(
-                            f"\n🔗 SERVICE CLASS (use ONLY these methods with EXACT return types):\n"
-                            f"📄 {created_path}:\n```java\n{created_content}\n```\n"
-                            f"CRITICAL: Match Service method signatures exactly:\n"
-                            f"- If Service returns Optional<T>, handle with .map()/.orElse()\n"
-                            f"- Only call methods that exist in the Service above"
-                        )
-                        logger.info(f"[Writer] Including full Service: {created_path} for Controller generation")
-                    else:
-                        # For other files, extract only signatures
-                        lines = created_content.split('\n')
-                        key_lines = []
-                        for line in lines[:60]:
-                            stripped = line.strip()
-                            if stripped.startswith('package ') or \
-                               stripped.startswith('import ') or \
-                               stripped.startswith('public class ') or \
-                               stripped.startswith('public interface ') or \
-                               stripped.startswith('public enum ') or \
-                               stripped.startswith('@Entity') or \
-                               stripped.startswith('@Repository') or \
-                               stripped.startswith('@Service') or \
-                               'extends ' in stripped or \
-                               'implements ' in stripped:
-                                key_lines.append(stripped)
+            # 4. Controller generation: Pass Service + Entity
+            if is_controller and entity_name:
+                for svc in find_related(categorized_files['services'], entity_name):
+                    full_dependency_files.append(
+                        f"\n🔗 SERVICE (use ONLY these methods with EXACT return types):\n"
+                        f"📄 {svc['path']}:\n```java\n{svc['content']}\n```\n"
+                        f"CRITICAL: Match method signatures exactly (Optional, Page, etc)!"
+                    )
+                    logger.info(f"[Writer] Including Service for Controller: {svc['path']}")
 
-                        if key_lines:
-                            java_context_parts.append(f"\n📄 {created_path}:\n" + '\n'.join(key_lines[:15]))
+                for entity in find_related(categorized_files['entities'], entity_name):
+                    full_dependency_files.append(
+                        f"\n🔗 ENTITY (for reference):\n"
+                        f"📄 {entity['path']}:\n```java\n{entity['content']}\n```"
+                    )
 
-            # Build context: Full dependencies first, then summaries
+            # 5. DTO generation: Pass matching Entity
+            if is_dto and entity_name:
+                for entity in find_related(categorized_files['entities'], entity_name):
+                    full_dependency_files.append(
+                        f"\n🔗 ENTITY (DTO fields should match):\n"
+                        f"📄 {entity['path']}:\n```java\n{entity['content']}\n```\n"
+                        f"CRITICAL: DTO field names must match Entity field names!"
+                    )
+                    logger.info(f"[Writer] Including Entity for DTO: {entity['path']}")
+
+            # 6. Security/Config files: Pass all entities (for UserDetails, etc)
+            if is_security or is_config:
+                # Pass all entities - security might need any of them
+                for entity in categorized_files['entities'][:5]:  # Limit to avoid context overflow
+                    full_dependency_files.append(
+                        f"\n🔗 ENTITY (use exact field names/methods):\n"
+                        f"📄 {entity['path']}:\n```java\n{entity['content']}\n```"
+                    )
+
+                # Pass existing security files for consistency
+                for sec in categorized_files['security']:
+                    if sec['path'] != file_path:
+                        full_dependency_files.append(
+                            f"\n🔗 EXISTING SECURITY FILE:\n"
+                            f"📄 {sec['path']}:\n```java\n{sec['content']}\n```"
+                        )
+
+            # Build package context from all files
+            for created_file in context.files_created[-20:]:
+                cp = created_file.get('path', '')
+                cc = created_file.get('content', '')
+                if cp.endswith('.java') and cc:
+                    for line in cc.split('\n')[:5]:
+                        if line.strip().startswith('package '):
+                            java_context_parts.append(f"📄 {cp}: {line.strip()}")
+                            break
+
+            # Build final context
             context_sections = []
             if full_dependency_files:
                 context_sections.append('\n'.join(full_dependency_files))
             if java_context_parts:
-                context_sections.append(
-                    f"EXISTING JAVA FILES (use these EXACT packages and imports):"
-                    f"{''.join(java_context_parts[:15])}"
-                )
+                context_sections.append(f"\nPACKAGES:\n{chr(10).join(java_context_parts[:10])}")
 
             if context_sections:
                 java_files_context = '\n'.join(context_sections)
