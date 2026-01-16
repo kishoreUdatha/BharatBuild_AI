@@ -26,19 +26,33 @@ BHARATBUILD-SPECIFIC RULES (MUST FOLLOW)
 5. CONSTRUCTOR INJECTION
    Use constructor injection, not @Autowired on fields.
 
-6. SERVICE→REPOSITORY CONSISTENCY
+6. SERVICE→REPOSITORY CONSISTENCY (CRITICAL - CAUSES COMPILE ERRORS)
    When writing a Service, check REPOSITORY INTERFACE in context.
    ONLY call methods that actually exist in the Repository.
-   - findAll(), findById(), save(), deleteById() → from JpaRepository (always available)
-   - Custom methods → ONLY if defined in the Repository interface provided
-   - If you need findByXxx() → it MUST be defined in the Repository
 
-7. CONTROLLER→SERVICE CONSISTENCY
+   ✅ ALWAYS AVAILABLE (from JpaRepository):
+   - findAll(), findById(id), save(entity), deleteById(id), existsById(id)
+
+   ❌ NEVER ASSUME THESE EXIST (unless explicitly defined):
+   - findByName(), findByEmail(), findByStatus()
+   - findByXxxAndYyy(), findByXxxOrYyy()
+   - countByXxx(), existsByXxx()
+
+   RULE: If Repository doesn't define findByEmail(), DON'T CALL IT!
+
+7. CONTROLLER→SERVICE CONSISTENCY (CRITICAL - CAUSES COMPILE ERRORS)
    When writing a Controller, check SERVICE CLASS in context.
    ONLY call methods that actually exist in the Service.
-   - Match EXACT return types (if Service returns Optional<T>, handle it properly)
-   - Use .map()/.orElse() or .isPresent() for Optional returns
-   - Do NOT assume Service returns direct type when it returns Optional
+
+   ✅ TYPICAL SERVICE METHODS (check if they exist):
+   - findAll(), findById(id), create(dto), update(id, dto), delete(id)
+
+   ❌ DO NOT INVENT METHODS LIKE:
+   - getPatientsByName() - unless Service has it
+   - searchDoctors() - unless Service has it
+   - getStatistics() - unless Service has it
+
+   RULE: If method is NOT in Service interface, DON'T CALL IT in Controller!
 
 8. RESPONSEENTITY PATTERNS
    CORRECT patterns:
@@ -88,7 +102,7 @@ EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]
 
 ═══════════════════════════════════════════════════════════════════════════════
-QUALITY CHECKLIST
+QUALITY CHECKLIST (VERIFY BEFORE OUTPUT)
 ═══════════════════════════════════════════════════════════════════════════════
 
 Before outputting code, verify:
@@ -99,5 +113,12 @@ Before outputting code, verify:
 - [ ] Field names match entity_specs
 - [ ] Enums are in separate files
 - [ ] Using constructor injection
-- [ ] Service calls ONLY existing Repository methods
-- [ ] Controller matches Service method signatures (especially Optional returns)
+
+⚠️ METHOD CONTRACT CHECKS (MOST COMMON ERRORS):
+- [ ] Service: Every repository.findByXxx() call → method EXISTS in Repository?
+- [ ] Service: NOT inventing methods like findByNameContaining() unless defined?
+- [ ] Controller: Every service.methodName() call → method EXISTS in Service?
+- [ ] Controller: NOT inventing methods like getByStatus(), search(), count()?
+- [ ] Controller: Return types match? (Optional<T> vs T vs List<T>)
+
+🚫 IF A METHOD IS NOT IN THE PROVIDED INTERFACE, DO NOT CALL IT!
