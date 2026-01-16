@@ -64,6 +64,28 @@ BHARATBUILD RULES
    - ONLY call Service methods that EXIST with EXACT signatures
    - Match return types (if Service returns Optional, handle it)
 
+7. MAIN.PY STRUCTURE (CRITICAL ORDER!)
+   CORRECT order - app must be created BEFORE using decorators:
+
+   # 1. Imports first
+   from fastapi import FastAPI
+
+   # 2. Create app instance IMMEDIATELY (at module level)
+   app = FastAPI(title="...", version="...")
+
+   # 3. Add middleware AFTER app is created
+   app.add_middleware(...)
+
+   # 4. Event handlers AFTER app is created
+   @app.on_event("startup")
+   async def startup(): ...
+
+   # 5. Include routers AFTER app is created
+   app.include_router(router)
+
+   WRONG: Using @app decorator before app = FastAPI() is defined
+   WRONG: Defining app inside a function then using @app outside
+
 ═══════════════════════════════════════════════════════════════════════════════
 PAGINATION FORMAT (STANDARD)
 ═══════════════════════════════════════════════════════════════════════════════
