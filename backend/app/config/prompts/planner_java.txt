@@ -7,38 +7,48 @@ BHARATBUILD RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
 1. NO LOMBOK - Writer will create explicit getters/setters
-2. NO SECURITY - Skip spring-boot-starter-security for student projects
-3. ENUMS IN SEPARATE FILES - Never inside entity classes
-4. SPRING BOOT 3.x - Uses jakarta.* (not javax.*)
+2. ENUMS IN SEPARATE FILES - Never inside entity classes
+3. SPRING BOOT 3.x - Uses jakarta.* (not javax.*)
 
 ═══════════════════════════════════════════════════════════════════════════════
 ENTITY_SPECS (CRITICAL - MUST INCLUDE)
 ═══════════════════════════════════════════════════════════════════════════════
 
-For EACH entity, define exact fields in <entity_specs>. Writer uses these
+For EACH entity, define ALL fields in <entity_specs>. Writer uses these
 EXACT field names across Entity, DTO, Service, and Repository.
+
+FIELD EXTRACTION RULES:
+1. Extract ALL nouns from user request as potential entities
+2. For each entity, extract ALL attributes mentioned or implied
+3. If user says "name" - decide: single field or split (analyze context)
+4. Always add: id (primary key), createdAt, updatedAt
+5. For relationships: add foreign key fields (e.g., if Entity A belongs to Entity B, add entityBId)
+6. Mark optional fields explicitly
 
 FORMAT:
 <entity_specs>
-ENTITY: User
-TABLE: users
+ENTITY: [ExtractedEntityName]
+TABLE: [plural_snake_case]
 FIELDS:
   - id: Long (primary key)
-  - name: String
-  - email: String
-  - role: UserRole (enum)
+  - [field1]: [Type]
+  - [field2]: [Type] (optional)
+  - [foreignEntityId]: Long (foreign key to [ForeignEntity])
   - createdAt: LocalDateTime
   - updatedAt: LocalDateTime
-API_PATH: /api/users
+API_PATH: /api/[plural-lowercase]
+RELATIONS:
+  - [relationName]: [RelationType] ([OneToMany/ManyToOne])
 
-ENUM: UserRole
-VALUES: ADMIN, USER, GUEST
+ENUM: [EnumName]
+VALUES: [VALUE1], [VALUE2], [VALUE3]
 </entity_specs>
 
 TYPE GUIDELINES:
 - Money/prices: BigDecimal (not Double)
 - IDs: Long (not Integer)
 - Dates: LocalDateTime (not String)
+- Boolean flags: Boolean (not String)
 
 ═══════════════════════════════════════════════════════════════════════════════
 FILE GENERATION ORDER
@@ -48,20 +58,24 @@ Generate files in this order (dependencies first):
 1. pom.xml, application.yml
 2. Enums (model/enums/*.java)
 3. Entities (model/*.java)
-4. DTOs (dto/*.java)
+4. DTOs (dto/*.java) - including auth DTOs if auth requested
 5. Repositories (repository/*.java)
-6. Services (service/*.java)
-7. Config (config/*.java)
-8. Controllers (controller/*.java)
-9. Application.java
-10. Dockerfile
+6. Services interfaces (service/*.java)
+7. Services implementations (service/impl/*.java)
+8. Security files (security/*.java) - if auth requested
+9. Config (config/*.java) - including SecurityConfig if auth requested
+10. Controllers (controller/*.java) - including AuthController if auth requested
+11. Application.java
+12. Dockerfile
 
 ═══════════════════════════════════════════════════════════════════════════════
 CHECKLIST
 ═══════════════════════════════════════════════════════════════════════════════
 
 Before finalizing plan:
-- [ ] entity_specs defined for ALL entities
+- [ ] entity_specs defined for ALL entities with ALL fields
 - [ ] Field names consistent across all layers
 - [ ] Enums listed as separate files
-- [ ] No security dependencies
+- [ ] Relationships have foreign key fields in entity_specs
+- [ ] Service interfaces AND implementations both planned
+- [ ] NO security dependencies (skip spring-boot-starter-security)

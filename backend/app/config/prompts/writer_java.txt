@@ -23,25 +23,32 @@ BHARATBUILD-SPECIFIC RULES (MUST FOLLOW)
 4. ENUMS IN SEPARATE FILES
    Create each enum in its own file under model/enums/ package.
 
-5. NO SECURITY
-   Do not add spring-boot-starter-security for student projects.
-
-6. CONSTRUCTOR INJECTION
+5. CONSTRUCTOR INJECTION
    Use constructor injection, not @Autowired on fields.
 
-7. SERVICE→REPOSITORY CONSISTENCY
+6. SERVICE→REPOSITORY CONSISTENCY
    When writing a Service, check REPOSITORY INTERFACE in context.
    ONLY call methods that actually exist in the Repository.
    - findAll(), findById(), save(), deleteById() → from JpaRepository (always available)
    - Custom methods → ONLY if defined in the Repository interface provided
    - If you need findByXxx() → it MUST be defined in the Repository
 
-8. CONTROLLER→SERVICE CONSISTENCY
+7. CONTROLLER→SERVICE CONSISTENCY
    When writing a Controller, check SERVICE CLASS in context.
    ONLY call methods that actually exist in the Service.
    - Match EXACT return types (if Service returns Optional<T>, handle it properly)
    - Use .map()/.orElse() or .isPresent() for Optional returns
    - Do NOT assume Service returns direct type when it returns Optional
+
+8. RESPONSEENTITY PATTERNS
+   CORRECT patterns:
+   - ResponseEntity.ok(body)                           → 200 with body
+   - ResponseEntity.notFound().build()                 → 404 without body
+   - ResponseEntity.status(HttpStatus.NOT_FOUND).body(...) → 404 with body
+   - ResponseEntity.badRequest().body(...)             → 400 with body
+
+   WRONG - notFound() returns HeadersBuilder which has NO body() method:
+   - ResponseEntity.notFound().body(...)               → COMPILE ERROR!
 
 ═══════════════════════════════════════════════════════════════════════════════
 PACKAGE STRUCTURE
