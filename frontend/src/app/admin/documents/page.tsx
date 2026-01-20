@@ -175,18 +175,11 @@ export default function AdminDocumentsPage() {
   const handleDownload = async (docId: string, fileName: string | null) => {
     setDownloadingId(docId)
     try {
-      const token = localStorage.getItem('token')
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/admin/documents/${docId}/download`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+      // Use apiClient.get with responseType: 'blob' for automatic token refresh support
+      const blob = await apiClient.get<Blob>(`/admin/documents/${docId}/download`, {
+        responseType: 'blob'
       })
 
-      if (!response.ok) {
-        throw new Error('Download failed')
-      }
-
-      const blob = await response.blob()
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
