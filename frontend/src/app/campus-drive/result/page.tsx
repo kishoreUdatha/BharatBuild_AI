@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -33,7 +33,7 @@ interface QuizResult {
   english_total: number
 }
 
-export default function ResultPage() {
+function ResultPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const driveId = searchParams.get('drive')
@@ -286,5 +286,21 @@ export default function ResultPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+function ResultLoadingFallback() {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50 flex items-center justify-center">
+      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+    </div>
+  )
+}
+
+export default function ResultPage() {
+  return (
+    <Suspense fallback={<ResultLoadingFallback />}>
+      <ResultPageContent />
+    </Suspense>
   )
 }

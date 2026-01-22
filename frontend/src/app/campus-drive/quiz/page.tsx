@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -37,7 +37,7 @@ const categoryColors: Record<string, { bg: string; text: string; icon: React.Rea
   english: { bg: 'bg-orange-100', text: 'text-orange-700', icon: <MessageSquare className="h-4 w-4" /> },
 }
 
-export default function QuizPage() {
+function QuizPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const driveId = searchParams.get('drive')
@@ -463,5 +463,24 @@ export default function QuizPage() {
         </div>
       )}
     </div>
+  )
+}
+
+function QuizLoadingFallback() {
+  return (
+    <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+        <p className="text-gray-600">Loading quiz...</p>
+      </div>
+    </div>
+  )
+}
+
+export default function QuizPage() {
+  return (
+    <Suspense fallback={<QuizLoadingFallback />}>
+      <QuizPageContent />
+    </Suspense>
   )
 }
