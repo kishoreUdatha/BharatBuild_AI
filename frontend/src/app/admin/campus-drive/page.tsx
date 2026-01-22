@@ -468,22 +468,22 @@ export default function AdminCampusDrivePage() {
                   <th className={`px-3 py-2 text-center font-medium uppercase whitespace-nowrap ${
                     isDark ? 'text-gray-400' : 'text-gray-500'
                   }`}>
-                    <Brain className="w-4 h-4 mx-auto text-blue-400" title="Logical" />
+                    <span title="Logical"><Brain className="w-4 h-4 mx-auto text-blue-400" /></span>
                   </th>
                   <th className={`px-3 py-2 text-center font-medium uppercase whitespace-nowrap ${
                     isDark ? 'text-gray-400' : 'text-gray-500'
                   }`}>
-                    <Code className="w-4 h-4 mx-auto text-green-400" title="Technical" />
+                    <span title="Technical"><Code className="w-4 h-4 mx-auto text-green-400" /></span>
                   </th>
                   <th className={`px-3 py-2 text-center font-medium uppercase whitespace-nowrap ${
                     isDark ? 'text-gray-400' : 'text-gray-500'
                   }`}>
-                    <BookOpen className="w-4 h-4 mx-auto text-purple-400" title="AI/ML" />
+                    <span title="AI/ML"><BookOpen className="w-4 h-4 mx-auto text-purple-400" /></span>
                   </th>
                   <th className={`px-3 py-2 text-center font-medium uppercase whitespace-nowrap ${
                     isDark ? 'text-gray-400' : 'text-gray-500'
                   }`}>
-                    <MessageSquare className="w-4 h-4 mx-auto text-orange-400" title="English" />
+                    <span title="English"><MessageSquare className="w-4 h-4 mx-auto text-orange-400" /></span>
                   </th>
                   <th className={`px-3 py-2 text-center font-medium uppercase whitespace-nowrap ${
                     isDark ? 'text-gray-400' : 'text-gray-500'
