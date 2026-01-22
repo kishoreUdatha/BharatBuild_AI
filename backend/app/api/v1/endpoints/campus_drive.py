@@ -284,25 +284,41 @@ async def start_quiz(
 
             questions.extend(selected)
 
-        # Shuffle all questions
-        random.shuffle(questions)
+        # Shuffle all questions using registration-specific seed
+        # This ensures same user gets same order if they refresh, but different users get different orders
+        user_seed = hash(str(registration.id) + str(drive_id))
+        rng = random.Random(user_seed)
+        rng.shuffle(questions)
 
         # Update registration status
         registration.status = RegistrationStatus.QUIZ_IN_PROGRESS
         registration.quiz_start_time = datetime.utcnow()
         await db.commit()
 
-        # Convert to response format (without correct answers)
-        quiz_questions = [
-            QuestionForQuiz(
-                id=q.id,
-                question_text=q.question_text,
-                category=q.category,
-                options=q.options,
-                marks=q.marks
+        # Convert to response format with shuffled options per question
+        # Each user gets different option order based on their registration + question ID
+        quiz_questions = []
+        for q in questions:
+            # Create a seed unique to this user + question combination
+            option_seed = hash(str(registration.id) + str(q.id))
+            option_rng = random.Random(option_seed)
+
+            # Create shuffled indices and shuffle options
+            original_options = list(q.options)
+            indices = list(range(len(original_options)))
+            option_rng.shuffle(indices)
+
+            shuffled_options = [original_options[i] for i in indices]
+
+            quiz_questions.append(
+                QuestionForQuiz(
+                    id=q.id,
+                    question_text=q.question_text,
+                    category=q.category,
+                    options=shuffled_options,
+                    marks=q.marks
+                )
             )
-            for q in questions
-        ]
 
         return QuizStartResponse(
             registration_id=registration.id,
@@ -395,7 +411,22 @@ async def submit_quiz(
 
             if answer.selected_option is not None:
                 attempted += 1
-                if answer.selected_option == question.correct_option:
+
+                # Recreate the same option shuffle to map user's selection back to original index
+                # This uses the same seed as when the quiz was started
+                option_seed = hash(str(registration.id) + str(question.id))
+                option_rng = random.Random(option_seed)
+
+                # Get the shuffle mapping: indices[shuffled_pos] = original_pos
+                indices = list(range(len(question.options)))
+                option_rng.shuffle(indices)
+
+                # Map user's selected shuffled index back to original index
+                # User selected shuffled position -> we need original position
+                # indices[i] gives original index that is now at shuffled position i
+                original_selected = indices[answer.selected_option] if answer.selected_option < len(indices) else -1
+
+                if original_selected == question.correct_option:
                     is_correct = True
                     marks = question.marks
                     correct_count += 1

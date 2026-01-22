@@ -540,7 +540,7 @@ export default function PricingPage() {
             </div>
             <div className="flex items-center gap-2 text-gray-400">
               <Star className="w-5 h-5 text-yellow-500" />
-              <span>500+ Students Trust Us</span>
+              <span>95,000+ Students Trust Us</span>
             </div>
           </div>
         </div>

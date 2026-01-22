@@ -23,13 +23,15 @@ import {
   Shield,
   Server,
   GraduationCap,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Trophy
 } from 'lucide-react'
 
 const navItems = [
   { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/admin/users', label: 'Users', icon: Users },
   { href: '/admin/enrollments', label: 'Enrollments', icon: GraduationCap },
+  { href: '/admin/campus-drive', label: 'Campus Drive', icon: Trophy },
   { href: '/admin/projects', label: 'Projects', icon: FolderKanban },
   { href: '/admin/documents', label: 'Documents', icon: FileSpreadsheet },
   { href: '/admin/sandboxes', label: 'Sandboxes', icon: Server },
