@@ -1,13 +1,262 @@
 """
 Project Analyzer - Analyzes codebase to extract project information
-for DocsPackAgent
+for DocsPackAgent and UML diagram generation.
+
+This module performs deep code analysis to extract:
+- Database schema with columns, types, and relationships
+- API endpoints with methods and parameters
+- Class structures with attributes and methods
+- Project features and modules
 """
 
 import os
 import json
+import re
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple
 import ast
+
+
+class SQLAlchemyModelVisitor(ast.NodeVisitor):
+    """AST visitor to extract SQLAlchemy model information."""
+
+    # SQLAlchemy type mappings
+    TYPE_MAPPINGS = {
+        'String': 'String',
+        'Integer': 'Integer',
+        'BigInteger': 'BigInteger',
+        'Float': 'Float',
+        'Numeric': 'Decimal',
+        'Boolean': 'Boolean',
+        'DateTime': 'DateTime',
+        'Date': 'Date',
+        'Time': 'Time',
+        'Text': 'Text',
+        'LargeBinary': 'Binary',
+        'JSON': 'JSON',
+        'JSONB': 'JSONB',
+        'UUID': 'UUID',
+        'Enum': 'Enum',
+        'ARRAY': 'Array',
+    }
+
+    def __init__(self):
+        self.models = []
+        self.current_model = None
+
+    def visit_ClassDef(self, node: ast.ClassDef):
+        """Visit class definitions to find SQLAlchemy models."""
+        # Check if this class inherits from Base or Model
+        base_names = []
+        for base in node.bases:
+            if isinstance(base, ast.Name):
+                base_names.append(base.id)
+            elif isinstance(base, ast.Attribute):
+                base_names.append(base.attr)
+
+        is_model = any(name in ['Base', 'Model', 'BaseModel', 'DeclarativeBase'] for name in base_names)
+
+        if is_model:
+            self.current_model = {
+                'name': node.name,
+                'columns': [],
+                'relationships': [],
+                'primary_key': 'id',
+                'table_name': None,
+                'methods': []
+            }
+
+            # Process class body
+            for item in node.body:
+                if isinstance(item, ast.Assign):
+                    self._process_assignment(item)
+                elif isinstance(item, ast.AnnAssign):
+                    self._process_annotated_assignment(item)
+                elif isinstance(item, ast.FunctionDef):
+                    if not item.name.startswith('_'):
+                        self.current_model['methods'].append(item.name)
+
+            # Only add if we found columns
+            if self.current_model['columns']:
+                self.models.append(self.current_model)
+
+            self.current_model = None
+
+        self.generic_visit(node)
+
+    def _process_assignment(self, node: ast.Assign):
+        """Process simple assignments like: id = Column(UUID, ...)"""
+        if not self.current_model:
+            return
+
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                col_name = target.id
+
+                # Check for __tablename__
+                if col_name == '__tablename__' and isinstance(node.value, ast.Constant):
+                    self.current_model['table_name'] = node.value.value
+                    continue
+
+                # Check for Column() call
+                if isinstance(node.value, ast.Call):
+                    col_info = self._extract_column_info(col_name, node.value)
+                    if col_info:
+                        self.current_model['columns'].append(col_info)
+
+                    # Check for relationship()
+                    rel_info = self._extract_relationship_info(col_name, node.value)
+                    if rel_info:
+                        self.current_model['relationships'].append(rel_info)
+
+    def _process_annotated_assignment(self, node: ast.AnnAssign):
+        """Process annotated assignments like: id: Mapped[UUID] = mapped_column(...)"""
+        if not self.current_model or not isinstance(node.target, ast.Name):
+            return
+
+        col_name = node.target.id
+
+        # Extract type from annotation
+        col_type = self._extract_type_from_annotation(node.annotation)
+
+        # Check for mapped_column() or Column()
+        if node.value and isinstance(node.value, ast.Call):
+            col_info = self._extract_column_info(col_name, node.value, default_type=col_type)
+            if col_info:
+                self.current_model['columns'].append(col_info)
+
+            rel_info = self._extract_relationship_info(col_name, node.value)
+            if rel_info:
+                self.current_model['relationships'].append(rel_info)
+        elif col_type:
+            # Just annotated without value
+            self.current_model['columns'].append({
+                'name': col_name,
+                'type': col_type,
+                'nullable': True,
+                'primary_key': False,
+                'foreign_key': None
+            })
+
+    def _extract_type_from_annotation(self, annotation) -> Optional[str]:
+        """Extract type from type annotation like Mapped[UUID]."""
+        if isinstance(annotation, ast.Subscript):
+            # Mapped[SomeType] or Optional[SomeType]
+            if isinstance(annotation.slice, ast.Name):
+                return self.TYPE_MAPPINGS.get(annotation.slice.id, annotation.slice.id)
+            elif isinstance(annotation.slice, ast.Subscript):
+                # Nested like Mapped[Optional[UUID]]
+                return self._extract_type_from_annotation(annotation.slice)
+        elif isinstance(annotation, ast.Name):
+            return self.TYPE_MAPPINGS.get(annotation.id, annotation.id)
+        return None
+
+    def _extract_column_info(self, col_name: str, call_node: ast.Call, default_type: str = None) -> Optional[Dict]:
+        """Extract column information from Column() or mapped_column() call."""
+        func_name = None
+        if isinstance(call_node.func, ast.Name):
+            func_name = call_node.func.id
+        elif isinstance(call_node.func, ast.Attribute):
+            func_name = call_node.func.attr
+
+        if func_name not in ['Column', 'mapped_column']:
+            return None
+
+        col_info = {
+            'name': col_name,
+            'type': default_type or 'String',
+            'nullable': True,
+            'primary_key': False,
+            'foreign_key': None
+        }
+
+        # Process positional arguments
+        for i, arg in enumerate(call_node.args):
+            if i == 0:
+                # First arg is usually the type
+                col_type = self._extract_column_type(arg)
+                if col_type:
+                    col_info['type'] = col_type
+
+            # Check for ForeignKey
+            if isinstance(arg, ast.Call):
+                fk_info = self._extract_foreign_key(arg)
+                if fk_info:
+                    col_info['foreign_key'] = fk_info
+
+        # Process keyword arguments
+        for kw in call_node.keywords:
+            if kw.arg == 'primary_key' and isinstance(kw.value, ast.Constant):
+                col_info['primary_key'] = kw.value.value
+                if kw.value.value:
+                    self.current_model['primary_key'] = col_name
+            elif kw.arg == 'nullable' and isinstance(kw.value, ast.Constant):
+                col_info['nullable'] = kw.value.value
+
+        return col_info
+
+    def _extract_column_type(self, node) -> Optional[str]:
+        """Extract column type from AST node."""
+        if isinstance(node, ast.Name):
+            return self.TYPE_MAPPINGS.get(node.id, node.id)
+        elif isinstance(node, ast.Call):
+            # Type with parameters like String(255)
+            if isinstance(node.func, ast.Name):
+                return self.TYPE_MAPPINGS.get(node.func.id, node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                return self.TYPE_MAPPINGS.get(node.func.attr, node.func.attr)
+        elif isinstance(node, ast.Attribute):
+            return self.TYPE_MAPPINGS.get(node.attr, node.attr)
+        return None
+
+    def _extract_foreign_key(self, call_node: ast.Call) -> Optional[str]:
+        """Extract ForeignKey reference."""
+        func_name = None
+        if isinstance(call_node.func, ast.Name):
+            func_name = call_node.func.id
+        elif isinstance(call_node.func, ast.Attribute):
+            func_name = call_node.func.attr
+
+        if func_name == 'ForeignKey' and call_node.args:
+            if isinstance(call_node.args[0], ast.Constant):
+                # ForeignKey('users.id') -> 'users'
+                fk_ref = call_node.args[0].value
+                if '.' in fk_ref:
+                    return fk_ref.split('.')[0]
+                return fk_ref
+        return None
+
+    def _extract_relationship_info(self, attr_name: str, call_node: ast.Call) -> Optional[Dict]:
+        """Extract relationship information from relationship() call."""
+        func_name = None
+        if isinstance(call_node.func, ast.Name):
+            func_name = call_node.func.id
+        elif isinstance(call_node.func, ast.Attribute):
+            func_name = call_node.func.attr
+
+        if func_name != 'relationship':
+            return None
+
+        rel_info = {
+            'name': attr_name,
+            'target': None,
+            'type': 'one_to_many',
+            'back_populates': None
+        }
+
+        # First argument is the target model
+        if call_node.args and isinstance(call_node.args[0], ast.Constant):
+            rel_info['target'] = call_node.args[0].value
+
+        # Check keywords
+        for kw in call_node.keywords:
+            if kw.arg == 'back_populates' and isinstance(kw.value, ast.Constant):
+                rel_info['back_populates'] = kw.value.value
+            elif kw.arg == 'uselist' and isinstance(kw.value, ast.Constant):
+                if not kw.value.value:
+                    rel_info['type'] = 'one_to_one'
+
+        return rel_info if rel_info['target'] else None
 
 
 class ProjectAnalyzer:
@@ -181,35 +430,455 @@ class ProjectAnalyzer:
         return "Monolithic architecture"
 
     def _analyze_database_schema(self) -> Dict[str, Any]:
-        """Extract database schema from models"""
+        """
+        Extract complete database schema from models using AST parsing.
 
+        Returns:
+            Dict with:
+            - tables: List of table dicts with name, columns, relationships
+            - relationships: Dict mapping table pairs to relationship type
+        """
         schema = {
             "tables": [],
             "relationships": {}
         }
 
-        models_dir = self.project_root / "backend" / "app" / "models"
-        if not models_dir.exists():
-            return schema
+        # Try multiple possible model locations
+        model_paths = [
+            self.project_root / "backend" / "app" / "models",
+            self.project_root / "app" / "models",
+            self.project_root / "models",
+            self.project_root / "src" / "models",
+        ]
 
+        models_dir = None
+        for path in model_paths:
+            if path.exists():
+                models_dir = path
+                break
+
+        if not models_dir:
+            # Try to find models in generated project files
+            return self._analyze_schema_from_files()
+
+        # Parse each model file with AST
         for model_file in models_dir.glob("*.py"):
-            if model_file.name.startswith('_'):
+            if model_file.name.startswith('_') or model_file.name == '__init__.py':
                 continue
 
-            # Extract table name from file
-            table_name = model_file.stem
-            if table_name != "__init__":
-                schema["tables"].append(table_name)
+            try:
+                with open(model_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
 
-            # Try to parse relationships (simplified)
-            with open(model_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-                if 'ForeignKey' in content:
-                    # Basic relationship detection
-                    # This is simplified - a full implementation would use AST parsing
-                    pass
+                # Use AST to parse Python models
+                tree = ast.parse(content)
+                visitor = SQLAlchemyModelVisitor()
+                visitor.visit(tree)
+
+                # Add extracted models to schema
+                for model in visitor.models:
+                    table_info = {
+                        'name': model['name'],
+                        'table_name': model.get('table_name') or self._to_snake_case(model['name']),
+                        'columns': model['columns'],
+                        'primary_key': model['primary_key'],
+                        'relationships': [],
+                        'methods': model.get('methods', [])
+                    }
+
+                    # Process relationships
+                    for rel in model['relationships']:
+                        table_info['relationships'].append({
+                            'column': rel['name'],
+                            'references': rel['target'],
+                            'type': rel['type']
+                        })
+
+                    # Also check columns for foreign keys
+                    for col in model['columns']:
+                        if col.get('foreign_key'):
+                            fk_table = col['foreign_key']
+                            table_info['relationships'].append({
+                                'column': col['name'],
+                                'references': self._snake_to_pascal(fk_table),
+                                'type': 'many_to_one'
+                            })
+                            # Add to global relationships
+                            rel_key = f"{model['name']}_{self._snake_to_pascal(fk_table)}"
+                            schema['relationships'][rel_key] = {
+                                'from': model['name'],
+                                'to': self._snake_to_pascal(fk_table),
+                                'type': 'many_to_one'
+                            }
+
+                    schema['tables'].append(table_info)
+
+            except SyntaxError as e:
+                # If AST parsing fails, try regex fallback
+                tables_from_regex = self._parse_model_with_regex(model_file)
+                schema['tables'].extend(tables_from_regex)
+            except Exception as e:
+                # Log but continue
+                pass
+
+        # If no tables found, try alternative parsing
+        if not schema['tables']:
+            schema = self._analyze_schema_from_files()
 
         return schema
+
+    def _analyze_schema_from_files(self) -> Dict[str, Any]:
+        """Fallback: Extract schema from various file types using regex."""
+        schema = {"tables": [], "relationships": {}}
+
+        # Search for model files in the entire project
+        search_patterns = [
+            ('*.py', self._parse_python_models),
+            ('*.prisma', self._parse_prisma_schema),
+            ('*.ts', self._parse_typeorm_models),
+            ('*.java', self._parse_java_entities),
+            ('*.sql', self._parse_sql_schema),
+        ]
+
+        for pattern, parser in search_patterns:
+            for file_path in self.project_root.rglob(pattern):
+                # Skip node_modules, venv, etc.
+                if any(skip in str(file_path) for skip in ['node_modules', 'venv', '.venv', '__pycache__', 'dist', 'build']):
+                    continue
+                try:
+                    tables = parser(file_path)
+                    schema['tables'].extend(tables)
+                except Exception:
+                    continue
+
+        # Remove duplicates
+        seen = set()
+        unique_tables = []
+        for table in schema['tables']:
+            name = table.get('name', '')
+            if name and name not in seen:
+                seen.add(name)
+                unique_tables.append(table)
+        schema['tables'] = unique_tables
+
+        return schema
+
+    def _parse_python_models(self, file_path: Path) -> List[Dict]:
+        """Parse Python file for SQLAlchemy/Django models."""
+        tables = []
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Check if this looks like a model file
+            if 'Column' not in content and 'models.Model' not in content:
+                return tables
+
+            tree = ast.parse(content)
+            visitor = SQLAlchemyModelVisitor()
+            visitor.visit(tree)
+
+            for model in visitor.models:
+                tables.append({
+                    'name': model['name'],
+                    'columns': model['columns'],
+                    'primary_key': model['primary_key'],
+                    'relationships': [
+                        {'column': col['name'], 'references': col['foreign_key'], 'type': 'many_to_one'}
+                        for col in model['columns'] if col.get('foreign_key')
+                    ]
+                })
+
+        except Exception:
+            pass
+
+        return tables
+
+    def _parse_model_with_regex(self, file_path: Path) -> List[Dict]:
+        """Parse model file using regex when AST fails."""
+        tables = []
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Find class definitions that inherit from Base/Model
+            class_pattern = r'class\s+(\w+)\s*\([^)]*(?:Base|Model)[^)]*\)'
+            for match in re.finditer(class_pattern, content):
+                class_name = match.group(1)
+
+                # Find columns
+                columns = []
+                col_pattern = r'(\w+)\s*[=:]\s*(?:Column|mapped_column)\s*\(\s*(\w+)'
+                for col_match in re.finditer(col_pattern, content):
+                    col_name, col_type = col_match.groups()
+                    if col_name not in ['__tablename__', '__table_args__']:
+                        columns.append({
+                            'name': col_name,
+                            'type': col_type,
+                            'nullable': True,
+                            'primary_key': col_name == 'id',
+                            'foreign_key': None
+                        })
+
+                # Find foreign keys
+                fk_pattern = r'(\w+)\s*=\s*Column\s*\([^)]*ForeignKey\s*\(\s*[\'"](\w+)\.(\w+)[\'"]'
+                for fk_match in re.finditer(fk_pattern, content):
+                    col_name, ref_table, ref_col = fk_match.groups()
+                    for col in columns:
+                        if col['name'] == col_name:
+                            col['foreign_key'] = ref_table
+                            break
+
+                if columns:
+                    tables.append({
+                        'name': class_name,
+                        'columns': columns,
+                        'primary_key': 'id',
+                        'relationships': [
+                            {'column': c['name'], 'references': c['foreign_key'], 'type': 'many_to_one'}
+                            for c in columns if c.get('foreign_key')
+                        ]
+                    })
+
+        except Exception:
+            pass
+
+        return tables
+
+    def _parse_prisma_schema(self, file_path: Path) -> List[Dict]:
+        """Parse Prisma schema file."""
+        tables = []
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Find model definitions
+            model_pattern = r'model\s+(\w+)\s*\{([^}]+)\}'
+            for match in re.finditer(model_pattern, content, re.DOTALL):
+                model_name = match.group(1)
+                model_body = match.group(2)
+
+                columns = []
+                relationships = []
+
+                # Parse fields
+                field_pattern = r'(\w+)\s+(\w+)(\[\])?\s*(@[^\n]+)?'
+                for field_match in re.finditer(field_pattern, model_body):
+                    field_name = field_match.group(1)
+                    field_type = field_match.group(2)
+                    is_array = field_match.group(3)
+                    decorators = field_match.group(4) or ''
+
+                    # Skip relation fields (they're model names, not types)
+                    if field_type[0].isupper() and field_type not in ['String', 'Int', 'Float', 'Boolean', 'DateTime', 'Json']:
+                        relationships.append({
+                            'column': field_name,
+                            'references': field_type,
+                            'type': 'one_to_many' if is_array else 'many_to_one'
+                        })
+                    else:
+                        columns.append({
+                            'name': field_name,
+                            'type': field_type,
+                            'nullable': '?' in decorators,
+                            'primary_key': '@id' in decorators,
+                            'foreign_key': None
+                        })
+
+                tables.append({
+                    'name': model_name,
+                    'columns': columns,
+                    'primary_key': next((c['name'] for c in columns if c['primary_key']), 'id'),
+                    'relationships': relationships
+                })
+
+        except Exception:
+            pass
+
+        return tables
+
+    def _parse_typeorm_models(self, file_path: Path) -> List[Dict]:
+        """Parse TypeORM entity files."""
+        tables = []
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            if '@Entity' not in content:
+                return tables
+
+            # Find entity classes
+            entity_pattern = r'@Entity\s*\([^)]*\)\s*(?:export\s+)?class\s+(\w+)'
+            for match in re.finditer(entity_pattern, content):
+                entity_name = match.group(1)
+
+                columns = []
+                relationships = []
+
+                # Find columns
+                col_pattern = r'@(?:PrimaryGeneratedColumn|Column)\s*\([^)]*\)\s*(\w+)\s*[?:]?\s*(\w+)?'
+                for col_match in re.finditer(col_pattern, content):
+                    col_name = col_match.group(1)
+                    col_type = col_match.group(2) or 'string'
+                    columns.append({
+                        'name': col_name,
+                        'type': col_type,
+                        'nullable': True,
+                        'primary_key': 'PrimaryGeneratedColumn' in col_match.group(0),
+                        'foreign_key': None
+                    })
+
+                # Find relationships
+                rel_pattern = r'@(?:ManyToOne|OneToMany|OneToOne|ManyToMany)\s*\([^)]*\)\s*(\w+)\s*[?:]?\s*(\w+)?'
+                for rel_match in re.finditer(rel_pattern, content):
+                    rel_name = rel_match.group(1)
+                    rel_type = rel_match.group(2)
+                    if rel_type:
+                        relationships.append({
+                            'column': rel_name,
+                            'references': rel_type.replace('[]', ''),
+                            'type': 'one_to_many' if 'OneToMany' in rel_match.group(0) else 'many_to_one'
+                        })
+
+                tables.append({
+                    'name': entity_name,
+                    'columns': columns,
+                    'primary_key': next((c['name'] for c in columns if c['primary_key']), 'id'),
+                    'relationships': relationships
+                })
+
+        except Exception:
+            pass
+
+        return tables
+
+    def _parse_java_entities(self, file_path: Path) -> List[Dict]:
+        """Parse Java JPA/Hibernate entity files."""
+        tables = []
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            if '@Entity' not in content:
+                return tables
+
+            # Find entity classes
+            entity_pattern = r'@Entity\s*(?:@Table\s*\([^)]*\))?\s*public\s+class\s+(\w+)'
+            for match in re.finditer(entity_pattern, content):
+                entity_name = match.group(1)
+
+                columns = []
+                relationships = []
+
+                # Find fields with @Column or @Id
+                field_pattern = r'(?:@(?:Id|Column|GeneratedValue)[^;]*\s+)?private\s+(\w+)\s+(\w+)\s*;'
+                for field_match in re.finditer(field_pattern, content):
+                    field_type = field_match.group(1)
+                    field_name = field_match.group(2)
+                    columns.append({
+                        'name': field_name,
+                        'type': field_type,
+                        'nullable': True,
+                        'primary_key': '@Id' in content[:field_match.start()].split('\n')[-1],
+                        'foreign_key': None
+                    })
+
+                # Find relationships
+                rel_pattern = r'@(?:ManyToOne|OneToMany|OneToOne|ManyToMany)[^;]*private\s+(?:List<)?(\w+)>?\s+(\w+)\s*;'
+                for rel_match in re.finditer(rel_pattern, content):
+                    rel_type = rel_match.group(1)
+                    rel_name = rel_match.group(2)
+                    relationships.append({
+                        'column': rel_name,
+                        'references': rel_type,
+                        'type': 'one_to_many' if 'OneToMany' in rel_match.group(0) else 'many_to_one'
+                    })
+
+                tables.append({
+                    'name': entity_name,
+                    'columns': columns,
+                    'primary_key': next((c['name'] for c in columns if c['primary_key']), 'id'),
+                    'relationships': relationships
+                })
+
+        except Exception:
+            pass
+
+        return tables
+
+    def _parse_sql_schema(self, file_path: Path) -> List[Dict]:
+        """Parse SQL CREATE TABLE statements."""
+        tables = []
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Find CREATE TABLE statements
+            table_pattern = r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\']?(\w+)[`"\']?\s*\(([^;]+)\)'
+            for match in re.finditer(table_pattern, content, re.IGNORECASE | re.DOTALL):
+                table_name = match.group(1)
+                table_body = match.group(2)
+
+                columns = []
+                relationships = []
+
+                # Parse columns
+                col_pattern = r'[`"\']?(\w+)[`"\']?\s+([\w\(\)]+)(?:\s+(?:NOT\s+)?NULL)?(?:\s+PRIMARY\s+KEY)?'
+                for col_match in re.finditer(col_pattern, table_body, re.IGNORECASE):
+                    col_name = col_match.group(1)
+                    col_type = col_match.group(2)
+
+                    # Skip constraints
+                    if col_name.upper() in ['PRIMARY', 'FOREIGN', 'UNIQUE', 'INDEX', 'CONSTRAINT', 'KEY']:
+                        continue
+
+                    columns.append({
+                        'name': col_name,
+                        'type': col_type,
+                        'nullable': 'NOT NULL' not in col_match.group(0).upper(),
+                        'primary_key': 'PRIMARY KEY' in col_match.group(0).upper(),
+                        'foreign_key': None
+                    })
+
+                # Find foreign keys
+                fk_pattern = r'FOREIGN\s+KEY\s*\([`"\']?(\w+)[`"\']?\)\s*REFERENCES\s+[`"\']?(\w+)[`"\']?'
+                for fk_match in re.finditer(fk_pattern, table_body, re.IGNORECASE):
+                    fk_col = fk_match.group(1)
+                    ref_table = fk_match.group(2)
+                    for col in columns:
+                        if col['name'] == fk_col:
+                            col['foreign_key'] = ref_table
+                    relationships.append({
+                        'column': fk_col,
+                        'references': ref_table,
+                        'type': 'many_to_one'
+                    })
+
+                tables.append({
+                    'name': self._snake_to_pascal(table_name),
+                    'columns': columns,
+                    'primary_key': next((c['name'] for c in columns if c['primary_key']), 'id'),
+                    'relationships': relationships
+                })
+
+        except Exception:
+            pass
+
+        return tables
+
+    def _to_snake_case(self, name: str) -> str:
+        """Convert PascalCase to snake_case."""
+        return re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
+
+    def _snake_to_pascal(self, name: str) -> str:
+        """Convert snake_case to PascalCase."""
+        return ''.join(word.title() for word in name.split('_'))
 
     def _analyze_modules(self) -> List[Dict[str, str]]:
         """Analyze project modules from API endpoints or directory structure"""

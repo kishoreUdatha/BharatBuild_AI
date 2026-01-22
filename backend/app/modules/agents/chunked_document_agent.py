@@ -2282,24 +2282,13 @@ Place: {ci.college_name}
         return endpoints[:20]
 
     def _extract_database_tables(self, files_created: list) -> list:
-        """Extract database tables from generated code files."""
+        """
+        Extract database tables with columns and relationships from generated code files.
+        This is the key method for generating DYNAMIC UML diagrams.
+        """
         import re
+        import ast
         tables = []
-
-        patterns = [
-            # SQLAlchemy
-            (r'class\s+(\w+)\s*\([^)]*(?:Base|Model)[^)]*\)', 'sqlalchemy'),
-            # Django
-            (r'class\s+(\w+)\s*\(models\.Model\)', 'django'),
-            # Prisma
-            (r'model\s+(\w+)\s*\{', 'prisma'),
-            # TypeORM
-            (r'@Entity\s*\([^)]*\)\s*(?:export\s+)?class\s+(\w+)', 'typeorm'),
-            # Mongoose
-            (r'const\s+(\w+)Schema\s*=\s*new\s+(?:mongoose\.)?Schema', 'mongoose'),
-            # SQL CREATE TABLE
-            (r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\']?(\w+)[`"\']?', 'sql'),
-        ]
 
         for file_info in files_created:
             if isinstance(file_info, dict):
@@ -2308,21 +2297,352 @@ Place: {ci.college_name}
             else:
                 continue
 
-            if not any(ext in file_path for ext in ['.py', '.js', '.ts', '.java', '.prisma', '.sql']):
+            if not content:
                 continue
 
-            for pattern, orm_type in patterns:
-                matches = re.findall(pattern, content, re.IGNORECASE)
-                for table_name in matches:
-                    if table_name.lower() in ['base', 'model', 'basemodel', 'entity']:
+            # Extract based on file type
+            if file_path.endswith('.py'):
+                tables.extend(self._extract_python_models(content, file_path))
+            elif file_path.endswith('.prisma'):
+                tables.extend(self._extract_prisma_models(content, file_path))
+            elif file_path.endswith('.ts') or file_path.endswith('.js'):
+                tables.extend(self._extract_typescript_models(content, file_path))
+            elif file_path.endswith('.java'):
+                tables.extend(self._extract_java_models(content, file_path))
+            elif file_path.endswith('.sql'):
+                tables.extend(self._extract_sql_tables(content, file_path))
+
+        # Remove duplicates by name
+        seen = set()
+        unique_tables = []
+        for table in tables:
+            name = table.get('name', '')
+            if name and name not in seen:
+                seen.add(name)
+                unique_tables.append(table)
+
+        return unique_tables[:15]
+
+    def _extract_python_models(self, content: str, file_path: str) -> list:
+        """Extract SQLAlchemy/Django models with columns and relationships."""
+        import re
+        tables = []
+
+        # Check if this looks like a model file
+        if 'Column' not in content and 'models.Model' not in content and 'mapped_column' not in content:
+            return tables
+
+        # Find class definitions that inherit from Base/Model
+        class_pattern = r'class\s+(\w+)\s*\([^)]*(?:Base|Model|DeclarativeBase)[^)]*\)\s*:'
+        class_matches = list(re.finditer(class_pattern, content))
+
+        for i, match in enumerate(class_matches):
+            class_name = match.group(1)
+            if class_name.lower() in ['base', 'model', 'basemodel']:
+                continue
+
+            # Get the class body (until next class or end of file)
+            start_pos = match.end()
+            if i + 1 < len(class_matches):
+                end_pos = class_matches[i + 1].start()
+            else:
+                end_pos = len(content)
+
+            class_body = content[start_pos:end_pos]
+
+            # Extract columns
+            columns = []
+            relationships = []
+
+            # Pattern for Column() or mapped_column()
+            col_patterns = [
+                # Standard: name = Column(Type, ...)
+                r'(\w+)\s*=\s*Column\s*\(\s*(\w+)',
+                # Mapped: name: Mapped[Type] = mapped_column(...)
+                r'(\w+)\s*:\s*Mapped\s*\[\s*(\w+)\s*\]',
+                # Annotated: name = mapped_column(Type, ...)
+                r'(\w+)\s*=\s*mapped_column\s*\(\s*(\w+)',
+            ]
+
+            for col_pattern in col_patterns:
+                for col_match in re.finditer(col_pattern, class_body):
+                    col_name = col_match.group(1)
+                    col_type = col_match.group(2)
+
+                    # Skip special attributes
+                    if col_name.startswith('__') or col_name in ['metadata', 'registry']:
                         continue
-                    tables.append({
-                        "name": table_name,
-                        "type": orm_type,
-                        "file": file_path
+
+                    # Check if it's a primary key
+                    is_pk = 'primary_key' in class_body[col_match.start():col_match.start()+200].lower()
+
+                    # Check for ForeignKey
+                    fk_match = re.search(r'ForeignKey\s*\(\s*["\'](\w+)\.(\w+)["\']',
+                                        class_body[col_match.start():col_match.start()+300])
+                    fk_ref = None
+                    if fk_match:
+                        fk_ref = fk_match.group(1)
+
+                    columns.append({
+                        'name': col_name,
+                        'type': col_type,
+                        'primary_key': is_pk or col_name == 'id',
+                        'nullable': 'nullable=False' not in class_body[col_match.start():col_match.start()+200],
+                        'foreign_key': fk_ref
                     })
 
-        return tables[:15]
+                    # Add relationship if FK found
+                    if fk_ref:
+                        relationships.append({
+                            'column': col_name,
+                            'references': self._snake_to_pascal(fk_ref),
+                            'type': 'many_to_one'
+                        })
+
+            # Find relationship() calls
+            rel_pattern = r'(\w+)\s*=\s*relationship\s*\(\s*["\'](\w+)["\']'
+            for rel_match in re.finditer(rel_pattern, class_body):
+                rel_name = rel_match.group(1)
+                rel_target = rel_match.group(2)
+                # Check if it's one-to-many or many-to-one
+                is_list = 'uselist=False' not in class_body[rel_match.start():rel_match.start()+200]
+                relationships.append({
+                    'column': rel_name,
+                    'references': rel_target,
+                    'type': 'one_to_many' if is_list else 'one_to_one'
+                })
+
+            if columns:
+                tables.append({
+                    'name': class_name,
+                    'columns': columns,
+                    'primary_key': next((c['name'] for c in columns if c.get('primary_key')), 'id'),
+                    'relationships': relationships,
+                    'file': file_path,
+                    'type': 'sqlalchemy'
+                })
+
+        return tables
+
+    def _extract_prisma_models(self, content: str, file_path: str) -> list:
+        """Extract Prisma schema models with columns and relationships."""
+        import re
+        tables = []
+
+        # Find model definitions
+        model_pattern = r'model\s+(\w+)\s*\{([^}]+)\}'
+        for match in re.finditer(model_pattern, content, re.DOTALL):
+            model_name = match.group(1)
+            model_body = match.group(2)
+
+            columns = []
+            relationships = []
+
+            # Parse each line in the model body
+            for line in model_body.strip().split('\n'):
+                line = line.strip()
+                if not line or line.startswith('//') or line.startswith('@@'):
+                    continue
+
+                # Pattern: fieldName Type[@decorators]
+                field_match = re.match(r'(\w+)\s+(\w+)(\[\])?\??(\s+.*)?', line)
+                if field_match:
+                    field_name = field_match.group(1)
+                    field_type = field_match.group(2)
+                    is_array = field_match.group(3) is not None
+                    decorators = field_match.group(4) or ''
+
+                    # Check if it's a relation (type is another model)
+                    if field_type[0].isupper() and field_type not in ['String', 'Int', 'Float', 'Boolean', 'DateTime', 'Json', 'Bytes', 'Decimal', 'BigInt']:
+                        relationships.append({
+                            'column': field_name,
+                            'references': field_type,
+                            'type': 'one_to_many' if is_array else 'many_to_one'
+                        })
+                    else:
+                        columns.append({
+                            'name': field_name,
+                            'type': field_type,
+                            'primary_key': '@id' in decorators,
+                            'nullable': '?' in line,
+                            'foreign_key': None
+                        })
+
+            if columns:
+                tables.append({
+                    'name': model_name,
+                    'columns': columns,
+                    'primary_key': next((c['name'] for c in columns if c.get('primary_key')), 'id'),
+                    'relationships': relationships,
+                    'file': file_path,
+                    'type': 'prisma'
+                })
+
+        return tables
+
+    def _extract_typescript_models(self, content: str, file_path: str) -> list:
+        """Extract TypeORM/Sequelize models with columns and relationships."""
+        import re
+        tables = []
+
+        if '@Entity' not in content and 'sequelize' not in content.lower():
+            return tables
+
+        # Find TypeORM entities
+        entity_pattern = r'@Entity\s*\([^)]*\)\s*(?:export\s+)?class\s+(\w+)'
+        for match in re.finditer(entity_pattern, content):
+            entity_name = match.group(1)
+            columns = []
+            relationships = []
+
+            # Find columns
+            col_pattern = r'@(?:PrimaryGeneratedColumn|Column)\s*\([^)]*\)\s*(\w+)\s*[?:]?\s*(\w+)?'
+            for col_match in re.finditer(col_pattern, content):
+                col_name = col_match.group(1)
+                col_type = col_match.group(2) or 'string'
+                is_pk = 'PrimaryGeneratedColumn' in col_match.group(0)
+                columns.append({
+                    'name': col_name,
+                    'type': col_type,
+                    'primary_key': is_pk,
+                    'nullable': True,
+                    'foreign_key': None
+                })
+
+            # Find relationships
+            rel_pattern = r'@(?:ManyToOne|OneToMany|OneToOne|ManyToMany)\s*\([^)]*\)\s*(\w+)\s*[?:]?\s*(\w+)?'
+            for rel_match in re.finditer(rel_pattern, content):
+                rel_name = rel_match.group(1)
+                rel_type = rel_match.group(2)
+                if rel_type:
+                    relationships.append({
+                        'column': rel_name,
+                        'references': rel_type.replace('[]', ''),
+                        'type': 'one_to_many' if 'OneToMany' in rel_match.group(0) else 'many_to_one'
+                    })
+
+            if columns:
+                tables.append({
+                    'name': entity_name,
+                    'columns': columns,
+                    'primary_key': next((c['name'] for c in columns if c.get('primary_key')), 'id'),
+                    'relationships': relationships,
+                    'file': file_path,
+                    'type': 'typeorm'
+                })
+
+        return tables
+
+    def _extract_java_models(self, content: str, file_path: str) -> list:
+        """Extract JPA/Hibernate entities with columns and relationships."""
+        import re
+        tables = []
+
+        if '@Entity' not in content:
+            return tables
+
+        # Find entity classes
+        entity_pattern = r'@Entity\s*(?:@Table\s*\([^)]*\))?\s*public\s+class\s+(\w+)'
+        for match in re.finditer(entity_pattern, content):
+            entity_name = match.group(1)
+            columns = []
+            relationships = []
+
+            # Find fields
+            field_pattern = r'private\s+(\w+)\s+(\w+)\s*;'
+            for field_match in re.finditer(field_pattern, content):
+                field_type = field_match.group(1)
+                field_name = field_match.group(2)
+
+                # Check if it's a relation type
+                if field_type[0].isupper() and field_type not in ['String', 'Integer', 'Long', 'Double', 'Float', 'Boolean', 'Date', 'LocalDateTime']:
+                    relationships.append({
+                        'column': field_name,
+                        'references': field_type.replace('List<', '').replace('>', '').replace('Set<', ''),
+                        'type': 'one_to_many' if 'List<' in content[field_match.start()-50:field_match.start()] else 'many_to_one'
+                    })
+                else:
+                    columns.append({
+                        'name': field_name,
+                        'type': field_type,
+                        'primary_key': '@Id' in content[field_match.start()-100:field_match.start()],
+                        'nullable': True,
+                        'foreign_key': None
+                    })
+
+            if columns:
+                tables.append({
+                    'name': entity_name,
+                    'columns': columns,
+                    'primary_key': next((c['name'] for c in columns if c.get('primary_key')), 'id'),
+                    'relationships': relationships,
+                    'file': file_path,
+                    'type': 'jpa'
+                })
+
+        return tables
+
+    def _extract_sql_tables(self, content: str, file_path: str) -> list:
+        """Extract tables from SQL CREATE TABLE statements."""
+        import re
+        tables = []
+
+        # Find CREATE TABLE statements
+        table_pattern = r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\']?(\w+)[`"\']?\s*\(([^;]+)\)'
+        for match in re.finditer(table_pattern, content, re.IGNORECASE | re.DOTALL):
+            table_name = match.group(1)
+            table_body = match.group(2)
+
+            columns = []
+            relationships = []
+
+            # Parse columns
+            lines = table_body.split(',')
+            for line in lines:
+                line = line.strip()
+
+                # Skip constraints
+                if re.match(r'^\s*(PRIMARY|FOREIGN|UNIQUE|INDEX|CONSTRAINT|KEY)', line, re.IGNORECASE):
+                    # Check for foreign key
+                    fk_match = re.search(r'FOREIGN\s+KEY\s*\([`"\']?(\w+)[`"\']?\)\s*REFERENCES\s+[`"\']?(\w+)[`"\']?', line, re.IGNORECASE)
+                    if fk_match:
+                        col_name = fk_match.group(1)
+                        ref_table = fk_match.group(2)
+                        relationships.append({
+                            'column': col_name,
+                            'references': self._snake_to_pascal(ref_table),
+                            'type': 'many_to_one'
+                        })
+                    continue
+
+                # Parse column definition
+                col_match = re.match(r'[`"\']?(\w+)[`"\']?\s+([\w\(\)]+)', line)
+                if col_match:
+                    col_name = col_match.group(1)
+                    col_type = col_match.group(2).upper()
+                    columns.append({
+                        'name': col_name,
+                        'type': col_type,
+                        'primary_key': 'PRIMARY KEY' in line.upper(),
+                        'nullable': 'NOT NULL' not in line.upper(),
+                        'foreign_key': None
+                    })
+
+            if columns:
+                tables.append({
+                    'name': self._snake_to_pascal(table_name),
+                    'columns': columns,
+                    'primary_key': next((c['name'] for c in columns if c.get('primary_key')), 'id'),
+                    'relationships': relationships,
+                    'file': file_path,
+                    'type': 'sql'
+                })
+
+        return tables
+
+    def _snake_to_pascal(self, name: str) -> str:
+        """Convert snake_case to PascalCase."""
+        return ''.join(word.title() for word in name.split('_'))
 
 
 # Singleton instance
