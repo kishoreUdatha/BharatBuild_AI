@@ -7,6 +7,9 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Add alembic directory to path for helpers import
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from app.core.config import settings
 from app.core.database import Base
 from app.models import *  # Import all models
