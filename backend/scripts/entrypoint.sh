@@ -198,6 +198,101 @@ asyncio.run(init())
 " || echo "[Entrypoint] WARNING: Table initialization had issues"
 }
 
+# Seed campus drive data if not exists
+seed_campus_drive() {
+    echo "[Entrypoint] Checking campus drive seed data..."
+
+    python -c "
+import asyncio
+from sqlalchemy import select, text
+from app.core.database import AsyncSessionLocal
+from app.models.campus_drive import CampusDrive, CampusDriveQuestion, QuestionCategory
+
+async def seed():
+    async with AsyncSessionLocal() as db:
+        # Check if campus drive exists
+        result = await db.execute(select(CampusDrive).where(CampusDrive.name == 'Campus Placement Drive 2026'))
+        if result.scalar_one_or_none():
+            print('[Entrypoint] Campus drive data already exists')
+            return
+
+        print('[Entrypoint] Seeding campus drive data...')
+
+        # Create campus drive
+        drive = CampusDrive(
+            name='Campus Placement Drive 2026',
+            company_name='BharatBuild',
+            description='Annual campus placement drive for engineering students.',
+            quiz_duration_minutes=60,
+            passing_percentage=60.0,
+            total_questions=30,
+            logical_questions=5,
+            technical_questions=10,
+            ai_ml_questions=10,
+            english_questions=5,
+            is_active=True
+        )
+        db.add(drive)
+        await db.flush()
+
+        # Seed questions
+        questions = [
+            ('If all Bloops are Razzies and all Razzies are Lazzies, then all Bloops are definitely Lazzies?', QuestionCategory.LOGICAL, ['True', 'False', 'Cannot be determined', 'Partially true'], 0),
+            ('A is brother of B. B is sister of C. D is father of A. How is C related to D?', QuestionCategory.LOGICAL, ['Daughter', 'Son', 'Granddaughter', 'Cannot be determined'], 0),
+            ('Complete: 2, 6, 12, 20, 30, ?', QuestionCategory.LOGICAL, ['40', '42', '44', '46'], 1),
+            ('Odd one out: 8, 27, 64, 100, 125, 216', QuestionCategory.LOGICAL, ['27', '64', '100', '125'], 2),
+            ('Clock shows 3:15. Angle between hands?', QuestionCategory.LOGICAL, ['0°', '7.5°', '15°', '22.5°'], 1),
+            ('Ram 7th from left, Shyam 9th from right. After swap Ram is 11th. Total students?', QuestionCategory.LOGICAL, ['17', '18', '19', '20'], 2),
+            ('Time complexity of binary search?', QuestionCategory.TECHNICAL, ['O(n)', 'O(log n)', 'O(n log n)', 'O(1)'], 1),
+            ('Which uses LIFO?', QuestionCategory.TECHNICAL, ['Queue', 'Stack', 'Array', 'Linked List'], 1),
+            ('Output of print(type([]) == type({}))?', QuestionCategory.TECHNICAL, ['True', 'False', 'Error', 'None'], 1),
+            ('Which HTTP method is idempotent?', QuestionCategory.TECHNICAL, ['POST', 'GET', 'PATCH', 'None'], 1),
+            ('SQL stands for?', QuestionCategory.TECHNICAL, ['Structured Query Language', 'Simple Query Language', 'Standard Query Language', 'Sequential Query Language'], 0),
+            ('Best average case sorting?', QuestionCategory.TECHNICAL, ['Bubble Sort', 'Insertion Sort', 'Quick Sort', 'Selection Sort'], 2),
+            ('Purpose of finally block?', QuestionCategory.TECHNICAL, ['Only if exception', 'Only if no exception', 'Always execute', 'Skip handling'], 2),
+            ('NOT a JavaScript data type?', QuestionCategory.TECHNICAL, ['Boolean', 'Undefined', 'Integer', 'Symbol'], 2),
+            ('Difference between == and ===?', QuestionCategory.TECHNICAL, ['No difference', '=== checks type', '== checks type', '=== is faster'], 1),
+            ('CSS property for background color?', QuestionCategory.TECHNICAL, ['color', 'bgcolor', 'background-color', 'background'], 2),
+            ('Git is used for?', QuestionCategory.TECHNICAL, ['Database', 'Version control', 'Web hosting', 'Compilation'], 1),
+            ('Which is NoSQL database?', QuestionCategory.TECHNICAL, ['MySQL', 'PostgreSQL', 'MongoDB', 'Oracle'], 2),
+            ('CNN stands for?', QuestionCategory.AI_ML, ['Central Neural Network', 'Convolutional Neural Network', 'Connected Neural Network', 'Computed Neural Network'], 1),
+            ('Algorithm for classification?', QuestionCategory.AI_ML, ['Linear Regression', 'K-Means', 'Random Forest', 'PCA'], 2),
+            ('What is overfitting?', QuestionCategory.AI_ML, ['Good on train, bad on test', 'Bad on train', 'Slow training', 'High memory'], 0),
+            ('Common activation in hidden layers?', QuestionCategory.AI_ML, ['Sigmoid', 'Tanh', 'ReLU', 'Softmax'], 2),
+            ('Purpose of learning rate?', QuestionCategory.AI_ML, ['Model complexity', 'Step size', 'Regularization', 'Batch size'], 1),
+            ('Metric for classification?', QuestionCategory.AI_ML, ['RMSE', 'MAE', 'Accuracy', 'R-squared'], 2),
+            ('Learning with labeled data?', QuestionCategory.AI_ML, ['Unsupervised', 'Supervised', 'Reinforcement', 'Semi-supervised'], 1),
+            ('Deep learning library?', QuestionCategory.AI_ML, ['NumPy', 'Pandas', 'TensorFlow', 'Matplotlib'], 2),
+            ('Purpose of dropout?', QuestionCategory.AI_ML, ['Speed up', 'Prevent overfitting', 'Increase accuracy', 'Reduce memory'], 1),
+            ('Clustering algorithm?', QuestionCategory.AI_ML, ['Linear Regression', 'Decision Tree', 'K-Means', 'Naive Bayes'], 2),
+            ('NLP stands for?', QuestionCategory.AI_ML, ['Neural Learning Process', 'Natural Language Processing', 'Network Layer Protocol', 'Non-Linear Programming'], 1),
+            ('Improvement over gradient descent?', QuestionCategory.AI_ML, ['SGD', 'Adam', 'RMSprop', 'All of above'], 3),
+            ('Correct sentence?', QuestionCategory.ENGLISH, ['He dont know nothing', 'He doesnt know anything', 'He dont know anything', 'He doesnt know nothing'], 1),
+            ('Synonym of Eloquent?', QuestionCategory.ENGLISH, ['Silent', 'Articulate', 'Humble', 'Arrogant'], 1),
+            ('Antonym of Benevolent?', QuestionCategory.ENGLISH, ['Kind', 'Generous', 'Malevolent', 'Caring'], 2),
+            ('She ___ to the store yesterday.', QuestionCategory.ENGLISH, ['go', 'goes', 'went', 'going'], 2),
+            ('Grammatically correct?', QuestionCategory.ENGLISH, ['Me and him went', 'Him and me went', 'He and I went', 'I and he went'], 2),
+            ('Ubiquitous means?', QuestionCategory.ENGLISH, ['Rare', 'Present everywhere', 'Unique', 'Unknown'], 1),
+        ]
+
+        for text, category, options, correct in questions:
+            q = CampusDriveQuestion(
+                question_text=text,
+                category=category,
+                options=options,
+                correct_option=correct,
+                marks=1.0,
+                is_global=True
+            )
+            db.add(q)
+
+        await db.commit()
+        print('[Entrypoint] Campus drive data seeded successfully!')
+
+asyncio.run(seed())
+" || echo "[Entrypoint] WARNING: Campus drive seeding had issues"
+}
+
 # Main execution
 main() {
     # Skip DB operations if SKIP_DB_INIT is set (for testing)
@@ -212,6 +307,9 @@ main() {
 
         # Then run migrations to add columns/indexes
         run_migrations
+
+        # Seed campus drive data if not exists
+        seed_campus_drive
     fi
 
     echo ""
