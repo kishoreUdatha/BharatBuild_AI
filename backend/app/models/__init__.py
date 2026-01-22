@@ -17,6 +17,15 @@ from app.models.snapshot import Snapshot
 from app.models.agent_task import AgentTask
 from app.models.project_message import ProjectMessage
 from app.models.workshop_enrollment import WorkshopEnrollment
+from app.models.campus_drive import (
+    CampusDrive,
+    CampusDriveRegistration,
+    CampusDriveQuestion,
+    CampusDriveResponse,
+    QuestionCategory,
+    QuestionDifficulty,
+    RegistrationStatus,
+)
 
 __all__ = [
     # User
@@ -66,4 +75,12 @@ __all__ = [
     "AgentTask",
     # Workshop
     "WorkshopEnrollment",
+    # Campus Drive
+    "CampusDrive",
+    "CampusDriveRegistration",
+    "CampusDriveQuestion",
+    "CampusDriveResponse",
+    "QuestionCategory",
+    "QuestionDifficulty",
+    "RegistrationStatus",
 ]
