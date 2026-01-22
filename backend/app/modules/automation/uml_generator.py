@@ -893,7 +893,7 @@ class UMLGenerator:
 
     def generate_system_architecture_diagram(self, project_data: Dict, project_id: str = None, user_id: str = None) -> str:
         """
-        Generate System Architecture Diagram
+        Generate System Architecture Diagram - FULLY DYNAMIC
 
         Args:
             project_data: Project data with technologies and components
@@ -909,6 +909,8 @@ class UMLGenerator:
 
         project_name = project_data.get('project_name', 'System')
         technologies = project_data.get('technologies', {})
+        features = project_data.get('features', [])
+        features_str = ' '.join(str(f).lower() for f in features)
 
         # Title
         draw.text(
@@ -919,8 +921,7 @@ class UMLGenerator:
             anchor="mm"
         )
 
-        # Draw three-tier architecture
-        # Presentation Layer
+        # ===== PRESENTATION LAYER (DYNAMIC) =====
         draw.rounded_rectangle(
             [100, 80, 500, 180],
             radius=10,
@@ -929,21 +930,25 @@ class UMLGenerator:
             width=2
         )
         draw.text((300, 100), "Presentation Layer", fill=self.COLORS['primary'], font=self.font_bold, anchor="mm")
-        frontend = technologies.get('frontend', ['React', 'HTML/CSS'])
+        frontend = technologies.get('frontend', [])
         if isinstance(frontend, str):
             frontend = [frontend]
+        if not frontend:
+            # Infer from project type
+            frontend = self._infer_frontend_tech(project_data)
         draw.text((300, 140), ", ".join(frontend[:3]), fill=self.COLORS['text'], font=self.font_small, anchor="mm")
 
-        # Client devices
+        # ===== CLIENT DEVICES (DYNAMIC) =====
         draw.rounded_rectangle([550, 80, 750, 180], radius=10, fill=(255, 228, 181), outline=self.COLORS['border'], width=2)
         draw.text((650, 110), "Client Devices", fill=self.COLORS['primary'], font=self.font_bold, anchor="mm")
-        draw.text((650, 150), "Web Browser, Mobile", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
+        client_devices = self._detect_client_devices(project_data)
+        draw.text((650, 150), client_devices, fill=self.COLORS['text'], font=self.font_small, anchor="mm")
 
         # Arrow from client to presentation
         draw.line([(550, 130), (500, 130)], fill=self.COLORS['arrow'], width=2)
         draw.polygon([(500, 130), (510, 125), (510, 135)], fill=self.COLORS['arrow'])
 
-        # Business Logic Layer
+        # ===== BUSINESS LOGIC LAYER (DYNAMIC) =====
         draw.rounded_rectangle(
             [100, 220, 500, 340],
             radius=10,
@@ -952,27 +957,33 @@ class UMLGenerator:
             width=2
         )
         draw.text((300, 240), "Business Logic Layer", fill=self.COLORS['primary'], font=self.font_bold, anchor="mm")
-        backend = technologies.get('backend', ['Node.js', 'Express'])
+        backend = technologies.get('backend', [])
         if isinstance(backend, str):
             backend = [backend]
+        if not backend:
+            backend = self._infer_backend_tech(project_data)
         draw.text((300, 280), ", ".join(backend[:3]), fill=self.COLORS['text'], font=self.font_small, anchor="mm")
-        draw.text((300, 310), "REST API / GraphQL", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
+
+        # Detect API type dynamically
+        api_type = self._detect_api_type(project_data)
+        draw.text((300, 310), api_type, fill=self.COLORS['text'], font=self.font_small, anchor="mm")
 
         # Arrow from presentation to business
         draw.line([(300, 180), (300, 220)], fill=self.COLORS['arrow'], width=2)
         draw.polygon([(300, 220), (295, 210), (305, 210)], fill=self.COLORS['arrow'])
 
-        # External Services box
+        # ===== EXTERNAL SERVICES (DYNAMIC) =====
         draw.rounded_rectangle([550, 220, 750, 340], radius=10, fill=(255, 218, 185), outline=self.COLORS['border'], width=2)
         draw.text((650, 250), "External Services", fill=self.COLORS['primary'], font=self.font_bold, anchor="mm")
-        draw.text((650, 290), "Payment Gateway", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
-        draw.text((650, 315), "Email Service", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
+        external_services = self._detect_external_services(project_data)
+        for i, service in enumerate(external_services[:3]):
+            draw.text((650, 280 + i * 20), f"• {service}", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
 
         # Arrow from business to external
         draw.line([(500, 280), (550, 280)], fill=self.COLORS['arrow'], width=2)
         draw.polygon([(550, 280), (540, 275), (540, 285)], fill=self.COLORS['arrow'])
 
-        # Data Layer
+        # ===== DATA LAYER (DYNAMIC) =====
         draw.rounded_rectangle(
             [100, 380, 500, 500],
             radius=10,
@@ -981,27 +992,33 @@ class UMLGenerator:
             width=2
         )
         draw.text((300, 400), "Data Layer", fill=self.COLORS['primary'], font=self.font_bold, anchor="mm")
-        database = technologies.get('database', ['PostgreSQL', 'MongoDB'])
+        database = technologies.get('database', [])
         if isinstance(database, str):
             database = [database]
+        if not database:
+            database = self._infer_database_tech(project_data)
         draw.text((300, 440), ", ".join(database[:3]), fill=self.COLORS['text'], font=self.font_small, anchor="mm")
-        draw.text((300, 470), "ORM / Query Builder", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
+
+        # Detect ORM dynamically
+        orm = self._detect_orm(project_data)
+        draw.text((300, 470), orm, fill=self.COLORS['text'], font=self.font_small, anchor="mm")
 
         # Arrow from business to data
         draw.line([(300, 340), (300, 380)], fill=self.COLORS['arrow'], width=2)
         draw.polygon([(300, 380), (295, 370), (305, 370)], fill=self.COLORS['arrow'])
 
-        # Cache/Storage box
+        # ===== CACHE/STORAGE (DYNAMIC) =====
         draw.rounded_rectangle([550, 380, 750, 500], radius=10, fill=(255, 182, 193), outline=self.COLORS['border'], width=2)
         draw.text((650, 410), "Cache / Storage", fill=self.COLORS['primary'], font=self.font_bold, anchor="mm")
-        draw.text((650, 450), "Redis / Memcached", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
-        draw.text((650, 475), "File Storage (S3)", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
+        cache_storage = self._detect_cache_storage(project_data)
+        for i, item in enumerate(cache_storage[:2]):
+            draw.text((650, 445 + i * 25), item, fill=self.COLORS['text'], font=self.font_small, anchor="mm")
 
         # Arrow from data to cache
         draw.line([(500, 440), (550, 440)], fill=self.COLORS['arrow'], width=2)
         draw.polygon([(550, 440), (540, 435), (540, 445)], fill=self.COLORS['arrow'])
 
-        # Infrastructure box at bottom
+        # ===== INFRASTRUCTURE LAYER (DYNAMIC) =====
         draw.rounded_rectangle(
             [100, 540, 750, 620],
             radius=10,
@@ -1010,16 +1027,15 @@ class UMLGenerator:
             width=2
         )
         draw.text((425, 560), "Infrastructure Layer", fill=self.COLORS['primary'], font=self.font_bold, anchor="mm")
-        draw.text((425, 590), "Docker | Kubernetes | AWS/GCP | CI/CD Pipeline", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
+        infrastructure = self._detect_infrastructure(project_data)
+        draw.text((425, 590), infrastructure, fill=self.COLORS['text'], font=self.font_small, anchor="mm")
 
-        # Security indicator
+        # ===== SECURITY LAYER (DYNAMIC) =====
         draw.rounded_rectangle([800, 200, 1100, 400], radius=10, fill=(255, 255, 224), outline=self.COLORS['border'], width=2)
         draw.text((950, 230), "Security Layer", fill=self.COLORS['primary'], font=self.font_bold, anchor="mm")
-        draw.text((950, 270), "• Authentication (JWT)", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
-        draw.text((950, 295), "• Authorization (RBAC)", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
-        draw.text((950, 320), "• HTTPS/TLS", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
-        draw.text((950, 345), "• Input Validation", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
-        draw.text((950, 370), "• Rate Limiting", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
+        security_features = self._detect_security_features(project_data)
+        for i, feature in enumerate(security_features[:5]):
+            draw.text((950, 265 + i * 25), f"• {feature}", fill=self.COLORS['text'], font=self.font_small, anchor="mm")
 
         filename = f"system_architecture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         output_dir = self.get_output_dir(project_id, user_id)
@@ -1027,6 +1043,327 @@ class UMLGenerator:
         img.save(str(filepath))
 
         return str(filepath)
+
+    def _infer_frontend_tech(self, project_data: Dict) -> List[str]:
+        """Infer frontend technologies from project data."""
+        features_str = ' '.join(str(f).lower() for f in project_data.get('features', []))
+        project_name = project_data.get('project_name', '').lower()
+
+        frontend = []
+
+        # Check for specific frameworks in features or name
+        if 'react' in features_str or 'react' in project_name:
+            frontend.append('React')
+        if 'vue' in features_str or 'vue' in project_name:
+            frontend.append('Vue.js')
+        if 'angular' in features_str or 'angular' in project_name:
+            frontend.append('Angular')
+        if 'next' in features_str or 'next' in project_name:
+            frontend.append('Next.js')
+        if 'svelte' in features_str:
+            frontend.append('Svelte')
+
+        # Check for mobile
+        if 'mobile' in features_str or 'app' in features_str:
+            if 'react native' in features_str:
+                frontend.append('React Native')
+            elif 'flutter' in features_str:
+                frontend.append('Flutter')
+
+        # Default based on project type
+        if not frontend:
+            if 'api' in features_str and 'web' not in features_str:
+                frontend = ['API Only']
+            else:
+                frontend = ['Web UI', 'HTML/CSS']
+
+        return frontend[:3]
+
+    def _infer_backend_tech(self, project_data: Dict) -> List[str]:
+        """Infer backend technologies from project data."""
+        features_str = ' '.join(str(f).lower() for f in project_data.get('features', []))
+        project_name = project_data.get('project_name', '').lower()
+
+        backend = []
+
+        if 'python' in features_str or 'django' in features_str or 'flask' in features_str or 'fastapi' in features_str:
+            if 'fastapi' in features_str:
+                backend.append('FastAPI')
+            elif 'django' in features_str:
+                backend.append('Django')
+            elif 'flask' in features_str:
+                backend.append('Flask')
+            else:
+                backend.append('Python')
+
+        if 'node' in features_str or 'express' in features_str or 'nest' in features_str:
+            if 'nest' in features_str:
+                backend.append('NestJS')
+            else:
+                backend.append('Node.js')
+
+        if 'java' in features_str or 'spring' in features_str:
+            backend.append('Spring Boot')
+
+        if 'go' in features_str or 'golang' in features_str:
+            backend.append('Go')
+
+        if 'rust' in features_str:
+            backend.append('Rust')
+
+        if not backend:
+            backend = ['Backend Server']
+
+        return backend[:3]
+
+    def _infer_database_tech(self, project_data: Dict) -> List[str]:
+        """Infer database technologies from project data."""
+        features_str = ' '.join(str(f).lower() for f in project_data.get('features', []))
+
+        database = []
+
+        if 'postgres' in features_str or 'postgresql' in features_str:
+            database.append('PostgreSQL')
+        if 'mysql' in features_str or 'mariadb' in features_str:
+            database.append('MySQL')
+        if 'mongo' in features_str:
+            database.append('MongoDB')
+        if 'sqlite' in features_str:
+            database.append('SQLite')
+        if 'redis' in features_str:
+            database.append('Redis')
+        if 'dynamodb' in features_str:
+            database.append('DynamoDB')
+
+        if not database:
+            database = ['Database']
+
+        return database[:3]
+
+    def _detect_client_devices(self, project_data: Dict) -> str:
+        """Detect client devices from project features."""
+        features_str = ' '.join(str(f).lower() for f in project_data.get('features', []))
+
+        devices = []
+
+        if 'web' in features_str or 'browser' in features_str or not ('mobile' in features_str or 'app' in features_str):
+            devices.append('Web Browser')
+        if 'mobile' in features_str or 'ios' in features_str or 'android' in features_str:
+            devices.append('Mobile App')
+        if 'desktop' in features_str or 'electron' in features_str:
+            devices.append('Desktop')
+        if 'api' in features_str and len(devices) == 0:
+            devices.append('API Clients')
+
+        if not devices:
+            devices = ['Web Browser']
+
+        return ', '.join(devices[:2])
+
+    def _detect_api_type(self, project_data: Dict) -> str:
+        """Detect API type from project data."""
+        features_str = ' '.join(str(f).lower() for f in project_data.get('features', []))
+        technologies = project_data.get('technologies', {})
+
+        api_types = []
+
+        if 'graphql' in features_str or 'graphql' in str(technologies).lower():
+            api_types.append('GraphQL')
+        if 'grpc' in features_str:
+            api_types.append('gRPC')
+        if 'websocket' in features_str or 'realtime' in features_str or 'real-time' in features_str:
+            api_types.append('WebSocket')
+
+        # REST is default for most APIs
+        if 'rest' in features_str or 'api' in features_str or not api_types:
+            api_types.insert(0, 'REST API')
+
+        return ' / '.join(api_types[:2])
+
+    def _detect_external_services(self, project_data: Dict) -> List[str]:
+        """Detect external services from project features."""
+        features_str = ' '.join(str(f).lower() for f in project_data.get('features', []))
+
+        services = []
+
+        # Payment
+        if any(kw in features_str for kw in ['payment', 'checkout', 'stripe', 'paypal', 'razorpay', 'billing']):
+            services.append('Payment Gateway')
+
+        # Email
+        if any(kw in features_str for kw in ['email', 'notification', 'sendgrid', 'mailgun', 'smtp']):
+            services.append('Email Service')
+
+        # SMS
+        if any(kw in features_str for kw in ['sms', 'twilio', 'otp', 'phone verification']):
+            services.append('SMS Service')
+
+        # Auth providers
+        if any(kw in features_str for kw in ['oauth', 'google login', 'facebook login', 'social login', 'sso']):
+            services.append('OAuth Provider')
+
+        # Maps
+        if any(kw in features_str for kw in ['map', 'location', 'gps', 'geocoding']):
+            services.append('Maps API')
+
+        # AI/ML
+        if any(kw in features_str for kw in ['ai', 'ml', 'openai', 'chatgpt', 'llm']):
+            services.append('AI/ML API')
+
+        # Analytics
+        if any(kw in features_str for kw in ['analytics', 'tracking', 'google analytics']):
+            services.append('Analytics')
+
+        # Cloud storage
+        if any(kw in features_str for kw in ['upload', 'file', 's3', 'cloudinary', 'storage']):
+            services.append('Cloud Storage')
+
+        if not services:
+            services = ['Third-party APIs']
+
+        return services[:3]
+
+    def _detect_orm(self, project_data: Dict) -> str:
+        """Detect ORM/database library from project data."""
+        features_str = ' '.join(str(f).lower() for f in project_data.get('features', []))
+        technologies = project_data.get('technologies', {})
+        backend = technologies.get('backend', [])
+        if isinstance(backend, str):
+            backend = [backend]
+        backend_str = ' '.join(str(b).lower() for b in backend)
+
+        # Python ORMs
+        if any(kw in features_str or kw in backend_str for kw in ['sqlalchemy', 'fastapi', 'flask']):
+            return 'SQLAlchemy ORM'
+        if 'django' in features_str or 'django' in backend_str:
+            return 'Django ORM'
+
+        # Node.js ORMs
+        if 'prisma' in features_str:
+            return 'Prisma ORM'
+        if 'typeorm' in features_str:
+            return 'TypeORM'
+        if 'sequelize' in features_str:
+            return 'Sequelize'
+        if 'mongoose' in features_str or 'mongo' in features_str:
+            return 'Mongoose ODM'
+
+        # Java
+        if 'hibernate' in features_str or 'jpa' in features_str or 'spring' in backend_str:
+            return 'JPA/Hibernate'
+
+        # Default
+        if 'node' in backend_str or 'express' in backend_str:
+            return 'Query Builder'
+
+        return 'Data Access Layer'
+
+    def _detect_cache_storage(self, project_data: Dict) -> List[str]:
+        """Detect cache and storage solutions from project data."""
+        features_str = ' '.join(str(f).lower() for f in project_data.get('features', []))
+
+        cache_storage = []
+
+        # Cache
+        if 'redis' in features_str:
+            cache_storage.append('Redis Cache')
+        elif 'memcached' in features_str:
+            cache_storage.append('Memcached')
+        elif any(kw in features_str for kw in ['cache', 'session', 'realtime']):
+            cache_storage.append('In-Memory Cache')
+
+        # File storage
+        if 's3' in features_str or 'aws' in features_str:
+            cache_storage.append('AWS S3 Storage')
+        elif 'gcs' in features_str or 'google cloud' in features_str:
+            cache_storage.append('Google Cloud Storage')
+        elif 'azure' in features_str:
+            cache_storage.append('Azure Blob Storage')
+        elif 'cloudinary' in features_str:
+            cache_storage.append('Cloudinary')
+        elif any(kw in features_str for kw in ['upload', 'file', 'image', 'media']):
+            cache_storage.append('File Storage')
+
+        if not cache_storage:
+            cache_storage = ['Local Storage', 'Session Storage']
+
+        return cache_storage[:2]
+
+    def _detect_infrastructure(self, project_data: Dict) -> str:
+        """Detect infrastructure from project data."""
+        features_str = ' '.join(str(f).lower() for f in project_data.get('features', []))
+
+        infra = []
+
+        # Containerization
+        if 'docker' in features_str:
+            infra.append('Docker')
+        if 'kubernetes' in features_str or 'k8s' in features_str:
+            infra.append('Kubernetes')
+
+        # Cloud providers
+        if 'aws' in features_str or 's3' in features_str or 'ec2' in features_str:
+            infra.append('AWS')
+        elif 'gcp' in features_str or 'google cloud' in features_str:
+            infra.append('GCP')
+        elif 'azure' in features_str:
+            infra.append('Azure')
+        elif 'vercel' in features_str:
+            infra.append('Vercel')
+        elif 'heroku' in features_str:
+            infra.append('Heroku')
+
+        # CI/CD
+        if any(kw in features_str for kw in ['ci/cd', 'github actions', 'jenkins', 'gitlab ci']):
+            infra.append('CI/CD Pipeline')
+
+        if not infra:
+            infra = ['Cloud Hosting', 'CI/CD']
+
+        return ' | '.join(infra[:4])
+
+    def _detect_security_features(self, project_data: Dict) -> List[str]:
+        """Detect security features from project data."""
+        features_str = ' '.join(str(f).lower() for f in project_data.get('features', []))
+
+        security = []
+
+        # Authentication
+        if any(kw in features_str for kw in ['jwt', 'token', 'auth']):
+            security.append('JWT Authentication')
+        elif any(kw in features_str for kw in ['session', 'cookie']):
+            security.append('Session Auth')
+        elif any(kw in features_str for kw in ['login', 'register', 'user']):
+            security.append('User Authentication')
+
+        # Authorization
+        if any(kw in features_str for kw in ['rbac', 'role', 'permission', 'admin']):
+            security.append('Role-Based Access')
+
+        # OAuth
+        if any(kw in features_str for kw in ['oauth', 'google login', 'social']):
+            security.append('OAuth 2.0')
+
+        # API Security
+        if any(kw in features_str for kw in ['api key', 'rate limit', 'throttle']):
+            security.append('API Rate Limiting')
+
+        # Encryption
+        if any(kw in features_str for kw in ['encrypt', 'https', 'ssl', 'tls']):
+            security.append('HTTPS/TLS')
+
+        # Validation
+        if any(kw in features_str for kw in ['validation', 'sanitize', 'xss', 'sql injection']):
+            security.append('Input Validation')
+
+        # If no specific security detected but has auth-related features
+        if not security and any(kw in features_str for kw in ['login', 'user', 'account']):
+            security = ['Authentication', 'Authorization', 'Data Encryption']
+
+        if not security:
+            security = ['Basic Security']
+
+        return security[:5]
 
     def _generate_placeholder(self, diagram_type: str) -> str:
         """Generate placeholder image when PIL is not available"""
@@ -1228,32 +1565,59 @@ class UMLGenerator:
         return list(actors)[:5]  # Max 5 actors
 
     def _extract_use_cases_from_project(self, project_data: Dict) -> List[str]:
-        """Dynamically extract use cases from features"""
+        """Dynamically extract use cases from features - NO HARDCODED DEFAULTS"""
         features = project_data.get('features', [])
+        project_name = project_data.get('project_name', '').lower()
+        project_type = project_data.get('project_type', '').lower()
 
+        use_cases = []
+
+        # Use actual features as use cases
         if features:
-            # Use actual features as use cases
-            use_cases = []
             for feature in features[:8]:
                 if isinstance(feature, str):
                     # Clean up feature name
                     uc = feature.strip()
-                    if not uc.lower().startswith(('user can', 'ability to', 'the system')):
-                        uc = uc.title()
-                    use_cases.append(uc[:30])  # Truncate long names
-            return use_cases
+                    # Remove common prefixes
+                    for prefix in ['user can ', 'ability to ', 'the system ', 'users can ', 'allow ']:
+                        if uc.lower().startswith(prefix):
+                            uc = uc[len(prefix):]
+                    uc = uc.strip().title()
+                    if len(uc) > 3:  # Skip very short strings
+                        use_cases.append(uc[:30])
 
-        # Default use cases based on project type
-        project_type = project_data.get('project_type', '').lower()
+        # If no features, infer from project name and type
+        if not use_cases:
+            # Parse project name for clues
+            name_words = project_name.replace('-', ' ').replace('_', ' ').split()
 
-        if 'ecommerce' in project_type or 'shop' in project_type:
-            return ['Browse Products', 'Add to Cart', 'Checkout', 'Track Order', 'Manage Inventory', 'Process Payment']
-        elif 'social' in project_type:
-            return ['Create Profile', 'Post Content', 'Follow Users', 'Like/Comment', 'Send Message', 'Search Users']
-        elif 'education' in project_type or 'learning' in project_type:
-            return ['Enroll Course', 'Watch Lectures', 'Take Quiz', 'Submit Assignment', 'View Progress', 'Get Certificate']
-        else:
-            return ['User Login', 'View Dashboard', 'Manage Data', 'Generate Report', 'Update Settings', 'Logout']
+            # Infer based on keywords in name or type
+            all_text = f"{project_name} {project_type}".lower()
+
+            # E-commerce patterns
+            if any(kw in all_text for kw in ['shop', 'store', 'ecommerce', 'cart', 'product']):
+                use_cases = [f'Browse {project_name.title()} Products', 'Add to Cart', 'Checkout', 'Track Order']
+            # Social patterns
+            elif any(kw in all_text for kw in ['social', 'community', 'forum', 'chat']):
+                use_cases = [f'Join {project_name.title()}', 'Create Post', 'Connect Users', 'Send Message']
+            # Education patterns
+            elif any(kw in all_text for kw in ['learn', 'course', 'education', 'school', 'student']):
+                use_cases = ['Enroll in Course', 'Access Content', 'Track Progress', 'Get Certified']
+            # Healthcare patterns
+            elif any(kw in all_text for kw in ['health', 'hospital', 'medical', 'patient', 'doctor']):
+                use_cases = ['Book Appointment', 'View Medical Records', 'Consult Doctor', 'Manage Prescriptions']
+            # Finance patterns
+            elif any(kw in all_text for kw in ['finance', 'bank', 'payment', 'money', 'wallet']):
+                use_cases = ['View Balance', 'Transfer Funds', 'Pay Bills', 'Transaction History']
+            # Management patterns
+            elif any(kw in all_text for kw in ['manage', 'admin', 'dashboard', 'crm', 'erp']):
+                use_cases = [f'Manage {name_words[0].title() if name_words else "Data"}', 'View Reports', 'Configure Settings', 'Export Data']
+            else:
+                # Generic based on project name
+                main_noun = name_words[0].title() if name_words else 'Data'
+                use_cases = [f'Create {main_noun}', f'View {main_noun}', f'Update {main_noun}', f'Delete {main_noun}']
+
+        return use_cases[:8]
 
     def _extract_sequence_from_project(self, project_data: Dict) -> tuple:
         """Dynamically extract sequence diagram data from API endpoints"""
@@ -1295,14 +1659,34 @@ class UMLGenerator:
                 break  # Just one flow for clarity
 
         if not messages:
-            # Default flow
+            # Build flow based on project context - not hardcoded
+            project_name = project_data.get('project_name', 'System')
+            features = project_data.get('features', [])
+            features_str = ' '.join(str(f).lower() for f in features)
+
+            # Determine the main action based on features
+            if any(kw in features_str for kw in ['login', 'auth', 'register']):
+                action = 'Authenticate'
+            elif any(kw in features_str for kw in ['create', 'add', 'new']):
+                action = 'Create Data'
+            elif any(kw in features_str for kw in ['search', 'find', 'browse']):
+                action = 'Search'
+            elif any(kw in features_str for kw in ['update', 'edit', 'modify']):
+                action = 'Update Data'
+            elif any(kw in features_str for kw in ['delete', 'remove']):
+                action = 'Delete Data'
+            elif any(kw in features_str for kw in ['view', 'list', 'get']):
+                action = 'Fetch Data'
+            else:
+                action = f'Use {project_name[:15]}'
+
             messages = [
-                {'from': 'User', 'to': participants[1], 'message': 'Submit Request'},
-                {'from': participants[1], 'to': participants[2], 'message': 'API Call'},
-                {'from': participants[2], 'to': participants[3], 'message': 'Query'},
-                {'from': participants[3], 'to': participants[2], 'message': 'Result', 'type': 'return'},
-                {'from': participants[2], 'to': participants[1], 'message': 'Response', 'type': 'return'},
-                {'from': participants[1], 'to': 'User', 'message': 'Display', 'type': 'return'},
+                {'from': 'User', 'to': participants[1], 'message': f'{action} Request'},
+                {'from': participants[1], 'to': participants[2], 'message': f'Process {action}'},
+                {'from': participants[2], 'to': participants[3], 'message': 'Data Query'},
+                {'from': participants[3], 'to': participants[2], 'message': 'Data Result', 'type': 'return'},
+                {'from': participants[2], 'to': participants[1], 'message': f'{action} Response', 'type': 'return'},
+                {'from': participants[1], 'to': 'User', 'message': 'Show Result', 'type': 'return'},
             ]
 
         return participants, messages
@@ -1333,15 +1717,26 @@ class UMLGenerator:
 
         activities.append('Return Response')
 
-        # If not enough activities, add defaults
+        # If not enough activities, infer from project context
         if len(activities) < 5:
-            default_activities = [
-                'Load Dashboard',
-                'Process Request',
-                'Validate Data',
-                'Update Records'
-            ]
-            for act in default_activities:
+            project_name = project_data.get('project_name', 'System')
+            project_type = project_data.get('project_type', '').lower()
+
+            # Build context-aware activities
+            if any(kw in features_str or kw in project_type for kw in ['shop', 'ecommerce', 'store']):
+                extra = ['Browse Catalog', 'Select Items', 'Process Order', 'Confirm Purchase']
+            elif any(kw in features_str or kw in project_type for kw in ['social', 'community']):
+                extra = ['Load Feed', 'Create Content', 'Interact with Posts', 'Update Profile']
+            elif any(kw in features_str or kw in project_type for kw in ['education', 'course', 'learning']):
+                extra = ['Load Course', 'View Content', 'Complete Exercise', 'Track Progress']
+            elif any(kw in features_str or kw in project_type for kw in ['health', 'hospital', 'medical']):
+                extra = ['Check Availability', 'Book Slot', 'Confirm Appointment', 'Send Notification']
+            else:
+                # Generic based on project name
+                main_noun = project_name.split()[0] if project_name else 'Data'
+                extra = [f'Load {main_noun}', f'Process {main_noun}', f'Validate {main_noun}', f'Save {main_noun}']
+
+            for act in extra:
                 if act not in activities and len(activities) < 6:
                     activities.append(act)
 
@@ -1492,22 +1887,41 @@ class UMLGenerator:
                         'relationships': []
                     })
 
-        # Absolute fallback
+        # Context-aware fallback based on project
         if not classes:
-            classes = [
-                {
+            project_name = project_data.get('project_name', 'System')
+            project_type = project_data.get('project_type', '').lower()
+            features = project_data.get('features', [])
+            features_str = ' '.join(str(f).lower() for f in features)
+            all_text = f"{project_name} {features_str}".lower()
+
+            # Always include a User class if auth-related
+            if any(kw in all_text for kw in ['user', 'login', 'auth', 'account']):
+                classes.append({
                     'name': 'User',
                     'attributes': ['+ id: UUID', '+ email: String', '+ passwordHash: String', '+ role: Enum'],
                     'methods': ['+ login()', '+ logout()', '+ register()'],
                     'relationships': []
-                },
-                {
-                    'name': 'Entity',
+                })
+
+            # Add project-specific main entity
+            main_noun = project_name.split()[0].title() if project_name else 'Entity'
+            if main_noun.lower() not in ['user', 'the', 'a', 'my']:
+                classes.append({
+                    'name': main_noun,
+                    'attributes': ['+ id: UUID', f'+ {main_noun.lower()}Name: String', '+ status: String', '+ createdAt: DateTime'],
+                    'methods': [f'+ create{main_noun}()', f'+ get{main_noun}()', f'+ update{main_noun}()', f'+ delete{main_noun}()'],
+                    'relationships': [{'target': 'User', 'type': 'association'}] if 'User' in [c['name'] for c in classes] else []
+                })
+
+            # If still empty, create generic based on project name
+            if not classes:
+                classes = [{
+                    'name': project_name.replace(' ', '')[:15] or 'MainEntity',
                     'attributes': ['+ id: UUID', '+ name: String', '+ createdAt: DateTime'],
                     'methods': ['+ create()', '+ read()', '+ update()', '+ delete()'],
-                    'relationships': [{'target': 'User', 'type': 'association'}]
-                }
-            ]
+                    'relationships': []
+                }]
 
         return classes
 
@@ -1666,57 +2080,174 @@ class UMLGenerator:
         return columns
 
     def _infer_entities_from_features(self, project_data: Dict) -> List[Dict]:
-        """Infer entities from project features and name."""
+        """Infer entities from project features and name - FULLY DYNAMIC."""
         entities = []
         features = project_data.get('features', [])
         project_name = project_data.get('project_name', '').lower()
+        project_type = project_data.get('project_type', '').lower()
         features_str = ' '.join(str(f).lower() for f in features)
+        all_text = f"{project_name} {project_type} {features_str}"
 
-        # E-commerce
-        if any(kw in project_name or kw in features_str for kw in ['shop', 'store', 'ecommerce', 'cart', 'checkout']):
-            entities = [
-                {'name': 'User', 'columns': self._infer_columns_from_entity_name('user'), 'primary_key': 'id', 'relationships': []},
-                {'name': 'Product', 'columns': self._infer_columns_from_entity_name('product'), 'primary_key': 'id',
-                 'relationships': [{'column': 'category_id', 'references': 'Category', 'type': 'many_to_one'}]},
-                {'name': 'Order', 'columns': self._infer_columns_from_entity_name('order'), 'primary_key': 'id',
-                 'relationships': [{'column': 'user_id', 'references': 'User', 'type': 'many_to_one'}]},
-                {'name': 'Category', 'columns': [
-                    {'name': 'id', 'type': 'UUID', 'primary_key': True},
-                    {'name': 'name', 'type': 'String'},
-                    {'name': 'parent_id', 'type': 'UUID'},
-                ], 'primary_key': 'id', 'relationships': []},
-            ]
-        # Education/LMS
-        elif any(kw in project_name or kw in features_str for kw in ['course', 'learning', 'education', 'student', 'lms']):
-            entities = [
-                {'name': 'User', 'columns': self._infer_columns_from_entity_name('user'), 'primary_key': 'id', 'relationships': []},
-                {'name': 'Course', 'columns': self._infer_columns_from_entity_name('course'), 'primary_key': 'id',
-                 'relationships': [{'column': 'instructor_id', 'references': 'User', 'type': 'many_to_one'}]},
-                {'name': 'Enrollment', 'columns': [
-                    {'name': 'id', 'type': 'UUID', 'primary_key': True},
-                    {'name': 'user_id', 'type': 'UUID', 'foreign_key': 'users'},
-                    {'name': 'course_id', 'type': 'UUID', 'foreign_key': 'courses'},
-                    {'name': 'enrolled_at', 'type': 'DateTime'},
-                    {'name': 'progress', 'type': 'Integer'},
-                ], 'primary_key': 'id', 'relationships': [
-                    {'column': 'user_id', 'references': 'User', 'type': 'many_to_one'},
-                    {'column': 'course_id', 'references': 'Course', 'type': 'many_to_one'},
-                ]},
-            ]
-        # Blog/CMS
-        elif any(kw in project_name or kw in features_str for kw in ['blog', 'post', 'article', 'cms', 'content']):
-            entities = [
-                {'name': 'User', 'columns': self._infer_columns_from_entity_name('user'), 'primary_key': 'id', 'relationships': []},
-                {'name': 'Post', 'columns': self._infer_columns_from_entity_name('post'), 'primary_key': 'id',
-                 'relationships': [{'column': 'author_id', 'references': 'User', 'type': 'many_to_one'}]},
-                {'name': 'Comment', 'columns': self._infer_columns_from_entity_name('comment'), 'primary_key': 'id',
-                 'relationships': [
-                    {'column': 'user_id', 'references': 'User', 'type': 'many_to_one'},
-                    {'column': 'post_id', 'references': 'Post', 'type': 'many_to_one'},
-                ]},
-            ]
-        # Generic/Default
-        else:
+        # Detect which entities are needed based on keywords
+        detected_entities = set()
+
+        # User/Auth detection
+        if any(kw in all_text for kw in ['user', 'login', 'auth', 'account', 'profile', 'member']):
+            detected_entities.add('user')
+
+        # E-commerce detection
+        if any(kw in all_text for kw in ['product', 'item', 'catalog', 'inventory']):
+            detected_entities.add('product')
+        if any(kw in all_text for kw in ['order', 'purchase', 'buy', 'checkout']):
+            detected_entities.add('order')
+        if any(kw in all_text for kw in ['cart', 'basket']):
+            detected_entities.add('cart')
+        if any(kw in all_text for kw in ['category', 'categories']):
+            detected_entities.add('category')
+
+        # Education detection
+        if any(kw in all_text for kw in ['course', 'class', 'lesson', 'module']):
+            detected_entities.add('course')
+        if any(kw in all_text for kw in ['student', 'learner', 'enrollment']):
+            detected_entities.add('enrollment')
+
+        # Content/Blog detection
+        if any(kw in all_text for kw in ['post', 'article', 'blog', 'content']):
+            detected_entities.add('post')
+        if any(kw in all_text for kw in ['comment', 'reply', 'feedback']):
+            detected_entities.add('comment')
+
+        # Healthcare detection
+        if any(kw in all_text for kw in ['patient', 'medical']):
+            detected_entities.add('patient')
+        if any(kw in all_text for kw in ['doctor', 'physician']):
+            detected_entities.add('doctor')
+        if any(kw in all_text for kw in ['appointment', 'booking', 'schedule']):
+            detected_entities.add('appointment')
+
+        # Finance detection
+        if any(kw in all_text for kw in ['transaction', 'payment', 'transfer']):
+            detected_entities.add('transaction')
+        if any(kw in all_text for kw in ['wallet', 'balance', 'account']):
+            detected_entities.add('wallet')
+
+        # Social detection
+        if any(kw in all_text for kw in ['message', 'chat', 'conversation']):
+            detected_entities.add('message')
+        if any(kw in all_text for kw in ['follow', 'friend', 'connection']):
+            detected_entities.add('follow')
+
+        # Build entities based on detection
+        entity_builders = {
+            'user': lambda: {'name': 'User', 'columns': self._infer_columns_from_entity_name('user'), 'primary_key': 'id', 'relationships': []},
+            'product': lambda: {'name': 'Product', 'columns': self._infer_columns_from_entity_name('product'), 'primary_key': 'id',
+                               'relationships': [{'column': 'category_id', 'references': 'Category', 'type': 'many_to_one'}] if 'category' in detected_entities else []},
+            'order': lambda: {'name': 'Order', 'columns': self._infer_columns_from_entity_name('order'), 'primary_key': 'id',
+                             'relationships': [{'column': 'user_id', 'references': 'User', 'type': 'many_to_one'}] if 'user' in detected_entities else []},
+            'cart': lambda: {'name': 'Cart', 'columns': [
+                {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                {'name': 'user_id', 'type': 'UUID', 'foreign_key': 'users'},
+                {'name': 'total', 'type': 'Decimal'},
+                {'name': 'created_at', 'type': 'DateTime'},
+            ], 'primary_key': 'id', 'relationships': [{'column': 'user_id', 'references': 'User', 'type': 'many_to_one'}] if 'user' in detected_entities else []},
+            'category': lambda: {'name': 'Category', 'columns': [
+                {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                {'name': 'name', 'type': 'String'},
+                {'name': 'parent_id', 'type': 'UUID'},
+                {'name': 'created_at', 'type': 'DateTime'},
+            ], 'primary_key': 'id', 'relationships': []},
+            'course': lambda: {'name': 'Course', 'columns': self._infer_columns_from_entity_name('course'), 'primary_key': 'id',
+                              'relationships': [{'column': 'instructor_id', 'references': 'User', 'type': 'many_to_one'}] if 'user' in detected_entities else []},
+            'enrollment': lambda: {'name': 'Enrollment', 'columns': [
+                {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                {'name': 'user_id', 'type': 'UUID', 'foreign_key': 'users'},
+                {'name': 'course_id', 'type': 'UUID', 'foreign_key': 'courses'},
+                {'name': 'enrolled_at', 'type': 'DateTime'},
+                {'name': 'progress', 'type': 'Integer'},
+            ], 'primary_key': 'id', 'relationships': [
+                {'column': 'user_id', 'references': 'User', 'type': 'many_to_one'},
+                {'column': 'course_id', 'references': 'Course', 'type': 'many_to_one'},
+            ]},
+            'post': lambda: {'name': 'Post', 'columns': self._infer_columns_from_entity_name('post'), 'primary_key': 'id',
+                            'relationships': [{'column': 'author_id', 'references': 'User', 'type': 'many_to_one'}] if 'user' in detected_entities else []},
+            'comment': lambda: {'name': 'Comment', 'columns': self._infer_columns_from_entity_name('comment'), 'primary_key': 'id',
+                               'relationships': [
+                                   {'column': 'user_id', 'references': 'User', 'type': 'many_to_one'},
+                                   {'column': 'post_id', 'references': 'Post', 'type': 'many_to_one'},
+                               ] if 'user' in detected_entities and 'post' in detected_entities else []},
+            'patient': lambda: {'name': 'Patient', 'columns': [
+                {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                {'name': 'user_id', 'type': 'UUID', 'foreign_key': 'users'},
+                {'name': 'medical_history', 'type': 'Text'},
+                {'name': 'blood_type', 'type': 'String'},
+                {'name': 'created_at', 'type': 'DateTime'},
+            ], 'primary_key': 'id', 'relationships': [{'column': 'user_id', 'references': 'User', 'type': 'one_to_one'}] if 'user' in detected_entities else []},
+            'doctor': lambda: {'name': 'Doctor', 'columns': [
+                {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                {'name': 'user_id', 'type': 'UUID', 'foreign_key': 'users'},
+                {'name': 'specialization', 'type': 'String'},
+                {'name': 'license_number', 'type': 'String'},
+                {'name': 'created_at', 'type': 'DateTime'},
+            ], 'primary_key': 'id', 'relationships': [{'column': 'user_id', 'references': 'User', 'type': 'one_to_one'}] if 'user' in detected_entities else []},
+            'appointment': lambda: {'name': 'Appointment', 'columns': [
+                {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                {'name': 'patient_id', 'type': 'UUID', 'foreign_key': 'patients'},
+                {'name': 'doctor_id', 'type': 'UUID', 'foreign_key': 'doctors'},
+                {'name': 'scheduled_at', 'type': 'DateTime'},
+                {'name': 'status', 'type': 'Enum'},
+            ], 'primary_key': 'id', 'relationships': [
+                {'column': 'patient_id', 'references': 'Patient', 'type': 'many_to_one'},
+                {'column': 'doctor_id', 'references': 'Doctor', 'type': 'many_to_one'},
+            ]},
+            'transaction': lambda: {'name': 'Transaction', 'columns': [
+                {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                {'name': 'user_id', 'type': 'UUID', 'foreign_key': 'users'},
+                {'name': 'amount', 'type': 'Decimal'},
+                {'name': 'type', 'type': 'Enum'},
+                {'name': 'status', 'type': 'Enum'},
+                {'name': 'created_at', 'type': 'DateTime'},
+            ], 'primary_key': 'id', 'relationships': [{'column': 'user_id', 'references': 'User', 'type': 'many_to_one'}] if 'user' in detected_entities else []},
+            'wallet': lambda: {'name': 'Wallet', 'columns': [
+                {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                {'name': 'user_id', 'type': 'UUID', 'foreign_key': 'users'},
+                {'name': 'balance', 'type': 'Decimal'},
+                {'name': 'currency', 'type': 'String'},
+                {'name': 'created_at', 'type': 'DateTime'},
+            ], 'primary_key': 'id', 'relationships': [{'column': 'user_id', 'references': 'User', 'type': 'one_to_one'}] if 'user' in detected_entities else []},
+            'message': lambda: {'name': 'Message', 'columns': [
+                {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                {'name': 'sender_id', 'type': 'UUID', 'foreign_key': 'users'},
+                {'name': 'receiver_id', 'type': 'UUID', 'foreign_key': 'users'},
+                {'name': 'content', 'type': 'Text'},
+                {'name': 'sent_at', 'type': 'DateTime'},
+            ], 'primary_key': 'id', 'relationships': [
+                {'column': 'sender_id', 'references': 'User', 'type': 'many_to_one'},
+                {'column': 'receiver_id', 'references': 'User', 'type': 'many_to_one'},
+            ] if 'user' in detected_entities else []},
+            'follow': lambda: {'name': 'Follow', 'columns': [
+                {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                {'name': 'follower_id', 'type': 'UUID', 'foreign_key': 'users'},
+                {'name': 'following_id', 'type': 'UUID', 'foreign_key': 'users'},
+                {'name': 'created_at', 'type': 'DateTime'},
+            ], 'primary_key': 'id', 'relationships': [
+                {'column': 'follower_id', 'references': 'User', 'type': 'many_to_one'},
+                {'column': 'following_id', 'references': 'User', 'type': 'many_to_one'},
+            ] if 'user' in detected_entities else []},
+        }
+
+        # Build entities in logical order
+        for entity_key in ['user', 'category', 'product', 'cart', 'order', 'course', 'enrollment',
+                          'post', 'comment', 'patient', 'doctor', 'appointment', 'transaction',
+                          'wallet', 'message', 'follow']:
+            if entity_key in detected_entities:
+                entities.append(entity_builders[entity_key]())
+
+        # If nothing detected, create project-specific entity
+        if not entities:
+            main_noun = project_name.split()[0].title() if project_name.split() else 'Entity'
+            if main_noun.lower() in ['the', 'a', 'my', 'our']:
+                main_noun = project_name.split()[1].title() if len(project_name.split()) > 1 else 'Entity'
+
             entities = [
                 {'name': 'User', 'columns': [
                     {'name': 'id', 'type': 'UUID', 'primary_key': True},
@@ -1725,9 +2256,10 @@ class UMLGenerator:
                     {'name': 'name', 'type': 'String'},
                     {'name': 'created_at', 'type': 'DateTime'},
                 ], 'primary_key': 'id', 'relationships': []},
-                {'name': 'Entity', 'columns': [
+                {'name': main_noun, 'columns': [
                     {'name': 'id', 'type': 'UUID', 'primary_key': True},
                     {'name': 'name', 'type': 'String'},
+                    {'name': 'description', 'type': 'Text'},
                     {'name': 'user_id', 'type': 'UUID', 'foreign_key': 'users'},
                     {'name': 'created_at', 'type': 'DateTime'},
                 ], 'primary_key': 'id', 'relationships': [
@@ -1735,7 +2267,7 @@ class UMLGenerator:
                 ]},
             ]
 
-        return entities
+        return entities[:6]  # Max 6 entities for readability
 
 
 # Singleton instance
