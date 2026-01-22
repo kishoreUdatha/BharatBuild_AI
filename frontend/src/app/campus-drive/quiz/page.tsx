@@ -259,15 +259,15 @@ function QuizPageContent() {
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Question Panel */}
           <div className="lg:col-span-3">
-            <Card className="shadow-lg">
-              <CardHeader className="border-b">
+            <Card className="shadow-lg bg-white">
+              <CardHeader className="border-b bg-gray-50">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <span className={`px-3 py-1 rounded-full text-sm font-medium flex items-center gap-1 ${category.bg} ${category.text}`}>
                       {category.icon}
                       {currentQuestion.category.replace('_', '/')}
                     </span>
-                    <span className="text-sm text-gray-500">
+                    <span className="text-sm text-gray-600">
                       {currentQuestion.marks} mark{currentQuestion.marks > 1 ? 's' : ''}
                     </span>
                   </div>
@@ -282,8 +282,8 @@ function QuizPageContent() {
                 </div>
               </CardHeader>
 
-              <CardContent className="p-6">
-                <h2 className="text-xl font-medium text-gray-900 mb-6">
+              <CardContent className="p-6 bg-white">
+                <h2 className="text-xl font-semibold text-gray-900 mb-6">
                   {currentQuestionIndex + 1}. {currentQuestion.question_text}
                 </h2>
 
@@ -295,18 +295,18 @@ function QuizPageContent() {
                       className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
                         answers[currentQuestion.id] === index
                           ? 'border-indigo-600 bg-indigo-50'
-                          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                          : 'border-gray-300 bg-white hover:border-gray-400 hover:bg-gray-50'
                       }`}
                     >
                       <div className="flex items-center gap-3">
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center font-medium ${
                           answers[currentQuestion.id] === index
                             ? 'bg-indigo-600 text-white'
-                            : 'bg-gray-200 text-gray-700'
+                            : 'bg-gray-300 text-gray-900'
                         }`}>
                           {String.fromCharCode(65 + index)}
                         </div>
-                        <span className="text-gray-700">{option}</span>
+                        <span className="text-gray-900 font-medium">{option}</span>
                       </div>
                     </button>
                   ))}
@@ -346,11 +346,11 @@ function QuizPageContent() {
 
           {/* Question Navigator */}
           <div className="lg:col-span-1">
-            <Card className="shadow-lg sticky top-24">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium">Question Navigator</CardTitle>
+            <Card className="shadow-lg sticky top-24 bg-white">
+              <CardHeader className="pb-2 bg-gray-50">
+                <CardTitle className="text-sm font-medium text-gray-900">Question Navigator</CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="bg-white">
                 <div className="grid grid-cols-5 gap-2">
                   {quizData.questions.map((q, index) => {
                     const isAnswered = answers[q.id] !== null
@@ -368,7 +368,7 @@ function QuizPageContent() {
                         } ${
                           isAnswered
                             ? 'bg-green-500 text-white'
-                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                            : 'bg-gray-300 text-gray-900 hover:bg-gray-400'
                         }`}
                       >
                         {index + 1}
@@ -380,18 +380,18 @@ function QuizPageContent() {
                   })}
                 </div>
 
-                <div className="mt-4 pt-4 border-t space-y-2 text-sm">
+                <div className="mt-4 pt-4 border-t border-gray-200 space-y-2 text-sm">
                   <div className="flex items-center gap-2">
                     <div className="w-4 h-4 bg-green-500 rounded"></div>
-                    <span>Answered ({answeredCount})</span>
+                    <span className="text-gray-700">Answered ({answeredCount})</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 bg-gray-200 rounded"></div>
-                    <span>Not Answered ({quizData.total_questions - answeredCount})</span>
+                    <div className="w-4 h-4 bg-gray-300 rounded"></div>
+                    <span className="text-gray-700">Not Answered ({quizData.total_questions - answeredCount})</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Flag className="h-4 w-4 text-orange-500 fill-current" />
-                    <span>Flagged ({flagged.size})</span>
+                    <span className="text-gray-700">Flagged ({flagged.size})</span>
                   </div>
                 </div>
 

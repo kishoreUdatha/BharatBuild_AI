@@ -281,7 +281,7 @@ export default function CampusDrivePage() {
                   <Users className="h-5 w-5 text-cyan-400" />
                 </div>
                 <div className="text-left">
-                  <p className="text-2xl font-bold text-white">500+</p>
+                  <p className="text-2xl font-bold text-white">95,000+</p>
                   <p className="text-xs text-slate-400">Students</p>
                 </div>
               </div>
@@ -290,7 +290,7 @@ export default function CampusDrivePage() {
                   <Building2 className="h-5 w-5 text-purple-400" />
                 </div>
                 <div className="text-left">
-                  <p className="text-2xl font-bold text-white">50+</p>
+                  <p className="text-2xl font-bold text-white">190+</p>
                   <p className="text-xs text-slate-400">Companies</p>
                 </div>
               </div>

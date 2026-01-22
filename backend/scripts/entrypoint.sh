@@ -238,7 +238,7 @@ async def seed():
         # Seed questions
         questions = [
             ('If all Bloops are Razzies and all Razzies are Lazzies, then all Bloops are definitely Lazzies?', QuestionCategory.LOGICAL, ['True', 'False', 'Cannot be determined', 'Partially true'], 0),
-            ('A is brother of B. B is sister of C. D is father of A. How is C related to D?', QuestionCategory.LOGICAL, ['Daughter', 'Son', 'Granddaughter', 'Cannot be determined'], 0),
+            ('A is brother of B. B is sister of C. D is father of A. How is C related to D?', QuestionCategory.LOGICAL, ['Daughter', 'Son', 'Granddaughter', 'Cannot be determined'], 3),
             ('Complete: 2, 6, 12, 20, 30, ?', QuestionCategory.LOGICAL, ['40', '42', '44', '46'], 1),
             ('Odd one out: 8, 27, 64, 100, 125, 216', QuestionCategory.LOGICAL, ['27', '64', '100', '125'], 2),
             ('Clock shows 3:15. Angle between hands?', QuestionCategory.LOGICAL, ['0°', '7.5°', '15°', '22.5°'], 1),

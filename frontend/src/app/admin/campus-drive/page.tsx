@@ -89,13 +89,18 @@ export default function AdminCampusDrivePage() {
 
   const fetchDrives = async () => {
     try {
+      setLoading(true)
       const response = await apiClient.get('/api/v1/admin/campus-drive/')
       setDrives(response.data)
       if (response.data.length > 0 && !selectedDrive) {
         setSelectedDrive(response.data[0])
+      } else if (response.data.length === 0) {
+        // No drives found, stop loading
+        setLoading(false)
       }
     } catch (error) {
       console.error('Error fetching drives:', error)
+      setLoading(false)
     }
   }
 
