@@ -141,6 +141,37 @@ export default function CampusDrivePage() {
     )
   }
 
+  // Show message when no drives are available
+  if (!loading && drives.length === 0) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+        <div className="fixed inset-0 overflow-hidden pointer-events-none">
+          <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl"></div>
+          <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-500/10 rounded-full blur-3xl"></div>
+        </div>
+
+        <Card className="w-full max-w-lg bg-slate-900/80 backdrop-blur-xl border-slate-800 shadow-2xl relative z-10">
+          <CardContent className="pt-10 pb-10 text-center">
+            <div className="w-20 h-20 bg-amber-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+              <AlertCircle className="h-10 w-10 text-amber-400" />
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-2">No Active Drives</h2>
+            <p className="text-slate-400 mb-6">
+              There are currently no active campus placement drives. Please check back later or contact the administrator.
+            </p>
+            <Button
+              onClick={() => window.location.reload()}
+              className="bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white"
+            >
+              <Zap className="mr-2 h-4 w-4" />
+              Refresh Page
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
   if (submitStatus === 'success') {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
