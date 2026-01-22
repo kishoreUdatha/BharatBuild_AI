@@ -10,7 +10,7 @@ import {
   Home, Download, Share2
 } from 'lucide-react'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
 
 interface QuizResult {
   registration_id: string
@@ -63,7 +63,7 @@ function ResultPageContent() {
   const fetchResult = async () => {
     try {
       const response = await fetch(
-        `${API_URL}/api/v1/campus-drive/drives/${driveId}/result/${email}`
+        `${API_URL}/campus-drive/drives/${driveId}/result/${email}`
       )
 
       if (response.ok) {
