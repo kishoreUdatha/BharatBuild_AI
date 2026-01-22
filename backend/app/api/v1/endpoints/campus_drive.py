@@ -548,3 +548,123 @@ async def get_result(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch result"
         )
+
+
+# ============================================
+# Seed Endpoint (One-time initialization)
+# ============================================
+
+@router.post("/seed")
+async def seed_campus_drive_data(
+    secret: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Seed campus drive and questions data.
+    Requires secret key: 'bharatbuild2026'
+    """
+    if secret != "bharatbuild2026":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid secret key"
+        )
+
+    try:
+        # Check if drive already exists
+        existing = await db.execute(
+            select(CampusDrive).where(CampusDrive.name == "Campus Placement Drive 2026")
+        )
+        if existing.scalar_one_or_none():
+            return {"message": "Data already seeded", "status": "exists"}
+
+        # Create campus drive
+        drive = CampusDrive(
+            name="Campus Placement Drive 2026",
+            company_name="BharatBuild",
+            description="Annual campus placement drive for engineering students. Test your skills in logical reasoning, technical knowledge, AI/ML concepts, and English proficiency.",
+            quiz_duration_minutes=60,
+            passing_percentage=60.0,
+            total_questions=30,
+            logical_questions=5,
+            technical_questions=10,
+            ai_ml_questions=10,
+            english_questions=5,
+            is_active=True
+        )
+        db.add(drive)
+        await db.flush()
+
+        # Seed questions
+        questions_data = [
+            # Logical Questions
+            ("If all Bloops are Razzies and all Razzies are Lazzies, then all Bloops are definitely Lazzies. Is this statement true?", QuestionCategory.LOGICAL, ["True", "False", "Cannot be determined", "Partially true"], 0),
+            ("A is the brother of B. B is the sister of C. D is the father of A. How is C related to D?", QuestionCategory.LOGICAL, ["Daughter", "Son", "Granddaughter", "Cannot be determined"], 0),
+            ("Complete the series: 2, 6, 12, 20, 30, ?", QuestionCategory.LOGICAL, ["40", "42", "44", "46"], 1),
+            ("Find the odd one out: 8, 27, 64, 100, 125, 216", QuestionCategory.LOGICAL, ["27", "64", "100", "125"], 2),
+            ("A clock shows 3:15. What is the angle between the hour and minute hands?", QuestionCategory.LOGICAL, ["0 degrees", "7.5 degrees", "15 degrees", "22.5 degrees"], 1),
+            ("In a row of students, Ram is 7th from left and Shyam is 9th from right. If they interchange, Ram becomes 11th from left. How many students?", QuestionCategory.LOGICAL, ["17", "18", "19", "20"], 2),
+
+            # Technical Questions
+            ("What is the time complexity of binary search?", QuestionCategory.TECHNICAL, ["O(n)", "O(log n)", "O(n log n)", "O(1)"], 1),
+            ("Which data structure uses LIFO (Last In First Out)?", QuestionCategory.TECHNICAL, ["Queue", "Stack", "Array", "Linked List"], 1),
+            ("What is the output of: print(type([]) == type({}))?", QuestionCategory.TECHNICAL, ["True", "False", "Error", "None"], 1),
+            ("Which HTTP method is idempotent?", QuestionCategory.TECHNICAL, ["POST", "GET", "PATCH", "None of the above"], 1),
+            ("What does SQL stand for?", QuestionCategory.TECHNICAL, ["Structured Query Language", "Simple Query Language", "Standard Query Language", "Sequential Query Language"], 0),
+            ("Which sorting algorithm has the best average case time complexity?", QuestionCategory.TECHNICAL, ["Bubble Sort", "Insertion Sort", "Quick Sort", "Selection Sort"], 2),
+            ("What is the purpose of the finally block in exception handling?", QuestionCategory.TECHNICAL, ["Execute only if exception occurs", "Execute only if no exception", "Always execute regardless of exception", "Skip exception handling"], 2),
+            ("Which of the following is NOT a valid JavaScript data type?", QuestionCategory.TECHNICAL, ["Boolean", "Undefined", "Integer", "Symbol"], 2),
+            ("What is the difference between == and === in JavaScript?", QuestionCategory.TECHNICAL, ["No difference", "=== checks type also", "== checks type also", "=== is faster"], 1),
+            ("Which CSS property is used to change the background color?", QuestionCategory.TECHNICAL, ["color", "bgcolor", "background-color", "background"], 2),
+            ("What is Git primarily used for?", QuestionCategory.TECHNICAL, ["Database management", "Version control", "Web hosting", "Compilation"], 1),
+            ("Which of the following is a NoSQL database?", QuestionCategory.TECHNICAL, ["MySQL", "PostgreSQL", "MongoDB", "Oracle"], 2),
+
+            # AI/ML Questions
+            ("What does CNN stand for in deep learning?", QuestionCategory.AI_ML, ["Central Neural Network", "Convolutional Neural Network", "Connected Neural Network", "Computed Neural Network"], 1),
+            ("Which algorithm is commonly used for classification problems?", QuestionCategory.AI_ML, ["Linear Regression", "K-Means Clustering", "Random Forest", "PCA"], 2),
+            ("What is overfitting in machine learning?", QuestionCategory.AI_ML, ["Model performs well on training data but poorly on test data", "Model performs poorly on training data", "Model takes too long to train", "Model uses too much memory"], 0),
+            ("Which activation function is most commonly used in hidden layers of neural networks?", QuestionCategory.AI_ML, ["Sigmoid", "Tanh", "ReLU", "Softmax"], 2),
+            ("What is the purpose of the learning rate in gradient descent?", QuestionCategory.AI_ML, ["Controls model complexity", "Controls step size in optimization", "Controls regularization", "Controls batch size"], 1),
+            ("Which metric is used to evaluate classification models?", QuestionCategory.AI_ML, ["RMSE", "MAE", "Accuracy", "R-squared"], 2),
+            ("What type of machine learning is used when we have labeled data?", QuestionCategory.AI_ML, ["Unsupervised Learning", "Supervised Learning", "Reinforcement Learning", "Semi-supervised Learning"], 1),
+            ("Which library is commonly used for deep learning in Python?", QuestionCategory.AI_ML, ["NumPy", "Pandas", "TensorFlow", "Matplotlib"], 2),
+            ("What is the purpose of dropout in neural networks?", QuestionCategory.AI_ML, ["Speed up training", "Prevent overfitting", "Increase accuracy", "Reduce memory usage"], 1),
+            ("Which of the following is a clustering algorithm?", QuestionCategory.AI_ML, ["Linear Regression", "Decision Tree", "K-Means", "Naive Bayes"], 2),
+            ("What does NLP stand for?", QuestionCategory.AI_ML, ["Neural Learning Process", "Natural Language Processing", "Network Layer Protocol", "Non-Linear Programming"], 1),
+            ("Which optimizer is an improvement over standard gradient descent?", QuestionCategory.AI_ML, ["SGD", "Adam", "RMSprop", "All of the above"], 3),
+
+            # English Questions
+            ("Choose the correct sentence:", QuestionCategory.ENGLISH, ["He don't know nothing", "He doesn't know anything", "He don't know anything", "He doesn't know nothing"], 1),
+            ("What is the synonym of Eloquent?", QuestionCategory.ENGLISH, ["Silent", "Articulate", "Humble", "Arrogant"], 1),
+            ("Choose the antonym of Benevolent:", QuestionCategory.ENGLISH, ["Kind", "Generous", "Malevolent", "Caring"], 2),
+            ("Fill in the blank: She ___ to the store yesterday.", QuestionCategory.ENGLISH, ["go", "goes", "went", "going"], 2),
+            ("Which sentence is grammatically correct?", QuestionCategory.ENGLISH, ["Me and him went to the park", "Him and me went to the park", "He and I went to the park", "I and he went to the park"], 2),
+            ("What does 'ubiquitous' mean?", QuestionCategory.ENGLISH, ["Rare", "Present everywhere", "Unique", "Unknown"], 1),
+        ]
+
+        for text, category, options, correct in questions_data:
+            question = CampusDriveQuestion(
+                question_text=text,
+                category=category,
+                options=options,
+                correct_option=correct,
+                marks=1.0,
+                is_global=True
+            )
+            db.add(question)
+
+        await db.commit()
+
+        logger.info("Campus drive data seeded successfully")
+        return {
+            "message": "Campus drive data seeded successfully",
+            "drive_name": drive.name,
+            "questions_count": len(questions_data)
+        }
+
+    except Exception as e:
+        logger.error(f"Error seeding campus drive data: {e}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to seed data: {str(e)}"
+        )
