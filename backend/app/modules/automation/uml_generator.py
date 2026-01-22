@@ -1378,137 +1378,362 @@ class UMLGenerator:
         return external_entities, data_stores, data_flows[:10]
 
     def _extract_classes_from_project(self, project_data: Dict) -> List[Dict]:
-        """Extract class info from project data"""
+        """
+        Extract class info from project data for Class Diagram.
+        Uses ACTUAL columns and methods from parsed model files.
+        """
         classes = []
 
-        # From database tables
-        tables = project_data.get('database_tables', [])
-        for table in tables[:5]:
-            classes.append({
-                'name': table.title() if isinstance(table, str) else table.get('name', 'Entity'),
-                'attributes': ['id', 'name', 'created_at', 'updated_at'],
-                'methods': ['create', 'read', 'update', 'delete'],
-                'relationships': []
-            })
+        # First, try to get from database_schema (from ProjectAnalyzer with AST parsing)
+        db_schema = project_data.get('database_schema', {})
+        tables_from_schema = db_schema.get('tables', [])
 
-        # Default classes if none found
+        if tables_from_schema:
+            for table in tables_from_schema[:9]:  # Max 9 classes
+                if isinstance(table, dict):
+                    name = table.get('name', 'Entity')
+                    columns = table.get('columns', [])
+                    methods = table.get('methods', [])
+                    relationships = table.get('relationships', [])
+
+                    # Convert columns to attributes with proper formatting
+                    attributes = []
+                    for col in columns[:8]:  # Limit to 8 attributes
+                        if isinstance(col, dict):
+                            col_name = col.get('name', '')
+                            col_type = col.get('type', 'Any')
+                            # Format: - name: Type or + name: Type (public by default)
+                            prefix = '-' if col.get('primary_key') else '+'
+                            attributes.append(f"{prefix} {col_name}: {col_type}")
+                        else:
+                            attributes.append(f"+ {col}")
+
+                    # If no methods found, generate CRUD based on class name
+                    if not methods:
+                        methods = [f'create{name}', f'get{name}ById', f'update{name}', f'delete{name}']
+
+                    # Format methods
+                    formatted_methods = [f"+ {m}()" if not m.endswith(')') else f"+ {m}" for m in methods[:6]]
+
+                    # Build class relationships
+                    class_rels = []
+                    for rel in relationships:
+                        if isinstance(rel, dict):
+                            target = rel.get('references', rel.get('target', ''))
+                            rel_type = rel.get('type', 'association')
+                            if target:
+                                class_rels.append({'target': target, 'type': rel_type})
+
+                    classes.append({
+                        'name': name,
+                        'attributes': attributes if attributes else ['+ id: UUID', '+ createdAt: DateTime'],
+                        'methods': formatted_methods,
+                        'relationships': class_rels
+                    })
+
+        # Fallback: Try database_tables (older format or from code file extraction)
+        if not classes:
+            tables = project_data.get('database_tables', [])
+            for table in tables[:9]:
+                if isinstance(table, dict):
+                    name = table.get('name', 'Entity')
+                    columns = table.get('columns', [])
+
+                    attributes = []
+                    for col in columns[:8]:
+                        if isinstance(col, dict):
+                            col_name = col.get('name', '')
+                            col_type = col.get('type', 'Any')
+                            attributes.append(f"+ {col_name}: {col_type}")
+                        else:
+                            attributes.append(f"+ {col}")
+
+                    classes.append({
+                        'name': name,
+                        'attributes': attributes if attributes else ['+ id: UUID'],
+                        'methods': [f'+ create{name}()', f'+ get{name}()', f'+ update{name}()', f'+ delete{name}()'],
+                        'relationships': []
+                    })
+                elif isinstance(table, str):
+                    name = table.title().replace('_', '')
+                    classes.append({
+                        'name': name,
+                        'attributes': ['+ id: UUID', '+ createdAt: DateTime', '+ updatedAt: DateTime'],
+                        'methods': [f'+ create()', f'+ findById()', f'+ update()', f'+ delete()'],
+                        'relationships': []
+                    })
+
+        # Last resort: Use features to infer classes
+        if not classes:
+            features = project_data.get('features', [])
+            project_name = project_data.get('project_name', '').lower()
+
+            # Infer entities from features
+            feature_str = ' '.join(str(f).lower() for f in features)
+
+            # Common entity patterns
+            entity_keywords = {
+                'user': ['user', 'login', 'auth', 'account', 'profile'],
+                'product': ['product', 'item', 'catalog', 'inventory'],
+                'order': ['order', 'purchase', 'checkout', 'cart'],
+                'payment': ['payment', 'billing', 'transaction'],
+                'course': ['course', 'lesson', 'module', 'learning'],
+                'student': ['student', 'enrollment', 'learner'],
+                'post': ['post', 'article', 'blog', 'content'],
+                'comment': ['comment', 'review', 'feedback'],
+            }
+
+            for entity_name, keywords in entity_keywords.items():
+                if any(kw in feature_str or kw in project_name for kw in keywords):
+                    classes.append({
+                        'name': entity_name.title(),
+                        'attributes': ['+ id: UUID', f'+ {entity_name}Name: String', '+ createdAt: DateTime'],
+                        'methods': [f'+ create{entity_name.title()}()', f'+ get{entity_name.title()}()'],
+                        'relationships': []
+                    })
+
+        # Absolute fallback
         if not classes:
             classes = [
                 {
                     'name': 'User',
-                    'attributes': ['id', 'name', 'email', 'password'],
-                    'methods': ['login', 'logout', 'register'],
+                    'attributes': ['+ id: UUID', '+ email: String', '+ passwordHash: String', '+ role: Enum'],
+                    'methods': ['+ login()', '+ logout()', '+ register()'],
                     'relationships': []
                 },
                 {
-                    'name': 'Controller',
-                    'attributes': ['routes', 'middleware'],
-                    'methods': ['handleRequest', 'validateInput'],
-                    'relationships': [{'target': 'Service', 'type': 'association'}]
-                },
-                {
-                    'name': 'Service',
-                    'attributes': ['repository'],
-                    'methods': ['processData', 'validateBusiness'],
-                    'relationships': [{'target': 'Repository', 'type': 'association'}]
-                },
-                {
-                    'name': 'Repository',
-                    'attributes': ['database'],
-                    'methods': ['find', 'save', 'delete'],
-                    'relationships': []
+                    'name': 'Entity',
+                    'attributes': ['+ id: UUID', '+ name: String', '+ createdAt: DateTime'],
+                    'methods': ['+ create()', '+ read()', '+ update()', '+ delete()'],
+                    'relationships': [{'target': 'User', 'type': 'association'}]
                 }
             ]
 
         return classes
 
     def _extract_entities_from_project(self, project_data: Dict) -> List[Dict]:
-        """Extract entity info from project data with columns and relationships"""
+        """
+        Extract entity info from project data for ER Diagram.
+        Uses ACTUAL columns, types, PKs, FKs from parsed model files.
+        """
         entities = []
 
-        tables = project_data.get('database_tables', [])
-        for table in tables[:6]:
-            if isinstance(table, str):
-                # Simple string table name - use defaults
-                entities.append({
-                    'name': table,
-                    'columns': [
-                        {'name': 'id', 'type': 'UUID'},
-                        {'name': 'name', 'type': 'String'},
-                        {'name': 'created_at', 'type': 'DateTime'},
-                        {'name': 'updated_at', 'type': 'DateTime'}
-                    ],
-                    'primary_key': 'id',
-                    'relationships': []
-                })
-            elif isinstance(table, dict):
-                # Rich table data with columns and relationships
-                name = table.get('name', 'Entity')
-                columns = table.get('columns', [])
-                relationships = table.get('relationships', [])
+        # First, try database_schema (from ProjectAnalyzer with full AST parsing)
+        db_schema = project_data.get('database_schema', {})
+        tables_from_schema = db_schema.get('tables', [])
 
-                # If no columns extracted, use defaults based on table name
-                if not columns:
-                    columns = [
-                        {'name': 'id', 'type': 'UUID'},
-                        {'name': f'{name.lower()}_name', 'type': 'String'},
-                        {'name': 'description', 'type': 'Text'},
-                        {'name': 'created_at', 'type': 'DateTime'},
-                        {'name': 'updated_at', 'type': 'DateTime'}
-                    ]
-                    # Add common FK based on entity type
-                    if name.lower() not in ['user', 'admin', 'settings']:
-                        columns.append({'name': 'user_id', 'type': 'UUID'})
-                        relationships.append({
-                            'column': 'user_id',
-                            'references': 'User',
-                            'type': 'many_to_one'
+        if tables_from_schema:
+            for table in tables_from_schema[:6]:  # Max 6 entities
+                if isinstance(table, dict):
+                    name = table.get('name', 'Entity')
+                    columns = table.get('columns', [])
+                    pk = table.get('primary_key', 'id')
+                    relationships = table.get('relationships', [])
+
+                    # Use actual columns if available
+                    if columns:
+                        entities.append({
+                            'name': name,
+                            'columns': columns[:10],  # Limit to 10 columns
+                            'primary_key': pk,
+                            'relationships': relationships
+                        })
+                    else:
+                        # Table name only, use minimal defaults
+                        entities.append({
+                            'name': name,
+                            'columns': [
+                                {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                                {'name': 'created_at', 'type': 'DateTime'},
+                            ],
+                            'primary_key': 'id',
+                            'relationships': relationships
                         })
 
-                entities.append({
-                    'name': name,
-                    'columns': columns,
-                    'primary_key': 'id',
-                    'relationships': relationships
-                })
-
-        # Default entities based on project type
+        # Fallback: Try database_tables (from code file extraction)
         if not entities:
-            project_name = project_data.get('project_name', '').lower()
-            features_str = ' '.join(str(f).lower() for f in project_data.get('features', []))
+            tables = project_data.get('database_tables', [])
+            for table in tables[:6]:
+                if isinstance(table, dict):
+                    name = table.get('name', 'Entity')
+                    columns = table.get('columns', [])
+                    relationships = table.get('relationships', [])
 
-            # E-commerce defaults
-            if 'shop' in project_name or 'store' in project_name or 'ecommerce' in features_str:
-                entities = [
-                    {'name': 'User', 'columns': [
-                        {'name': 'id', 'type': 'UUID'}, {'name': 'email', 'type': 'String'},
-                        {'name': 'password_hash', 'type': 'String'}, {'name': 'role', 'type': 'Enum'}
-                    ], 'primary_key': 'id', 'relationships': []},
-                    {'name': 'Product', 'columns': [
-                        {'name': 'id', 'type': 'UUID'}, {'name': 'name', 'type': 'String'},
-                        {'name': 'price', 'type': 'Decimal'}, {'name': 'vendor_id', 'type': 'UUID'}
-                    ], 'primary_key': 'id', 'relationships': [{'column': 'vendor_id', 'references': 'Vendor', 'type': 'many_to_one'}]},
-                    {'name': 'Order', 'columns': [
-                        {'name': 'id', 'type': 'UUID'}, {'name': 'user_id', 'type': 'UUID'},
-                        {'name': 'total', 'type': 'Decimal'}, {'name': 'status', 'type': 'Enum'}
-                    ], 'primary_key': 'id', 'relationships': [{'column': 'user_id', 'references': 'User', 'type': 'many_to_one'}]},
-                ]
-            else:
-                # Generic defaults
-                entities = [
-                    {'name': 'User', 'columns': [
-                        {'name': 'id', 'type': 'UUID'}, {'name': 'name', 'type': 'String'},
-                        {'name': 'email', 'type': 'String'}, {'name': 'password_hash', 'type': 'String'}
-                    ], 'primary_key': 'id', 'relationships': []},
-                    {'name': 'Project', 'columns': [
-                        {'name': 'id', 'type': 'UUID'}, {'name': 'title', 'type': 'String'},
-                        {'name': 'description', 'type': 'Text'}, {'name': 'user_id', 'type': 'UUID'}
-                    ], 'primary_key': 'id', 'relationships': [{'column': 'user_id', 'references': 'User', 'type': 'many_to_one'}]},
-                    {'name': 'Document', 'columns': [
-                        {'name': 'id', 'type': 'UUID'}, {'name': 'name', 'type': 'String'},
-                        {'name': 'content', 'type': 'Text'}, {'name': 'project_id', 'type': 'UUID'}
-                    ], 'primary_key': 'id', 'relationships': [{'column': 'project_id', 'references': 'Project', 'type': 'many_to_one'}]},
-                ]
+                    if columns:
+                        entities.append({
+                            'name': name,
+                            'columns': columns[:10],
+                            'primary_key': table.get('primary_key', 'id'),
+                            'relationships': relationships
+                        })
+                    else:
+                        # No columns, infer from name
+                        inferred_cols = self._infer_columns_from_entity_name(name)
+                        entities.append({
+                            'name': name,
+                            'columns': inferred_cols,
+                            'primary_key': 'id',
+                            'relationships': relationships
+                        })
+                elif isinstance(table, str):
+                    # Just table name string
+                    name = table.title().replace('_', '')
+                    inferred_cols = self._infer_columns_from_entity_name(name)
+                    entities.append({
+                        'name': name,
+                        'columns': inferred_cols,
+                        'primary_key': 'id',
+                        'relationships': []
+                    })
+
+        # Try to infer from features/project type
+        if not entities:
+            entities = self._infer_entities_from_features(project_data)
+
+        return entities
+
+    def _infer_columns_from_entity_name(self, entity_name: str) -> List[Dict]:
+        """Infer likely columns based on entity name."""
+        name_lower = entity_name.lower()
+        columns = [{'name': 'id', 'type': 'UUID', 'primary_key': True}]
+
+        # Common columns based on entity type
+        entity_columns = {
+            'user': [
+                {'name': 'email', 'type': 'String'},
+                {'name': 'password_hash', 'type': 'String'},
+                {'name': 'name', 'type': 'String'},
+                {'name': 'role', 'type': 'Enum'},
+                {'name': 'is_active', 'type': 'Boolean'},
+            ],
+            'product': [
+                {'name': 'name', 'type': 'String'},
+                {'name': 'description', 'type': 'Text'},
+                {'name': 'price', 'type': 'Decimal'},
+                {'name': 'stock', 'type': 'Integer'},
+                {'name': 'category_id', 'type': 'UUID', 'foreign_key': 'categories'},
+            ],
+            'order': [
+                {'name': 'user_id', 'type': 'UUID', 'foreign_key': 'users'},
+                {'name': 'total', 'type': 'Decimal'},
+                {'name': 'status', 'type': 'Enum'},
+                {'name': 'shipping_address', 'type': 'Text'},
+            ],
+            'payment': [
+                {'name': 'order_id', 'type': 'UUID', 'foreign_key': 'orders'},
+                {'name': 'amount', 'type': 'Decimal'},
+                {'name': 'method', 'type': 'String'},
+                {'name': 'status', 'type': 'Enum'},
+            ],
+            'course': [
+                {'name': 'title', 'type': 'String'},
+                {'name': 'description', 'type': 'Text'},
+                {'name': 'instructor_id', 'type': 'UUID', 'foreign_key': 'users'},
+                {'name': 'price', 'type': 'Decimal'},
+                {'name': 'duration', 'type': 'Integer'},
+            ],
+            'post': [
+                {'name': 'title', 'type': 'String'},
+                {'name': 'content', 'type': 'Text'},
+                {'name': 'author_id', 'type': 'UUID', 'foreign_key': 'users'},
+                {'name': 'published_at', 'type': 'DateTime'},
+            ],
+            'comment': [
+                {'name': 'content', 'type': 'Text'},
+                {'name': 'user_id', 'type': 'UUID', 'foreign_key': 'users'},
+                {'name': 'post_id', 'type': 'UUID', 'foreign_key': 'posts'},
+            ],
+        }
+
+        # Check if entity name matches known patterns
+        for pattern, cols in entity_columns.items():
+            if pattern in name_lower:
+                columns.extend(cols)
+                break
+        else:
+            # Generic columns
+            columns.extend([
+                {'name': 'name', 'type': 'String'},
+                {'name': 'description', 'type': 'Text'},
+            ])
+
+        # Always add timestamps
+        columns.extend([
+            {'name': 'created_at', 'type': 'DateTime'},
+            {'name': 'updated_at', 'type': 'DateTime'},
+        ])
+
+        return columns
+
+    def _infer_entities_from_features(self, project_data: Dict) -> List[Dict]:
+        """Infer entities from project features and name."""
+        entities = []
+        features = project_data.get('features', [])
+        project_name = project_data.get('project_name', '').lower()
+        features_str = ' '.join(str(f).lower() for f in features)
+
+        # E-commerce
+        if any(kw in project_name or kw in features_str for kw in ['shop', 'store', 'ecommerce', 'cart', 'checkout']):
+            entities = [
+                {'name': 'User', 'columns': self._infer_columns_from_entity_name('user'), 'primary_key': 'id', 'relationships': []},
+                {'name': 'Product', 'columns': self._infer_columns_from_entity_name('product'), 'primary_key': 'id',
+                 'relationships': [{'column': 'category_id', 'references': 'Category', 'type': 'many_to_one'}]},
+                {'name': 'Order', 'columns': self._infer_columns_from_entity_name('order'), 'primary_key': 'id',
+                 'relationships': [{'column': 'user_id', 'references': 'User', 'type': 'many_to_one'}]},
+                {'name': 'Category', 'columns': [
+                    {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                    {'name': 'name', 'type': 'String'},
+                    {'name': 'parent_id', 'type': 'UUID'},
+                ], 'primary_key': 'id', 'relationships': []},
+            ]
+        # Education/LMS
+        elif any(kw in project_name or kw in features_str for kw in ['course', 'learning', 'education', 'student', 'lms']):
+            entities = [
+                {'name': 'User', 'columns': self._infer_columns_from_entity_name('user'), 'primary_key': 'id', 'relationships': []},
+                {'name': 'Course', 'columns': self._infer_columns_from_entity_name('course'), 'primary_key': 'id',
+                 'relationships': [{'column': 'instructor_id', 'references': 'User', 'type': 'many_to_one'}]},
+                {'name': 'Enrollment', 'columns': [
+                    {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                    {'name': 'user_id', 'type': 'UUID', 'foreign_key': 'users'},
+                    {'name': 'course_id', 'type': 'UUID', 'foreign_key': 'courses'},
+                    {'name': 'enrolled_at', 'type': 'DateTime'},
+                    {'name': 'progress', 'type': 'Integer'},
+                ], 'primary_key': 'id', 'relationships': [
+                    {'column': 'user_id', 'references': 'User', 'type': 'many_to_one'},
+                    {'column': 'course_id', 'references': 'Course', 'type': 'many_to_one'},
+                ]},
+            ]
+        # Blog/CMS
+        elif any(kw in project_name or kw in features_str for kw in ['blog', 'post', 'article', 'cms', 'content']):
+            entities = [
+                {'name': 'User', 'columns': self._infer_columns_from_entity_name('user'), 'primary_key': 'id', 'relationships': []},
+                {'name': 'Post', 'columns': self._infer_columns_from_entity_name('post'), 'primary_key': 'id',
+                 'relationships': [{'column': 'author_id', 'references': 'User', 'type': 'many_to_one'}]},
+                {'name': 'Comment', 'columns': self._infer_columns_from_entity_name('comment'), 'primary_key': 'id',
+                 'relationships': [
+                    {'column': 'user_id', 'references': 'User', 'type': 'many_to_one'},
+                    {'column': 'post_id', 'references': 'Post', 'type': 'many_to_one'},
+                ]},
+            ]
+        # Generic/Default
+        else:
+            entities = [
+                {'name': 'User', 'columns': [
+                    {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                    {'name': 'email', 'type': 'String'},
+                    {'name': 'password_hash', 'type': 'String'},
+                    {'name': 'name', 'type': 'String'},
+                    {'name': 'created_at', 'type': 'DateTime'},
+                ], 'primary_key': 'id', 'relationships': []},
+                {'name': 'Entity', 'columns': [
+                    {'name': 'id', 'type': 'UUID', 'primary_key': True},
+                    {'name': 'name', 'type': 'String'},
+                    {'name': 'user_id', 'type': 'UUID', 'foreign_key': 'users'},
+                    {'name': 'created_at', 'type': 'DateTime'},
+                ], 'primary_key': 'id', 'relationships': [
+                    {'column': 'user_id', 'references': 'User', 'type': 'many_to_one'}
+                ]},
+            ]
 
         return entities
 
