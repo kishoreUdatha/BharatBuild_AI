@@ -11,7 +11,7 @@ import {
   BookOpen, MessageSquare, CheckCircle, Flag, Send
 } from 'lucide-react'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
 
 interface Question {
   id: string
@@ -62,7 +62,7 @@ function QuizPageContent() {
 
     try {
       const response = await fetch(
-        `${API_URL}/api/v1/campus-drive/drives/${driveId}/quiz/start?email=${encodeURIComponent(email)}`,
+        `${API_URL}/campus-drive/drives/${driveId}/quiz/start?email=${encodeURIComponent(email)}`,
         { method: 'POST' }
       )
 
@@ -161,7 +161,7 @@ function QuizPageContent() {
       }
 
       const response = await fetch(
-        `${API_URL}/api/v1/campus-drive/drives/${driveId}/quiz/submit?email=${encodeURIComponent(email!)}`,
+        `${API_URL}/campus-drive/drives/${driveId}/quiz/submit?email=${encodeURIComponent(email!)}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

@@ -14,7 +14,7 @@ import {
   Target, Award, Zap, ArrowRight, Calendar, Shield
 } from 'lucide-react'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
 
 interface CampusDrive {
   id: string
@@ -60,7 +60,7 @@ export default function CampusDrivePage() {
 
   const fetchDrives = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/v1/campus-drive/drives`)
+      const response = await fetch(`${API_URL}/campus-drive/drives`)
       if (response.ok) {
         const data = await response.json()
         setDrives(data)
@@ -93,7 +93,7 @@ export default function CampusDrivePage() {
         cgpa: formData.cgpa ? parseFloat(formData.cgpa) : null
       }
 
-      const response = await fetch(`${API_URL}/api/v1/campus-drive/drives/${selectedDrive.id}/register`, {
+      const response = await fetch(`${API_URL}/campus-drive/drives/${selectedDrive.id}/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
