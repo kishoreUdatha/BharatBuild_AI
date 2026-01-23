@@ -90,11 +90,11 @@ export default function AdminCampusDrivePage() {
   const fetchDrives = async () => {
     try {
       setLoading(true)
-      const response = await apiClient.get('/api/v1/admin/campus-drive/')
-      setDrives(response.data)
-      if (response.data.length > 0 && !selectedDrive) {
-        setSelectedDrive(response.data[0])
-      } else if (response.data.length === 0) {
+      const drives = await apiClient.get('/admin/campus-drive/')
+      setDrives(drives)
+      if (drives.length > 0 && !selectedDrive) {
+        setSelectedDrive(drives[0])
+      } else if (drives.length === 0) {
         // No drives found, stop loading
         setLoading(false)
       }
@@ -107,12 +107,12 @@ export default function AdminCampusDrivePage() {
   const fetchRegistrations = async (driveId: string) => {
     try {
       setLoading(true)
-      const [regResponse, statsResponse] = await Promise.all([
-        apiClient.get(`/api/v1/admin/campus-drive/${driveId}/registrations`),
-        apiClient.get(`/api/v1/admin/campus-drive/${driveId}/stats`)
+      const [registrations, stats] = await Promise.all([
+        apiClient.get(`/admin/campus-drive/${driveId}/registrations`),
+        apiClient.get(`/admin/campus-drive/${driveId}/stats`)
       ])
-      setRegistrations(regResponse.data)
-      setStats(statsResponse.data)
+      setRegistrations(registrations)
+      setStats(stats)
     } catch (error) {
       console.error('Error fetching registrations:', error)
     } finally {
@@ -142,10 +142,10 @@ export default function AdminCampusDrivePage() {
   const exportResults = async () => {
     if (!selectedDrive) return
     try {
-      const response = await apiClient.get(
-        `/api/v1/admin/campus-drive/${selectedDrive.id}/export?qualified_only=${filterQualified === 'qualified'}`
+      const exportData = await apiClient.get(
+        `/admin/campus-drive/${selectedDrive.id}/export?qualified_only=${filterQualified === 'qualified'}`
       )
-      const { data, filename } = response.data
+      const { data, filename } = exportData
 
       // Convert to CSV
       const csvContent = data.map((row: string[]) => row.join(',')).join('\n')

@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import {
   Trophy, XCircle, CheckCircle2, Brain, Code, BookOpen, MessageSquare,
-  Home, Download, Share2
+  Home, Download, Share2, Clock
 } from 'lucide-react'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
@@ -41,21 +41,28 @@ function ResultPageContent() {
 
   const [result, setResult] = useState<QuizResult | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     // First try to get from localStorage (just submitted)
     const storedResult = localStorage.getItem('quiz_result')
     if (storedResult) {
-      setResult(JSON.parse(storedResult))
-      localStorage.removeItem('quiz_result')
-      setLoading(false)
-      return
+      try {
+        setResult(JSON.parse(storedResult))
+        localStorage.removeItem('quiz_result')
+        setLoading(false)
+        return
+      } catch (e) {
+        console.error('Error parsing stored result:', e)
+        localStorage.removeItem('quiz_result')
+      }
     }
 
     // Otherwise fetch from API
     if (driveId && email) {
       fetchResult()
     } else {
+      setError('Missing drive ID or email')
       setLoading(false)
     }
   }, [driveId, email])
@@ -63,15 +70,19 @@ function ResultPageContent() {
   const fetchResult = async () => {
     try {
       const response = await fetch(
-        `${API_URL}/campus-drive/drives/${driveId}/result/${email}`
+        `${API_URL}/campus-drive/drives/${driveId}/result/${encodeURIComponent(email!)}`
       )
 
       if (response.ok) {
         const data = await response.json()
         setResult(data)
+      } else {
+        const errorData = await response.json().catch(() => ({}))
+        setError(errorData.detail || `Failed to fetch result (${response.status})`)
       }
     } catch (error) {
       console.error('Error fetching result:', error)
+      setError('Network error: Unable to fetch result')
     } finally {
       setLoading(false)
     }
@@ -90,13 +101,13 @@ function ResultPageContent() {
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50 flex items-center justify-center p-4">
         <Card className="w-full max-w-md text-center">
           <CardContent className="pt-6">
-            <XCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
-            <h2 className="text-xl font-bold text-gray-900 mb-2">Result Not Found</h2>
+            <Clock className="h-16 w-16 text-blue-500 mx-auto mb-4" />
+            <h2 className="text-xl font-bold text-gray-900 mb-2">Results Not Available Yet</h2>
             <p className="text-gray-600 mb-4">
-              We couldn&apos;t find your quiz result. Please make sure you have completed the quiz.
+              Quiz results will be announced after the evaluation process is complete.
             </p>
-            <Button onClick={() => router.push('/campus-drive')}>
-              Go to Registration
+            <Button onClick={() => router.push('/')}>
+              Go to Home
             </Button>
           </CardContent>
         </Card>
