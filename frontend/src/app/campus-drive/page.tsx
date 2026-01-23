@@ -31,6 +31,7 @@ interface CampusDrive {
   technical_questions: number
   ai_ml_questions: number
   english_questions: number
+  coding_questions: number
   is_active: boolean
 }
 
@@ -413,6 +414,12 @@ export default function CampusDrivePage() {
                           <MessageSquare className="h-6 w-6 text-orange-400 mb-2" />
                           <p className="text-white font-semibold">{selectedDrive.english_questions}</p>
                           <p className="text-slate-400 text-xs">English</p>
+                        </div>
+
+                        <div className="bg-pink-500/10 border border-pink-500/20 rounded-xl p-4 hover:bg-pink-500/20 transition-colors col-span-2">
+                          <Code className="h-6 w-6 text-pink-400 mb-2" />
+                          <p className="text-white font-semibold">{selectedDrive.coding_questions}</p>
+                          <p className="text-slate-400 text-xs">Coding MCQ</p>
                         </div>
                       </div>
                     </div>

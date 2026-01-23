@@ -28,6 +28,7 @@ class CampusDriveCreate(BaseModel):
     technical_questions: int = Field(default=10, ge=0)
     ai_ml_questions: int = Field(default=10, ge=0)
     english_questions: int = Field(default=5, ge=0)
+    coding_questions: int = Field(default=5, ge=0)
 
 
 class CampusDriveUpdate(BaseModel):
@@ -58,6 +59,7 @@ class CampusDriveResponse(BaseModel):
     technical_questions: int
     ai_ml_questions: int
     english_questions: int
+    coding_questions: int = 0
     is_active: bool
     created_at: datetime
 
@@ -105,6 +107,7 @@ class RegistrationResponse(BaseModel):
     technical_score: float
     ai_ml_score: float
     english_score: float
+    coding_score: float = 0
     created_at: datetime
 
     @field_serializer('id', 'campus_drive_id')
@@ -230,6 +233,8 @@ class QuizResultResponse(BaseModel):
     ai_ml_total: float
     english_score: float
     english_total: float
+    coding_score: float = 0
+    coding_total: float = 0
 
     @field_serializer('registration_id')
     def serialize_id(self, value: UUID) -> str:

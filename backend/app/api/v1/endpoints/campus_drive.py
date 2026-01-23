@@ -276,6 +276,7 @@ async def start_quiz(
             QuestionCategory.TECHNICAL: [],
             QuestionCategory.AI_ML: [],
             QuestionCategory.ENGLISH: [],
+            QuestionCategory.CODING: [],
         }
         for q in all_questions:
             if q.category in questions_by_category:
@@ -288,10 +289,13 @@ async def start_quiz(
             (QuestionCategory.TECHNICAL, drive.technical_questions),
             (QuestionCategory.AI_ML, drive.ai_ml_questions),
             (QuestionCategory.ENGLISH, drive.english_questions),
+            (QuestionCategory.CODING, getattr(drive, 'coding_questions', 0) or 0),
         ]
 
         for category, count in category_counts:
-            category_questions = questions_by_category[category]
+            if count <= 0:
+                continue
+            category_questions = questions_by_category.get(category, [])
             if len(category_questions) >= count:
                 selected = random.sample(category_questions, count)
             else:
@@ -413,6 +417,7 @@ async def submit_quiz(
             QuestionCategory.TECHNICAL: {"obtained": 0, "total": 0},
             QuestionCategory.AI_ML: {"obtained": 0, "total": 0},
             QuestionCategory.ENGLISH: {"obtained": 0, "total": 0},
+            QuestionCategory.CODING: {"obtained": 0, "total": 0},
         }
 
         # Prepare bulk responses list
@@ -484,6 +489,7 @@ async def submit_quiz(
         registration.technical_score = section_scores[QuestionCategory.TECHNICAL]["obtained"]
         registration.ai_ml_score = section_scores[QuestionCategory.AI_ML]["obtained"]
         registration.english_score = section_scores[QuestionCategory.ENGLISH]["obtained"]
+        registration.coding_score = section_scores[QuestionCategory.CODING]["obtained"]
 
         if is_qualified:
             registration.status = RegistrationStatus.QUALIFIED
@@ -513,6 +519,8 @@ async def submit_quiz(
             ai_ml_total=section_scores[QuestionCategory.AI_ML]["total"],
             english_score=section_scores[QuestionCategory.ENGLISH]["obtained"],
             english_total=section_scores[QuestionCategory.ENGLISH]["total"],
+            coding_score=section_scores[QuestionCategory.CODING]["obtained"],
+            coding_total=section_scores[QuestionCategory.CODING]["total"],
         )
 
     except HTTPException:
@@ -783,6 +791,7 @@ async def resume_quiz(
             QuestionCategory.TECHNICAL: [],
             QuestionCategory.AI_ML: [],
             QuestionCategory.ENGLISH: [],
+            QuestionCategory.CODING: [],
         }
         for q in all_questions:
             if q.category in questions_by_category:
@@ -795,6 +804,7 @@ async def resume_quiz(
             (QuestionCategory.TECHNICAL, drive.technical_questions),
             (QuestionCategory.AI_ML, drive.ai_ml_questions),
             (QuestionCategory.ENGLISH, drive.english_questions),
+            (QuestionCategory.CODING, getattr(drive, 'coding_questions', 0) or 0),
         ]
 
         # Use same seed as original quiz start for consistent question selection
@@ -913,11 +923,12 @@ async def seed_campus_drive_data(
             description="Annual campus placement drive for engineering students. Test your skills in logical reasoning, technical knowledge, AI/ML concepts, and English proficiency.",
             quiz_duration_minutes=60,
             passing_percentage=60.0,
-            total_questions=30,
+            total_questions=35,
             logical_questions=5,
             technical_questions=10,
             ai_ml_questions=10,
             english_questions=5,
+            coding_questions=5,
             is_active=True
         )
         db.add(drive)
@@ -968,6 +979,18 @@ async def seed_campus_drive_data(
             ("Fill in the blank: She ___ to the store yesterday.", QuestionCategory.ENGLISH, ["go", "goes", "went", "going"], 2),
             ("Which sentence is grammatically correct?", QuestionCategory.ENGLISH, ["Me and him went to the park", "Him and me went to the park", "He and I went to the park", "I and he went to the park"], 2),
             ("What does 'ubiquitous' mean?", QuestionCategory.ENGLISH, ["Rare", "Present everywhere", "Unique", "Unknown"], 1),
+
+            # Coding Questions (Code Output, Debugging, Code Completion)
+            ("What is the output of this Python code?\n\nx = [1, 2, 3]\ny = x\ny.append(4)\nprint(len(x))", QuestionCategory.CODING, ["3", "4", "Error", "None"], 1),
+            ("What is the output of this code?\n\nfor i in range(3):\n    print(i, end=' ')", QuestionCategory.CODING, ["1 2 3", "0 1 2", "0 1 2 3", "1 2 3 4"], 1),
+            ("Find the bug in this factorial function:\n\ndef factorial(n):\n    if n == 0:\n        return 0\n    return n * factorial(n-1)", QuestionCategory.CODING, ["Line 2: wrong condition", "Line 3: should return 1", "Line 4: wrong formula", "No bug"], 1),
+            ("What is the output?\n\nprint(type([]) == type({}))", QuestionCategory.CODING, ["True", "False", "Error", "None"], 1),
+            ("What will this print?\n\nx = 'hello'\nprint(x[1:4])", QuestionCategory.CODING, ["hel", "ell", "ello", "hell"], 1),
+            ("What is the output?\n\na = [1, 2, 3]\nb = a.copy()\nb.append(4)\nprint(len(a))", QuestionCategory.CODING, ["3", "4", "Error", "None"], 0),
+            ("Fill in the blank to reverse a string:\n\ns = 'hello'\nreversed_s = s[___]", QuestionCategory.CODING, ["::-1", "-1::", "::1", "1::"], 0),
+            ("What is the output?\n\nprint(2 ** 3 ** 2)", QuestionCategory.CODING, ["64", "512", "8", "Error"], 1),
+            ("What does this list comprehension return?\n\n[x*2 for x in range(4)]", QuestionCategory.CODING, ["[0, 2, 4, 6]", "[2, 4, 6, 8]", "[1, 2, 3, 4]", "[0, 1, 2, 3]"], 0),
+            ("What is the output?\n\ndef foo(a, b=[]):\n    b.append(a)\n    return b\n\nprint(foo(1))\nprint(foo(2))", QuestionCategory.CODING, ["[1] and [2]", "[1] and [1, 2]", "[1, 2] and [1, 2]", "Error"], 1),
         ]
 
         for text, category, options, correct in questions_data:
