@@ -80,9 +80,13 @@ class CampusDrive(Base):
 class CampusDriveRegistration(Base):
     """Student registration for a campus drive"""
     __tablename__ = "campus_drive_registrations"
+    __table_args__ = (
+        # Composite index for fast lookups by drive + email (most common query)
+        {'sqlite_autoincrement': True}
+    )
 
     id = Column(GUID, primary_key=True, default=generate_uuid)
-    campus_drive_id = Column(GUID, ForeignKey("campus_drives.id", ondelete="CASCADE"), nullable=False)
+    campus_drive_id = Column(GUID, ForeignKey("campus_drives.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Personal Information
     full_name = Column(String(255), nullable=False)
@@ -130,11 +134,11 @@ class CampusDriveQuestion(Base):
     __tablename__ = "campus_drive_questions"
 
     id = Column(GUID, primary_key=True, default=generate_uuid)
-    campus_drive_id = Column(GUID, ForeignKey("campus_drives.id", ondelete="CASCADE"), nullable=True)
+    campus_drive_id = Column(GUID, ForeignKey("campus_drives.id", ondelete="CASCADE"), nullable=True, index=True)
 
     # Question Details
     question_text = Column(Text, nullable=False)
-    category = Column(Enum(QuestionCategory), nullable=False)
+    category = Column(Enum(QuestionCategory), nullable=False, index=True)
     difficulty = Column(Enum(QuestionDifficulty), default=QuestionDifficulty.MEDIUM)
 
     # Options (JSON array of 4 options)
@@ -162,8 +166,8 @@ class CampusDriveResponse(Base):
     __tablename__ = "campus_drive_responses"
 
     id = Column(GUID, primary_key=True, default=generate_uuid)
-    registration_id = Column(GUID, ForeignKey("campus_drive_registrations.id", ondelete="CASCADE"), nullable=False)
-    question_id = Column(GUID, ForeignKey("campus_drive_questions.id", ondelete="CASCADE"), nullable=False)
+    registration_id = Column(GUID, ForeignKey("campus_drive_registrations.id", ondelete="CASCADE"), nullable=False, index=True)
+    question_id = Column(GUID, ForeignKey("campus_drive_questions.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Response
     selected_option = Column(Integer, nullable=True)  # Index 0-3, null if not answered

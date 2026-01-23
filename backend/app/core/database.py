@@ -57,12 +57,13 @@ def get_engine() -> AsyncEngine:
             )
         else:
             # Production: Use QueuePool with proper connection management
+            # Optimized for handling 300+ concurrent quiz takers
             from sqlalchemy.pool import QueuePool
             import os
 
-            pool_size = int(os.getenv('DB_POOL_SIZE', '10'))
-            max_overflow = int(os.getenv('DB_MAX_OVERFLOW', '20'))
-            pool_timeout = int(os.getenv('DB_POOL_TIMEOUT', '30'))
+            pool_size = int(os.getenv('DB_POOL_SIZE', '50'))  # Increased from 10
+            max_overflow = int(os.getenv('DB_MAX_OVERFLOW', '100'))  # Increased from 20
+            pool_timeout = int(os.getenv('DB_POOL_TIMEOUT', '60'))  # Increased from 30
             pool_recycle = int(os.getenv('DB_POOL_RECYCLE', '1800'))  # 30 minutes
 
             _engine = create_async_engine(

@@ -54,6 +54,12 @@ export default function CampusDrivePage() {
   const [errorMessage, setErrorMessage] = useState('')
   const [registrationId, setRegistrationId] = useState('')
 
+  // Login/Continue state
+  const [showLogin, setShowLogin] = useState(false)
+  const [loginEmail, setLoginEmail] = useState('')
+  const [isCheckingLogin, setIsCheckingLogin] = useState(false)
+  const [loginError, setLoginError] = useState('')
+
   useEffect(() => {
     fetchDrives()
   }, [])
@@ -124,6 +130,49 @@ export default function CampusDrivePage() {
   const startQuiz = () => {
     if (selectedDrive) {
       router.push(`/campus-drive/quiz?drive=${selectedDrive.id}&email=${formData.email}`)
+    }
+  }
+
+  // Check registration status and continue quiz
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedDrive || !loginEmail) return
+
+    setIsCheckingLogin(true)
+    setLoginError('')
+
+    try {
+      // Check registration status
+      const response = await fetch(
+        `${API_URL}/campus-drive/drives/${selectedDrive.id}/registration/${encodeURIComponent(loginEmail)}`
+      )
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error('No registration found with this email. Please register first.')
+        }
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Failed to check registration')
+      }
+
+      const registration = await response.json()
+
+      // Check status and redirect accordingly
+      if (registration.status === 'quiz_completed' || registration.status === 'qualified' || registration.status === 'not_qualified') {
+        // Quiz already completed
+        setLoginError('You have already completed the quiz. Results will be announced soon.')
+        return
+      }
+
+      // Store email and redirect to quiz
+      localStorage.setItem('campus_drive_email', loginEmail)
+      localStorage.setItem('campus_drive_id', selectedDrive.id)
+      router.push(`/campus-drive/quiz?drive=${selectedDrive.id}&email=${encodeURIComponent(loginEmail)}`)
+
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : 'Something went wrong')
+    } finally {
+      setIsCheckingLogin(false)
     }
   }
 
@@ -440,13 +489,109 @@ export default function CampusDrivePage() {
             <div className="lg:col-span-3">
               <Card className="bg-slate-900/60 backdrop-blur-xl border-slate-800 shadow-2xl">
                 <CardContent className="p-8">
-                  <div className="mb-8">
-                    <h2 className="text-2xl font-bold text-white mb-2 flex items-center gap-2">
-                      <GraduationCap className="h-6 w-6 text-cyan-400" />
-                      Student Registration
-                    </h2>
-                    <p className="text-slate-400">Fill in your details to register for the placement drive</p>
+                  {/* Tab Toggle */}
+                  <div className="flex mb-8 bg-slate-800/50 rounded-xl p-1">
+                    <button
+                      type="button"
+                      onClick={() => { setShowLogin(false); setLoginError(''); }}
+                      className={`flex-1 py-3 px-4 rounded-lg text-sm font-medium transition-all ${
+                        !showLogin
+                          ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-lg'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <GraduationCap className="h-4 w-4 inline mr-2" />
+                      New Registration
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setShowLogin(true); setLoginError(''); }}
+                      className={`flex-1 py-3 px-4 rounded-lg text-sm font-medium transition-all ${
+                        showLogin
+                          ? 'bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <ArrowRight className="h-4 w-4 inline mr-2" />
+                      Continue Quiz
+                    </button>
                   </div>
+
+                  {/* Continue Quiz Form */}
+                  {showLogin ? (
+                    <div>
+                      <div className="mb-6">
+                        <h2 className="text-2xl font-bold text-white mb-2 flex items-center gap-2">
+                          <ArrowRight className="h-6 w-6 text-green-400" />
+                          Continue Your Quiz
+                        </h2>
+                        <p className="text-slate-400">Already registered? Enter your email to continue or resume your quiz.</p>
+                      </div>
+
+                      <form onSubmit={handleLogin} className="space-y-6">
+                        {loginError && (
+                          <Alert className="bg-red-500/10 border-red-500/30 text-red-400">
+                            <AlertCircle className="h-4 w-4" />
+                            <AlertDescription>{loginError}</AlertDescription>
+                          </Alert>
+                        )}
+
+                        <div className="space-y-2">
+                          <Label htmlFor="login_email" className="text-slate-300">Registered Email Address</Label>
+                          <div className="relative">
+                            <Mail className="absolute left-3 top-3 h-5 w-5 text-slate-500" />
+                            <Input
+                              id="login_email"
+                              type="email"
+                              placeholder="Enter your registered email"
+                              className="pl-12 py-6 text-lg bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500 focus:border-green-500 focus:ring-green-500/20"
+                              value={loginEmail}
+                              onChange={(e) => setLoginEmail(e.target.value)}
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        <Button
+                          type="submit"
+                          className="w-full bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white py-6 text-lg font-semibold rounded-xl shadow-lg shadow-green-500/25 transition-all duration-300 hover:shadow-green-500/40 hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+                          disabled={isCheckingLogin || !selectedDrive}
+                        >
+                          {isCheckingLogin ? (
+                            <>
+                              <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                              </svg>
+                              Checking...
+                            </>
+                          ) : (
+                            <>
+                              Continue to Quiz
+                              <ArrowRight className="ml-2 h-5 w-5" />
+                            </>
+                          )}
+                        </Button>
+
+                        <div className="text-center">
+                          <p className="text-slate-500 text-sm">
+                            If your quiz was interrupted, your progress has been saved.
+                            <br />
+                            You can continue from where you left off.
+                          </p>
+                        </div>
+                      </form>
+                    </div>
+                  ) : (
+                    /* Registration Form */
+                    <div>
+                      <div className="mb-8">
+                        <h2 className="text-2xl font-bold text-white mb-2 flex items-center gap-2">
+                          <GraduationCap className="h-6 w-6 text-cyan-400" />
+                          Student Registration
+                        </h2>
+                        <p className="text-slate-400">Fill in your details to register for the placement drive</p>
+                      </div>
 
                   <form onSubmit={handleSubmit} className="space-y-6">
                     {submitStatus === 'error' && (
@@ -634,6 +779,8 @@ export default function CampusDrivePage() {
                       </Button>
                     </div>
                   </form>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
