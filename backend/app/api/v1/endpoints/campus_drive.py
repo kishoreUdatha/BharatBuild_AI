@@ -913,8 +913,46 @@ async def seed_campus_drive_data(
         existing = await db.execute(
             select(CampusDrive).where(CampusDrive.name == "Campus Placement Drive 2026")
         )
-        if existing.scalar_one_or_none():
-            return {"message": "Data already seeded", "status": "exists"}
+        existing_drive = existing.scalar_one_or_none()
+
+        if existing_drive:
+            # Check if coding questions already exist
+            coding_q = await db.execute(
+                select(CampusDriveQuestion).where(CampusDriveQuestion.category == QuestionCategory.CODING)
+            )
+            if coding_q.scalars().first():
+                return {"message": "Data already seeded", "status": "exists"}
+
+            # Add coding questions to existing drive
+            existing_drive.coding_questions = 5
+            existing_drive.total_questions = 35
+
+            coding_questions_data = [
+                ("What is the output of this Python code?\n\nx = [1, 2, 3]\ny = x\ny.append(4)\nprint(len(x))", QuestionCategory.CODING, ["3", "4", "Error", "None"], 1),
+                ("What is the output of this code?\n\nfor i in range(3):\n    print(i, end=' ')", QuestionCategory.CODING, ["1 2 3", "0 1 2", "0 1 2 3", "1 2 3 4"], 1),
+                ("Find the bug in this factorial function:\n\ndef factorial(n):\n    if n == 0:\n        return 0\n    return n * factorial(n-1)", QuestionCategory.CODING, ["Line 2: wrong condition", "Line 3: should return 1", "Line 4: wrong formula", "No bug"], 1),
+                ("What is the output?\n\nprint(type([]) == type({}))", QuestionCategory.CODING, ["True", "False", "Error", "None"], 1),
+                ("What will this print?\n\nx = 'hello'\nprint(x[1:4])", QuestionCategory.CODING, ["hel", "ell", "ello", "hell"], 1),
+                ("What is the output?\n\na = [1, 2, 3]\nb = a.copy()\nb.append(4)\nprint(len(a))", QuestionCategory.CODING, ["3", "4", "Error", "None"], 0),
+                ("Fill in the blank to reverse a string:\n\ns = 'hello'\nreversed_s = s[___]", QuestionCategory.CODING, ["::-1", "-1::", "::1", "1::"], 0),
+                ("What is the output?\n\nprint(2 ** 3 ** 2)", QuestionCategory.CODING, ["64", "512", "8", "Error"], 1),
+                ("What does this list comprehension return?\n\n[x*2 for x in range(4)]", QuestionCategory.CODING, ["[0, 2, 4, 6]", "[2, 4, 6, 8]", "[1, 2, 3, 4]", "[0, 1, 2, 3]"], 0),
+                ("What is the output?\n\ndef foo(a, b=[]):\n    b.append(a)\n    return b\n\nprint(foo(1))\nprint(foo(2))", QuestionCategory.CODING, ["[1] and [2]", "[1] and [1, 2]", "[1, 2] and [1, 2]", "Error"], 1),
+            ]
+
+            for text, category, options, correct in coding_questions_data:
+                question = CampusDriveQuestion(
+                    question_text=text,
+                    category=category,
+                    options=options,
+                    correct_option=correct,
+                    marks=1.0,
+                    is_global=True
+                )
+                db.add(question)
+
+            await db.commit()
+            return {"message": "Coding questions added to existing drive", "status": "updated", "questions_added": 10}
 
         # Create campus drive
         drive = CampusDrive(
