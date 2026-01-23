@@ -28,6 +28,10 @@ from app.schemas.campus_drive import (
     QuizStartResponse,
     QuizSubmission,
     QuizResultResponse,
+    QuizProgressSave,
+    QuizProgressResponse,
+    QuizResumeResponse,
+    SavedAnswer,
 )
 
 router = APIRouter(prefix="/campus-drive", tags=["Campus Drive"])
@@ -257,31 +261,41 @@ async def start_quiz(
                 detail="Campus drive not found"
             )
 
-        # Get questions for each category
-        questions = []
+        # Get all questions in one query (optimized for performance)
+        q_result = await db.execute(
+            select(CampusDriveQuestion).where(
+                (CampusDriveQuestion.campus_drive_id == drive_id) |
+                (CampusDriveQuestion.is_global == True)
+            )
+        )
+        all_questions = list(q_result.scalars().all())
 
-        for category, count in [
+        # Group by category
+        questions_by_category = {
+            QuestionCategory.LOGICAL: [],
+            QuestionCategory.TECHNICAL: [],
+            QuestionCategory.AI_ML: [],
+            QuestionCategory.ENGLISH: [],
+        }
+        for q in all_questions:
+            if q.category in questions_by_category:
+                questions_by_category[q.category].append(q)
+
+        # Select required number from each category
+        questions = []
+        category_counts = [
             (QuestionCategory.LOGICAL, drive.logical_questions),
             (QuestionCategory.TECHNICAL, drive.technical_questions),
             (QuestionCategory.AI_ML, drive.ai_ml_questions),
             (QuestionCategory.ENGLISH, drive.english_questions),
-        ]:
-            # Get questions - either drive-specific or global
-            q_result = await db.execute(
-                select(CampusDriveQuestion).where(
-                    CampusDriveQuestion.category == category,
-                    (CampusDriveQuestion.campus_drive_id == drive_id) |
-                    (CampusDriveQuestion.is_global == True)
-                )
-            )
-            category_questions = list(q_result.scalars().all())
+        ]
 
-            # Randomly select required number of questions
+        for category, count in category_counts:
+            category_questions = questions_by_category[category]
             if len(category_questions) >= count:
                 selected = random.sample(category_questions, count)
             else:
                 selected = category_questions
-
             questions.extend(selected)
 
         # Shuffle all questions using registration-specific seed
@@ -378,6 +392,14 @@ async def submit_quiz(
         )
         drive = drive_result.scalar_one_or_none()
 
+        # Batch fetch all questions at once (fixes N+1 query problem)
+        question_ids = [str(answer.question_id) for answer in submission.answers]
+        q_result = await db.execute(
+            select(CampusDriveQuestion).where(CampusDriveQuestion.id.in_(question_ids))
+        )
+        questions_list = q_result.scalars().all()
+        questions_map = {str(q.id): q for q in questions_list}
+
         # Process answers
         total_marks = 0
         marks_obtained = 0
@@ -393,12 +415,11 @@ async def submit_quiz(
             QuestionCategory.ENGLISH: {"obtained": 0, "total": 0},
         }
 
+        # Prepare bulk responses list
+        responses_to_add = []
+
         for answer in submission.answers:
-            # Get question
-            q_result = await db.execute(
-                select(CampusDriveQuestion).where(CampusDriveQuestion.id == str(answer.question_id))
-            )
-            question = q_result.scalar_one_or_none()
+            question = questions_map.get(str(answer.question_id))
 
             if not question:
                 continue
@@ -436,15 +457,17 @@ async def submit_quiz(
             marks_obtained += marks
             section_scores[question.category]["obtained"] += marks
 
-            # Save response
-            response = CampusDriveResponse(
+            # Prepare response for bulk insert
+            responses_to_add.append(CampusDriveResponse(
                 registration_id=registration.id,
                 question_id=question.id,
                 selected_option=answer.selected_option,
                 is_correct=is_correct,
                 marks_obtained=marks
-            )
-            db.add(response)
+            ))
+
+        # Bulk add all responses
+        db.add_all(responses_to_add)
 
         # Calculate percentage
         percentage = (marks_obtained / total_marks * 100) if total_marks > 0 else 0
@@ -578,6 +601,281 @@ async def get_result(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch result"
+        )
+
+
+# ============================================
+# Quiz Progress Save & Resume Endpoints
+# ============================================
+
+@router.post("/drives/{drive_id}/quiz/save-progress", response_model=QuizProgressResponse)
+async def save_quiz_progress(
+    drive_id: str,
+    email: str,
+    progress: QuizProgressSave,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Save quiz progress without submitting.
+    Allows students to resume if browser crashes.
+    """
+    try:
+        # Get registration
+        result = await db.execute(
+            select(CampusDriveRegistration).where(
+                CampusDriveRegistration.campus_drive_id == drive_id,
+                CampusDriveRegistration.email == email
+            )
+        )
+        registration = result.scalar_one_or_none()
+
+        if not registration:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Registration not found"
+            )
+
+        # Only allow saving if quiz is in progress
+        if registration.status != RegistrationStatus.QUIZ_IN_PROGRESS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Quiz is not in progress"
+            )
+
+        # Check if quiz time has expired
+        if registration.quiz_start_time:
+            drive_result = await db.execute(
+                select(CampusDrive).where(CampusDrive.id == drive_id)
+            )
+            drive = drive_result.scalar_one_or_none()
+
+            elapsed = (datetime.utcnow() - registration.quiz_start_time).total_seconds()
+            if elapsed > (drive.quiz_duration_minutes * 60):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Quiz time has expired"
+                )
+
+        # Delete existing saved responses for this registration
+        await db.execute(
+            CampusDriveResponse.__table__.delete().where(
+                CampusDriveResponse.registration_id == registration.id
+            )
+        )
+
+        # Save new responses
+        saved_count = 0
+        for answer in progress.answers:
+            if answer.selected_option is not None:
+                response = CampusDriveResponse(
+                    registration_id=registration.id,
+                    question_id=str(answer.question_id),
+                    selected_option=answer.selected_option,
+                    is_correct=False,  # Will be calculated on final submit
+                    marks_obtained=0
+                )
+                db.add(response)
+                saved_count += 1
+
+        await db.commit()
+
+        logger.info(f"Quiz progress saved: {email} - {saved_count} answers")
+        return QuizProgressResponse(
+            saved_count=saved_count,
+            message="Progress saved successfully"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving quiz progress: {e}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save progress"
+        )
+
+
+@router.get("/drives/{drive_id}/quiz/resume", response_model=QuizResumeResponse)
+async def resume_quiz(
+    drive_id: str,
+    email: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Check if student has an in-progress quiz and return saved answers.
+    Returns questions with any previously saved answers.
+    """
+    try:
+        # Get registration
+        result = await db.execute(
+            select(CampusDriveRegistration).where(
+                CampusDriveRegistration.campus_drive_id == drive_id,
+                CampusDriveRegistration.email == email
+            )
+        )
+        registration = result.scalar_one_or_none()
+
+        if not registration:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Registration not found"
+            )
+
+        # Check if quiz is completed
+        if registration.status in [RegistrationStatus.QUIZ_COMPLETED, RegistrationStatus.QUALIFIED, RegistrationStatus.NOT_QUALIFIED]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Quiz already completed"
+            )
+
+        # Check if quiz was started
+        if registration.status != RegistrationStatus.QUIZ_IN_PROGRESS or not registration.quiz_start_time:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Quiz not started yet"
+            )
+
+        # Get drive
+        drive_result = await db.execute(
+            select(CampusDrive).where(CampusDrive.id == drive_id)
+        )
+        drive = drive_result.scalar_one_or_none()
+
+        if not drive:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Campus drive not found"
+            )
+
+        # Calculate remaining time
+        elapsed = (datetime.utcnow() - registration.quiz_start_time).total_seconds()
+        total_seconds = drive.quiz_duration_minutes * 60
+        remaining_seconds = max(0, int(total_seconds - elapsed))
+
+        # Check if time expired
+        if remaining_seconds <= 0:
+            return QuizResumeResponse(
+                registration_id=registration.id,
+                drive_name=drive.name,
+                duration_minutes=drive.quiz_duration_minutes,
+                total_questions=0,
+                questions=[],
+                start_time=registration.quiz_start_time,
+                time_remaining_seconds=0,
+                saved_answers=[],
+                can_resume=False,
+                message="Quiz time has expired. Please submit your quiz."
+            )
+
+        # Get all questions (same logic as start_quiz)
+        q_result = await db.execute(
+            select(CampusDriveQuestion).where(
+                (CampusDriveQuestion.campus_drive_id == drive_id) |
+                (CampusDriveQuestion.is_global == True)
+            )
+        )
+        all_questions = list(q_result.scalars().all())
+
+        # Group by category
+        questions_by_category = {
+            QuestionCategory.LOGICAL: [],
+            QuestionCategory.TECHNICAL: [],
+            QuestionCategory.AI_ML: [],
+            QuestionCategory.ENGLISH: [],
+        }
+        for q in all_questions:
+            if q.category in questions_by_category:
+                questions_by_category[q.category].append(q)
+
+        # Select required number from each category using same seed
+        questions = []
+        category_counts = [
+            (QuestionCategory.LOGICAL, drive.logical_questions),
+            (QuestionCategory.TECHNICAL, drive.technical_questions),
+            (QuestionCategory.AI_ML, drive.ai_ml_questions),
+            (QuestionCategory.ENGLISH, drive.english_questions),
+        ]
+
+        # Use same seed as original quiz start for consistent question selection
+        user_seed = hash(str(registration.id) + str(drive_id))
+        rng = random.Random(user_seed)
+
+        for category, count in category_counts:
+            category_questions = questions_by_category[category]
+            if len(category_questions) >= count:
+                # Use deterministic selection
+                rng_cat = random.Random(user_seed + hash(category.value))
+                indices = list(range(len(category_questions)))
+                rng_cat.shuffle(indices)
+                selected = [category_questions[i] for i in indices[:count]]
+            else:
+                selected = category_questions
+            questions.extend(selected)
+
+        # Shuffle questions with same seed
+        rng.shuffle(questions)
+
+        # Convert to response format with shuffled options
+        quiz_questions = []
+        for q in questions:
+            option_seed = hash(str(registration.id) + str(q.id))
+            option_rng = random.Random(option_seed)
+
+            original_options = list(q.options)
+            indices = list(range(len(original_options)))
+            option_rng.shuffle(indices)
+
+            shuffled_options = [original_options[i] for i in indices]
+
+            quiz_questions.append(
+                QuestionForQuiz(
+                    id=q.id,
+                    question_text=q.question_text,
+                    category=q.category,
+                    options=shuffled_options,
+                    marks=q.marks
+                )
+            )
+
+        # Get saved answers
+        saved_result = await db.execute(
+            select(CampusDriveResponse).where(
+                CampusDriveResponse.registration_id == registration.id
+            )
+        )
+        saved_responses = saved_result.scalars().all()
+
+        saved_answers = [
+            SavedAnswer(
+                question_id=str(r.question_id),
+                selected_option=r.selected_option
+            )
+            for r in saved_responses
+        ]
+
+        logger.info(f"Quiz resume: {email} - {len(saved_answers)} saved answers, {remaining_seconds}s remaining")
+
+        return QuizResumeResponse(
+            registration_id=registration.id,
+            drive_name=drive.name,
+            duration_minutes=drive.quiz_duration_minutes,
+            total_questions=len(quiz_questions),
+            questions=quiz_questions,
+            start_time=registration.quiz_start_time,
+            time_remaining_seconds=remaining_seconds,
+            saved_answers=saved_answers,
+            can_resume=True,
+            message=f"Quiz resumed with {len(saved_answers)} saved answers"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resuming quiz: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume quiz"
         )
 
 

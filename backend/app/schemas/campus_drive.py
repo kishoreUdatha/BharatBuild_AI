@@ -260,3 +260,45 @@ class AdminRegistrationResponse(RegistrationResponse):
 class BulkQuestionCreate(BaseModel):
     """Create multiple questions at once"""
     questions: List[QuestionCreate]
+
+
+# ============================================
+# Quiz Progress/Resume Schemas
+# ============================================
+
+class SavedAnswer(BaseModel):
+    """Saved answer for a question"""
+    question_id: str
+    selected_option: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+class QuizProgressSave(BaseModel):
+    """Save quiz progress (partial answers)"""
+    answers: List[QuestionAnswer]
+
+
+class QuizProgressResponse(BaseModel):
+    """Response after saving progress"""
+    saved_count: int
+    message: str
+
+
+class QuizResumeResponse(BaseModel):
+    """Response for quiz resume - includes questions and saved answers"""
+    registration_id: UUID
+    drive_name: str
+    duration_minutes: int
+    total_questions: int
+    questions: List[QuestionForQuiz]
+    start_time: datetime
+    time_remaining_seconds: int
+    saved_answers: List[SavedAnswer]
+    can_resume: bool
+    message: str
+
+    @field_serializer('registration_id')
+    def serialize_id(self, value: UUID) -> str:
+        return str(value)

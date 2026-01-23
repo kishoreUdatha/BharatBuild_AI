@@ -8,7 +8,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Progress } from '@/components/ui/progress'
 import {
   Clock, AlertCircle, ChevronLeft, ChevronRight, Brain, Code,
-  BookOpen, MessageSquare, CheckCircle, Flag, Send
+  BookOpen, MessageSquare, CheckCircle, Flag, Send, Save, RefreshCw
 } from 'lucide-react'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
@@ -52,7 +52,93 @@ function QuizPageContent() {
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [showConfirmSubmit, setShowConfirmSubmit] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [lastSaved, setLastSaved] = useState<Date | null>(null)
+  const [isResumed, setIsResumed] = useState(false)
 
+  // Save progress to server
+  const saveProgress = useCallback(async (currentAnswers: Record<string, number | null>) => {
+    if (!driveId || !email || !quizData) return
+
+    try {
+      setSaving(true)
+      const answersArray = Object.entries(currentAnswers)
+        .filter(([_, value]) => value !== null)
+        .map(([questionId, selectedOption]) => ({
+          question_id: questionId,
+          selected_option: selectedOption
+        }))
+
+      if (answersArray.length === 0) return
+
+      const response = await fetch(
+        `${API_URL}/campus-drive/drives/${driveId}/quiz/save-progress?email=${encodeURIComponent(email)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ answers: answersArray })
+        }
+      )
+
+      if (response.ok) {
+        setLastSaved(new Date())
+        console.log('Progress saved:', answersArray.length, 'answers')
+      }
+    } catch (err) {
+      console.error('Failed to save progress:', err)
+    } finally {
+      setSaving(false)
+    }
+  }, [driveId, email, quizData])
+
+  // Check for existing quiz to resume
+  const checkResume = useCallback(async (): Promise<boolean> => {
+    if (!driveId || !email) return false
+
+    try {
+      const response = await fetch(
+        `${API_URL}/campus-drive/drives/${driveId}/quiz/resume?email=${encodeURIComponent(email)}`
+      )
+
+      if (response.ok) {
+        const data = await response.json()
+
+        if (data.can_resume && data.time_remaining_seconds > 0) {
+          // Resume the quiz
+          setQuizData({
+            registration_id: data.registration_id,
+            drive_name: data.drive_name,
+            duration_minutes: data.duration_minutes,
+            total_questions: data.total_questions,
+            questions: data.questions,
+            start_time: data.start_time
+          })
+          setTimeLeft(data.time_remaining_seconds)
+
+          // Restore saved answers
+          const restoredAnswers: Record<string, number | null> = {}
+          data.questions.forEach((q: Question) => {
+            restoredAnswers[q.id] = null
+          })
+          data.saved_answers.forEach((sa: { question_id: string; selected_option: number | null }) => {
+            if (sa.selected_option !== null) {
+              restoredAnswers[sa.question_id] = sa.selected_option
+            }
+          })
+          setAnswers(restoredAnswers)
+          setIsResumed(true)
+          console.log('Quiz resumed with', data.saved_answers.length, 'saved answers')
+          return true
+        }
+      }
+      return false
+    } catch (err) {
+      console.log('No quiz to resume:', err)
+      return false
+    }
+  }, [driveId, email])
+
+  // Start a new quiz
   const startQuiz = useCallback(async () => {
     if (!driveId || !email) {
       setError('Missing drive ID or email')
@@ -89,9 +175,18 @@ function QuizPageContent() {
     }
   }, [driveId, email])
 
+  // Initialize: Check resume first, then start new quiz if needed
   useEffect(() => {
-    startQuiz()
-  }, [startQuiz])
+    const initQuiz = async () => {
+      const resumed = await checkResume()
+      if (!resumed) {
+        await startQuiz()
+      } else {
+        setLoading(false)
+      }
+    }
+    initQuiz()
+  }, [checkResume, startQuiz])
 
   // Timer effect
   useEffect(() => {
@@ -110,6 +205,57 @@ function QuizPageContent() {
 
     return () => clearInterval(timer)
   }, [timeLeft, quizData])
+
+  // Auto-save every 30 seconds
+  useEffect(() => {
+    if (!quizData || submitting) return
+
+    const autoSaveInterval = setInterval(() => {
+      saveProgress(answers)
+    }, 30000) // Save every 30 seconds
+
+    return () => clearInterval(autoSaveInterval)
+  }, [quizData, answers, saveProgress, submitting])
+
+  // Save on page visibility change (when user switches tabs/minimizes)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden' && quizData && !submitting) {
+        saveProgress(answers)
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [quizData, answers, saveProgress, submitting])
+
+  // Save before page unload
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (quizData && !submitting) {
+        // Trigger a synchronous save using sendBeacon
+        const answersArray = Object.entries(answers)
+          .filter(([_, value]) => value !== null)
+          .map(([questionId, selectedOption]) => ({
+            question_id: questionId,
+            selected_option: selectedOption
+          }))
+
+        if (answersArray.length > 0) {
+          navigator.sendBeacon(
+            `${API_URL}/campus-drive/drives/${driveId}/quiz/save-progress?email=${encodeURIComponent(email!)}`,
+            JSON.stringify({ answers: answersArray })
+          )
+        }
+
+        e.preventDefault()
+        e.returnValue = 'Your quiz progress will be saved. Are you sure you want to leave?'
+      }
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [quizData, answers, driveId, email, submitting])
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -262,11 +408,29 @@ function QuizPageContent() {
             </div>
           </div>
 
-          <div className="mt-2">
-            <Progress value={progress} className="h-2" />
-            <p className="text-xs text-gray-500 mt-1">
-              {answeredCount} of {quizData.total_questions} answered
-            </p>
+          <div className="mt-2 flex items-center justify-between">
+            <div className="flex-1">
+              <Progress value={progress} className="h-2" />
+              <p className="text-xs text-gray-500 mt-1">
+                {answeredCount} of {quizData.total_questions} answered
+              </p>
+            </div>
+
+            {/* Save Status & Resume Badge */}
+            <div className="flex items-center gap-3 ml-4">
+              {isResumed && (
+                <span className="flex items-center gap-1 text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">
+                  <RefreshCw className="h-3 w-3" />
+                  Resumed
+                </span>
+              )}
+              <span className={`flex items-center gap-1 text-xs px-2 py-1 rounded-full ${
+                saving ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-600'
+              }`}>
+                <Save className={`h-3 w-3 ${saving ? 'animate-pulse' : ''}`} />
+                {saving ? 'Saving...' : lastSaved ? `Saved ${lastSaved.toLocaleTimeString()}` : 'Auto-save on'}
+              </span>
+            </div>
           </div>
         </div>
       </div>
