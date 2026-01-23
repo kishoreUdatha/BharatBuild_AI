@@ -35,6 +35,7 @@ const categoryColors: Record<string, { bg: string; text: string; icon: React.Rea
   technical: { bg: 'bg-green-100', text: 'text-green-700', icon: <Code className="h-4 w-4" /> },
   ai_ml: { bg: 'bg-purple-100', text: 'text-purple-700', icon: <BookOpen className="h-4 w-4" /> },
   english: { bg: 'bg-orange-100', text: 'text-orange-700', icon: <MessageSquare className="h-4 w-4" /> },
+  coding: { bg: 'bg-pink-100', text: 'text-pink-700', icon: <Code className="h-4 w-4" /> },
 }
 
 function QuizPageContent() {

@@ -17,6 +17,7 @@ class QuestionCategory(str, enum.Enum):
     TECHNICAL = "technical"
     AI_ML = "ai_ml"
     ENGLISH = "english"
+    CODING = "coding"
 
 
 class QuestionDifficulty(str, enum.Enum):
@@ -61,6 +62,7 @@ class CampusDrive(Base):
     technical_questions = Column(Integer, default=10)
     ai_ml_questions = Column(Integer, default=10)
     english_questions = Column(Integer, default=5)
+    coding_questions = Column(Integer, default=5)
 
     # Status
     is_active = Column(Boolean, default=True)
@@ -116,6 +118,7 @@ class CampusDriveRegistration(Base):
     technical_score = Column(Float, default=0)
     ai_ml_score = Column(Float, default=0)
     english_score = Column(Float, default=0)
+    coding_score = Column(Float, default=0)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
