@@ -151,6 +151,7 @@ function QuizPageContent() {
 
     setSubmitting(true)
     setShowConfirmSubmit(false)
+    setError('')
 
     try {
       const submission = {
@@ -159,6 +160,8 @@ function QuizPageContent() {
           selected_option: selectedOption
         }))
       }
+
+      console.log('Submitting quiz...', { driveId, email, answersCount: submission.answers.length })
 
       const response = await fetch(
         `${API_URL}/campus-drive/drives/${driveId}/quiz/submit?email=${encodeURIComponent(email!)}`,
@@ -169,18 +172,31 @@ function QuizPageContent() {
         }
       )
 
+      const responseText = await response.text()
+      console.log('Quiz submit response:', response.status, responseText)
+
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.detail || 'Failed to submit quiz')
+        let errorMessage = 'Failed to submit quiz'
+        try {
+          const errorData = JSON.parse(responseText)
+          errorMessage = errorData.detail || errorMessage
+        } catch {
+          errorMessage = responseText || errorMessage
+        }
+        throw new Error(errorMessage)
       }
 
-      const result = await response.json()
+      const result = JSON.parse(responseText)
+      console.log('Quiz submitted successfully')
 
-      // Store result and redirect
-      localStorage.setItem('quiz_result', JSON.stringify(result))
-      router.push(`/campus-drive/result?drive=${driveId}&email=${email}`)
+      // Clear any stored result (we don't show results to students)
+      localStorage.removeItem('quiz_result')
+
+      // Redirect to thank you page
+      router.push('/campus-drive/thank-you')
 
     } catch (err) {
+      console.error('Quiz submit error:', err)
       setError(err instanceof Error ? err.message : 'Failed to submit quiz')
       setSubmitting(false)
     }
