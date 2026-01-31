@@ -67,6 +67,12 @@ class Technology(Enum):
     RUST = "rust"
     STATIC_HTML = "static-html"
 
+    # Mobile / Flutter
+    FLUTTER = "flutter"
+    FLUTTER_WEB = "flutter-web"
+    REACT_NATIVE = "react-native"
+    EXPO = "expo"
+
     # Fullstack Monorepo
     FULLSTACK_REACT_EXPRESS = "fullstack-react-express"
     FULLSTACK_REACT_FASTAPI = "fullstack-react-fastapi"

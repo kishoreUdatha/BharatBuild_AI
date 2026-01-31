@@ -1,6 +1,8 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import auth, projects, api_keys, billing, tokens, streaming, bolt, automation, orchestrator, logs, execution, documents, adventure, resume, download, containers, preview, preview_proxy, jobs, agentic, classify, sync, payments, import_project, paper, feedback, sandbox, workspace, log_stream, retrieval, users, sdk_agents, errors, autofixer_metrics, health, workshop, campus_drive
+from app.api.v1.endpoints import auth, projects, api_keys, billing, tokens, streaming, bolt, automation, orchestrator, logs, execution, documents, adventure, resume, download, containers, preview, preview_proxy, jobs, agentic, classify, sync, payments, import_project, paper, feedback, sandbox, workspace, log_stream, retrieval, users, sdk_agents, errors, autofixer_metrics, health, workshop, campus_drive, lab_assistance, content_analysis, college_management, playground, faculty, project_reviews, activity, faculty_tests, marks_management, student_assignments, project_guidance
 from app.api.v1.endpoints.admin import admin_router
+
+print("Faculty module loaded successfully")
 
 api_router = APIRouter()
 
@@ -227,6 +229,17 @@ api_router.include_router(retrieval.router, tags=["Project Retrieval"])
 api_router.include_router(users.router, prefix="/users", tags=["User Management"])
 api_router.include_router(workshop.router, tags=["Workshop Enrollment"])
 api_router.include_router(campus_drive.router, tags=["Campus Drive"])
+api_router.include_router(lab_assistance.router, prefix="/lab", tags=["Lab Assistance"])
+api_router.include_router(content_analysis.router, prefix="/analysis", tags=["Content Analysis"])
+api_router.include_router(college_management.router, prefix="/college", tags=["College Management"])
+api_router.include_router(playground.router, tags=["Code Playground"])
+api_router.include_router(faculty.router, prefix="/faculty", tags=["Faculty Dashboard"])
+api_router.include_router(activity.router, prefix="/activity", tags=["Activity Tracking"])
+# Note: project_reviews merged into project_guidance - using unified endpoint
+api_router.include_router(faculty_tests.router, prefix="/faculty-tests", tags=["Faculty Tests & Exams"])
+api_router.include_router(marks_management.router, prefix="/marks", tags=["Marks Management"])
+api_router.include_router(student_assignments.router, prefix="/student", tags=["Student Assignment Portal"])
+api_router.include_router(project_guidance.router, prefix="/project-guidance", tags=["Project Guidance & Reviews"])
 api_router.include_router(sdk_agents.router, tags=["SDK Agents"])
 api_router.include_router(errors.router, prefix="/errors", tags=["Unified Error Handler"])
 api_router.include_router(autofixer_metrics.router, prefix="/autofixer", tags=["Auto-Fixer Metrics"])

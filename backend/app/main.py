@@ -151,9 +151,13 @@ async def lifespan(app: FastAPI):
         logger.warning("[Startup] Database not ready - some features may fail")
 
     # Step 3: Validate Claude API connection (critical for AI generation)
-    claude_ready = await validate_claude_api()
-    if not claude_ready:
-        logger.warning("[Startup] Claude API not ready - AI generation may fail")
+    try:
+        claude_ready = await validate_claude_api()
+        if not claude_ready:
+            logger.warning("[Startup] Claude API not ready - AI generation may fail")
+    except RuntimeError as e:
+        logger.warning(f"[Startup] Claude API validation failed: {e} - AI generation will not work")
+        claude_ready = False
 
     # Clean up any leftover temp sessions from previous runs
     temp_storage.cleanup_all()
@@ -235,7 +239,7 @@ app.add_middleware(RequestSizeLimitMiddleware, max_size=10 * 1024 * 1024)
 # 4. CORS - Origins from CORS_ORIGINS_STR in .env
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS + ["https://*.bharatbuild.ai"],  # Include preview subdomains
+    allow_origins=["*"],  # Allow all origins in development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

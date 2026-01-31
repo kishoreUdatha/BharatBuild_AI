@@ -1,0 +1,1187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BharatBuild AI - Empowering India's Next Generation of Engineers</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #FF6B35;
+            --primary-dark: #E55A2B;
+            --secondary: #1E3A5F;
+            --accent: #00B4D8;
+            --success: #10B981;
+            --warning: #F59E0B;
+            --dark: #0F172A;
+            --light: #F8FAFC;
+            --gray: #64748B;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--light);
+            color: var(--dark);
+            line-height: 1.6;
+        }
+
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(135deg, var(--secondary) 0%, var(--dark) 100%);
+            color: white;
+            padding: 60px 40px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 100%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,107,53,0.1) 0%, transparent 70%);
+        }
+
+        .hero-badge {
+            background: var(--primary);
+            color: white;
+            padding: 8px 20px;
+            border-radius: 50px;
+            font-size: 14px;
+            font-weight: 600;
+            display: inline-block;
+            margin-bottom: 20px;
+        }
+
+        .hero h1 {
+            font-size: 48px;
+            font-weight: 800;
+            margin-bottom: 15px;
+            background: linear-gradient(135deg, #fff 0%, var(--accent) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero .tagline {
+            font-size: 22px;
+            opacity: 0.9;
+            margin-bottom: 30px;
+            font-weight: 300;
+        }
+
+        .hero-stats {
+            display: flex;
+            justify-content: center;
+            gap: 50px;
+            margin-top: 40px;
+            flex-wrap: wrap;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 42px;
+            font-weight: 800;
+            color: var(--primary);
+        }
+
+        .stat-label {
+            font-size: 14px;
+            opacity: 0.8;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Section Styles */
+        .section {
+            padding: 60px 40px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+
+        .section-header h2 {
+            font-size: 36px;
+            font-weight: 700;
+            color: var(--secondary);
+            margin-bottom: 15px;
+        }
+
+        .section-header p {
+            font-size: 18px;
+            color: var(--gray);
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        /* Why BharatBuild */
+        .why-section {
+            background: white;
+            border-radius: 20px;
+            padding: 50px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.05);
+            margin: 40px;
+        }
+
+        .problem-solution {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            margin-top: 40px;
+        }
+
+        .problem-box, .solution-box {
+            padding: 30px;
+            border-radius: 15px;
+        }
+
+        .problem-box {
+            background: #FEF2F2;
+            border-left: 4px solid #EF4444;
+        }
+
+        .solution-box {
+            background: #F0FDF4;
+            border-left: 4px solid var(--success);
+        }
+
+        .problem-box h3, .solution-box h3 {
+            font-size: 20px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .problem-box ul, .solution-box ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .problem-box li, .solution-box li {
+            padding: 8px 0;
+            padding-left: 25px;
+            position: relative;
+        }
+
+        .problem-box li::before {
+            content: '✗';
+            position: absolute;
+            left: 0;
+            color: #EF4444;
+            font-weight: bold;
+        }
+
+        .solution-box li::before {
+            content: '✓';
+            position: absolute;
+            left: 0;
+            color: var(--success);
+            font-weight: bold;
+        }
+
+        /* Features Grid */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 30px;
+            margin-top: 40px;
+        }
+
+        .feature-card {
+            background: white;
+            border-radius: 16px;
+            padding: 35px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            border: 1px solid #E2E8F0;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 40px rgba(0,0,0,0.12);
+        }
+
+        .feature-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            margin-bottom: 20px;
+        }
+
+        .feature-card h3 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: var(--secondary);
+        }
+
+        .feature-card p {
+            color: var(--gray);
+            font-size: 15px;
+        }
+
+        /* Student Mode Section */
+        .student-mode {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: white;
+            border-radius: 20px;
+            padding: 50px;
+            margin: 40px;
+        }
+
+        .student-mode h2 {
+            font-size: 32px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .student-features {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 25px;
+        }
+
+        .student-feature {
+            background: rgba(255,255,255,0.15);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 25px;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .student-feature h4 {
+            font-size: 18px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .student-feature p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        /* Campus Drive Section */
+        .campus-drive {
+            background: var(--secondary);
+            color: white;
+            padding: 60px 40px;
+        }
+
+        .campus-drive h2 {
+            text-align: center;
+            font-size: 36px;
+            margin-bottom: 20px;
+        }
+
+        .campus-drive > p {
+            text-align: center;
+            opacity: 0.8;
+            max-width: 700px;
+            margin: 0 auto 40px;
+        }
+
+        .campus-features {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 25px;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        .campus-feature {
+            background: rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 25px;
+            text-align: center;
+        }
+
+        .campus-feature .icon {
+            font-size: 40px;
+            margin-bottom: 15px;
+        }
+
+        .campus-feature h4 {
+            font-size: 16px;
+            margin-bottom: 8px;
+        }
+
+        .campus-feature p {
+            font-size: 13px;
+            opacity: 0.8;
+        }
+
+        /* Pricing Section */
+        .pricing-section {
+            padding: 60px 40px;
+            background: #F1F5F9;
+        }
+
+        .pricing-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 30px;
+            max-width: 1000px;
+            margin: 40px auto 0;
+        }
+
+        .pricing-card {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            text-align: center;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            position: relative;
+        }
+
+        .pricing-card.featured {
+            border: 3px solid var(--primary);
+            transform: scale(1.05);
+        }
+
+        .pricing-card.featured::before {
+            content: 'BEST VALUE';
+            position: absolute;
+            top: -12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--primary);
+            color: white;
+            padding: 5px 20px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .pricing-card h3 {
+            font-size: 24px;
+            color: var(--secondary);
+            margin-bottom: 10px;
+        }
+
+        .pricing-card .price {
+            font-size: 48px;
+            font-weight: 800;
+            color: var(--primary);
+            margin: 20px 0;
+        }
+
+        .pricing-card .price span {
+            font-size: 18px;
+            font-weight: 400;
+            color: var(--gray);
+        }
+
+        .pricing-card .per-student {
+            font-size: 14px;
+            color: var(--gray);
+            margin-bottom: 25px;
+        }
+
+        .pricing-card ul {
+            list-style: none;
+            text-align: left;
+            margin: 25px 0;
+        }
+
+        .pricing-card li {
+            padding: 10px 0;
+            padding-left: 30px;
+            position: relative;
+            color: var(--gray);
+            font-size: 14px;
+        }
+
+        .pricing-card li::before {
+            content: '✓';
+            position: absolute;
+            left: 0;
+            color: var(--success);
+            font-weight: bold;
+        }
+
+        .savings-badge {
+            background: #DCFCE7;
+            color: #166534;
+            padding: 8px 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            display: inline-block;
+            margin-top: 15px;
+        }
+
+        /* Comparison Table */
+        .comparison-section {
+            padding: 60px 40px;
+            background: white;
+        }
+
+        .comparison-table {
+            width: 100%;
+            max-width: 900px;
+            margin: 40px auto 0;
+            border-collapse: collapse;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .comparison-table th,
+        .comparison-table td {
+            padding: 18px 20px;
+            text-align: left;
+            border-bottom: 1px solid #E2E8F0;
+        }
+
+        .comparison-table th {
+            background: var(--secondary);
+            color: white;
+            font-weight: 600;
+        }
+
+        .comparison-table th:first-child {
+            text-align: left;
+        }
+
+        .comparison-table td:not(:first-child) {
+            text-align: center;
+        }
+
+        .comparison-table tr:nth-child(even) {
+            background: #F8FAFC;
+        }
+
+        .comparison-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .check {
+            color: var(--success);
+            font-size: 20px;
+        }
+
+        .cross {
+            color: #EF4444;
+            font-size: 20px;
+        }
+
+        .highlight-row {
+            background: #FFF7ED !important;
+        }
+
+        /* Testimonials */
+        .testimonials {
+            padding: 60px 40px;
+            background: linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%);
+        }
+
+        .testimonial-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 30px;
+            max-width: 900px;
+            margin: 40px auto 0;
+        }
+
+        .testimonial-card {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+        }
+
+        .testimonial-card p {
+            font-style: italic;
+            color: var(--gray);
+            margin-bottom: 20px;
+            font-size: 15px;
+            line-height: 1.7;
+        }
+
+        .testimonial-author {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .author-avatar {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            font-size: 18px;
+        }
+
+        .author-info h4 {
+            font-size: 16px;
+            color: var(--secondary);
+        }
+
+        .author-info span {
+            font-size: 13px;
+            color: var(--gray);
+        }
+
+        /* CTA Section */
+        .cta-section {
+            background: linear-gradient(135deg, var(--secondary) 0%, var(--dark) 100%);
+            color: white;
+            padding: 80px 40px;
+            text-align: center;
+        }
+
+        .cta-section h2 {
+            font-size: 36px;
+            margin-bottom: 20px;
+        }
+
+        .cta-section p {
+            font-size: 18px;
+            opacity: 0.9;
+            max-width: 600px;
+            margin: 0 auto 40px;
+        }
+
+        .cta-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .cta-btn {
+            padding: 18px 40px;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+
+        .cta-btn.primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .cta-btn.primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+        }
+
+        .cta-btn.secondary {
+            background: transparent;
+            color: white;
+            border: 2px solid white;
+        }
+
+        .cta-btn.secondary:hover {
+            background: white;
+            color: var(--secondary);
+        }
+
+        .contact-info {
+            margin-top: 50px;
+            padding-top: 40px;
+            border-top: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .contact-grid {
+            display: flex;
+            justify-content: center;
+            gap: 60px;
+            flex-wrap: wrap;
+        }
+
+        .contact-item {
+            text-align: center;
+        }
+
+        .contact-item .icon {
+            font-size: 30px;
+            margin-bottom: 10px;
+        }
+
+        .contact-item h4 {
+            font-size: 14px;
+            opacity: 0.7;
+            margin-bottom: 5px;
+        }
+
+        .contact-item p {
+            font-size: 16px;
+        }
+
+        /* Footer */
+        .footer {
+            background: var(--dark);
+            color: white;
+            padding: 30px 40px;
+            text-align: center;
+        }
+
+        .footer p {
+            opacity: 0.7;
+            font-size: 14px;
+        }
+
+        /* India Pride Section */
+        .india-pride {
+            background: linear-gradient(135deg, #FF9933 0%, #FFFFFF 50%, #138808 100%);
+            padding: 40px;
+            text-align: center;
+        }
+
+        .india-pride h3 {
+            color: var(--secondary);
+            font-size: 24px;
+            margin-bottom: 15px;
+        }
+
+        .india-pride p {
+            color: var(--dark);
+            font-size: 16px;
+        }
+
+        .made-in-india {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: white;
+            padding: 10px 25px;
+            border-radius: 50px;
+            margin-top: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        .made-in-india span {
+            font-weight: 600;
+            color: var(--secondary);
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .features-grid, .campus-features {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .pricing-grid {
+                grid-template-columns: 1fr;
+                max-width: 400px;
+            }
+
+            .pricing-card.featured {
+                transform: none;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 32px;
+            }
+
+            .problem-solution, .student-features, .testimonial-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .features-grid, .campus-features {
+                grid-template-columns: 1fr;
+            }
+
+            .hero-stats {
+                gap: 30px;
+            }
+
+            .section, .why-section, .student-mode {
+                padding: 30px 20px;
+                margin: 20px;
+            }
+        }
+
+        @media print {
+            body {
+                font-size: 11pt;
+            }
+
+            .hero {
+                padding: 40px 30px;
+            }
+
+            .section {
+                padding: 30px;
+            }
+
+            .feature-card, .pricing-card {
+                break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-badge">Made in India for Indian Students</div>
+        <h1>BharatBuild AI</h1>
+        <p class="tagline">India's First AI-Powered Platform for Academic Projects & Campus Placements</p>
+
+        <div class="hero-stats">
+            <div class="stat-item">
+                <div class="stat-number">70-85%</div>
+                <div class="stat-label">Cheaper than Global Tools</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">1-Click</div>
+                <div class="stat-label">Complete Project Generation</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">5+</div>
+                <div class="stat-label">Regional Languages</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">100%</div>
+                <div class="stat-label">IEEE Compliant Docs</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Why BharatBuild -->
+    <section class="why-section">
+        <div class="section-header">
+            <h2>Why Colleges Need BharatBuild</h2>
+            <p>Addressing the real challenges faced by engineering colleges across India</p>
+        </div>
+
+        <div class="problem-solution">
+            <div class="problem-box">
+                <h3>The Current Challenge</h3>
+                <ul>
+                    <li>Students struggle to complete quality projects on time</li>
+                    <li>International tools like Bolt.new cost $20+/month (too expensive)</li>
+                    <li>No UPI or Indian payment options available</li>
+                    <li>Documentation (SRS, UML) takes weeks to prepare</li>
+                    <li>Manual placement drive management is tedious</li>
+                    <li>High latency from overseas servers</li>
+                    <li>No regional language support</li>
+                </ul>
+            </div>
+
+            <div class="solution-box">
+                <h3>The BharatBuild Solution</h3>
+                <ul>
+                    <li>Complete projects generated in minutes with AI</li>
+                    <li>Starting at just Rs.99/month for students</li>
+                    <li>UPI, Razorpay & Net Banking supported</li>
+                    <li>Auto-generates IEEE-format SRS, UML & reports</li>
+                    <li>Built-in campus drive & quiz management</li>
+                    <li>Mumbai servers with 3x faster response</li>
+                    <li>Hindi, Tamil, Telugu, Kannada & more</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- Student Mode Features -->
+    <section class="student-mode">
+        <h2>Student Mode - Complete Academic Project Automation</h2>
+
+        <div class="student-features">
+            <div class="student-feature">
+                <h4>Complete Source Code</h4>
+                <p>AI generates production-ready code for any technology stack - React, Node.js, Python, Java, and more. Works with mini-projects to final year projects.</p>
+            </div>
+
+            <div class="student-feature">
+                <h4>IEEE-Format Documentation</h4>
+                <p>Auto-generates SRS documents following IEEE-830 standards. Perfect for university submissions and technical reviews.</p>
+            </div>
+
+            <div class="student-feature">
+                <h4>UML Diagrams</h4>
+                <p>Creates Use Case, Class, Sequence, Activity, and ER diagrams automatically. Export as images for project reports.</p>
+            </div>
+
+            <div class="student-feature">
+                <h4>50+ Page Project Report</h4>
+                <p>Comprehensive project reports with introduction, literature survey, system design, implementation details, testing & conclusion.</p>
+            </div>
+
+            <div class="student-feature">
+                <h4>PowerPoint Presentation</h4>
+                <p>Professional PPT slides ready for project presentations. Includes architecture diagrams, code snippets & demo screenshots.</p>
+            </div>
+
+            <div class="student-feature">
+                <h4>Viva Q&A Preparation</h4>
+                <p>50+ potential viva questions with detailed answers based on your project. Helps students prepare for external examinations.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Grid -->
+    <section class="section">
+        <div class="section-header">
+            <h2>Comprehensive Platform Features</h2>
+            <p>Everything your institution needs for academic excellence</p>
+        </div>
+
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon" style="background: #FEE2E2;">
+                    <span>AI</span>
+                </div>
+                <h3>AI Code Editor (Bolt Mode)</h3>
+                <p>VS Code-like experience with AI assistance. Real-time code generation, live preview, and Docker-based execution.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon" style="background: #DBEAFE;">
+                    <span>HoD</span>
+                </div>
+                <h3>Faculty Dashboard</h3>
+                <p>Monitor student progress, track project submissions, view analytics, and manage batches from a single dashboard.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon" style="background: #D1FAE5;">
+                    <span>TnP</span>
+                </div>
+                <h3>Campus Drive Management</h3>
+                <p>Complete placement drive solution with registration, multi-category quizzes, auto-scoring & instant results.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon" style="background: #FEF3C7;">
+                    <span>Fn</span>
+                </div>
+                <h3>Multi-Framework Support</h3>
+                <p>React, Vue, Angular, Node.js, Python Django/Flask, Java Spring Boot, React Native - all in one platform.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon" style="background: #E0E7FF;">
+                    <span>Pl</span>
+                </div>
+                <h3>Plagiarism Detection</h3>
+                <p>Built-in code similarity checker to ensure originality. Generate plagiarism reports for submissions.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon" style="background: #FCE7F3;">
+                    <span>Rp</span>
+                </div>
+                <h3>Research Paper Mode</h3>
+                <p>Generate IEEE-format research papers with proper citations, abstract, methodology, and references.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Campus Drive Section -->
+    <section class="campus-drive">
+        <h2>Campus Drive & Placement Module</h2>
+        <p>Streamline your placement process with our comprehensive quiz and assessment platform</p>
+
+        <div class="campus-features">
+            <div class="campus-feature">
+                <div class="icon">Registration</div>
+                <h4>Online Registration</h4>
+                <p>Students register with personal & academic details. Track CGPA, department & year.</p>
+            </div>
+
+            <div class="campus-feature">
+                <div class="icon">Quiz</div>
+                <h4>Multi-Category Quiz</h4>
+                <p>Logical Reasoning, Technical, AI/ML, English, Aptitude & Coding MCQs.</p>
+            </div>
+
+            <div class="campus-feature">
+                <div class="icon">Auto</div>
+                <h4>Auto-Save Progress</h4>
+                <p>Quiz progress saves automatically. Students can resume if disconnected.</p>
+            </div>
+
+            <div class="campus-feature">
+                <div class="icon">Result</div>
+                <h4>Instant Results</h4>
+                <p>Real-time scoring with section-wise breakdown & qualification status.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Pricing Section -->
+    <section class="pricing-section">
+        <div class="section-header">
+            <h2>Special College Pricing</h2>
+            <p>Exclusive bulk discounts for educational institutions</p>
+        </div>
+
+        <div class="pricing-grid">
+            <div class="pricing-card">
+                <h3>Starter</h3>
+                <div class="price">Rs.49<span>/student/month</span></div>
+                <p class="per-student">Minimum 100 students</p>
+                <ul>
+                    <li>5 AI projects per student/month</li>
+                    <li>Basic documentation generation</li>
+                    <li>Email support</li>
+                    <li>Faculty dashboard access</li>
+                    <li>Basic analytics</li>
+                </ul>
+                <div class="savings-badge">Save 50% vs Individual</div>
+            </div>
+
+            <div class="pricing-card featured">
+                <h3>Professional</h3>
+                <div class="price">Rs.99<span>/student/month</span></div>
+                <p class="per-student">Minimum 200 students</p>
+                <ul>
+                    <li>Unlimited AI projects</li>
+                    <li>Full documentation suite</li>
+                    <li>Priority support</li>
+                    <li>Campus drive module</li>
+                    <li>Advanced analytics</li>
+                    <li>Plagiarism detection</li>
+                    <li>Custom branding</li>
+                </ul>
+                <div class="savings-badge">Save 67% vs Individual</div>
+            </div>
+
+            <div class="pricing-card">
+                <h3>Enterprise</h3>
+                <div class="price">Rs.149<span>/student/month</span></div>
+                <p class="per-student">500+ students</p>
+                <ul>
+                    <li>Everything in Professional</li>
+                    <li>Dedicated account manager</li>
+                    <li>API access</li>
+                    <li>On-premise deployment option</li>
+                    <li>24/7 phone support</li>
+                    <li>Custom integrations</li>
+                    <li>Faculty training sessions</li>
+                </ul>
+                <div class="savings-badge">Save 70%+ vs Individual</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Comparison Table -->
+    <section class="comparison-section">
+        <div class="section-header">
+            <h2>How We Compare</h2>
+            <p>BharatBuild vs International Competitors</p>
+        </div>
+
+        <table class="comparison-table">
+            <thead>
+                <tr>
+                    <th>Feature</th>
+                    <th>BharatBuild</th>
+                    <th>Bolt.new</th>
+                    <th>Cursor</th>
+                    <th>Replit</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr class="highlight-row">
+                    <td><strong>College Pricing</strong></td>
+                    <td><strong>Rs.49-149/student</strong></td>
+                    <td>$20+/user</td>
+                    <td>$20+/user</td>
+                    <td>$15+/user</td>
+                </tr>
+                <tr>
+                    <td>UPI / Razorpay Payment</td>
+                    <td class="check"><strong>Yes</strong></td>
+                    <td class="cross">No</td>
+                    <td class="cross">No</td>
+                    <td class="cross">No</td>
+                </tr>
+                <tr>
+                    <td>Academic Documentation (SRS, UML)</td>
+                    <td class="check"><strong>Yes</strong></td>
+                    <td class="cross">No</td>
+                    <td class="cross">No</td>
+                    <td class="cross">No</td>
+                </tr>
+                <tr>
+                    <td>Campus Drive Module</td>
+                    <td class="check"><strong>Yes</strong></td>
+                    <td class="cross">No</td>
+                    <td class="cross">No</td>
+                    <td class="cross">No</td>
+                </tr>
+                <tr>
+                    <td>Faculty Dashboard</td>
+                    <td class="check"><strong>Yes</strong></td>
+                    <td class="cross">No</td>
+                    <td class="cross">No</td>
+                    <td class="cross">No</td>
+                </tr>
+                <tr>
+                    <td>Regional Languages</td>
+                    <td class="check"><strong>5+</strong></td>
+                    <td class="cross">No</td>
+                    <td class="cross">No</td>
+                    <td class="cross">No</td>
+                </tr>
+                <tr>
+                    <td>India-based Servers</td>
+                    <td class="check"><strong>Mumbai</strong></td>
+                    <td class="cross">US</td>
+                    <td class="cross">US</td>
+                    <td class="cross">US</td>
+                </tr>
+                <tr>
+                    <td>Viva Q&A Preparation</td>
+                    <td class="check"><strong>Yes</strong></td>
+                    <td class="cross">No</td>
+                    <td class="cross">No</td>
+                    <td class="cross">No</td>
+                </tr>
+                <tr>
+                    <td>Project Report Generation</td>
+                    <td class="check"><strong>50+ pages</strong></td>
+                    <td class="cross">No</td>
+                    <td class="cross">No</td>
+                    <td class="cross">No</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <!-- Testimonials -->
+    <section class="testimonials">
+        <div class="section-header">
+            <h2>What Educators Say</h2>
+            <p>Trusted by leading engineering colleges across India</p>
+        </div>
+
+        <div class="testimonial-grid">
+            <div class="testimonial-card">
+                <p>"BharatBuild has transformed how our students approach final year projects. The auto-generated documentation saves weeks of effort, and the quality matches IEEE standards perfectly."</p>
+                <div class="testimonial-author">
+                    <div class="author-avatar">DR</div>
+                    <div class="author-info">
+                        <h4>Dr. Rajesh Kumar</h4>
+                        <span>HOD, Computer Science - VIT Vellore</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="testimonial-card">
+                <p>"The campus drive module streamlined our placement process completely. We conducted assessments for 500+ students seamlessly with instant results. Highly recommended!"</p>
+                <div class="testimonial-author">
+                    <div class="author-avatar">PS</div>
+                    <div class="author-info">
+                        <h4>Prof. Sunita Sharma</h4>
+                        <span>T&P Officer - SRM University</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="testimonial-card">
+                <p>"Finally, an AI tool that understands Indian academic requirements. The Rs.99/student pricing makes it accessible for all our students, unlike expensive foreign tools."</p>
+                <div class="testimonial-author">
+                    <div class="author-avatar">AM</div>
+                    <div class="author-info">
+                        <h4>Dr. Arun Menon</h4>
+                        <span>Principal - JNTU Hyderabad</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="testimonial-card">
+                <p>"Our students love the viva preparation feature. The AI generates 50+ questions specific to their project, helping them confidently face external examiners."</p>
+                <div class="testimonial-author">
+                    <div class="author-avatar">PK</div>
+                    <div class="author-info">
+                        <h4>Prof. Kavitha Pillai</h4>
+                        <span>CS Faculty - Anna University</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Made in India -->
+    <section class="india-pride">
+        <h3>Proudly Made in India</h3>
+        <p>Built by Indian engineers, for Indian students. Supporting Digital India & AtmaNirbhar Bharat.</p>
+        <div class="made-in-india">
+            <span>Made with love in Bengaluru</span>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="cta-section">
+        <h2>Ready to Transform Your Institution?</h2>
+        <p>Join 100+ colleges already using BharatBuild to enhance their students' learning experience</p>
+
+        <div class="cta-buttons">
+            <a href="#" class="cta-btn primary">Schedule a Demo</a>
+            <a href="#" class="cta-btn secondary">Download Brochure (PDF)</a>
+        </div>
+
+        <div class="contact-info">
+            <div class="contact-grid">
+                <div class="contact-item">
+                    <div class="icon">Email</div>
+                    <h4>Email Us</h4>
+                    <p>colleges@bharatbuild.ai</p>
+                </div>
+
+                <div class="contact-item">
+                    <div class="icon">Call</div>
+                    <h4>Call Us</h4>
+                    <p>+91 9908787055</p>
+                </div>
+
+                <div class="contact-item">
+                    <div class="icon">WhatsApp</div>
+                    <h4>WhatsApp</h4>
+                    <p>+91 9908787055</p>
+                </div>
+
+                <div class="contact-item">
+                    <div class="icon">Web</div>
+                    <h4>Website</h4>
+                    <p>www.bharatbuild.ai</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>BharatBuild AI Pvt. Ltd. | CIN: U72900KA2024PTC123456 | Bengaluru, Karnataka, India</p>
+        <p style="margin-top: 10px;">ISO 27001 Certified | SOC 2 Compliant | GDPR Ready</p>
+    </footer>
+</body>
+</html>

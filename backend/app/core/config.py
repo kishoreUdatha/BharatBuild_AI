@@ -258,6 +258,18 @@ class Settings(BaseSettings):
     PROMO_CODES: str = "WELCOME2024:10000,LAUNCH50:50000,BETA100:100000"
 
     # ==========================================
+    # Judge0 Code Execution Engine
+    # ==========================================
+    # Self-hosted HackerRank-style code execution for 60+ languages
+    JUDGE0_API_URL: str = "http://localhost:2358"
+    JUDGE0_API_KEY: str = ""  # Optional auth token for Judge0
+    JUDGE0_TIMEOUT: int = 30  # API request timeout in seconds
+    JUDGE0_DEFAULT_TIME_LIMIT: float = 2.0  # Default CPU time limit in seconds
+    JUDGE0_DEFAULT_MEMORY_LIMIT: int = 128000  # Default memory limit in KB (128MB)
+    JUDGE0_MAX_TIME_LIMIT: float = 10.0  # Maximum allowed time limit
+    JUDGE0_MAX_MEMORY_LIMIT: int = 524288  # Maximum memory limit in KB (512MB)
+
+    # ==========================================
     # Container Execution - CENTRALIZED TIMEOUT CONFIGURATION
     # Single source of truth for all container lifecycle settings
     # ==========================================

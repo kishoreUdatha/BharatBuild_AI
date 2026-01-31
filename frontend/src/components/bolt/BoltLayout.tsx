@@ -51,6 +51,7 @@ import {
   Check,
   FileText,
   Lock,
+  Smartphone,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useTerminal } from '@/hooks/useTerminal'
@@ -239,6 +240,66 @@ export function BoltLayout({
   const [canResume, setCanResume] = useState(false)
   const [isResuming, setIsResuming] = useState(false)
   const [resumeMessage, setResumeMessage] = useState<string | null>(null)
+
+  // APK download state (for Flutter/mobile projects)
+  const [apkAvailable, setApkAvailable] = useState(false)
+  const [apkInfo, setApkInfo] = useState<{
+    apk_count: number;
+    is_flutter_project: boolean;
+    download_url: string | null;
+  } | null>(null)
+  const [isDownloadingApk, setIsDownloadingApk] = useState(false)
+
+  // Check if project is a Flutter project (for APK download)
+  const isFlutterProject = currentProject?.files?.some(
+    file => file.path === 'pubspec.yaml' || file.path?.endsWith('/pubspec.yaml')
+  ) || false
+
+  // Check APK availability when project changes or files update
+  useEffect(() => {
+    const checkApkAvailability = async () => {
+      // First check if it looks like a Flutter project from files
+      if (!isFlutterProject) {
+        setApkAvailable(false)
+        setApkInfo(null)
+        return
+      }
+
+      try {
+        const token = localStorage.getItem('access_token')
+        if (!token) return
+
+        // Check session-based APK first (for newly generated projects)
+        if (sessionId) {
+          const response = await fetch(`${API_BASE_URL}/download/session/${sessionId}/apk/info`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          })
+          if (response.ok) {
+            const data = await response.json()
+            setApkInfo(data)
+            setApkAvailable(data.apk_available || false)
+            return
+          }
+        }
+
+        // Check project-based APK
+        if (currentProject?.id && currentProject.id !== 'default-project') {
+          const response = await fetch(`${API_BASE_URL}/projects/${currentProject.id}/download/apk/info`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          })
+          if (response.ok) {
+            const data = await response.json()
+            setApkInfo(data)
+            setApkAvailable(data.apk_available || false)
+          }
+        }
+      } catch (error) {
+        console.warn('[BoltLayout] Failed to check APK availability:', error)
+      }
+    }
+
+    checkApkAvailability()
+  }, [currentProject?.id, sessionId, isFlutterProject, currentProject?.files?.length])
 
   // Check if project generation was interrupted
   useEffect(() => {
@@ -578,6 +639,88 @@ export function BoltLayout({
     }
 
     console.error("[Export] All export methods failed")
+  }
+
+  // Download APK for Flutter/mobile projects
+  const handleDownloadApk = async (buildType: 'release' | 'debug' = 'release') => {
+    if (!isFlutterProject && !apkAvailable) {
+      console.warn('[APK] Not a Flutter project or APK not available')
+      return
+    }
+
+    setIsDownloadingApk(true)
+    try {
+      const token = localStorage.getItem('access_token')
+      if (!token) {
+        alert('Please log in to download APK')
+        return
+      }
+
+      let blob: Blob | null = null
+      let filename = 'app.apk'
+
+      // Try session-based download first
+      if (sessionId) {
+        const response = await fetch(`${API_BASE_URL}/download/session/${sessionId}/apk?build_type=${buildType}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+        if (response.ok) {
+          blob = await response.blob()
+          // Extract filename from content-disposition header if available
+          const contentDisposition = response.headers.get('content-disposition')
+          if (contentDisposition) {
+            const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
+            if (filenameMatch) {
+              filename = filenameMatch[1].replace(/['"]/g, '')
+            }
+          }
+        }
+      }
+
+      // Try project-based download
+      if (!blob && currentProject?.id && currentProject.id !== 'default-project') {
+        const response = await fetch(`${API_BASE_URL}/projects/${currentProject.id}/download/apk?build_type=${buildType}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+        if (response.ok) {
+          blob = await response.blob()
+          const contentDisposition = response.headers.get('content-disposition')
+          if (contentDisposition) {
+            const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
+            if (filenameMatch) {
+              filename = filenameMatch[1].replace(/['"]/g, '')
+            }
+          }
+        }
+      }
+
+      if (blob && blob.size > 0) {
+        // Create download link
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = filename
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+        console.log(`[APK] Successfully downloaded: ${filename}`)
+      } else {
+        // APK not built yet - show instructions
+        alert(
+          'APK not found. To build the APK:\n\n' +
+          '1. Click "Run" to execute the Flutter project\n' +
+          '2. The build process will create the APK\n' +
+          '3. Once complete, you can download it here\n\n' +
+          'Or manually run: flutter build apk --' + buildType
+        )
+      }
+    } catch (error) {
+      console.error('[APK] Download failed:', error)
+      alert('Failed to download APK. Please try again.')
+    } finally {
+      setIsDownloadingApk(false)
+    }
   }
 
 
@@ -935,6 +1078,27 @@ export function BoltLayout({
             >
               <Download className="w-4 h-4" />
               Export
+            </button>
+          )}
+
+          {/* APK Download Button - Only shown for Flutter projects */}
+          {isFlutterProject && (
+            <button
+              onClick={() => handleDownloadApk('release')}
+              disabled={isDownloadingApk || !currentProject}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                apkAvailable
+                  ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30 border border-green-500/30'
+                  : 'text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] hover:bg-[hsl(var(--bolt-bg-tertiary))]'
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
+              title={apkAvailable ? 'Download Android APK' : 'Flutter project detected - Run to build APK'}
+            >
+              {isDownloadingApk ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <Smartphone className="w-4 h-4" />
+              )}
+              {isDownloadingApk ? 'Downloading...' : apkAvailable ? 'APK' : 'APK (Build)'}
             </button>
           )}
 

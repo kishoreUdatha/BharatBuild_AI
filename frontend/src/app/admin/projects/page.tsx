@@ -157,7 +157,7 @@ export default function AdminProjectsPage() {
     setDownloadingId(projectId)
     setActionMenuProject(null)
     try {
-      const token = localStorage.getItem('token')
+      const token = localStorage.getItem('access_token')
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/admin/projects/${projectId}/download`, {
         headers: {
           'Authorization': `Bearer ${token}`
@@ -201,7 +201,7 @@ export default function AdminProjectsPage() {
         formData.append('project_name', uploadProjectName)
       }
 
-      const token = localStorage.getItem('token')
+      const token = localStorage.getItem('access_token')
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/admin/projects/upload`, {
         method: 'POST',
         headers: {

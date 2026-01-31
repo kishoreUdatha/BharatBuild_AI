@@ -183,6 +183,11 @@ class FrameworkType(Enum):
     # ===== iOS =====
     IOS_SWIFT = "ios-swift"
 
+    # ===== FLUTTER / MOBILE =====
+    FLUTTER = "flutter"              # Flutter mobile (Android APK)
+    FLUTTER_WEB = "flutter-web"      # Flutter web build
+    REACT_NATIVE = "react-native"    # React Native / Expo
+
     # ===== BLOCKCHAIN =====
     SOLIDITY = "solidity"  # Ethereum/EVM
     RUST_SOLANA = "rust-solana"  # Solana
@@ -925,6 +930,114 @@ EXPOSE 8899
 # Start Solana test validator
 CMD ["solana-test-validator"]
 ''',
+
+    # ===== FLUTTER WEB =====
+    FrameworkType.FLUTTER_WEB: '''FROM ghcr.io/cirruslabs/flutter:stable AS build
+
+WORKDIR /app
+
+# Copy pubspec files first for caching
+COPY pubspec.* ./
+
+# Get dependencies
+RUN flutter pub get
+
+# Copy source files
+COPY . .
+
+# Build for web
+RUN flutter build web --release
+
+# Production stage with nginx
+FROM nginx:alpine
+
+# Copy built web files
+COPY --from=build /app/build/web /usr/share/nginx/html
+
+# Configure nginx for SPA
+RUN echo 'server { \\
+    listen 80; \\
+    location / { \\
+        root /usr/share/nginx/html; \\
+        index index.html; \\
+        try_files $uri $uri/ /index.html; \\
+    } \\
+}' > /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+''',
+
+    # ===== FLUTTER MOBILE (APK Build) =====
+    FrameworkType.FLUTTER: '''FROM ghcr.io/cirruslabs/flutter:stable
+
+WORKDIR /app
+
+# Accept Android SDK licenses
+RUN yes | flutter doctor --android-licenses || true
+
+# Copy pubspec files first for caching
+COPY pubspec.* ./
+
+# Get dependencies
+RUN flutter pub get
+
+# Copy source files
+COPY . .
+
+# Build APK (debug for faster builds, release for production)
+RUN flutter build apk --debug || flutter build apk --release || echo "APK build completed"
+
+# The APK will be at: /app/build/app/outputs/flutter-apk/app-debug.apk
+# or: /app/build/app/outputs/flutter-apk/app-release.apk
+
+# For preview, we can serve the web version
+RUN flutter build web --release || true
+
+# Serve web version for preview
+FROM nginx:alpine
+COPY --from=0 /app/build/web /usr/share/nginx/html
+COPY --from=0 /app/build/app/outputs/flutter-apk/*.apk /usr/share/nginx/html/download/ 2>/dev/null || true
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+''',
+
+    # ===== REACT NATIVE / EXPO =====
+    FrameworkType.REACT_NATIVE: '''FROM node:18-bullseye
+
+WORKDIR /app
+
+# Install system dependencies for React Native
+RUN apt-get update && apt-get install -y \\
+    openjdk-17-jdk \\
+    watchman \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Set JAVA_HOME
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV PATH="$JAVA_HOME/bin:$PATH"
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Install Expo CLI globally
+RUN npm install -g expo-cli @expo/ngrok
+
+# Copy source files
+COPY . .
+
+# Expose Expo ports
+EXPOSE 19000 19001 19002 8081
+
+# Start Expo in web mode for preview
+CMD ["npx", "expo", "start", "--web", "--host", "0.0.0.0"]
+''',
 }
 
 
@@ -964,6 +1077,11 @@ DEFAULT_PORTS: Dict[FrameworkType, int] = {
 
     # iOS
     FrameworkType.IOS_SWIFT: 8080,
+
+    # Flutter / Mobile
+    FrameworkType.FLUTTER: 80,         # nginx serving web preview
+    FrameworkType.FLUTTER_WEB: 80,     # nginx serving web build
+    FrameworkType.REACT_NATIVE: 19006, # Expo web preview port
 
     # Blockchain
     FrameworkType.SOLIDITY: 8545,  # Hardhat/Ganache default
@@ -1789,6 +1907,43 @@ class DockerExecutor:
                         return FrameworkType.REACT_VITE
                     else:
                         return FrameworkType.REACT_CRA
+
+        # ===== FLUTTER (Check BEFORE Android - Flutter projects have pubspec.yaml) =====
+        pubspec_path = project_path / "pubspec.yaml"
+        if pubspec_path.exists():
+            try:
+                with open(pubspec_path, 'r') as f:
+                    pubspec_content = f.read().lower()
+                    # Check if it's a Flutter project (has flutter SDK dependency)
+                    if 'flutter:' in pubspec_content or 'sdk: flutter' in pubspec_content:
+                        # Check if web is enabled (lib/main.dart with web target)
+                        lib_main = project_path / "lib" / "main.dart"
+                        web_dir = project_path / "web"
+
+                        # If web directory exists, it's configured for web
+                        if web_dir.exists():
+                            logger.info(f"[FrameworkDetection] Detected Flutter Web project (has web/ folder)")
+                            return FrameworkType.FLUTTER_WEB
+
+                        # Default to Flutter mobile (will build APK + web preview)
+                        logger.info(f"[FrameworkDetection] Detected Flutter Mobile project")
+                        return FrameworkType.FLUTTER
+            except Exception as e:
+                logger.warning(f"[FrameworkDetection] Error reading pubspec.yaml: {e}")
+
+        # ===== REACT NATIVE / EXPO (Check before generic Node.js) =====
+        package_json_rn = project_path / "package.json"
+        if package_json_rn.exists():
+            try:
+                with open(package_json_rn, 'r') as f:
+                    pkg = json.load(f)
+                    deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+                    # Check for React Native or Expo
+                    if "react-native" in deps or "expo" in deps:
+                        logger.info(f"[FrameworkDetection] Detected React Native/Expo project")
+                        return FrameworkType.REACT_NATIVE
+            except:
+                pass
 
         # ===== ANDROID (Check first - has build.gradle but different from Spring) =====
         android_manifest = project_path / "app" / "src" / "main" / "AndroidManifest.xml"
