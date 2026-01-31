@@ -126,14 +126,36 @@ BE STRICT: If a file looks incomplete, mark it as incomplete.
     }
 
     # Critical files that MUST exist for different project types
+    # NOTE: These are enforced in bolt_instant mode too!
     CRITICAL_FILES = {
-        # JavaScript/TypeScript Frontend
-        'react': ['package.json', 'index.html', 'src/main.tsx', 'src/App.tsx'],
-        'react-js': ['package.json', 'index.html', 'src/main.jsx', 'src/App.jsx'],
-        'nextjs': ['package.json', 'app/layout.tsx', 'app/page.tsx'],
-        'vue': ['package.json', 'index.html', 'src/main.ts', 'src/App.vue'],
+        # JavaScript/TypeScript Frontend - VITE + TAILWIND (Most common setup)
+        'react': [
+            'package.json',
+            'index.html',
+            'src/main.tsx',
+            'src/App.tsx',
+            'vite.config.ts',  # CRITICAL: Build fails without this
+            'tsconfig.json',
+            'tsconfig.node.json',  # CRITICAL: Most commonly missed!
+            'tailwind.config.js',
+            'postcss.config.js',
+        ],
+        'react-vite': [  # Explicit Vite variant
+            'package.json',
+            'index.html',
+            'src/main.tsx',
+            'src/App.tsx',
+            'vite.config.ts',
+            'tsconfig.json',
+            'tsconfig.node.json',
+            'tailwind.config.js',
+            'postcss.config.js',
+        ],
+        'react-js': ['package.json', 'index.html', 'src/main.jsx', 'src/App.jsx', 'vite.config.js'],
+        'nextjs': ['package.json', 'app/layout.tsx', 'app/page.tsx', 'tailwind.config.ts', 'next.config.js'],
+        'vue': ['package.json', 'index.html', 'src/main.ts', 'src/App.vue', 'vite.config.ts'],
         'angular': ['package.json', 'angular.json', 'src/main.ts', 'src/app/app.component.ts'],
-        'svelte': ['package.json', 'svelte.config.js', 'src/routes/+page.svelte'],
+        'svelte': ['package.json', 'svelte.config.js', 'src/routes/+page.svelte', 'vite.config.ts'],
         # Backend
         'node': ['package.json', 'src/index.js'],
         'express': ['package.json', 'src/index.js', 'src/app.js'],
@@ -900,6 +922,178 @@ Use <file path="...">COMPLETE_CONTENT</file> tags.
 Generate ONLY the files listed above, with FULL implementations.
 """
         return prompt
+
+    def quick_validate_bolt_instant(
+        self,
+        files_created: List[Dict[str, Any]],
+        tech_stack: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        FAST validation for bolt_instant mode - no LLM calls.
+
+        Checks critical files and imports synchronously.
+        Used AFTER bolt_instant generation to catch common issues.
+
+        Args:
+            files_created: List of files created by bolt_instant
+            tech_stack: Detected tech stack
+
+        Returns:
+            Dict with status, missing_files, issues
+        """
+        logger.info(f"[Verification] Quick validating {len(files_created)} files...")
+
+        result = {
+            "status": "pass",
+            "missing_files": [],
+            "empty_files": [],
+            "incomplete_files": [],
+            "import_issues": [],
+            "needs_regeneration": False
+        }
+
+        # 1. Check for critical files
+        project_type = self._detect_project_type(files_created, tech_stack)
+        missing = self._check_critical_files(files_created, project_type)
+
+        if missing:
+            result["missing_files"] = missing
+            result["status"] = "fail"
+            result["needs_regeneration"] = True
+            logger.warning(f"[Verification] Missing critical files: {missing}")
+
+        # 2. Basic file verification
+        basic = self._verify_files_basic(files_created)
+        result["empty_files"] = basic["empty_files"]
+        result["incomplete_files"] = basic["incomplete_files"]
+
+        if basic["empty_files"]:
+            result["status"] = "fail"
+            result["needs_regeneration"] = True
+            logger.warning(f"[Verification] Empty files: {basic['empty_files']}")
+
+        if basic["incomplete_files"]:
+            if result["status"] == "pass":
+                result["status"] = "partial"
+            logger.warning(f"[Verification] Incomplete files: {basic['incomplete_files']}")
+
+        # 3. Import validation
+        import_issues = self._validate_imports(files_created)
+        if import_issues["missing_imports"]:
+            result["import_issues"] = import_issues["missing_imports"]
+            result["status"] = "fail"
+            result["needs_regeneration"] = True
+            for mi in import_issues["missing_imports"]:
+                if mi["suggested_path"] not in result["missing_files"]:
+                    result["missing_files"].append(mi["suggested_path"])
+
+        # 4. Package.json consistency check
+        pkg_issues = self.validate_package_consistency(files_created)
+        if pkg_issues["missing_deps"]:
+            result["package_issues"] = pkg_issues["missing_deps"]
+            # This is a warning, not a regeneration trigger
+            logger.warning(f"[Verification] Package.json missing deps: {pkg_issues['missing_deps']}")
+
+        # 5. Build regeneration list
+        result["files_to_regenerate"] = list(set(
+            result["empty_files"] +
+            result["incomplete_files"] +
+            result["missing_files"]
+        ))
+
+        logger.info(f"[Verification] Quick validation: {result['status']} - {len(result['files_to_regenerate'])} files need work")
+
+        return result
+
+    def validate_package_consistency(
+        self,
+        files_created: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Validate that package.json dependencies match config files.
+
+        Catches issues like:
+        - tailwind.config.js using @tailwindcss/forms but not in package.json
+        - vite.config.ts using plugins not installed
+
+        Args:
+            files_created: List of files with path and content
+
+        Returns:
+            Dict with missing_deps list
+        """
+        result = {
+            "missing_deps": [],
+            "warnings": []
+        }
+
+        # Find package.json
+        package_json = None
+        tailwind_config = None
+        vite_config = None
+
+        for file_info in files_created:
+            path = file_info.get("path", "").lower()
+            content = file_info.get("content", "")
+
+            if path.endswith("package.json"):
+                try:
+                    package_json = json.loads(content)
+                except:
+                    pass
+            elif "tailwind.config" in path:
+                tailwind_config = content
+            elif "vite.config" in path:
+                vite_config = content
+
+        if not package_json:
+            return result
+
+        # Get all dependencies
+        all_deps = set()
+        for dep_type in ["dependencies", "devDependencies", "peerDependencies"]:
+            all_deps.update(package_json.get(dep_type, {}).keys())
+
+        # Check tailwind plugins
+        if tailwind_config:
+            # Extract plugins from tailwind config
+            plugin_patterns = [
+                r"require\(['\"](@tailwindcss/[^'\"]+)['\"]",
+                r"require\(['\"](@headlessui/[^'\"]+)['\"]",
+                r"import\s+\w+\s+from\s+['\"](@tailwindcss/[^'\"]+)['\"]",
+            ]
+
+            for pattern in plugin_patterns:
+                matches = re.findall(pattern, tailwind_config)
+                for plugin in matches:
+                    if plugin not in all_deps:
+                        result["missing_deps"].append({
+                            "package": plugin,
+                            "required_by": "tailwind.config.js",
+                            "add_to": "devDependencies"
+                        })
+
+        # Check vite plugins
+        if vite_config:
+            plugin_patterns = [
+                r"import\s+\w+\s+from\s+['\"](@vitejs/[^'\"]+)['\"]",
+                r"import\s+\w+\s+from\s+['\"]vite-plugin-[^'\"]+['\"]",
+            ]
+
+            for pattern in plugin_patterns:
+                matches = re.findall(pattern, vite_config)
+                for plugin in matches:
+                    if plugin not in all_deps:
+                        result["missing_deps"].append({
+                            "package": plugin,
+                            "required_by": "vite.config.ts",
+                            "add_to": "devDependencies"
+                        })
+
+        if result["missing_deps"]:
+            logger.warning(f"[Verification] Package consistency issues: {result['missing_deps']}")
+
+        return result
 
 
 # Create instance on demand in dynamic_orchestrator.py

@@ -101,10 +101,10 @@ export function ProjectStagesPanel() {
 
   // Get data from stores
   const messages = useChatStore((state) => state.messages)
-  const { currentProject, openTab } = useProjectStore()
+  const { currentProject, openTab, loadFileContent } = useProjectStore()
 
-  // Find file in project tree and open in editor
-  const handleFileClick = (filePath: string) => {
+  // Find file in project tree and open in editor (with lazy loading)
+  const handleFileClick = async (filePath: string) => {
     if (!currentProject?.files) return
 
     const findFile = (files: any[], path: string): any => {
@@ -120,7 +120,39 @@ export function ProjectStagesPanel() {
 
     const file = findFile(currentProject.files, filePath)
     if (file && file.type === 'file') {
-      openTab(file)
+      // Check if content is already loaded
+      if (file.content !== undefined && file.content !== null) {
+        openTab({
+          path: file.path || filePath,
+          content: file.content,
+          language: '',
+          type: 'file',
+          name: file.name
+        })
+      } else {
+        // Content not loaded - open with loading state and lazy load
+        openTab({
+          path: file.path || filePath,
+          content: '// Loading...',
+          language: '',
+          type: 'file',
+          name: file.name,
+          isLoading: true
+        })
+
+        // Load content from backend
+        const content = await loadFileContent(filePath)
+        if (content !== null) {
+          openTab({
+            path: file.path || filePath,
+            content: content,
+            language: '',
+            type: 'file',
+            name: file.name,
+            isLoaded: true
+          })
+        }
+      }
     }
   }
 

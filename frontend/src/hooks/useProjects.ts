@@ -17,6 +17,7 @@ export interface Project {
   created_at: string
   updated_at: string
   completed_at: string | null
+  tech_stack?: string | null  // Technology stack (e.g., "Flutter, Dart, Firebase")
 }
 
 export interface ProjectsResponse {

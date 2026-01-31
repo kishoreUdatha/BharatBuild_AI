@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Project } from '@/hooks/useProjects'
 import { apiClient } from '@/lib/api-client'
@@ -8,6 +8,13 @@ import { apiClient } from '@/lib/api-client'
 interface ProjectCardProps {
   project: Project
   onDelete?: (projectId: string) => void
+}
+
+// Check if tech_stack indicates a Flutter project
+const isFlutterProject = (techStack?: string | null): boolean => {
+  if (!techStack) return false
+  const stack = techStack.toLowerCase()
+  return stack.includes('flutter') || stack.includes('dart')
 }
 
 const statusColors: Record<string, { bg: string; text: string; dot: string }> = {
@@ -28,10 +35,31 @@ const modeIcons: Record<string, string> = {
 export function ProjectCard({ project, onDelete }: ProjectCardProps) {
   const router = useRouter()
   const [isDownloading, setIsDownloading] = useState(false)
+  const [isDownloadingApk, setIsDownloadingApk] = useState(false)
   const [showMenu, setShowMenu] = useState(false)
+  const [apkAvailable, setApkAvailable] = useState(false)
 
   const status = statusColors[project.status] || statusColors.draft
   const modeIcon = modeIcons[project.mode] || modeIcons.developer
+  const isFlutter = isFlutterProject(project.tech_stack)
+
+  // Check APK availability for Flutter projects
+  useEffect(() => {
+    if (!isFlutter) {
+      setApkAvailable(false)
+      return
+    }
+
+    const checkApk = async () => {
+      try {
+        const response = await apiClient.get(`/projects/${project.id}/download/apk/info`)
+        setApkAvailable(response.apk_available || false)
+      } catch {
+        setApkAvailable(false)
+      }
+    }
+    checkApk()
+  }, [project.id, isFlutter])
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString)
@@ -104,6 +132,31 @@ export function ProjectCard({ project, onDelete }: ProjectCardProps) {
       onDelete?.(project.id)
     }
     setShowMenu(false)
+  }
+
+  const handleDownloadApk = async () => {
+    if (!isFlutter) return
+    setIsDownloadingApk(true)
+    try {
+      const blob = await apiClient.downloadApk(project.id, 'release')
+      if (blob && blob.size > 0) {
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `${project.title.replace(/[^a-z0-9]/gi, '_')}.apk`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+      } else {
+        alert('APK not available. Run the project first to build the APK.')
+      }
+    } catch (err) {
+      console.error('APK download failed:', err)
+      alert('Failed to download APK. Make sure the project has been built.')
+    } finally {
+      setIsDownloadingApk(false)
+    }
   }
 
   return (
@@ -203,6 +256,31 @@ export function ProjectCard({ project, onDelete }: ProjectCardProps) {
               </svg>
             )}
           </button>
+
+          {/* APK Download Button - Only for Flutter projects */}
+          {isFlutter && (
+            <button
+              onClick={handleDownloadApk}
+              disabled={isDownloadingApk}
+              className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 ${
+                apkAvailable
+                  ? 'bg-green-600 hover:bg-green-700 text-white'
+                  : 'bg-[#333] hover:bg-[#444] text-gray-400'
+              }`}
+              title={apkAvailable ? 'Download APK' : 'APK not built yet - Run project first'}
+            >
+              {isDownloadingApk ? (
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              ) : (
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3" />
+                </svg>
+              )}
+            </button>
+          )}
 
           {/* More menu */}
           <div className="relative">

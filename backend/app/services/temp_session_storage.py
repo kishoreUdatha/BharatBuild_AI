@@ -87,8 +87,20 @@ class TempSessionStorage:
         logger.info(f"TempSessionStorage initialized at {self.base_dir}")
 
     def _get_session_path(self, session_id: str) -> Path:
-        """Get path for a session directory"""
+        """Get path for a session directory (internal)"""
         return self.base_dir / session_id
+
+    def get_session_path(self, session_id: str) -> Optional[Path]:
+        """
+        Get path for a session directory (public).
+
+        Returns:
+            Path to session directory if it exists, None otherwise
+        """
+        path = self._get_session_path(session_id)
+        if path.exists():
+            return path
+        return None
 
     def _get_files_path(self, session_id: str) -> Path:
         """Get path for files within a session"""

@@ -10,6 +10,7 @@ from app.core.types import GUID, generate_uuid
 class College(Base):
     """College model"""
     __tablename__ = "colleges"
+    __table_args__ = {'extend_existing': True}
 
     id = Column(GUID, primary_key=True, default=generate_uuid)
 

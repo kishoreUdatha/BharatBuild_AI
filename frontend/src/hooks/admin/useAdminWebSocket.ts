@@ -60,7 +60,7 @@ export function useAdminWebSocket(options: UseAdminWebSocketOptions = {}) {
   const { setLiveStats, addActivity, addNotification } = useAdminStore()
 
   const connect = useCallback(() => {
-    const token = localStorage.getItem('token')
+    const token = localStorage.getItem('access_token')
     if (!token) {
       console.warn('No auth token available for WebSocket connection')
       return

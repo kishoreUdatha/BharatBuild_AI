@@ -200,6 +200,152 @@ wrapperUrl=https://repo.maven.apache.org/maven2/org/apache/maven/wrapper/maven-w
 """
 
 # =============================================================================
+# DEFAULT FILE TEMPLATES - FLUTTER
+# =============================================================================
+
+FLUTTER_PUBSPEC_YAML = """name: app
+description: A Flutter application built with BharatBuild AI.
+
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  http: ^1.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+"""
+
+FLUTTER_MAIN_DART = """import 'package:flutter/material.dart';
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Flutter App',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        useMaterial3: true,
+      ),
+      home: const HomePage(),
+    );
+  }
+}
+
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  int _counter = 0;
+
+  void _incrementCounter() {
+    setState(() {
+      _counter++;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        title: const Text('Flutter App'),
+      ),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            const Text(
+              'You have pushed the button this many times:',
+            ),
+            Text(
+              '$_counter',
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+          ],
+        ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _incrementCounter,
+        tooltip: 'Increment',
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+}
+"""
+
+FLUTTER_ANALYSIS_OPTIONS = """include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    - prefer_const_constructors
+    - prefer_const_literals_to_create_immutables
+    - avoid_print
+"""
+
+FLUTTER_INDEX_HTML = """<!DOCTYPE html>
+<html>
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="A Flutter web application">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Flutter App">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="icon" type="image/png" href="favicon.png"/>
+  <title>Flutter App</title>
+  <link rel="manifest" href="manifest.json">
+  <script>
+    var serviceWorkerVersion = null;
+  </script>
+  <script src="flutter.js" defer></script>
+</head>
+<body>
+  <script>
+    window.addEventListener('load', function(ev) {
+      _flutter.loader.loadEntrypoint({
+        serviceWorker: {
+          serviceWorkerVersion: serviceWorkerVersion,
+        },
+        onEntrypointLoaded: function(engineInitializer) {
+          engineInitializer.initializeEngine().then(function(appRunner) {
+            appRunner.runApp();
+          });
+        }
+      });
+    });
+  </script>
+</body>
+</html>
+"""
+
+# =============================================================================
 # DEFAULT FILE TEMPLATES - BLOCKCHAIN
 # =============================================================================
 
@@ -366,6 +512,12 @@ class TechnologyValidator:
         if detections.get("node"):
             self._validate_node(detections["node"], result)
 
+        if detections.get("flutter"):
+            self._validate_flutter(detections["flutter"], result)
+
+        if detections.get("react_native"):
+            self._validate_react_native(detections["react_native"], result)
+
         # Validate Docker files if present
         if self._check_exists(project_path, "docker-compose.yml") or \
            self._check_exists(project_path, "docker-compose.yaml"):
@@ -461,6 +613,20 @@ class TechnologyValidator:
                self._check_exists(check_path, "truffle-config.js"):
                 if "blockchain" not in detections:
                     detections["blockchain"] = check_path
+
+            # Flutter detection
+            if self._check_exists(check_path, "pubspec.yaml"):
+                pubspec_content = self._read_file(check_path, "pubspec.yaml")
+                if pubspec_content and ("flutter:" in pubspec_content or "sdk: flutter" in pubspec_content):
+                    if "flutter" not in detections:
+                        detections["flutter"] = check_path
+
+            # React Native / Expo detection
+            if self._check_exists(check_path, "package.json"):
+                pkg_content = self._read_file(check_path, "package.json")
+                if pkg_content and ("react-native" in pkg_content or '"expo"' in pkg_content):
+                    if "react_native" not in detections:
+                        detections["react_native"] = check_path
 
         return detections
 
@@ -830,6 +996,155 @@ export default defineConfig({
         self._fix_dockerfile_in_path(node_path, result)
 
     # =========================================================================
+    # FLUTTER VALIDATION
+    # =========================================================================
+
+    def _validate_flutter(self, flutter_path: str, result: ValidationResult):
+        """Validate Flutter/Dart project"""
+        logger.info(f"[TechnologyValidator] Validating Flutter project: {flutter_path}")
+
+        # 1. Check pubspec.yaml exists
+        if not self._check_exists(flutter_path, "pubspec.yaml"):
+            if self._write_file(flutter_path, "pubspec.yaml", FLUTTER_PUBSPEC_YAML):
+                result.files_created.append("pubspec.yaml")
+
+        # 2. Check for lib/main.dart (entry point)
+        if not self._check_exists(flutter_path, "lib/main.dart"):
+            if self._write_file(flutter_path, "lib/main.dart", FLUTTER_MAIN_DART):
+                result.files_created.append("lib/main.dart")
+
+        # 3. Check for analysis_options.yaml
+        if not self._check_exists(flutter_path, "analysis_options.yaml"):
+            if self._write_file(flutter_path, "analysis_options.yaml", FLUTTER_ANALYSIS_OPTIONS):
+                result.files_created.append("analysis_options.yaml")
+
+        # 4. Check for web/index.html (for web builds)
+        if not self._check_exists(flutter_path, "web/index.html"):
+            if self._write_file(flutter_path, "web/index.html", FLUTTER_INDEX_HTML):
+                result.files_created.append("web/index.html")
+                result.warnings.append("Created web/index.html for Flutter web support")
+
+        # 5. Validate pubspec.yaml content
+        pubspec_content = self._read_file(flutter_path, "pubspec.yaml")
+        if pubspec_content:
+            # Check for required fields
+            if "name:" not in pubspec_content:
+                result.errors.append("pubspec.yaml missing 'name' field")
+
+            if "flutter:" not in pubspec_content and "sdk: flutter" not in pubspec_content:
+                result.errors.append("pubspec.yaml missing Flutter SDK dependency")
+
+            # Check environment/SDK constraint
+            if "environment:" not in pubspec_content:
+                result.warnings.append("pubspec.yaml missing 'environment' SDK constraint")
+
+        # 6. Check lib/main.dart has main() and runApp()
+        main_dart = self._read_file(flutter_path, "lib/main.dart")
+        if main_dart:
+            if "void main()" not in main_dart and "main()" not in main_dart:
+                result.errors.append("lib/main.dart missing main() function")
+
+            if "runApp(" not in main_dart:
+                result.errors.append("lib/main.dart missing runApp() call")
+
+        logger.info(f"[TechnologyValidator] Flutter validation complete: {len(result.errors)} errors, {len(result.warnings)} warnings")
+
+    # =========================================================================
+    # REACT NATIVE / EXPO VALIDATION
+    # =========================================================================
+
+    def _validate_react_native(self, rn_path: str, result: ValidationResult):
+        """Validate React Native / Expo project"""
+        logger.info(f"[TechnologyValidator] Validating React Native project: {rn_path}")
+
+        # 1. Check package.json exists
+        pkg_content = self._read_file(rn_path, "package.json")
+        if not pkg_content:
+            result.errors.append("Missing package.json for React Native project")
+            return
+
+        # 2. Check for required dependencies
+        is_expo = '"expo"' in pkg_content
+        is_bare_rn = '"react-native"' in pkg_content and not is_expo
+
+        if is_expo:
+            # Expo project validation
+            if not self._check_exists(rn_path, "app.json") and not self._check_exists(rn_path, "app.config.js"):
+                app_json = """{
+  "expo": {
+    "name": "MyApp",
+    "slug": "myapp",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}"""
+                if self._write_file(rn_path, "app.json", app_json):
+                    result.files_created.append("app.json")
+
+            # Check for App.js or App.tsx
+            if not self._check_exists(rn_path, "App.js") and \
+               not self._check_exists(rn_path, "App.tsx") and \
+               not self._check_exists(rn_path, "app/index.tsx"):
+                expo_app = """import { StatusBar } from 'expo-status-bar';
+import { StyleSheet, Text, View } from 'react-native';
+
+export default function App() {
+  return (
+    <View style={styles.container}>
+      <Text>Welcome to React Native!</Text>
+      <StatusBar style="auto" />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
+"""
+                if self._write_file(rn_path, "App.js", expo_app):
+                    result.files_created.append("App.js")
+
+        if is_bare_rn:
+            # Bare React Native project
+            if not self._check_exists(rn_path, "index.js"):
+                result.warnings.append("Missing index.js entry point for React Native")
+
+            if not self._check_exists(rn_path, "metro.config.js"):
+                metro_config = """const {getDefaultConfig, mergeConfig} = require('@react-native/metro-config');
+
+const config = {};
+
+module.exports = mergeConfig(getDefaultConfig(__dirname), config);
+"""
+                if self._write_file(rn_path, "metro.config.js", metro_config):
+                    result.files_created.append("metro.config.js")
+
+        logger.info(f"[TechnologyValidator] React Native validation complete: {len(result.errors)} errors, {len(result.warnings)} warnings")
+
+    # =========================================================================
     # DOCKER COMPOSE VALIDATION
     # =========================================================================
 
@@ -870,7 +1185,7 @@ export default defineConfig({
         """Fix invalid Python package names in requirements.txt"""
         invalid_packages = []
         valid_python_prefixed = ["python-dotenv", "python-dateutil", "python-multipart",
-                                  "python-jose", "python-magic", "python-slugify"]
+                                  "python-jose", "python-magic", "python-slugify", "python-decouple"]
 
         for line in req_content.split("\n"):
             line = line.strip()

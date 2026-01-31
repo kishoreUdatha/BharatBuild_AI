@@ -2017,3 +2017,255 @@ async def preview_download(
             success=False,
             errors=[str(e)]
         )
+
+
+# =============================================================================
+# MOBILE APP DOWNLOADS (APK, IPA)
+# =============================================================================
+
+@router.get("/{project_id}/download/apk")
+async def download_project_apk(
+    project_id: str,
+    build_type: str = "release",
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Download APK file for Flutter/Android project.
+
+    Args:
+        project_id: The project ID
+        build_type: "release" or "debug" (default: release)
+
+    Returns:
+        APK file download
+
+    Note:
+        The project must have been built with Flutter first.
+        APK locations checked:
+        - build/app/outputs/flutter-apk/app-release.apk
+        - build/app/outputs/flutter-apk/app-debug.apk
+        - build/app/outputs/apk/release/app-release.apk
+    """
+    from fastapi.responses import FileResponse
+    from app.core.config import settings
+    from pathlib import Path
+    import glob as glob_module
+
+    try:
+        # Get project
+        project = await db.get(Project, project_id)
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found"
+            )
+
+        # Check ownership
+        if str(project.user_id) != str(current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to download this project"
+            )
+
+        # Get project path
+        project_path = Path(settings.SANDBOX_PATH) / str(current_user.id) / project_id
+
+        if not project_path.exists():
+            project_path = Path(settings.SANDBOX_PATH) / project_id
+
+        if not project_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project files not found. Please run the project first."
+            )
+
+        # Check if this is a Flutter project
+        pubspec_path = project_path / "pubspec.yaml"
+        if not pubspec_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Not a Flutter project. pubspec.yaml not found."
+            )
+
+        # Find APK files
+        apk_patterns = [
+            "**/build/app/outputs/flutter-apk/*.apk",
+            "**/build/app/outputs/apk/**/*.apk",
+            "**/app/build/outputs/apk/**/*.apk",
+            "**/*.apk",
+        ]
+
+        apk_files = []
+        for pattern in apk_patterns:
+            found = list(project_path.glob(pattern))
+            apk_files.extend(found)
+
+        # Remove duplicates
+        apk_files = list(set(apk_files))
+
+        if not apk_files:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No APK file found. The Flutter project needs to be built first. "
+                       "Run the project to trigger 'flutter build apk'."
+            )
+
+        # Filter by build type
+        preferred_apk = None
+        for apk in apk_files:
+            apk_name = apk.name.lower()
+            if build_type == "release" and "release" in apk_name:
+                preferred_apk = apk
+                break
+            elif build_type == "debug" and "debug" in apk_name:
+                preferred_apk = apk
+                break
+
+        # Fallback to first available
+        if not preferred_apk:
+            preferred_apk = apk_files[0]
+
+        # Generate filename
+        safe_name = "".join(c for c in (project.title or "app") if c.isalnum() or c in ('-', '_')).strip()
+        filename = f"{safe_name or 'app'}-{build_type}.apk"
+
+        logger.info(f"[APK Download] Project {project_id}: Serving {preferred_apk.name} as {filename}")
+
+        return FileResponse(
+            path=str(preferred_apk),
+            filename=filename,
+            media_type="application/vnd.android.package-archive",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "X-APK-Build-Type": build_type,
+                "X-APK-Original-Name": preferred_apk.name,
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[APK Download] Failed for project {project_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@router.get("/{project_id}/download/apk/info")
+async def get_project_apk_info(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get information about available APK files for a Flutter project.
+
+    Returns:
+        - Whether APK is available
+        - List of APK files with size and build type
+        - Download URL
+        - Build instructions if APK not found
+    """
+    from app.core.config import settings
+    from pathlib import Path
+
+    try:
+        # Get project
+        project = await db.get(Project, project_id)
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found"
+            )
+
+        # Check ownership
+        if str(project.user_id) != str(current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized"
+            )
+
+        # Get project path
+        project_path = Path(settings.SANDBOX_PATH) / str(current_user.id) / project_id
+
+        if not project_path.exists():
+            project_path = Path(settings.SANDBOX_PATH) / project_id
+
+        if not project_path.exists():
+            return {
+                "project_id": project_id,
+                "project_name": project.title,
+                "is_flutter_project": False,
+                "apk_available": False,
+                "message": "Project files not found. Please run the project first."
+            }
+
+        # Check if Flutter project
+        pubspec_path = project_path / "pubspec.yaml"
+        is_flutter = pubspec_path.exists()
+
+        if not is_flutter:
+            return {
+                "project_id": project_id,
+                "project_name": project.title,
+                "is_flutter_project": False,
+                "apk_available": False,
+                "message": "Not a Flutter project"
+            }
+
+        # Find APK files
+        apk_patterns = [
+            "**/build/app/outputs/flutter-apk/*.apk",
+            "**/build/app/outputs/apk/**/*.apk",
+            "**/*.apk",
+        ]
+
+        apk_files = []
+        for pattern in apk_patterns:
+            found = list(project_path.glob(pattern))
+            apk_files.extend(found)
+
+        apk_files = list(set(apk_files))
+
+        # Build APK info list
+        apk_info = []
+        for apk in apk_files:
+            try:
+                stat = apk.stat()
+                apk_info.append({
+                    "filename": apk.name,
+                    "path": str(apk.relative_to(project_path)),
+                    "size_bytes": stat.st_size,
+                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                    "build_type": "release" if "release" in apk.name.lower() else "debug",
+                })
+            except Exception:
+                pass
+
+        return {
+            "project_id": project_id,
+            "project_name": project.title,
+            "is_flutter_project": True,
+            "apk_available": len(apk_info) > 0,
+            "apk_count": len(apk_info),
+            "apk_files": apk_info,
+            "download_url": f"/api/v1/projects/{project_id}/download/apk" if apk_info else None,
+            "build_instructions": None if apk_info else {
+                "message": "APK not found. Run the project to build the APK.",
+                "commands": [
+                    "flutter pub get",
+                    "flutter build apk --release"
+                ]
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[APK Info] Failed for project {project_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )

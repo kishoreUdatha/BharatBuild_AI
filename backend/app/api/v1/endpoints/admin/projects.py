@@ -1,7 +1,7 @@
 """
 Admin Project Management endpoints.
 """
-from fastapi import APIRouter, Depends, Query, HTTPException, Request, UploadFile, File, Form, BackgroundTasks
+from fastapi import APIRouter, Depends, Query, HTTPException, Request, UploadFile, File, Form, BackgroundTasks, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, and_
@@ -410,8 +410,9 @@ async def download_project(
                 # Write file to ZIP
                 zf.writestr(file.path, content)
 
-    # Seek to beginning
+    # Seek to beginning and read content
     zip_buffer.seek(0)
+    zip_content = zip_buffer.getvalue()
 
     # Sanitize filename
     safe_title = "".join(c for c in project.title if c.isalnum() or c in (' ', '-', '_')).strip()
@@ -429,8 +430,9 @@ async def download_project(
         request=request
     )
 
-    return StreamingResponse(
-        zip_buffer,
+    # Return Response with bytes content (not StreamingResponse with BytesIO)
+    return Response(
+        content=zip_content,
         media_type="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"'

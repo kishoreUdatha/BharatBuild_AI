@@ -15,6 +15,11 @@ class UserRole(str, enum.Enum):
     FACULTY = "faculty"
     ADMIN = "admin"
     API_PARTNER = "api_partner"
+    # College Management Roles
+    PRINCIPAL = "principal"
+    VICE_PRINCIPAL = "vice_principal"
+    HOD = "hod"
+    LECTURER = "lecturer"
 
 
 class User(Base):

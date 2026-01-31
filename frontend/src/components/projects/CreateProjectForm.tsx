@@ -317,6 +317,27 @@ export function CreateProjectForm({ onProjectCreated }: CreateProjectFormProps) 
                 value={techStack}
                 onChange={(e) => setTechStack(e.target.value)}
               />
+              {/* Quick Tech Stack Suggestions */}
+              <div className="flex flex-wrap gap-2 mt-2">
+                <span className="text-xs text-muted-foreground">Quick select:</span>
+                {[
+                  { label: 'React + Node.js', value: 'React, Node.js, Express, PostgreSQL' },
+                  { label: 'Next.js Full Stack', value: 'Next.js, TypeScript, Tailwind CSS, Prisma' },
+                  { label: 'Python FastAPI', value: 'Python, FastAPI, SQLAlchemy, PostgreSQL' },
+                  { label: 'Flutter Mobile', value: 'Flutter, Dart, Firebase' },
+                  { label: 'React Native', value: 'React Native, Expo, TypeScript' },
+                  { label: 'Spring Boot', value: 'Java, Spring Boot, Maven, MySQL' },
+                ].map((suggestion) => (
+                  <Badge
+                    key={suggestion.label}
+                    variant="outline"
+                    className="cursor-pointer hover:bg-primary/10 transition-colors text-xs"
+                    onClick={() => setTechStack(suggestion.value)}
+                  >
+                    {suggestion.label}
+                  </Badge>
+                ))}
+              </div>
             </div>
           )}
 

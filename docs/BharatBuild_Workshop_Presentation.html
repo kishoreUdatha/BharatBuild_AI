@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BharatBuild AI - Project Generation Workshop</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: white; }
+
+        .slide {
+            min-height: 100vh;
+            padding: 60px 80px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            border-bottom: 2px solid #334155;
+            page-break-after: always;
+        }
+
+        .slide-title {
+            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%);
+            text-align: center;
+        }
+
+        .slide-section {
+            background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%);
+        }
+
+        h1 { font-size: 3.5rem; margin-bottom: 20px; }
+        h2 { font-size: 2.8rem; margin-bottom: 30px; color: #a5b4fc; }
+        h3 { font-size: 2rem; margin-bottom: 20px; color: #c4b5fd; }
+
+        .subtitle { font-size: 1.8rem; color: #cbd5e1; margin-bottom: 40px; }
+        .logo { font-size: 5rem; margin-bottom: 30px; }
+
+        ul { font-size: 1.6rem; line-height: 2.2; margin-left: 40px; }
+        li { margin-bottom: 15px; }
+        li::marker { color: #8b5cf6; }
+
+        .highlight { color: #fbbf24; font-weight: bold; }
+        .code { background: #1e293b; padding: 5px 15px; border-radius: 8px; font-family: monospace; color: #22d3ee; }
+
+        .two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; margin-top: 30px; }
+        .box {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border: 1px solid #475569;
+            border-radius: 16px;
+            padding: 30px;
+        }
+        .box h4 { font-size: 1.5rem; color: #a5b4fc; margin-bottom: 20px; }
+        .box ul { font-size: 1.3rem; margin-left: 20px; }
+
+        .icon { font-size: 3rem; margin-bottom: 20px; }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 30px; font-size: 1.3rem; }
+        th { background: #6366f1; padding: 15px; text-align: left; }
+        td { background: #1e293b; padding: 15px; border-bottom: 1px solid #334155; }
+        tr:hover td { background: #334155; }
+
+        .prompt-box {
+            background: #1e293b;
+            border-left: 4px solid #22d3ee;
+            padding: 25px;
+            margin: 20px 0;
+            font-size: 1.4rem;
+            border-radius: 0 12px 12px 0;
+        }
+        .prompt-bad {
+            border-left-color: #ef4444;
+        }
+        .prompt-good {
+            border-left-color: #22c55e;
+        }
+
+        .step-number {
+            display: inline-flex;
+            width: 50px;
+            height: 50px;
+            background: #6366f1;
+            border-radius: 50%;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-right: 20px;
+        }
+
+        .step { display: flex; align-items: center; margin-bottom: 25px; font-size: 1.5rem; }
+
+        .footer {
+            position: absolute;
+            bottom: 30px;
+            right: 60px;
+            font-size: 1rem;
+            color: #64748b;
+        }
+
+        .slide-number {
+            position: absolute;
+            bottom: 30px;
+            left: 60px;
+            font-size: 1rem;
+            color: #64748b;
+        }
+
+        .center { text-align: center; }
+
+        .big-icon { font-size: 6rem; margin: 30px 0; }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 30px;
+            margin-top: 40px;
+        }
+        .feature-card {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border: 1px solid #475569;
+            border-radius: 16px;
+            padding: 30px;
+            text-align: center;
+        }
+        .feature-card h4 { color: #a5b4fc; margin: 15px 0; font-size: 1.3rem; }
+        .feature-card p { color: #94a3b8; font-size: 1.1rem; }
+
+        @media print {
+            .slide { page-break-after: always; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Slide 1: Title -->
+<div class="slide slide-title">
+    <div class="center">
+        <div class="logo">🚀</div>
+        <h1>BharatBuild AI</h1>
+        <p class="subtitle">Project Generation Workshop</p>
+        <p style="font-size: 1.5rem; margin-top: 40px;">2-Day Hands-on Program</p>
+        <p style="font-size: 1.2rem; color: #cbd5e1; margin-top: 20px;">10:00 AM - 4:00 PM</p>
+    </div>
+</div>
+
+<!-- Slide 2: Workshop Overview -->
+<div class="slide">
+    <h2>Workshop Overview</h2>
+    <div class="two-column">
+        <div class="box">
+            <h4>📅 Day 1: Fundamentals</h4>
+            <ul>
+                <li>Introduction to AI Generation</li>
+                <li>Writing Effective Prompts</li>
+                <li>Generate Simple Projects</li>
+                <li>Modify with AI Chat</li>
+            </ul>
+        </div>
+        <div class="box">
+            <h4>📅 Day 2: Advanced</h4>
+            <ul>
+                <li>Full-Stack Projects</li>
+                <li>Complex Applications</li>
+                <li>Download & Deploy</li>
+                <li>Project Showcase</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<!-- Slide 3: What is BharatBuild AI -->
+<div class="slide">
+    <h2>What is BharatBuild AI?</h2>
+    <p style="font-size: 1.6rem; margin-bottom: 40px; color: #cbd5e1;">
+        An AI-powered platform that generates complete, production-ready code from natural language descriptions.
+    </p>
+    <div class="feature-grid">
+        <div class="feature-card">
+            <div style="font-size: 3rem;">💬</div>
+            <h4>Describe in English</h4>
+            <p>Tell AI what you want to build</p>
+        </div>
+        <div class="feature-card">
+            <div style="font-size: 3rem;">⚡</div>
+            <h4>Instant Generation</h4>
+            <p>Get complete code in seconds</p>
+        </div>
+        <div class="feature-card">
+            <div style="font-size: 3rem;">👁️</div>
+            <h4>Live Preview</h4>
+            <p>See your app running instantly</p>
+        </div>
+        <div class="feature-card">
+            <div style="font-size: 3rem;">🔧</div>
+            <h4>AI Modifications</h4>
+            <p>Ask AI to add features & fix bugs</p>
+        </div>
+        <div class="feature-card">
+            <div style="font-size: 3rem;">📁</div>
+            <h4>Full Source Code</h4>
+            <p>Download complete project</p>
+        </div>
+        <div class="feature-card">
+            <div style="font-size: 3rem;">🌐</div>
+            <h4>Deploy Ready</h4>
+            <p>Production-ready applications</p>
+        </div>
+    </div>
+</div>
+
+<!-- Slide 4: Supported Technologies -->
+<div class="slide">
+    <h2>Supported Technologies</h2>
+    <div class="two-column">
+        <div class="box">
+            <h4>Frontend</h4>
+            <ul>
+                <li>React / Next.js</li>
+                <li>Vue.js / Nuxt.js</li>
+                <li>Angular</li>
+                <li>HTML/CSS/JavaScript</li>
+                <li>Tailwind CSS</li>
+            </ul>
+        </div>
+        <div class="box">
+            <h4>Backend</h4>
+            <ul>
+                <li>Node.js / Express</li>
+                <li>Python / FastAPI / Django</li>
+                <li>Java / Spring Boot</li>
+                <li>PHP / Laravel</li>
+                <li>Go / Gin</li>
+            </ul>
+        </div>
+    </div>
+    <div class="two-column" style="margin-top: 30px;">
+        <div class="box">
+            <h4>Database</h4>
+            <ul>
+                <li>PostgreSQL / MySQL</li>
+                <li>MongoDB</li>
+                <li>SQLite</li>
+            </ul>
+        </div>
+        <div class="box">
+            <h4>Mobile</h4>
+            <ul>
+                <li>React Native</li>
+                <li>Flutter</li>
+                <li>Kotlin / Swift</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<!-- Slide 5: Day 1 Section -->
+<div class="slide slide-section center">
+    <div class="big-icon">📘</div>
+    <h1>Day 1</h1>
+    <p class="subtitle">Fundamentals & Simple Projects</p>
+</div>
+
+<!-- Slide 6: Getting Started -->
+<div class="slide">
+    <h2>Getting Started</h2>
+    <div class="step"><span class="step-number">1</span> Open <span class="code">bharatbuild.ai</span> in your browser</div>
+    <div class="step"><span class="step-number">2</span> Login with your credentials</div>
+    <div class="step"><span class="step-number">3</span> Click <span class="highlight">"New Project"</span></div>
+    <div class="step"><span class="step-number">4</span> Enter your project description</div>
+    <div class="step"><span class="step-number">5</span> Click <span class="highlight">"Generate"</span> and watch the magic!</div>
+</div>
+
+<!-- Slide 7: Writing Effective Prompts -->
+<div class="slide">
+    <h2>Writing Effective Prompts</h2>
+    <h3 style="color: #ef4444;">❌ Bad Prompt</h3>
+    <div class="prompt-box prompt-bad">
+        "Make me a website"
+    </div>
+    <h3 style="color: #22c55e; margin-top: 30px;">✅ Good Prompt</h3>
+    <div class="prompt-box prompt-good">
+        "Create a personal portfolio website with React and Tailwind CSS. Include sections for About Me, Skills, Projects (with image cards), and Contact form. Use dark theme with purple accents."
+    </div>
+</div>
+
+<!-- Slide 8: Prompt Structure -->
+<div class="slide">
+    <h2>Prompt Structure</h2>
+    <table>
+        <tr>
+            <th>Element</th>
+            <th>Example</th>
+        </tr>
+        <tr>
+            <td><span class="highlight">Project Type</span></td>
+            <td>"Create a todo app" / "Build an e-commerce site"</td>
+        </tr>
+        <tr>
+            <td><span class="highlight">Tech Stack</span></td>
+            <td>"using React and Node.js" / "with Next.js and MongoDB"</td>
+        </tr>
+        <tr>
+            <td><span class="highlight">Features</span></td>
+            <td>"Include login, dashboard, and reports"</td>
+        </tr>
+        <tr>
+            <td><span class="highlight">Design</span></td>
+            <td>"Use dark theme with blue accents"</td>
+        </tr>
+        <tr>
+            <td><span class="highlight">Pages/Sections</span></td>
+            <td>"Include Home, About, Products, Contact pages"</td>
+        </tr>
+    </table>
+</div>
+
+<!-- Slide 9: Demo Project -->
+<div class="slide center">
+    <h2>Live Demo</h2>
+    <div class="big-icon">🎬</div>
+    <p style="font-size: 1.8rem; color: #cbd5e1;">Generating a Portfolio Website</p>
+    <div class="prompt-box prompt-good" style="text-align: left; margin-top: 40px;">
+        "Create a modern portfolio website for a web developer using Next.js and Tailwind CSS. Include:
+        <br>- Hero section with animated text
+        <br>- About me section
+        <br>- Skills with progress bars
+        <br>- Projects grid with hover effects
+        <br>- Contact form
+        <br>Use dark theme with gradient accents."
+    </div>
+</div>
+
+<!-- Slide 10: Hands-on Exercise 1 -->
+<div class="slide">
+    <h2>🛠️ Hands-on Exercise 1</h2>
+    <p style="font-size: 1.5rem; margin-bottom: 30px;">Generate your first project! Choose one:</p>
+    <div class="feature-grid">
+        <div class="feature-card">
+            <div style="font-size: 3rem;">📝</div>
+            <h4>Todo App</h4>
+            <p>Add, complete, delete tasks</p>
+        </div>
+        <div class="feature-card">
+            <div style="font-size: 3rem;">🧮</div>
+            <h4>Calculator</h4>
+            <p>Basic arithmetic operations</p>
+        </div>
+        <div class="feature-card">
+            <div style="font-size: 3rem;">🌤️</div>
+            <h4>Weather App</h4>
+            <p>Show weather for a city</p>
+        </div>
+    </div>
+    <p style="font-size: 1.3rem; margin-top: 40px; color: #94a3b8;">
+        ⏱️ Time: 30 minutes | Ask for help if stuck!
+    </p>
+</div>
+
+<!-- Slide 11: Understanding Generated Code -->
+<div class="slide">
+    <h2>Understanding Generated Code</h2>
+    <div class="two-column">
+        <div class="box">
+            <h4>📁 File Structure</h4>
+            <ul style="font-family: monospace; font-size: 1.2rem;">
+                <li>📂 src/</li>
+                <li>&nbsp;&nbsp;📂 components/</li>
+                <li>&nbsp;&nbsp;📂 pages/</li>
+                <li>&nbsp;&nbsp;📂 styles/</li>
+                <li>&nbsp;&nbsp;📄 App.jsx</li>
+                <li>📄 package.json</li>
+                <li>📄 README.md</li>
+            </ul>
+        </div>
+        <div class="box">
+            <h4>🔍 Key Files</h4>
+            <ul>
+                <li><span class="code">package.json</span> - Dependencies</li>
+                <li><span class="code">App.jsx</span> - Main component</li>
+                <li><span class="code">components/</span> - UI parts</li>
+                <li><span class="code">pages/</span> - Route pages</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<!-- Slide 12: Modifying with AI Chat -->
+<div class="slide">
+    <h2>Modifying with AI Chat</h2>
+    <p style="font-size: 1.4rem; margin-bottom: 30px;">After generation, ask AI to make changes:</p>
+    <div class="prompt-box prompt-good">
+        "Add a dark/light theme toggle button in the header"
+    </div>
+    <div class="prompt-box prompt-good">
+        "Change the primary color from blue to purple"
+    </div>
+    <div class="prompt-box prompt-good">
+        "Add a new 'Services' page with 6 service cards"
+    </div>
+    <div class="prompt-box prompt-good">
+        "Fix the mobile navigation menu - it's not closing properly"
+    </div>
+</div>
+
+<!-- Slide 13: Day 2 Section -->
+<div class="slide slide-section center">
+    <div class="big-icon">📗</div>
+    <h1>Day 2</h1>
+    <p class="subtitle">Advanced Projects & Deployment</p>
+</div>
+
+<!-- Slide 14: Full-Stack Projects -->
+<div class="slide">
+    <h2>Full-Stack Project Generation</h2>
+    <div class="prompt-box prompt-good">
+        "Create a full-stack blog application with:
+        <br><br><b>Frontend:</b> Next.js with Tailwind CSS
+        <br><b>Backend:</b> Node.js with Express
+        <br><b>Database:</b> MongoDB
+        <br><br><b>Features:</b>
+        <br>- User authentication (login/register)
+        <br>- Create, edit, delete blog posts
+        <br>- Rich text editor for content
+        <br>- Categories and tags
+        <br>- Comments system
+        <br>- Admin dashboard"
+    </div>
+</div>
+
+<!-- Slide 15: Complex Project Examples -->
+<div class="slide">
+    <h2>Complex Project Examples</h2>
+    <div class="feature-grid">
+        <div class="feature-card">
+            <div style="font-size: 3rem;">🛒</div>
+            <h4>E-Commerce</h4>
+            <p>Products, Cart, Checkout, Payments</p>
+        </div>
+        <div class="feature-card">
+            <div style="font-size: 3rem;">🏥</div>
+            <h4>Hospital System</h4>
+            <p>Patients, Doctors, Appointments</p>
+        </div>
+        <div class="feature-card">
+            <div style="font-size: 3rem;">🎓</div>
+            <h4>Student Portal</h4>
+            <p>Courses, Grades, Attendance</p>
+        </div>
+        <div class="feature-card">
+            <div style="font-size: 3rem;">📦</div>
+            <h4>Inventory System</h4>
+            <p>Products, Stock, Orders</p>
+        </div>
+        <div class="feature-card">
+            <div style="font-size: 3rem;">🍽️</div>
+            <h4>Restaurant App</h4>
+            <p>Menu, Orders, Delivery</p>
+        </div>
+        <div class="feature-card">
+            <div style="font-size: 3rem;">💼</div>
+            <h4>HR Management</h4>
+            <p>Employees, Leave, Payroll</p>
+        </div>
+    </div>
+</div>
+
+<!-- Slide 16: Hands-on Exercise 2 -->
+<div class="slide">
+    <h2>🛠️ Hands-on Exercise 2</h2>
+    <p style="font-size: 1.5rem; margin-bottom: 30px;">Build your final project! Choose one:</p>
+    <table>
+        <tr>
+            <th>Project</th>
+            <th>Key Features</th>
+        </tr>
+        <tr>
+            <td>Student Management System</td>
+            <td>Students, Courses, Grades, Attendance</td>
+        </tr>
+        <tr>
+            <td>E-Commerce Website</td>
+            <td>Products, Cart, Checkout, Orders</td>
+        </tr>
+        <tr>
+            <td>Blog Platform</td>
+            <td>Posts, Categories, Comments, Admin</td>
+        </tr>
+        <tr>
+            <td>Task Manager</td>
+            <td>Projects, Tasks, Teams, Deadlines</td>
+        </tr>
+        <tr>
+            <td>Your Own Idea!</td>
+            <td>Describe your project to AI</td>
+        </tr>
+    </table>
+    <p style="font-size: 1.3rem; margin-top: 30px; color: #94a3b8;">
+        ⏱️ Time: 60 minutes
+    </p>
+</div>
+
+<!-- Slide 17: Download & Deploy -->
+<div class="slide">
+    <h2>Download & Deploy</h2>
+    <div class="step"><span class="step-number">1</span> Click <span class="highlight">"Download"</span> button to get ZIP file</div>
+    <div class="step"><span class="step-number">2</span> Extract and open in VS Code</div>
+    <div class="step"><span class="step-number">3</span> Run <span class="code">npm install</span> to install dependencies</div>
+    <div class="step"><span class="step-number">4</span> Run <span class="code">npm run dev</span> to start locally</div>
+    <div class="step"><span class="step-number">5</span> Deploy to Vercel / Netlify / Railway</div>
+    <div class="box" style="margin-top: 30px;">
+        <h4>🚀 Free Deployment Options</h4>
+        <ul>
+            <li><b>Vercel</b> - Best for Next.js apps</li>
+            <li><b>Netlify</b> - Great for static sites</li>
+            <li><b>Railway</b> - Full-stack with database</li>
+        </ul>
+    </div>
+</div>
+
+<!-- Slide 18: Tips & Best Practices -->
+<div class="slide">
+    <h2>Tips & Best Practices</h2>
+    <ul style="font-size: 1.5rem;">
+        <li>✅ Be <span class="highlight">specific</span> in your prompts</li>
+        <li>✅ Mention the <span class="highlight">tech stack</span> you want</li>
+        <li>✅ List all <span class="highlight">features</span> clearly</li>
+        <li>✅ Describe the <span class="highlight">design/theme</span></li>
+        <li>✅ Use AI chat for <span class="highlight">incremental changes</span></li>
+        <li>✅ Review and <span class="highlight">understand</span> the generated code</li>
+        <li>✅ Test thoroughly before deploying</li>
+        <li>❌ Don't use vague prompts like "make it better"</li>
+    </ul>
+</div>
+
+<!-- Slide 19: Q&A -->
+<div class="slide center">
+    <div class="big-icon">❓</div>
+    <h1>Questions?</h1>
+    <p class="subtitle">Let's discuss!</p>
+</div>
+
+<!-- Slide 20: Thank You -->
+<div class="slide slide-title center">
+    <div class="big-icon">🎉</div>
+    <h1>Thank You!</h1>
+    <p class="subtitle">Happy Building with BharatBuild AI</p>
+    <p style="font-size: 1.3rem; margin-top: 40px; color: #cbd5e1;">
+        🌐 bharatbuild.ai
+    </p>
+</div>
+
+</body>
+</html>

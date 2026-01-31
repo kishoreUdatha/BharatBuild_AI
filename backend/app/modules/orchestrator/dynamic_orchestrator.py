@@ -5742,7 +5742,67 @@ Stream code in chunks for real-time display.
                 yield event
             # Skip internal thinking steps to keep UI clean
 
-        # Step 3: Done (shown to user)
+        # Step 3: Validate generated files (fast, no LLM)
+        verifier = VerificationAgent(model="haiku")
+
+        # Get files with content for validation
+        files_with_content = []
+        for file_path in context.files_created:
+            content = context.file_contents.get(file_path, "")
+            files_with_content.append({"path": file_path, "content": content})
+
+        validation = verifier.quick_validate_bolt_instant(
+            files_created=files_with_content,
+            tech_stack=context.tech_stack
+        )
+
+        # If missing critical files, try to regenerate them
+        if validation["needs_regeneration"] and validation["files_to_regenerate"]:
+            missing_files = validation["files_to_regenerate"]
+            logger.warning(f"[Bolt Instant] Missing {len(missing_files)} files, regenerating: {missing_files}")
+
+            yield OrchestratorEvent(
+                type=EventType.THINKING_STEP,
+                data={
+                    "step": "fixing",
+                    "detail": f"Completing {len(missing_files)} missing files...",
+                    "icon": "🔧",
+                    "user_visible": True
+                }
+            )
+
+            # Generate prompt for missing files
+            regen_prompt = await verifier.generate_missing_files_prompt(
+                missing_files=missing_files,
+                plan=context.plan or {},
+                existing_files=files_with_content
+            )
+
+            # Use writer to regenerate missing files
+            regen_context = ExecutionContext(
+                project_id=context.project_id,
+                session_id=context.session_id,
+                user_request=regen_prompt,
+                tech_stack=context.tech_stack
+            )
+            regen_context.files_created = context.files_created.copy()
+            regen_context.file_contents = context.file_contents.copy()
+
+            async for event in self._execute_writer_for_task(config, regen_context, None, config.system_prompt):
+                if event.type in [EventType.FILE_OPERATION, EventType.FILE_CONTENT]:
+                    yield event
+                    # Update original context with new files
+                    if hasattr(event, 'data') and isinstance(event.data, dict):
+                        if 'path' in event.data:
+                            file_path = event.data['path']
+                            if file_path not in context.files_created:
+                                context.files_created.append(file_path)
+                            if 'content' in event.data:
+                                context.file_contents[file_path] = event.data['content']
+
+            logger.info(f"[Bolt Instant] Regeneration complete, now {len(context.files_created)} files")
+
+        # Step 4: Done (shown to user)
         yield OrchestratorEvent(
             type=EventType.THINKING_STEP,
             data={

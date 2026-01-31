@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BharatBuild AI - College Partnership Proposal</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #0ea5e9;
+            --primary-dark: #0284c7;
+            --secondary: #8b5cf6;
+            --accent: #06b6d4;
+            --dark: #0f172a;
+            --gray: #64748b;
+            --light: #f8fafc;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            line-height: 1.6;
+            color: #334155;
+            background: #fff;
+        }
+
+        /* Print Styles */
+        @media print {
+            .no-print { display: none !important; }
+            .page-break { page-break-before: always; }
+            body { font-size: 11pt; }
+            .hero { min-height: auto; padding: 40px 20px; }
+        }
+
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(135deg, var(--dark) 0%, #1e293b 50%, #0f172a 100%);
+            color: white;
+            padding: 80px 40px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%230ea5e9' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+            opacity: 0.5;
+        }
+
+        .hero-content {
+            position: relative;
+            z-index: 1;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .logo {
+            font-size: 3.5rem;
+            font-weight: 800;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, var(--primary), var(--accent), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .tagline {
+            font-size: 1.5rem;
+            color: #94a3b8;
+            margin-bottom: 40px;
+            font-weight: 300;
+        }
+
+        .hero h1 {
+            font-size: 2.8rem;
+            font-weight: 700;
+            margin-bottom: 20px;
+            line-height: 1.2;
+        }
+
+        .hero p {
+            font-size: 1.2rem;
+            color: #cbd5e1;
+            max-width: 700px;
+            margin: 0 auto 40px;
+        }
+
+        .badge {
+            display: inline-block;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            padding: 8px 24px;
+            border-radius: 50px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 30px;
+        }
+
+        .stats-row {
+            display: flex;
+            justify-content: center;
+            gap: 60px;
+            margin-top: 50px;
+            flex-wrap: wrap;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 3rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stat-label {
+            color: #94a3b8;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Section Styles */
+        .section {
+            padding: 80px 40px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .section-title {
+            font-size: 2.2rem;
+            font-weight: 700;
+            color: var(--dark);
+            text-align: center;
+            margin-bottom: 15px;
+        }
+
+        .section-subtitle {
+            text-align: center;
+            color: var(--gray);
+            font-size: 1.1rem;
+            margin-bottom: 50px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        /* Features Grid */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+        }
+
+        .feature-card {
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            padding: 30px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+            border-color: var(--primary);
+        }
+
+        .feature-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.8rem;
+            margin-bottom: 20px;
+        }
+
+        .feature-card h3 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: var(--dark);
+            margin-bottom: 10px;
+        }
+
+        .feature-card p {
+            color: var(--gray);
+            font-size: 0.95rem;
+        }
+
+        /* Campus Drive Section */
+        .campus-section {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: white;
+            padding: 80px 40px;
+        }
+
+        .campus-content {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .campus-section .section-title {
+            color: white;
+        }
+
+        .campus-section .section-subtitle {
+            color: #94a3b8;
+        }
+
+        .campus-features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 25px;
+            margin-top: 40px;
+        }
+
+        .campus-feature {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 25px;
+            text-align: center;
+        }
+
+        .campus-feature-icon {
+            font-size: 2.5rem;
+            margin-bottom: 15px;
+        }
+
+        .campus-feature h4 {
+            font-size: 1.1rem;
+            margin-bottom: 8px;
+            color: white;
+        }
+
+        .campus-feature p {
+            color: #94a3b8;
+            font-size: 0.9rem;
+        }
+
+        /* Benefits Section */
+        .benefits-section {
+            background: #f8fafc;
+        }
+
+        .benefits-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 40px;
+        }
+
+        @media (max-width: 768px) {
+            .benefits-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .benefit-column h3 {
+            font-size: 1.5rem;
+            color: var(--dark);
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+            border-bottom: 3px solid var(--primary);
+            display: inline-block;
+        }
+
+        .benefit-list {
+            list-style: none;
+        }
+
+        .benefit-list li {
+            padding: 12px 0;
+            padding-left: 35px;
+            position: relative;
+            color: #475569;
+        }
+
+        .benefit-list li::before {
+            content: '✓';
+            position: absolute;
+            left: 0;
+            top: 12px;
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+
+        /* Pricing Section */
+        .pricing-section {
+            background: white;
+        }
+
+        .pricing-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        .pricing-card {
+            border: 2px solid #e2e8f0;
+            border-radius: 20px;
+            padding: 40px 30px;
+            text-align: center;
+            position: relative;
+            background: white;
+        }
+
+        .pricing-card.featured {
+            border-color: var(--primary);
+            transform: scale(1.05);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.15);
+        }
+
+        .pricing-card.featured::before {
+            content: 'RECOMMENDED';
+            position: absolute;
+            top: -12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            padding: 5px 20px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
+
+        .pricing-card h3 {
+            font-size: 1.4rem;
+            color: var(--dark);
+            margin-bottom: 10px;
+        }
+
+        .pricing-card .price {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: var(--primary);
+            margin: 20px 0;
+        }
+
+        .pricing-card .price span {
+            font-size: 1rem;
+            color: var(--gray);
+            font-weight: 400;
+        }
+
+        .pricing-card ul {
+            list-style: none;
+            text-align: left;
+            margin: 30px 0;
+        }
+
+        .pricing-card ul li {
+            padding: 10px 0;
+            color: #475569;
+            border-bottom: 1px solid #f1f5f9;
+        }
+
+        .pricing-card ul li::before {
+            content: '✓ ';
+            color: var(--primary);
+            font-weight: bold;
+        }
+
+        /* Process Section */
+        .process-section {
+            background: #f8fafc;
+        }
+
+        .process-steps {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 20px;
+            position: relative;
+        }
+
+        .process-step {
+            flex: 1;
+            min-width: 200px;
+            text-align: center;
+            position: relative;
+        }
+
+        .step-number {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin: 0 auto 20px;
+        }
+
+        .process-step h4 {
+            font-size: 1.1rem;
+            color: var(--dark);
+            margin-bottom: 10px;
+        }
+
+        .process-step p {
+            color: var(--gray);
+            font-size: 0.9rem;
+        }
+
+        /* Testimonials */
+        .testimonial-section {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            text-align: center;
+        }
+
+        .testimonial-section .section-title {
+            color: white;
+        }
+
+        .testimonial-section .section-subtitle {
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .testimonial-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 40px;
+            max-width: 700px;
+            margin: 0 auto;
+            backdrop-filter: blur(10px);
+        }
+
+        .testimonial-card p {
+            font-size: 1.2rem;
+            font-style: italic;
+            margin-bottom: 20px;
+            line-height: 1.8;
+        }
+
+        .testimonial-author {
+            font-weight: 600;
+        }
+
+        /* Contact Section */
+        .contact-section {
+            background: var(--dark);
+            color: white;
+            text-align: center;
+        }
+
+        .contact-section .section-title {
+            color: white;
+        }
+
+        .contact-info {
+            display: flex;
+            justify-content: center;
+            gap: 60px;
+            flex-wrap: wrap;
+            margin-top: 40px;
+        }
+
+        .contact-item {
+            text-align: center;
+        }
+
+        .contact-item-icon {
+            font-size: 2rem;
+            margin-bottom: 15px;
+        }
+
+        .contact-item h4 {
+            font-size: 1rem;
+            color: #94a3b8;
+            margin-bottom: 5px;
+        }
+
+        .contact-item p {
+            font-size: 1.1rem;
+            color: white;
+        }
+
+        .cta-button {
+            display: inline-block;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            color: white;
+            padding: 15px 40px;
+            border-radius: 50px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            text-decoration: none;
+            margin-top: 40px;
+            transition: all 0.3s ease;
+        }
+
+        .cta-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 10px 30px rgba(14, 165, 233, 0.4);
+        }
+
+        /* Footer */
+        .footer {
+            background: #0a0f1a;
+            color: #64748b;
+            text-align: center;
+            padding: 30px;
+            font-size: 0.9rem;
+        }
+
+        /* Screenshots Gallery */
+        .screenshot-section {
+            background: white;
+        }
+
+        .screenshots-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 30px;
+        }
+
+        .screenshot-card {
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+        }
+
+        .screenshot-placeholder {
+            background: linear-gradient(135deg, #1e293b, #334155);
+            height: 220px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #94a3b8;
+            font-size: 1rem;
+        }
+
+        .screenshot-card h4 {
+            padding: 20px;
+            font-size: 1rem;
+            color: var(--dark);
+            background: #f8fafc;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 2rem; }
+            .logo { font-size: 2.5rem; }
+            .tagline { font-size: 1.2rem; }
+            .stats-row { gap: 30px; }
+            .stat-number { font-size: 2rem; }
+            .section { padding: 50px 20px; }
+            .section-title { font-size: 1.8rem; }
+            .pricing-card.featured { transform: none; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-content">
+            <div class="badge">AI-Powered Development Platform</div>
+            <div class="logo">BharatBuild AI</div>
+            <p class="tagline">Build. Learn. Deploy.</p>
+
+            <h1>Empowering the Next Generation of Tech Talent</h1>
+            <p>A comprehensive AI-powered platform that helps students learn programming, build real-world projects, and prepare for campus placements - all in one place.</p>
+
+            <div class="stats-row">
+                <div class="stat">
+                    <div class="stat-number">10K+</div>
+                    <div class="stat-label">Students</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-number">500+</div>
+                    <div class="stat-label">Projects Built</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-number">50+</div>
+                    <div class="stat-label">College Partners</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-number">95%</div>
+                    <div class="stat-label">Satisfaction</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="section">
+        <h2 class="section-title">Platform Features</h2>
+        <p class="section-subtitle">Everything students need to become industry-ready developers</p>
+
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon" style="background: linear-gradient(135deg, #dbeafe, #bfdbfe);">
+                    <span>🤖</span>
+                </div>
+                <h3>AI Code Generation</h3>
+                <p>Generate production-ready code using advanced AI. Students describe what they want to build, and our AI creates the complete project structure with clean, documented code.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon" style="background: linear-gradient(135deg, #dcfce7, #bbf7d0);">
+                    <span>💻</span>
+                </div>
+                <h3>Multi-Language Support</h3>
+                <p>Build projects in Python, JavaScript, Java, React, Node.js, and more. Full-stack development with frontend, backend, and database integration.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon" style="background: linear-gradient(135deg, #fef3c7, #fde68a);">
+                    <span>📚</span>
+                </div>
+                <h3>Learning Paths</h3>
+                <p>Structured learning modules covering programming fundamentals, data structures, algorithms, web development, and AI/ML concepts.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon" style="background: linear-gradient(135deg, #f3e8ff, #e9d5ff);">
+                    <span>🚀</span>
+                </div>
+                <h3>One-Click Deployment</h3>
+                <p>Deploy projects instantly to the cloud. Students get live URLs to showcase their work in portfolios and interviews.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon" style="background: linear-gradient(135deg, #ffe4e6, #fecdd3);">
+                    <span>👨‍💻</span>
+                </div>
+                <h3>VS Code Integration</h3>
+                <p>Built-in code editor with syntax highlighting, IntelliSense, and debugging. Familiar interface for students transitioning to professional tools.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon" style="background: linear-gradient(135deg, #cffafe, #a5f3fc);">
+                    <span>📊</span>
+                </div>
+                <h3>Progress Analytics</h3>
+                <p>Track student progress, identify learning gaps, and generate detailed reports for faculty and placement cells.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Campus Drive Section -->
+    <section class="campus-section page-break">
+        <div class="campus-content">
+            <h2 class="section-title">🎓 Campus Placement Drive Platform</h2>
+            <p class="section-subtitle">Conduct seamless online assessments for 500+ students simultaneously</p>
+
+            <div class="campus-features">
+                <div class="campus-feature">
+                    <div class="campus-feature-icon">📝</div>
+                    <h4>Online Registration</h4>
+                    <p>Students register with college details, department, and CGPA. Automatic validation and duplicate prevention.</p>
+                </div>
+
+                <div class="campus-feature">
+                    <div class="campus-feature-icon">🧠</div>
+                    <h4>Multi-Section Quiz</h4>
+                    <p>Logical Reasoning, Technical Skills, AI/ML Knowledge, and English Proficiency - all in one assessment.</p>
+                </div>
+
+                <div class="campus-feature">
+                    <div class="campus-feature-icon">⏱️</div>
+                    <h4>Timed Assessment</h4>
+                    <p>60-minute auto-submit exam with real-time countdown. Anti-cheating measures included.</p>
+                </div>
+
+                <div class="campus-feature">
+                    <div class="campus-feature-icon">📈</div>
+                    <h4>Instant Results</h4>
+                    <p>Students see scores immediately. Section-wise breakdown with pass/fail status.</p>
+                </div>
+
+                <div class="campus-feature">
+                    <div class="campus-feature-icon">👨‍💼</div>
+                    <h4>Admin Dashboard</h4>
+                    <p>Real-time monitoring of registrations, submissions, and qualified candidates.</p>
+                </div>
+
+                <div class="campus-feature">
+                    <div class="campus-feature-icon">📥</div>
+                    <h4>Export Reports</h4>
+                    <p>Download student data, scores, and analytics in Excel/CSV format for placement records.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Benefits Section -->
+    <section class="section benefits-section">
+        <h2 class="section-title">Why Partner With BharatBuild?</h2>
+        <p class="section-subtitle">Benefits for colleges, faculty, and students</p>
+
+        <div class="benefits-grid">
+            <div class="benefit-column">
+                <h3>For Colleges & Faculty</h3>
+                <ul class="benefit-list">
+                    <li>Reduce lab infrastructure costs with cloud-based development</li>
+                    <li>Track student progress and generate placement reports</li>
+                    <li>Conduct online assessments and coding competitions</li>
+                    <li>Integrate with existing LMS systems</li>
+                    <li>24/7 technical support and training for faculty</li>
+                    <li>White-label option with college branding</li>
+                    <li>Dedicated account manager for support</li>
+                    <li>Regular platform updates with new features</li>
+                </ul>
+            </div>
+
+            <div class="benefit-column">
+                <h3>For Students</h3>
+                <ul class="benefit-list">
+                    <li>Build real-world projects for portfolio</li>
+                    <li>Learn industry-standard tools and practices</li>
+                    <li>AI-assisted coding to accelerate learning</li>
+                    <li>Prepare for technical interviews</li>
+                    <li>Get certified upon course completion</li>
+                    <li>Access 24/7 from any device</li>
+                    <li>Collaborate on team projects</li>
+                    <li>Direct pathway to job opportunities</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- Screenshots Section -->
+    <section class="section screenshot-section">
+        <h2 class="section-title">Platform Screenshots</h2>
+        <p class="section-subtitle">A glimpse of the BharatBuild experience</p>
+
+        <div class="screenshots-grid">
+            <div class="screenshot-card">
+                <div class="screenshot-placeholder">
+                    [AI Project Builder Interface]
+                </div>
+                <h4>AI-Powered Project Generation</h4>
+            </div>
+
+            <div class="screenshot-card">
+                <div class="screenshot-placeholder">
+                    [Code Editor with Syntax Highlighting]
+                </div>
+                <h4>Integrated Code Editor</h4>
+            </div>
+
+            <div class="screenshot-card">
+                <div class="screenshot-placeholder">
+                    [Campus Drive Registration Page]
+                </div>
+                <h4>Campus Placement Portal</h4>
+            </div>
+
+            <div class="screenshot-card">
+                <div class="screenshot-placeholder">
+                    [Admin Analytics Dashboard]
+                </div>
+                <h4>Admin Analytics Dashboard</h4>
+            </div>
+        </div>
+    </section>
+
+    <!-- Pricing Section -->
+    <section class="section pricing-section page-break">
+        <h2 class="section-title">Partnership Plans</h2>
+        <p class="section-subtitle">Flexible pricing designed for educational institutions</p>
+
+        <div class="pricing-cards">
+            <div class="pricing-card">
+                <h3>Starter</h3>
+                <p style="color: var(--gray);">For small departments</p>
+                <div class="price">₹49,999<span>/year</span></div>
+                <ul>
+                    <li>Up to 100 students</li>
+                    <li>AI Project Generation</li>
+                    <li>Basic Analytics</li>
+                    <li>Email Support</li>
+                    <li>1 Campus Drive/year</li>
+                    <li>5 Faculty Accounts</li>
+                </ul>
+            </div>
+
+            <div class="pricing-card featured">
+                <h3>Professional</h3>
+                <p style="color: var(--gray);">Most Popular Choice</p>
+                <div class="price">₹1,49,999<span>/year</span></div>
+                <ul>
+                    <li>Up to 500 students</li>
+                    <li>All AI Features</li>
+                    <li>Advanced Analytics</li>
+                    <li>Priority Support</li>
+                    <li>Unlimited Campus Drives</li>
+                    <li>20 Faculty Accounts</li>
+                    <li>LMS Integration</li>
+                    <li>Custom Question Bank</li>
+                </ul>
+            </div>
+
+            <div class="pricing-card">
+                <h3>Enterprise</h3>
+                <p style="color: var(--gray);">For entire institutions</p>
+                <div class="price">Custom</div>
+                <ul>
+                    <li>Unlimited Students</li>
+                    <li>White-label Branding</li>
+                    <li>On-premise Option</li>
+                    <li>Dedicated Support</li>
+                    <li>Custom Integrations</li>
+                    <li>Unlimited Faculty</li>
+                    <li>SLA Guarantee</li>
+                    <li>Training Workshops</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- Implementation Process -->
+    <section class="section process-section">
+        <h2 class="section-title">Implementation Process</h2>
+        <p class="section-subtitle">Get started in just 4 simple steps</p>
+
+        <div class="process-steps">
+            <div class="process-step">
+                <div class="step-number">1</div>
+                <h4>Discovery Call</h4>
+                <p>Understand your requirements, student strength, and goals</p>
+            </div>
+
+            <div class="process-step">
+                <div class="step-number">2</div>
+                <h4>Demo & Trial</h4>
+                <p>Live demonstration and 30-day free pilot program</p>
+            </div>
+
+            <div class="process-step">
+                <div class="step-number">3</div>
+                <h4>Onboarding</h4>
+                <p>Account setup, faculty training, and student enrollment</p>
+            </div>
+
+            <div class="process-step">
+                <div class="step-number">4</div>
+                <h4>Go Live</h4>
+                <p>Launch platform with ongoing support and updates</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Testimonial Section -->
+    <section class="section testimonial-section">
+        <h2 class="section-title">What Educators Say</h2>
+        <p class="section-subtitle">Trusted by leading institutions</p>
+
+        <div class="testimonial-card">
+            <p>"BharatBuild has transformed how we teach programming. Students are now building real projects from day one, and our placement rates have improved significantly. The campus drive feature saved us countless hours during recruitment season."</p>
+            <div class="testimonial-author">— Dr. Ramesh Kumar, HOD Computer Science</div>
+        </div>
+    </section>
+
+    <!-- Contact Section -->
+    <section class="section contact-section">
+        <h2 class="section-title">Let's Partner Together</h2>
+        <p class="section-subtitle" style="color: #94a3b8;">Ready to transform your institution's tech education?</p>
+
+        <div class="contact-info">
+            <div class="contact-item">
+                <div class="contact-item-icon">📧</div>
+                <h4>Email</h4>
+                <p>partnerships@bharatbuild.ai</p>
+            </div>
+
+            <div class="contact-item">
+                <div class="contact-item-icon">📞</div>
+                <h4>Phone</h4>
+                <p>+91 98765 43210</p>
+            </div>
+
+            <div class="contact-item">
+                <div class="contact-item-icon">🌐</div>
+                <h4>Website</h4>
+                <p>www.bharatbuild.ai</p>
+            </div>
+
+            <div class="contact-item">
+                <div class="contact-item-icon">📍</div>
+                <h4>Location</h4>
+                <p>Hyderabad, India</p>
+            </div>
+        </div>
+
+        <a href="mailto:partnerships@bharatbuild.ai" class="cta-button no-print">Schedule a Demo</a>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>© 2026 BharatBuild AI. All rights reserved.</p>
+        <p style="margin-top: 10px;">Empowering India's Future Tech Leaders</p>
+    </footer>
+
+</body>
+</html>

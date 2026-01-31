@@ -201,7 +201,7 @@ export function useAdminUsers({
     try {
       const response = await fetch('/api/v1/admin/users/export/csv', {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${localStorage.getItem('access_token')}`,
         },
       })
       const blob = await response.blob()
