@@ -51,7 +51,7 @@ const colorClasses = {
   },
 }
 
-export default function StatCard({
+export function StatCard({
   title,
   value,
   subtitle,
@@ -128,3 +128,5 @@ export default function StatCard({
     </div>
   )
 }
+
+export default StatCard

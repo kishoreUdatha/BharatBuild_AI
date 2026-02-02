@@ -2990,7 +2990,7 @@ class DockerExecutor:
                 missing_runtimes.append("Maven/Gradle (Java build tools)")
             if not shutil.which("java"):
                 missing_runtimes.append("Java JDK")
-        elif framework in [FrameworkType.GO, FrameworkType.FULLSTACK_GO_REACT]:
+        elif framework == FrameworkType.GO:
             if not shutil.which("go"):
                 missing_runtimes.append("Go runtime")
         elif framework in [FrameworkType.PYTHON_FASTAPI, FrameworkType.PYTHON_FLASK, FrameworkType.PYTHON_DJANGO, FrameworkType.PYTHON_STREAMLIT, FrameworkType.PYTHON_ML]:

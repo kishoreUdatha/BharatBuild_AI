@@ -4,13 +4,44 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { Check, X, Zap, Loader2, Crown, Star, Shield, Clock, Download, FileText, Code, Bug, Presentation, HelpCircle, Search } from 'lucide-react'
+import { Check, X, Zap, Loader2, Crown, Star, Shield, Clock, Download, FileText, Code, Tag, Gift } from 'lucide-react'
 import { usePayment } from '@/hooks/usePayment'
 
 export default function PricingPage() {
   const router = useRouter()
-  const { initiatePayment, loading } = usePayment()
+  const {
+    initiatePayment,
+    validateCoupon,
+    removeCoupon,
+    loading,
+    validatingCoupon,
+    appliedCoupon,
+    couponError
+  } = usePayment()
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [couponInput, setCouponInput] = useState('')
+
+  // Original price in paise (₹4,499 = 449900 paise)
+  const originalPrice = 449900
+  const discountedPrice = appliedCoupon?.final_amount || originalPrice
+
+  const handleApplyCoupon = async () => {
+    if (!couponInput.trim()) return
+
+    const token = localStorage.getItem('access_token')
+    if (!token) {
+      router.push(`/login?redirect=/pricing&plan=premium`)
+      return
+    }
+
+    await validateCoupon(couponInput.trim(), originalPrice)
+  }
+
+  const handleRemoveCoupon = () => {
+    removeCoupon()
+    setCouponInput('')
+  }
 
   const handlePurchase = async () => {
     const token = localStorage.getItem('access_token')
@@ -20,13 +51,26 @@ export default function PricingPage() {
     }
 
     setSuccessMessage(null)
+    setErrorMessage(null)
+
     initiatePayment(
       'complete',
       (result) => {
-        setSuccessMessage(`Payment successful! You now have access to 1 complete project.`)
-        setTimeout(() => router.push('/build'), 2000)
+        console.log('[Pricing] Payment success:', result)
+        const tokens = result.tokens_credited ? ` ${result.tokens_credited.toLocaleString()} tokens credited.` : ''
+        setSuccessMessage(`Payment successful!${tokens} Redirecting to build page...`)
+        // Give user time to see the success message
+        setTimeout(() => {
+          router.push('/build')
+        }, 2500)
       },
-      () => {}
+      (error) => {
+        console.error('[Pricing] Payment failed:', error)
+        setErrorMessage(error || 'Payment failed. Please try again or contact support.')
+        // Auto-hide error after 5 seconds
+        setTimeout(() => setErrorMessage(null), 5000)
+      },
+      appliedCoupon?.code
     )
   }
 
@@ -43,13 +87,12 @@ export default function PricingPage() {
   const features = [
     { name: 'Complete Projects', free: '3 Files Only', premium: '1 Full Project', icon: Code },
     { name: 'Working Code', free: false, premium: true, icon: Code },
-    { name: 'Bug Fixing', free: false, premium: 'Unlimited', icon: Bug },
+    { name: 'Bug Fixing', free: false, premium: 'Unlimited', icon: Code },
     { name: 'SRS Document', free: false, premium: true, icon: FileText },
     { name: 'SDS Document', free: false, premium: true, icon: FileText },
     { name: 'Project Report (60-80 pages)', free: false, premium: true, icon: FileText },
-    { name: 'PPT Presentation (15 slides)', free: false, premium: true, icon: Presentation },
-    { name: 'Viva Q&A (50+ questions)', free: false, premium: true, icon: HelpCircle },
-    { name: 'Plagiarism Check', free: false, premium: true, icon: Search },
+    { name: 'PPT Presentation (15 slides)', free: false, premium: true, icon: FileText },
+    { name: 'Viva Q&A (50+ questions)', free: false, premium: true, icon: FileText },
     { name: 'Code Execution & Preview', free: false, premium: true, icon: Code },
     { name: 'Download ZIP', free: false, premium: true, icon: Download },
     { name: 'GitHub Export', free: false, premium: true, icon: Download },
@@ -82,8 +125,17 @@ export default function PricingPage() {
 
       {/* Success Message */}
       {successMessage && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg">
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-6 py-4 rounded-lg shadow-lg flex items-center gap-3 animate-pulse">
+          <Check className="w-5 h-5" />
           {successMessage}
+        </div>
+      )}
+
+      {/* Error Message */}
+      {errorMessage && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-red-600 text-white px-6 py-4 rounded-lg shadow-lg flex items-center gap-3">
+          <X className="w-5 h-5" />
+          {errorMessage}
         </div>
       )}
 
@@ -173,12 +225,78 @@ export default function PricingPage() {
               </div>
 
               <div className="mb-2">
-                <span className="text-5xl font-bold text-white">₹4,499</span>
-                <span className="text-gray-400 ml-2">one-time</span>
+                {appliedCoupon ? (
+                  <div className="flex items-baseline gap-3">
+                    <span className="text-3xl font-bold text-gray-500 line-through">₹4,499</span>
+                    <span className="text-5xl font-bold text-white">₹{(discountedPrice / 100).toLocaleString()}</span>
+                  </div>
+                ) : (
+                  <>
+                    <span className="text-5xl font-bold text-white">₹4,499</span>
+                    <span className="text-gray-400 ml-2">one-time</span>
+                  </>
+                )}
               </div>
-              <p className="text-green-400 text-sm mb-8">
+              {appliedCoupon && (
+                <div className="flex items-center gap-2 mb-2">
+                  <Gift className="w-4 h-4 text-green-400" />
+                  <span className="text-green-400 text-sm font-medium">
+                    You save ₹{(appliedCoupon.discount_amount_inr || 0).toLocaleString()}!
+                  </span>
+                </div>
+              )}
+              <p className="text-green-400 text-sm mb-4">
                 1 month validity
               </p>
+
+              {/* Coupon Code Input */}
+              <div className="mb-6">
+                <div className="flex items-center gap-2 mb-2">
+                  <Tag className="w-4 h-4 text-gray-400" />
+                  <span className="text-sm text-gray-400">Have a coupon code?</span>
+                </div>
+                {appliedCoupon ? (
+                  <div className="flex items-center justify-between bg-green-500/10 border border-green-500/30 rounded-lg px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <Check className="w-5 h-5 text-green-500" />
+                      <span className="text-green-400 font-medium">{appliedCoupon.code}</span>
+                      <span className="text-green-400/70 text-sm">applied</span>
+                    </div>
+                    <button
+                      onClick={handleRemoveCoupon}
+                      className="text-gray-400 hover:text-white text-sm"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={couponInput}
+                      onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+                      placeholder="Enter coupon code"
+                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500/50 uppercase"
+                      disabled={validatingCoupon}
+                    />
+                    <Button
+                      onClick={handleApplyCoupon}
+                      disabled={validatingCoupon || !couponInput.trim()}
+                      variant="outline"
+                      className="border-blue-500/50 text-blue-400 hover:bg-blue-500/10"
+                    >
+                      {validatingCoupon ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        'Apply'
+                      )}
+                    </Button>
+                  </div>
+                )}
+                {couponError && (
+                  <p className="text-red-400 text-sm mt-2">{couponError}</p>
+                )}
+              </div>
 
               <Button
                 onClick={handlePurchase}
@@ -190,6 +308,8 @@ export default function PricingPage() {
                     <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                     Processing...
                   </>
+                ) : appliedCoupon ? (
+                  `Pay ₹${(discountedPrice / 100).toLocaleString()}`
                 ) : (
                   'Get 1 Project'
                 )}
@@ -288,245 +408,6 @@ export default function PricingPage() {
           </div>
         </div>
 
-        {/* What You Get Section - Detailed by Category */}
-        <div className="max-w-6xl mx-auto mb-20">
-          <h2 className="text-3xl font-bold text-white text-center mb-4">
-            What You Get with Premium
-          </h2>
-          <p className="text-gray-400 text-center mb-12">
-            Everything you need for your final year project submission
-          </p>
-
-          {/* Code Generation Section */}
-          <div className="bg-[#111118] rounded-2xl border border-white/10 p-8 mb-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
-                <Code className="w-5 h-5 text-blue-400" />
-              </div>
-              <h3 className="text-xl font-bold text-white">Code Generation</h3>
-            </div>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[
-                'Full working code for any project',
-                'Web Apps (React, Next.js, Vue)',
-                'Backend APIs (Node.js, Python, FastAPI)',
-                'Full-Stack Applications',
-                'Real-time code preview',
-                'Live code editing',
-                'Multiple file generation',
-                'Folder structure creation',
-                'Package.json & dependencies',
-                'Database schema generation',
-                'API endpoint generation',
-              ].map((item, i) => (
-                <div key={i} className="flex items-center gap-2 text-gray-300">
-                  <Check className="w-4 h-4 text-cyan-500 flex-shrink-0" />
-                  <span className="text-sm">{item}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Bug Fixing Section */}
-          <div className="bg-[#111118] rounded-2xl border border-white/10 p-8 mb-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
-                <Bug className="w-5 h-5 text-blue-400" />
-              </div>
-              <h3 className="text-xl font-bold text-white">Bug Fixing</h3>
-            </div>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[
-                'Unlimited automatic bug fixing',
-                'AI-powered error detection',
-                'Instant code fixes',
-                'Syntax error correction',
-                'Logic error detection',
-                'Runtime error fixing',
-                'Code optimization suggestions',
-                'Security vulnerability detection',
-              ].map((item, i) => (
-                <div key={i} className="flex items-center gap-2 text-gray-300">
-                  <Check className="w-4 h-4 text-cyan-500 flex-shrink-0" />
-                  <span className="text-sm">{item}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Project Report Section */}
-          <div className="bg-[#111118] rounded-2xl border border-white/10 p-8 mb-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
-                <FileText className="w-5 h-5 text-blue-400" />
-              </div>
-              <h3 className="text-xl font-bold text-white">Project Report (60-80 Pages)</h3>
-            </div>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[
-                'Complete IEEE format documentation',
-                'Title page with project details',
-                'Certificate page',
-                'Abstract (project summary)',
-                'Table of contents',
-                'Chapter 1: Introduction',
-                'Chapter 2: Literature Review',
-                'Chapter 3: System Requirements',
-                'Chapter 4: System Design',
-                'Chapter 5: Implementation',
-                'Chapter 6: Testing & Results',
-                'Chapter 7: Conclusion & Future Scope',
-                'References (IEEE format)',
-                'Appendix with code snippets',
-              ].map((item, i) => (
-                <div key={i} className="flex items-center gap-2 text-gray-300">
-                  <Check className="w-4 h-4 text-cyan-500 flex-shrink-0" />
-                  <span className="text-sm">{item}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* SRS Document Section */}
-          <div className="bg-[#111118] rounded-2xl border border-white/10 p-8 mb-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
-                <FileText className="w-5 h-5 text-blue-400" />
-              </div>
-              <h3 className="text-xl font-bold text-white">SRS Document (IEEE 830 Standard)</h3>
-            </div>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[
-                'Functional requirements',
-                'Non-functional requirements',
-                'Use case diagrams',
-                'Use case descriptions',
-                'System requirements',
-                'Hardware requirements',
-                'Software requirements',
-                'User requirements',
-              ].map((item, i) => (
-                <div key={i} className="flex items-center gap-2 text-gray-300">
-                  <Check className="w-4 h-4 text-cyan-500 flex-shrink-0" />
-                  <span className="text-sm">{item}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* SDS Document Section */}
-          <div className="bg-[#111118] rounded-2xl border border-white/10 p-8 mb-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
-                <FileText className="w-5 h-5 text-blue-400" />
-              </div>
-              <h3 className="text-xl font-bold text-white">SDS Document (Full Design)</h3>
-            </div>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[
-                'System architecture',
-                'High-level design (HLD)',
-                'Low-level design (LLD)',
-                'Class diagrams',
-                'Sequence diagrams',
-                'Activity diagrams',
-                'ER diagrams',
-                'Data flow diagrams (DFD)',
-                'Component diagrams',
-                'Database schema design',
-              ].map((item, i) => (
-                <div key={i} className="flex items-center gap-2 text-gray-300">
-                  <Check className="w-4 h-4 text-cyan-500 flex-shrink-0" />
-                  <span className="text-sm">{item}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* PPT Presentation Section */}
-          <div className="bg-[#111118] rounded-2xl border border-white/10 p-8 mb-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
-                <Presentation className="w-5 h-5 text-blue-400" />
-              </div>
-              <h3 className="text-xl font-bold text-white">PPT Presentation (15 Slides)</h3>
-            </div>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[
-                'Professional slide design',
-                'Problem statement',
-                'Objectives of the project',
-                'System architecture slide',
-                'Technology stack used',
-                'Screenshots & demos',
-                'Implementation details',
-                'Testing results',
-                'Conclusion slide',
-                'Future enhancements',
-              ].map((item, i) => (
-                <div key={i} className="flex items-center gap-2 text-gray-300">
-                  <Check className="w-4 h-4 text-cyan-500 flex-shrink-0" />
-                  <span className="text-sm">{item}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Viva Q&A Section */}
-          <div className="bg-[#111118] rounded-2xl border border-white/10 p-8 mb-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
-                <HelpCircle className="w-5 h-5 text-blue-400" />
-              </div>
-              <h3 className="text-xl font-bold text-white">Viva Q&A Preparation (50+ Questions)</h3>
-            </div>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[
-                '50+ potential viva questions',
-                'Detailed answers for each question',
-                'Project-specific questions',
-                'Technology-related questions',
-                'Implementation questions',
-                'Design pattern questions',
-                'Tips for viva presentation',
-                'Common examiner questions',
-              ].map((item, i) => (
-                <div key={i} className="flex items-center gap-2 text-gray-300">
-                  <Check className="w-4 h-4 text-cyan-500 flex-shrink-0" />
-                  <span className="text-sm">{item}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Export & Download Section */}
-          <div className="bg-[#111118] rounded-2xl border border-white/10 p-8 mb-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
-                <Download className="w-5 h-5 text-blue-400" />
-              </div>
-              <h3 className="text-xl font-bold text-white">Export & Download</h3>
-            </div>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[
-                'Download complete project as ZIP',
-                'Export directly to GitHub',
-                'GitHub repository creation',
-                'README.md generation',
-                'Export documentation as PDF',
-                'Export documentation as DOCX',
-                'Export PPT as PPTX',
-                '6 months access to download',
-              ].map((item, i) => (
-                <div key={i} className="flex items-center gap-2 text-gray-300">
-                  <Check className="w-4 h-4 text-cyan-500 flex-shrink-0" />
-                  <span className="text-sm">{item}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
         {/* Trust Badges */}
         <div className="max-w-4xl mx-auto mb-20">
           <div className="flex flex-wrap justify-center gap-8">
@@ -600,6 +481,11 @@ export default function PricingPage() {
                 <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                 Processing...
               </>
+            ) : appliedCoupon ? (
+              <>
+                <Crown className="w-5 h-5 mr-2" />
+                Get Premium - ₹{(discountedPrice / 100).toLocaleString()}
+              </>
             ) : (
               <>
                 <Crown className="w-5 h-5 mr-2" />
@@ -608,8 +494,13 @@ export default function PricingPage() {
             )}
           </Button>
           <p className="text-gray-500 text-sm mt-4">
-            One-time payment • No subscription • 6 months validity
+            One-time payment • No subscription • 1 month validity
           </p>
+          {appliedCoupon && (
+            <p className="text-green-400 text-sm mt-2">
+              Coupon {appliedCoupon.code} applied - Save ₹{(appliedCoupon.discount_amount_inr || 0).toLocaleString()}!
+            </p>
+          )}
         </div>
       </main>
 

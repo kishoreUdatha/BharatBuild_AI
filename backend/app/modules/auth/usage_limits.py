@@ -273,22 +273,18 @@ async def check_project_limit(user: User, db: AsyncSession) -> UsageLimitCheck:
     """
     Check if user can create more projects.
 
-    Two-stage completion model:
-    - Only COMPLETED projects (code + documents generated) count against the limit
-    - PARTIAL_COMPLETED (code done, documents pending) does NOT count
+    For Premium users (1 project limit):
+    - Count ALL projects except FAILED/CANCELLED
+    - User can only have 1 active project
 
     Status breakdown:
-    - COMPLETED: Code + all documents generated → COUNTS against limit
-    - PARTIAL_COMPLETED: Code done, documents pending → Does NOT count
-    - IN_PROGRESS: Currently generating → Does NOT count
-    - PROCESSING: Being processed → Does NOT count
-    - DRAFT: Just created → Does NOT count
+    - COMPLETED: Fully done → COUNTS against limit
+    - PARTIAL_COMPLETED: Code done → COUNTS against limit
+    - IN_PROGRESS: Currently generating → COUNTS against limit
+    - PROCESSING: Being processed → COUNTS against limit
+    - DRAFT: Just created → COUNTS against limit
     - FAILED: Generation failed → Does NOT count
     - CANCELLED: User cancelled → Does NOT count
-
-    This allows users to:
-    1. Generate code freely (PARTIAL_COMPLETED)
-    2. Only use a "project slot" when documents are generated (COMPLETED)
     """
     from app.models.project import Project, ProjectStatus
 
@@ -297,13 +293,13 @@ async def check_project_limit(user: User, db: AsyncSession) -> UsageLimitCheck:
     if limits.project_limit is None:
         return UsageLimitCheck(allowed=True)
 
-    # Only count FULLY COMPLETED projects (code + documents)
-    # PARTIAL_COMPLETED (code only) does NOT count against the limit
+    # Count ALL active projects (everything except FAILED and CANCELLED)
+    # This ensures premium users can only have 1 project total
     project_count_result = await db.execute(
         select(func.count(Project.id)).where(
             and_(
                 Project.user_id == user.id,
-                Project.status == ProjectStatus.COMPLETED  # Only fully completed
+                Project.status.notin_([ProjectStatus.FAILED, ProjectStatus.CANCELLED])
             )
         )
     )
@@ -312,7 +308,7 @@ async def check_project_limit(user: User, db: AsyncSession) -> UsageLimitCheck:
     if current_count >= limits.project_limit:
         return UsageLimitCheck(
             allowed=False,
-            reason=f"Project limit reached. You have {current_count} fully completed project(s). Upgrade your plan for more projects.",
+            reason=f"Project limit reached. You already have {current_count} project(s). Premium plan allows {limits.project_limit} project only.",
             current_usage=current_count,
             limit=limits.project_limit
         )
@@ -321,7 +317,7 @@ async def check_project_limit(user: User, db: AsyncSession) -> UsageLimitCheck:
         allowed=True,
         current_usage=current_count,
         limit=limits.project_limit,
-        message=f"You can complete {limits.project_limit - current_count} more project(s) with documents"
+        message=f"You can create {limits.project_limit - current_count} more project(s)"
     )
 
 

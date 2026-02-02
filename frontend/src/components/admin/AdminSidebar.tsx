@@ -24,7 +24,8 @@ import {
   Server,
   GraduationCap,
   FileSpreadsheet,
-  Trophy
+  Trophy,
+  Ticket
 } from 'lucide-react'
 
 const navItems = [
@@ -36,6 +37,7 @@ const navItems = [
   { href: '/admin/documents', label: 'Documents', icon: FileSpreadsheet },
   { href: '/admin/sandboxes', label: 'Sandboxes', icon: Server },
   { href: '/admin/billing', label: 'Billing', icon: CreditCard },
+  { href: '/admin/coupons', label: 'Coupons', icon: Ticket },
   { href: '/admin/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/admin/plans', label: 'Plans', icon: Layers },
   { href: '/admin/api-keys', label: 'API Keys', icon: Key },

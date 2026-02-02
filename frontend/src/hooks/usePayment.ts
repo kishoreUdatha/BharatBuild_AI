@@ -7,10 +7,14 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1
 interface PaymentOrder {
   order_id: string
   amount: number
+  original_amount: number
+  discount_amount: number
   currency: string
   key_id: string
   package_name: string
   tokens: number
+  coupon_applied?: string
+  coupon_message?: string
 }
 
 interface PaymentResult {
@@ -21,6 +25,18 @@ interface PaymentResult {
   new_balance?: number
 }
 
+interface CouponValidation {
+  valid: boolean
+  code: string
+  message: string
+  discount_amount?: number
+  discount_amount_inr?: number
+  final_amount?: number
+  final_amount_inr?: number
+  coupon_id?: string
+  owner_name?: string
+}
+
 declare global {
   interface Window {
     Razorpay: any
@@ -29,7 +45,10 @@ declare global {
 
 export function usePayment() {
   const [loading, setLoading] = useState(false)
+  const [validatingCoupon, setValidatingCoupon] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [couponError, setCouponError] = useState<string | null>(null)
+  const [appliedCoupon, setAppliedCoupon] = useState<CouponValidation | null>(null)
 
   const loadRazorpayScript = useCallback((): Promise<boolean> => {
     return new Promise((resolve) => {
@@ -46,7 +65,58 @@ export function usePayment() {
     })
   }, [])
 
-  const createOrder = async (packageId: string): Promise<PaymentOrder | null> => {
+  const validateCoupon = useCallback(async (code: string, amount: number): Promise<CouponValidation | null> => {
+    const token = localStorage.getItem('access_token')
+    if (!token) {
+      setCouponError('Please login to apply coupon')
+      return null
+    }
+
+    setValidatingCoupon(true)
+    setCouponError(null)
+
+    try {
+      const response = await fetch(`${API_URL}/coupons/validate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ code, amount })
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        setCouponError(data.detail || 'Invalid coupon code')
+        setAppliedCoupon(null)
+        return null
+      }
+
+      if (data.valid) {
+        setAppliedCoupon(data)
+        setCouponError(null)
+        return data
+      } else {
+        setCouponError(data.message || 'Invalid coupon code')
+        setAppliedCoupon(null)
+        return null
+      }
+    } catch (err: any) {
+      setCouponError(err.message || 'Failed to validate coupon')
+      setAppliedCoupon(null)
+      return null
+    } finally {
+      setValidatingCoupon(false)
+    }
+  }, [])
+
+  const removeCoupon = useCallback(() => {
+    setAppliedCoupon(null)
+    setCouponError(null)
+  }, [])
+
+  const createOrder = async (packageId: string, couponCode?: string): Promise<PaymentOrder | null> => {
     const token = localStorage.getItem('access_token')
     if (!token) {
       setError('Please login to purchase')
@@ -54,13 +124,18 @@ export function usePayment() {
     }
 
     try {
+      const body: any = { package: packageId }
+      if (couponCode) {
+        body.coupon_code = couponCode
+      }
+
       const response = await fetch(`${API_URL}/payments/create-order`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ package: packageId })
+        body: JSON.stringify(body)
       })
 
       if (!response.ok) {
@@ -113,7 +188,8 @@ export function usePayment() {
   const initiatePayment = useCallback(async (
     packageId: string,
     onSuccess?: (result: PaymentResult) => void,
-    onFailure?: (error: string) => void
+    onFailure?: (error: string) => void,
+    couponCode?: string
   ) => {
     setLoading(true)
     setError(null)
@@ -125,8 +201,8 @@ export function usePayment() {
         throw new Error('Failed to load payment gateway')
       }
 
-      // Create order
-      const order = await createOrder(packageId)
+      // Create order with coupon code if provided
+      const order = await createOrder(packageId, couponCode || appliedCoupon?.code)
       if (!order) {
         throw new Error(error || 'Failed to create order')
       }
@@ -151,20 +227,30 @@ export function usePayment() {
           color: '#3B82F6'
         },
         handler: async (response: any) => {
-          // Verify payment
-          const result = await verifyPayment(
-            response.razorpay_order_id,
-            response.razorpay_payment_id,
-            response.razorpay_signature
-          )
+          try {
+            // Verify payment
+            const result = await verifyPayment(
+              response.razorpay_order_id,
+              response.razorpay_payment_id,
+              response.razorpay_signature
+            )
 
-          // Check for success - backend returns status: "success" not success: true
-          if (result.success || result.status === 'success') {
-            onSuccess?.(result)
-          } else {
-            onFailure?.(result.message)
+            console.log('[Payment] Verification result:', result)
+
+            // Check for success - backend returns status: "success" not success: true
+            if (result && (result.success === true || result.status === 'success')) {
+              console.log('[Payment] Payment successful, calling onSuccess')
+              onSuccess?.(result)
+            } else {
+              console.log('[Payment] Payment failed:', result?.message)
+              onFailure?.(result?.message || 'Payment verification failed')
+            }
+          } catch (err: any) {
+            console.error('[Payment] Handler error:', err)
+            onFailure?.(err.message || 'Payment verification failed')
+          } finally {
+            setLoading(false)
           }
-          setLoading(false)
         },
         modal: {
           ondismiss: () => {
@@ -187,12 +273,18 @@ export function usePayment() {
       setError(err.message)
       onFailure?.(err.message)
     }
-  }, [loadRazorpayScript, error])
+  }, [loadRazorpayScript, error, appliedCoupon])
 
   return {
     initiatePayment,
+    validateCoupon,
+    removeCoupon,
     loading,
+    validatingCoupon,
     error,
-    clearError: () => setError(null)
+    couponError,
+    appliedCoupon,
+    clearError: () => setError(null),
+    clearCouponError: () => setCouponError(null)
   }
 }

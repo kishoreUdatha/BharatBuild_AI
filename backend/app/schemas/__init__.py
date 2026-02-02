@@ -13,3 +13,21 @@ from app.schemas.campus_drive import (
     QuizResultResponse,
     CampusDriveStats,
 )
+from app.schemas.coupon import (
+    CouponCreate,
+    CouponUpdate,
+    CouponResponse,
+    CouponListResponse,
+    CouponValidateRequest,
+    CouponValidateResponse,
+    CouponApplyRequest,
+    CouponApplyResponse,
+    CouponUsageResponse,
+    CouponUsageListResponse,
+    WalletResponse,
+    WalletTransactionResponse,
+    WalletTransactionListResponse,
+    MyCouponResponse,
+    CouponAnalytics,
+    CouponStatsResponse,
+)
