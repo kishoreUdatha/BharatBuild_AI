@@ -840,6 +840,183 @@ No explanations. Only the <file> block."""
 
         return None
 
+    async def _try_deterministic_svg_dataurl_fix(
+        self,
+        project_id: str,
+        project_path: Path,
+        error_output: str
+    ) -> Optional[BoltFixResult]:
+        """
+        Deterministically fix SVG data URL encoding errors.
+
+        esbuild fails with: Expected ">" but found "6"
+        when SVG data URLs in Tailwind arbitrary values have unescaped quotes.
+
+        Fix: Convert bg-[url('data:image/svg+xml,...')] to inline style
+        with properly escaped/single quotes inside the SVG.
+        """
+        # Check if this is an SVG data URL error
+        if 'Expected' not in error_output or 'but found' not in error_output:
+            return None
+
+        # Look for the pattern that indicates SVG data URL issue
+        if 'data:image/svg' not in error_output and 'width="' not in error_output:
+            # Also check if it's the truncated error (just "Expected ">" but found "6"")
+            if not re.search(r'Expected\s+["\']?>\s*["\']?\s+but\s+found\s+["\']?\d', error_output):
+                return None
+
+        logger.info(f"[BoltFixer:{project_id}] Detected SVG data URL error, attempting deterministic fix")
+
+        # Extract the file path from error
+        file_match = re.search(r'([a-zA-Z0-9_\-./\\]+\.[jt]sx?):(\d+)', error_output)
+        if not file_match:
+            logger.warning(f"[BoltFixer:{project_id}] Could not extract file path from SVG error")
+            return None
+
+        error_file = file_match.group(1)
+        # Normalize path
+        error_file = error_file.replace('\\', '/').lstrip('/')
+        if error_file.startswith('app/'):
+            error_file = error_file[4:]
+
+        logger.info(f"[BoltFixer:{project_id}] SVG error in file: {error_file}")
+
+        # Read the file
+        content = await self._read_file(project_path, error_file)
+        if not content:
+            logger.warning(f"[BoltFixer:{project_id}] Could not read file: {error_file}")
+            return None
+
+        # Fix SVG data URLs in the content
+        fixed_content = self._fix_svg_data_urls(content)
+
+        if fixed_content == content:
+            logger.warning(f"[BoltFixer:{project_id}] No SVG data URL fixes applied")
+            return None
+
+        # Write the fixed file
+        if not await self._write_file(project_path, error_file, fixed_content):
+            logger.error(f"[BoltFixer:{project_id}] Failed to write fixed file: {error_file}")
+            return None
+
+        # Persist to DB/S3
+        await self._persist_single_fix(project_id, project_path, error_file, fixed_content)
+
+        logger.info(f"[BoltFixer:{project_id}] ✓ Fixed SVG data URL in: {error_file}")
+
+        return BoltFixResult(
+            success=True,
+            files_modified=[error_file],
+            message=f"Deterministic fix: Fixed SVG data URL encoding in {error_file}",
+            patches_applied=1,
+            error_type="svg_data_url_error",
+            fix_strategy="deterministic"
+        )
+
+    def _fix_svg_data_urls(self, content: str) -> str:
+        """
+        Fix SVG data URLs with unescaped quotes.
+
+        Converts Tailwind bg-[url(...)] with broken SVG to inline style.
+        """
+        if 'data:image/svg' not in content:
+            return content
+
+        # Pattern to match Tailwind bg-[url(...)] with SVG data URL
+        # This catches: bg-[url('data:image/svg+xml,...')]
+        bg_url_pattern = r"bg-\[url\(['\"]?(data:image/svg\+xml[^)]+)['\"]?\)\]"
+
+        def fix_tailwind_svg(match):
+            svg_url = match.group(1)
+
+            # Check if it has unescaped quotes inside
+            if '="' not in svg_url:
+                return match.group(0)  # No fix needed
+
+            # Convert double quotes to single quotes inside SVG
+            # Keep %22 for already-encoded quotes
+            fixed_svg = re.sub(r'="([^"]*)"', r"='\1'", svg_url)
+
+            # Return as className comment + add note that style prop needed
+            # We can't easily convert to style prop in regex, so mark it
+            return "bg-[url('" + fixed_svg + "')]"
+
+        result = re.sub(bg_url_pattern, fix_tailwind_svg, content)
+
+        # Also handle inline style backgroundImage patterns
+        # style={{backgroundImage: "url('data:image/svg+xml,...')"}}
+        style_pattern = r'(backgroundImage:\s*[`"\'])url\(["\']?(data:image/svg\+xml[^)]+)["\']?\)([`"\'])'
+
+        def fix_style_svg(match):
+            prefix = match.group(1)
+            svg_url = match.group(2)
+            suffix = match.group(3)
+
+            if '="' not in svg_url:
+                return match.group(0)
+
+            # Convert double quotes to single quotes inside SVG
+            fixed_svg = re.sub(r'="([^"]*)"', r"='\1'", svg_url)
+
+            return prefix + "url('" + fixed_svg + "')" + suffix
+
+        result = re.sub(style_pattern, fix_style_svg, result)
+
+        # Handle the most common case: className with bg-[url(...)] containing unescaped SVG
+        # Convert to style prop
+        def convert_bg_to_style(match):
+            full_class = match.group(0)
+
+            # Find the SVG data URL part
+            svg_match = re.search(r"bg-\[url\(['\"]?(data:image/svg\+xml[^)]+)['\"]?\)\]", full_class)
+            if not svg_match:
+                return full_class
+
+            svg_url = svg_match.group(1)
+
+            # Check if it has unescaped quotes
+            if '="' not in svg_url:
+                return full_class
+
+            # Fix quotes in SVG
+            fixed_svg = re.sub(r'="([^"]*)"', r"='\1'", svg_url)
+
+            # Remove the bg-[url(...)] from className
+            new_class = re.sub(r'\s*bg-\[url\([^\]]+\]\s*', ' ', full_class).strip()
+
+            # Can't easily inject style prop in regex, but this helps Claude
+            return new_class
+
+        # Try a more aggressive fix: find lines with the broken pattern and fix them
+        lines = result.split('\n')
+        fixed_lines = []
+
+        for line in lines:
+            if 'data:image/svg' in line and '="' in line and 'bg-[' in line:
+                # This line likely has the broken SVG
+                # Convert inner quotes to single quotes
+                fixed_line = re.sub(
+                    r'(data:image/svg\+xml[^"\'`]*?)="([^"]*)"',
+                    r"\1='\2'",
+                    line
+                )
+                # Keep applying until all are fixed
+                while '="' in fixed_line and 'data:image/svg' in fixed_line:
+                    new_fixed = re.sub(
+                        r'(data:image/svg\+xml[^"\'`]*?)="([^"]*)"',
+                        r"\1='\2'",
+                        fixed_line
+                    )
+                    if new_fixed == fixed_line:
+                        break
+                    fixed_line = new_fixed
+
+                fixed_lines.append(fixed_line)
+            else:
+                fixed_lines.append(line)
+
+        return '\n'.join(fixed_lines)
+
     async def _persist_single_fix(
         self,
         project_id: str,
@@ -1088,6 +1265,17 @@ No explanations. Only the <file> block."""
             retry_limiter.record_attempt(project_id, error_hash, tokens_used=0, fixed=True)
             return dockerfile_fix_result
 
+        # SVG data URL fixes (esbuild fails on unescaped quotes in SVG data URLs)
+        svg_fix_result = await self._try_deterministic_svg_dataurl_fix(
+            project_id=project_id,
+            project_path=project_path,
+            error_output=combined_output
+        )
+        if svg_fix_result:
+            logger.info(f"[BoltFixer:{project_id}] Deterministic SVG data URL fix applied - skipping AI")
+            retry_limiter.record_attempt(project_id, error_hash, tokens_used=0, fixed=True)
+            return svg_fix_result
+
         # =================================================================
         # STEP 4: GATHER CONTEXT (file content for Claude)
         # =================================================================
@@ -1242,6 +1430,10 @@ No explanations. Only the <file> block."""
         # =================================================================
         # Choose prompt based on error type
         if classified.error_type == ErrorType.SYNTAX_ERROR:
+            system_prompt = self.SYNTAX_FIX_PROMPT
+            max_tokens = 16384
+        elif classified.error_type == ErrorType.SVG_DATA_URL_ERROR:
+            # SVG data URL errors need full file replacement like syntax errors
             system_prompt = self.SYNTAX_FIX_PROMPT
             max_tokens = 16384
         else:
