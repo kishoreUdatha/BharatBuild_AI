@@ -224,8 +224,8 @@ class TestCheckProjectLimit:
         assert result.current_usage == 1
 
     @pytest.mark.asyncio
-    async def test_partial_completed_not_counted(self, db_session, test_user):
-        """Test PARTIAL_COMPLETED projects don't count against limit"""
+    async def test_partial_completed_counted(self, db_session, test_user):
+        """Test PARTIAL_COMPLETED projects DO count against limit (premium users get 1 project total)"""
         project = Project(
             user_id=str(test_user.id),
             title="Partial Project",
@@ -238,7 +238,7 @@ class TestCheckProjectLimit:
 
         result = await check_project_limit(test_user, db_session)
 
-        assert result.current_usage == 0  # Partial doesn't count
+        assert result.current_usage == 1  # All active projects count
 
 
 class TestCheckApiRateLimit:
