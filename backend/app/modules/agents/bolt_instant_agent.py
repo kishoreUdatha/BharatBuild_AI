@@ -418,6 +418,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 3000,
+    allowedHosts: true,  // Allow all hosts (required for sandbox preview)
     // Proxy API requests to backend
     // Uses VITE_API_URL env var (set in docker-compose) or defaults to localhost
     proxy: {
