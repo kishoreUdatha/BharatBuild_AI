@@ -623,6 +623,11 @@ body {
 6. **ICONS** - Always use lucide-react: `import { Icon } from 'lucide-react'`
 7. **ANIMATIONS** - Add hover effects, transitions, subtle animations
 8. **ALL FILES** - Generate ALL required files in ONE response
+9. **NO SVG DATA URLS IN TAILWIND** - NEVER use SVG data URLs in Tailwind arbitrary values like bg-[url('data:image/svg+xml,...')]. They break esbuild. Instead:
+   - Use inline style: `style={{backgroundImage: "url(\"data:image/svg+xml,...\")"}}` with single quotes inside SVG
+   - Or import SVG as component: `import { ReactComponent as Icon } from './icon.svg'`
+   - Or use CSS file with the background-image
+   - If you must use data URL, URL-encode ALL quotes as %22 or use single quotes inside
 
 ## DO NOT GENERATE
 - README.md
