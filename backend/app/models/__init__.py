@@ -26,6 +26,16 @@ from app.models.campus_drive import (
     QuestionDifficulty,
     RegistrationStatus,
 )
+from app.models.coupon import (
+    Coupon,
+    CouponUsage,
+    CouponCategory,
+    CouponStatus,
+    Wallet,
+    WalletTransaction,
+    WalletTransactionType,
+    WalletTransactionSource,
+)
 
 __all__ = [
     # User
@@ -83,4 +93,13 @@ __all__ = [
     "QuestionCategory",
     "QuestionDifficulty",
     "RegistrationStatus",
+    # Coupon & Wallet
+    "Coupon",
+    "CouponUsage",
+    "CouponCategory",
+    "CouponStatus",
+    "Wallet",
+    "WalletTransaction",
+    "WalletTransactionType",
+    "WalletTransactionSource",
 ]

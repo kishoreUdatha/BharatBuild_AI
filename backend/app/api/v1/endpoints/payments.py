@@ -30,6 +30,7 @@ from app.models.token_balance import TokenPurchase
 from app.modules.auth.dependencies import get_current_user
 from app.utils.token_manager import token_manager
 from dateutil.relativedelta import relativedelta
+from app.services.coupon_service import coupon_service
 
 # Razorpay client initialization
 try:
@@ -53,17 +54,22 @@ class CreateOrderRequest(BaseModel):
     """Request to create a payment order"""
     package: str  # 'starter', 'pro', 'unlimited' or plan name
     amount: Optional[int] = None  # Override amount in paise (for custom)
+    coupon_code: Optional[str] = None  # Optional coupon code for discount
 
 
 class CreateOrderResponse(BaseModel):
     """Response with Razorpay order details"""
     order_id: str
-    amount: int  # in paise
+    amount: int  # in paise (after discount)
+    original_amount: int  # in paise (before discount)
+    discount_amount: int  # in paise
     currency: str
     key_id: str  # Razorpay key for frontend
     package_name: str
     tokens: int
     notes: dict
+    coupon_applied: Optional[str] = None  # Coupon code if applied
+    coupon_message: Optional[str] = None  # Message about coupon
 
 
 class VerifyPaymentRequest(BaseModel):
@@ -116,42 +122,95 @@ async def create_payment_order(
         )
 
     package = packages[request.package]
-    amount = request.amount if request.amount else package["price"]
+    original_amount = request.amount if request.amount else package["price"]
     tokens = package["tokens"]
+
+    # Validate and apply coupon if provided
+    coupon_applied = None
+    coupon_message = None
+    discount_amount = 0
+    coupon_id = None
+
+    if request.coupon_code:
+        coupon_validation = await coupon_service.validate_coupon(
+            db=db,
+            code=request.coupon_code,
+            amount=original_amount,
+            user_id=str(current_user.id)
+        )
+
+        if coupon_validation.valid:
+            discount_amount = coupon_validation.discount_amount
+            coupon_applied = coupon_validation.code
+            coupon_message = coupon_validation.message
+            coupon_id = coupon_validation.coupon_id
+            logger.info(f"[Payment] Coupon {coupon_applied} applied. Discount: ₹{discount_amount/100:.0f}")
+        else:
+            # Coupon invalid - return error
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=coupon_validation.message
+            )
+
+    # Calculate final amount after discount
+    amount = max(0, original_amount - discount_amount)
 
     try:
         # Create Razorpay order
         # Receipt must be max 40 chars - use short format
         receipt = f"bb_{str(current_user.id)[:8]}_{int(datetime.utcnow().timestamp())}"
+        order_notes = {
+            "user_id": str(current_user.id),
+            "user_email": current_user.email,
+            "package": request.package,
+            "tokens": tokens,
+            "original_amount": original_amount,
+            "discount_amount": discount_amount,
+        }
+
+        # Add coupon info to notes if applied
+        if coupon_applied:
+            order_notes["coupon_code"] = coupon_applied
+            order_notes["coupon_id"] = coupon_id
+
         order_data = {
-            "amount": amount,  # Amount in paise
+            "amount": amount,  # Amount in paise (after discount)
             "currency": "INR",
             "receipt": receipt,
-            "notes": {
-                "user_id": str(current_user.id),
-                "user_email": current_user.email,
-                "package": request.package,
-                "tokens": tokens
-            }
+            "notes": order_notes
         }
 
         razorpay_order = razorpay_client.order.create(data=order_data)
 
-        logger.info(f"[Payment] Created Razorpay order: {razorpay_order['id']} for user {current_user.id}")
+        logger.info(f"[Payment] Created Razorpay order: {razorpay_order['id']} for user {current_user.id}" +
+                   (f" with coupon {coupon_applied}" if coupon_applied else ""))
 
         # Store pending transaction in database
+        transaction_metadata = {
+            "package": request.package,
+            "tokens": tokens,
+            "package_name": package["name"],
+            "original_amount": original_amount,
+            "discount_amount": discount_amount,
+        }
+
+        # Add coupon info to metadata if applied
+        if coupon_applied:
+            transaction_metadata["coupon_code"] = coupon_applied
+            transaction_metadata["coupon_id"] = coupon_id
+
+        description = f"Token purchase: {package['name']} ({tokens:,} tokens)"
+        if coupon_applied:
+            description += f" (Coupon: {coupon_applied}, Discount: ₹{discount_amount/100:.0f})"
+
         transaction = Transaction(
             user_id=current_user.id,
             razorpay_order_id=razorpay_order["id"],
             amount=amount,
             currency="INR",
             status=TransactionStatus.PENDING,
-            description=f"Token purchase: {package['name']} ({tokens:,} tokens)",
-            extra_metadata={
-                "package": request.package,
-                "tokens": tokens,
-                "package_name": package["name"]
-            }
+            description=description,
+            extra_metadata=transaction_metadata
         )
 
         db.add(transaction)
@@ -160,11 +219,15 @@ async def create_payment_order(
         return CreateOrderResponse(
             order_id=razorpay_order["id"],
             amount=amount,
+            original_amount=original_amount,
+            discount_amount=discount_amount,
             currency="INR",
             key_id=settings.RAZORPAY_KEY_ID,
             package_name=package["name"],
             tokens=tokens,
-            notes=order_data["notes"]
+            notes=order_data["notes"],
+            coupon_applied=coupon_applied,
+            coupon_message=coupon_message
         )
 
     except Exception as e:
@@ -343,13 +406,48 @@ async def verify_payment(
                 # User still gets tokens, subscription is a bonus
                 logger.error(f"[Payment] Failed to create subscription record (non-fatal): {sub_error}")
 
+            # ================================================================
+            # APPLY COUPON IF ONE WAS USED
+            # Credit reward to coupon owner's wallet
+            # ================================================================
+            coupon_code = transaction.extra_metadata.get("coupon_code")
+            if coupon_code:
+                try:
+                    original_amount = transaction.extra_metadata.get("original_amount", transaction.amount)
+                    discount_amount = transaction.extra_metadata.get("discount_amount", 0)
+
+                    success, message, coupon_usage = await coupon_service.apply_coupon(
+                        db=db,
+                        code=coupon_code,
+                        applied_by_id=str(current_user.id),
+                        order_id=request.razorpay_order_id,
+                        original_amount=original_amount,
+                        discount_amount=discount_amount,
+                        final_amount=transaction.amount,
+                        transaction_id=str(transaction.id)
+                    )
+
+                    if success:
+                        logger.info(f"[Payment] Coupon {coupon_code} applied successfully. "
+                                   f"Reward credited to owner.")
+                    else:
+                        logger.warning(f"[Payment] Failed to apply coupon {coupon_code}: {message}")
+
+                except Exception as coupon_error:
+                    # Don't fail payment if coupon application fails
+                    logger.error(f"[Payment] Coupon application error (non-fatal): {coupon_error}")
+
             await db.commit()
 
             logger.info(f"[Payment] Successfully credited {tokens_to_add} tokens to user {current_user.id}")
 
+            success_message = f"Payment successful! {tokens_to_add:,} tokens added to your account."
+            if coupon_code:
+                success_message += f" Coupon {coupon_code} applied."
+
             return PaymentStatusResponse(
                 status="success",
-                message=f"Payment successful! {tokens_to_add:,} tokens added to your account.",
+                message=success_message,
                 tokens_credited=tokens_to_add,
                 new_balance=balance.remaining_tokens
             )
@@ -553,6 +651,34 @@ async def _handle_payment_captured(payload: dict, db: AsyncSession):
 
         except Exception as sub_error:
             logger.error(f"[Webhook] Failed to create subscription (non-fatal): {sub_error}")
+
+        # ================================================================
+        # APPLY COUPON IF ONE WAS USED (Webhook backup)
+        # ================================================================
+        coupon_code = transaction.extra_metadata.get("coupon_code") if transaction.extra_metadata else None
+        if coupon_code:
+            try:
+                original_amount = transaction.extra_metadata.get("original_amount", transaction.amount)
+                discount_amount = transaction.extra_metadata.get("discount_amount", 0)
+
+                success, message, coupon_usage = await coupon_service.apply_coupon(
+                    db=db,
+                    code=coupon_code,
+                    applied_by_id=str(transaction.user_id),
+                    order_id=order_id,
+                    original_amount=original_amount,
+                    discount_amount=discount_amount,
+                    final_amount=transaction.amount,
+                    transaction_id=str(transaction.id)
+                )
+
+                if success:
+                    logger.info(f"[Webhook] Coupon {coupon_code} applied successfully")
+                else:
+                    logger.warning(f"[Webhook] Failed to apply coupon {coupon_code}: {message}")
+
+            except Exception as coupon_error:
+                logger.error(f"[Webhook] Coupon application error (non-fatal): {coupon_error}")
 
     await db.commit()
     logger.info(f"[Webhook] Processed payment.captured for order {order_id}")
