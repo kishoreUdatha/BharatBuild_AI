@@ -69,7 +69,8 @@ class Coupon(Base):
     id = Column(GUID, primary_key=True, default=generate_uuid)
 
     # Coupon Code (unique identifier shown to users)
-    code = Column(String(50), unique=True, index=True, nullable=False)
+    # Note: index is defined in __table_args__ as ix_coupons_code
+    code = Column(String(50), unique=True, nullable=False)
 
     # Owner info - stored directly for flexibility (no user account required)
     owner_id = Column(GUID, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)  # Optional link to user
