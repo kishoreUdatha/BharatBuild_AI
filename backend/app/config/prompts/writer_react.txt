@@ -79,3 +79,25 @@ ICONS
 ═══════════════════════════════════════════════════════════════════════════════
 
 Use lucide-react: import { Home, Settings, Menu } from 'lucide-react';
+
+═══════════════════════════════════════════════════════════════════════════════
+SVG DATA URLS - CRITICAL
+═══════════════════════════════════════════════════════════════════════════════
+
+NEVER use SVG data URLs in Tailwind arbitrary values like:
+  bg-[url('data:image/svg+xml,...')]  ← BREAKS ESBUILD
+
+The quotes inside SVG conflict with Tailwind's parser causing build errors like:
+  "Expected '>' but found '6'"
+
+INSTEAD USE:
+1. Inline style (PREFERRED):
+   style={{backgroundImage: "url(\"data:image/svg+xml,<svg ... fill='%23fff' ... />\")}}
+   (use single quotes inside SVG, URL-encode # as %23)
+
+2. Import SVG as component:
+   import PatternSvg from './pattern.svg';
+   <PatternSvg className="w-full h-full" />
+
+3. CSS file with background-image:
+   .pattern-bg { background-image: url("data:image/svg+xml,..."); }
