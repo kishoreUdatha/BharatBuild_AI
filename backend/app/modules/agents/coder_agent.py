@@ -166,6 +166,7 @@ CODE GENERATION RULES:
    - Use Tailwind CSS for styling
    - Implement proper routing
    - Add SEO meta tags
+   - NEVER use SVG data URLs in Tailwind arbitrary values like bg-[url('data:image/svg+xml,...')] - they break esbuild. Use inline style={{backgroundImage: ...}} with single quotes inside SVG, or import SVG as component
 
    **FastAPI/Python:**
    - Use Pydantic models for validation
