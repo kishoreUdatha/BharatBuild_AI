@@ -31,6 +31,7 @@ class ErrorType(Enum):
     REACT_ERROR = "react_error"
     CSS_ERROR = "css_error"
     CONFIG_ERROR = "config_error"
+    SVG_DATA_URL_ERROR = "svg_data_url_error"  # SVG data URL encoding issues
 
     # NOT fixable by Claude - require infrastructure action
     INFRA_ERROR = "infra_error"
@@ -129,6 +130,16 @@ class ErrorClassifier:
         (r'Unknown\s+at\s+rule\s+@|PostCSS|tailwind.*unknown',
          ErrorType.CSS_ERROR,
          "Fix CSS/Tailwind configuration", 0.85),
+
+        # SVG Data URL errors (esbuild fails on unescaped quotes in data URLs)
+        # Matches: Expected ">" but found "6" with data:image/svg context
+        (r'Expected\s+["\']?>\s*["\']?\s+but\s+found.*data:image/svg|data:image/svg.*Expected\s+["\']?>\s*["\']?\s+but\s+found',
+         ErrorType.SVG_DATA_URL_ERROR,
+         "Fix SVG data URL - escape quotes", 0.95),
+        # Also match the error even without svg context visible (line truncated)
+        (r'Expected\s+["\']?>\s*["\']?\s+but\s+found\s+["\']?\d',
+         ErrorType.SVG_DATA_URL_ERROR,
+         "Fix SVG data URL - escape quotes", 0.90),
 
         # Config errors
         (r'vite\.config|tsconfig|babel\.config|webpack\.config',
@@ -843,6 +854,28 @@ Return ONLY a unified diff or create missing file.""",
             ErrorType.CONFIG_ERROR: """Error type: CONFIG_ERROR
 Fix the configuration file.
 Return ONLY a unified diff.""",
+
+            ErrorType.SVG_DATA_URL_ERROR: """Error type: SVG_DATA_URL_ERROR
+The file contains an SVG data URL with unescaped double quotes that breaks esbuild parsing.
+
+PROBLEM: Tailwind arbitrary values like bg-[url('data:image/svg+xml,...')] contain SVG with unescaped quotes:
+  width="60" height="60" viewBox="0 0 60 60"
+
+SOLUTION: Convert to inline style with properly escaped quotes. Replace the Tailwind class with a style prop:
+
+WRONG (breaks esbuild):
+  className="bg-[url('data:image/svg+xml,%3Csvg width="60" height="60"...')]"
+
+CORRECT (use style prop with single quotes in SVG):
+  style={{backgroundImage: "url(\\"data:image/svg+xml,%3Csvg width='60' height='60'...\\")"}}
+
+RULES:
+1. Replace bg-[url(...)] Tailwind class with style={{backgroundImage: "url(...)"}}
+2. Inside the SVG, change ALL double quotes to single quotes (width='60' not width="60")
+3. Keep %3C %3E %23 URL encoding for < > #
+4. The outer url() uses escaped double quotes: url(\\"...\\")"
+
+Return the COMPLETE fixed file using <file path="...">content</file>""",
         }
 
         return templates.get(error_type, """Error type: UNKNOWN
