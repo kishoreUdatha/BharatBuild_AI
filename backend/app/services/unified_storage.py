@@ -57,8 +57,9 @@ BROWSER_ERROR_CAPTURE_SCRIPT = '''
 <script>
 (function() {
   'use strict';
-  // Extract project ID from URL path (e.g., /sandbox/PROJECT_ID/...)
-  var match = window.location.pathname.match(/\\/sandbox\\/([a-f0-9-]+)/i);
+  // Extract project ID from URL path
+  // Supports: /sandbox/PROJECT_ID/, /api/v1/preview/PROJECT_ID/, etc.
+  var match = window.location.pathname.match(/(?:\\/sandbox\\/|\\/preview\\/|\\/api\\/v1\\/preview\\/)([a-f0-9-]+)/i);
   var projectId = match ? match[1] : null;
   if (!projectId) {
     // Try to get from parent URL or meta tag
@@ -67,8 +68,18 @@ BROWSER_ERROR_CAPTURE_SCRIPT = '''
   }
   if (!projectId) return; // No project ID, skip
 
+  // Determine backend URL - prefer bharatbuild.ai, fallback to relative path
+  var backendUrl = '';
+  if (window.location.hostname.includes('bharatbuild.ai')) {
+    backendUrl = 'https://bharatbuild.ai';
+  } else if (window.location.hostname.match(/^\\d+\\.\\d+\\.\\d+\\.\\d+$/)) {
+    // Direct IP access (sandbox preview) - use production backend
+    backendUrl = 'https://bharatbuild.ai';
+  }
+  // else: relative path for local development
+
   var CONFIG = {
-    endpoint: '/api/v1/errors/browser',
+    endpoint: backendUrl + '/api/v1/errors/browser',
     projectId: projectId,
     debounceMs: 1000,
     maxBufferSize: 5

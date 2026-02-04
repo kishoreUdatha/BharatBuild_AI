@@ -233,9 +233,20 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestSizeLimitMiddleware, max_size=10 * 1024 * 1024)
 
 # 4. CORS - Origins from CORS_ORIGINS_STR in .env
+# Include sandbox server IP for browser error reporting from previews
+# Get sandbox IP from SANDBOX_PUBLIC_URL or use default
+import os
+sandbox_public_url = os.environ.get("SANDBOX_PUBLIC_URL", "http://13.202.228.249")
+sandbox_ip = sandbox_public_url.replace("http://", "").replace("https://", "").split(":")[0]
+sandbox_origins = [
+    f"http://{sandbox_ip}",
+    f"http://{sandbox_ip}:3000", f"http://{sandbox_ip}:5173", f"http://{sandbox_ip}:8080",
+    f"http://{sandbox_ip}:3001", f"http://{sandbox_ip}:3002", f"http://{sandbox_ip}:3003",
+    f"http://{sandbox_ip}:4200", f"http://{sandbox_ip}:8000", f"http://{sandbox_ip}:8001",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS + ["https://*.bharatbuild.ai"],  # Include preview subdomains
+    allow_origins=settings.CORS_ORIGINS + ["https://*.bharatbuild.ai"] + sandbox_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
