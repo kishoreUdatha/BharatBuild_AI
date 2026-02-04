@@ -1003,94 +1003,158 @@ class UnifiedStorageService:
 
     async def sync_sandbox_to_s3(self, project_id: str, user_id: Optional[str] = None) -> int:
         """
-        Sync files from sandbox to S3 and update database records.
-        Used when files exist on sandbox but were never uploaded to S3.
+        Sync files from sandbox to S3 using AWS CLI directly on EC2.
 
-        GAP #2 FIX:
-        - Increased file limit from 100 to 500 (most projects < 500 source files)
-        - Fixed path extraction using proper string manipulation
-        - Fixed newline splitting (was '\\n' instead of '\n')
+        IMPROVED: Uses 'aws s3 sync' command run inside a container on EC2
+        instead of reading files one-by-one via Docker exec (which was slow/unreliable).
 
-        Returns: Number of files synced
+        Returns: Number of files synced (estimated from aws s3 sync output)
         """
         import docker
-        from app.core.database import async_session
-        from app.models.project_file import ProjectFile, FileGenerationStatus
-        from sqlalchemy import select, cast
-        from sqlalchemy import String as SQLString
-        from uuid import UUID
 
         synced_count = 0
         sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST")
-        # Build workspace path based on SANDBOX_PATH setting (supports EFS mount)
         sandbox_base = settings.SANDBOX_PATH
         workspace_path = f"{sandbox_base}/{user_id}/{project_id}" if user_id else f"{sandbox_base}/{project_id}"
 
+        # S3 destination path
+        s3_bucket = os.environ.get("S3_BUCKET", "bharatbuild-storage-930030325663")
+        aws_region = os.environ.get("AWS_REGION", "ap-south-1")
+        s3_project_path = f"s3://{s3_bucket}/projects/{project_id}"
+
         try:
-            # Get list of files from sandbox
             if sandbox_docker_host:
-                # Use TLS-enabled docker client
+                # ================================================================
+                # IMPROVED: Use aws s3 sync in amazon/aws-cli container on EC2
+                # This is MUCH faster than reading files one-by-one
+                # ================================================================
                 from app.services.docker_client_helper import get_docker_client
                 docker_client = get_docker_client()
                 if not docker_client:
                     docker_client = docker.DockerClient(base_url=sandbox_docker_host)
-                # GAP #2 FIX: Increased limit from 200 to 500 files
-                result = docker_client.containers.run(
-                    image="alpine:latest",
-                    command=f"find {workspace_path} -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/build/*' | head -500",
-                    volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},
-                    remove=True, detach=False
+
+                logger.info(f"[SyncToS3] Starting aws s3 sync: {workspace_path} → {s3_project_path}")
+
+                # Run aws s3 sync command inside amazon/aws-cli container
+                # Excludes node_modules, .git, dist, build folders
+                sync_command = (
+                    f"s3 sync {workspace_path} {s3_project_path}/ "
+                    f"--exclude '*/node_modules/*' "
+                    f"--exclude '*/.git/*' "
+                    f"--exclude '*/dist/*' "
+                    f"--exclude '*/build/*' "
+                    f"--exclude '*/.vite/*' "
+                    f"--exclude '*.log' "
+                    f"--region {aws_region}"
                 )
-                # GAP #2 FIX: Fixed newline splitting (was '\\n' which is literal backslash-n)
-                file_paths = [p.strip() for p in result.decode().split('\n') if p.strip()]
+
+                try:
+                    result = docker_client.containers.run(
+                        image="amazon/aws-cli:latest",
+                        command=sync_command,
+                        volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},
+                        environment={
+                            "AWS_DEFAULT_REGION": aws_region,
+                            # Use EC2 instance role credentials (no explicit keys needed)
+                        },
+                        remove=True,
+                        detach=False,
+                        network_mode="host"  # Use host network for EC2 IAM role
+                    )
+
+                    output = result.decode() if result else ""
+                    # Count "upload:" lines in output to estimate synced files
+                    synced_count = output.count("upload:")
+                    logger.info(f"[SyncToS3] aws s3 sync completed: ~{synced_count} files uploaded")
+
+                except docker.errors.ContainerError as ce:
+                    # Container exited with non-zero code
+                    logger.warning(f"[SyncToS3] aws s3 sync container error: {ce}")
+                    # Fall back to file-by-file sync
+                    synced_count = await self._sync_sandbox_to_s3_fallback(
+                        project_id, user_id, docker_client, workspace_path, sandbox_base
+                    )
+                except docker.errors.ImageNotFound:
+                    logger.warning("[SyncToS3] amazon/aws-cli image not found, using fallback")
+                    synced_count = await self._sync_sandbox_to_s3_fallback(
+                        project_id, user_id, docker_client, workspace_path, sandbox_base
+                    )
+
             else:
+                # Local mode - use existing file-by-file approach
                 sandbox_path = self.get_sandbox_path(project_id, user_id)
                 file_paths = [str(p) for p in sandbox_path.rglob('*') if p.is_file() and 'node_modules' not in str(p) and '.git' not in str(p)]
 
-            logger.info(f"[SyncToS3] Found {len(file_paths)} files in sandbox to sync")
+                logger.info(f"[SyncToS3] Found {len(file_paths)} files in local sandbox to sync")
 
-            # GAP #2 FIX: Increased limit from 100 to 500 files per sync
-            for full_path in file_paths[:500]:
-                try:
-                    # GAP #2 FIX: Improved path extraction
-                    # Ensure workspace_path ends without slash for consistent extraction
-                    workspace_normalized = workspace_path.rstrip('/')
-                    if full_path.startswith(workspace_normalized + '/'):
-                        rel_path = full_path[len(workspace_normalized) + 1:]
-                    elif full_path.startswith(workspace_normalized):
-                        rel_path = full_path[len(workspace_normalized):]
-                    else:
-                        # Fallback: just use filename
-                        rel_path = full_path.split('/')[-1] if '/' in full_path else full_path
-                        logger.warning(f"[SyncToS3] Could not extract relative path for {full_path}, using: {rel_path}")
-
-                    # Skip if path is invalid
-                    if not rel_path or rel_path.startswith('/'):
-                        rel_path = rel_path.lstrip('/')
-                    if not rel_path:
+                for full_path in file_paths[:500]:
+                    try:
+                        rel_path = str(Path(full_path).relative_to(sandbox_path))
+                        content = await self.read_from_sandbox(project_id, rel_path, user_id)
+                        if content:
+                            success = await self.save_to_database(project_id, rel_path, content)
+                            if success:
+                                synced_count += 1
+                    except Exception as file_err:
+                        logger.warning(f"[SyncToS3] Failed to sync {full_path}: {file_err}")
                         continue
 
-                    # Read file content from sandbox
-                    content = await self.read_from_sandbox(project_id, rel_path, user_id)
-                    if not content:
-                        logger.debug(f"[SyncToS3] Skipping empty file: {rel_path}")
-                        continue
-
-                    # Upload to S3 and save to database
-                    success = await self.save_to_database(project_id, rel_path, content)
-                    if success:
-                        synced_count += 1
-                        logger.debug(f"[SyncToS3] ✓ Synced: {rel_path}")
-
-                except Exception as file_err:
-                    logger.warning(f"[SyncToS3] Failed to sync {full_path}: {file_err}")
-                    continue
-
-            logger.info(f"[SyncToS3] Completed: {synced_count}/{len(file_paths)} files synced to S3")
+            logger.info(f"[SyncToS3] Completed: {synced_count} files synced to S3")
 
         except Exception as e:
             logger.error(f"[SyncToS3] Sync failed: {e}", exc_info=True)
-            raise  # GAP #3 FIX: Re-raise so retry logic in execution.py can catch it
+            raise
+
+        return synced_count
+
+    async def _sync_sandbox_to_s3_fallback(
+        self,
+        project_id: str,
+        user_id: Optional[str],
+        docker_client,
+        workspace_path: str,
+        sandbox_base: str
+    ) -> int:
+        """
+        Fallback file-by-file sync when aws s3 sync fails.
+        Uses Alpine container to list and read files.
+        """
+        synced_count = 0
+
+        try:
+            # Get list of files
+            result = docker_client.containers.run(
+                image="alpine:latest",
+                command=f"find {workspace_path} -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/build/*' | head -200",
+                volumes={sandbox_base: {"bind": sandbox_base, "mode": "ro"}},
+                remove=True, detach=False
+            )
+            file_paths = [p.strip() for p in result.decode().split('\n') if p.strip()]
+
+            logger.info(f"[SyncToS3-Fallback] Found {len(file_paths)} files")
+
+            workspace_normalized = workspace_path.rstrip('/')
+            for full_path in file_paths[:200]:  # Limit to 200 in fallback mode
+                try:
+                    if full_path.startswith(workspace_normalized + '/'):
+                        rel_path = full_path[len(workspace_normalized) + 1:]
+                    else:
+                        rel_path = full_path.split('/')[-1]
+
+                    if not rel_path:
+                        continue
+
+                    content = await self.read_from_sandbox(project_id, rel_path, user_id)
+                    if content:
+                        success = await self.save_to_database(project_id, rel_path, content)
+                        if success:
+                            synced_count += 1
+                except Exception as file_err:
+                    logger.debug(f"[SyncToS3-Fallback] Skip {full_path}: {file_err}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"[SyncToS3-Fallback] Failed: {e}")
 
         return synced_count
 
