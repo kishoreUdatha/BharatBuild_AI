@@ -2017,3 +2017,133 @@ async def preview_download(
             success=False,
             errors=[str(e)]
         )
+
+
+# =============================================================================
+# PROJECT RETRY - For Failed Projects (Admin/User)
+# =============================================================================
+
+@router.post("/{project_id}/retry")
+async def retry_failed_project(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retry a failed project.
+
+    This resets the project status to PENDING and requeues it for processing.
+    Only works for projects with FAILED status.
+
+    Returns:
+        - success: Whether the retry was queued
+        - project_id: The project ID
+        - message: Status message
+    """
+    from sqlalchemy import cast, String
+
+    # Get project
+    result = await db.execute(
+        select(Project).where(
+            cast(Project.id, String(36)) == str(project_id),
+            cast(Project.user_id, String(36)) == str(current_user.id)
+        )
+    )
+    project = result.scalar_one_or_none()
+
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+
+    if project.status != ProjectStatus.FAILED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Project is not in FAILED status. Current status: {project.status.value}"
+        )
+
+    # Reset status and queue for retry
+    project.status = ProjectStatus.PENDING
+    project.progress = 0
+    project.current_agent = "Queued for retry"
+
+    try:
+        await db.commit()
+    except Exception as e:
+        logger.error(f"Failed to reset project status: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to queue retry"
+        )
+
+    # Queue the Celery task
+    from app.modules.projects.tasks import execute_project_task
+    execute_project_task.delay(str(project.id))
+
+    logger.info(f"[Retry] Project {project_id} queued for retry by user {current_user.email}")
+
+    return {
+        "success": True,
+        "project_id": project_id,
+        "message": "Project queued for retry"
+    }
+
+
+@router.post("/admin/retry-all-failed")
+async def admin_retry_all_failed(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Admin endpoint: Retry all failed projects.
+
+    Use this after infrastructure issues are fixed to reprocess
+    all projects that failed.
+
+    Requires admin privileges.
+    """
+    # Check admin
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
+
+    # Get all failed projects
+    result = await db.execute(
+        select(Project).where(Project.status == ProjectStatus.FAILED)
+    )
+    failed_projects = result.scalars().all()
+
+    if not failed_projects:
+        return {
+            "success": True,
+            "retried_count": 0,
+            "message": "No failed projects to retry"
+        }
+
+    # Queue each for retry
+    from app.modules.projects.tasks import retry_failed_project as retry_task
+
+    project_ids = []
+    for project in failed_projects:
+        project.status = ProjectStatus.PENDING
+        project.progress = 0
+        project.current_agent = "Queued for retry (admin)"
+        project_ids.append(str(project.id))
+
+    await db.commit()
+
+    # Queue all tasks
+    for pid in project_ids:
+        retry_task.delay(pid)
+
+    logger.info(f"[Admin Retry] Queued {len(project_ids)} failed projects for retry")
+
+    return {
+        "success": True,
+        "retried_count": len(project_ids),
+        "project_ids": project_ids,
+        "message": f"Queued {len(project_ids)} projects for retry"
+    }
