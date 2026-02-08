@@ -730,6 +730,10 @@ class EventType(str, Enum):
     DOCUMENT_COMPLETE = "document_complete"
     ALL_DOCUMENTS_COMPLETE = "all_documents_complete"
     DOCUMENT_ERROR = "document_error"
+    # Learning mode events
+    LEARNING_CHECKPOINT = "learning_checkpoint"
+    LEARNING_QUIZ_READY = "learning_quiz_ready"
+    FILE_CREATED = "file_created"  # For tracking individual file creation
 
 
 @dataclass
@@ -844,6 +848,7 @@ class ExecutionContext:
     ):
         """
         Track token usage from a Claude API call.
+        NOW SAVES IMMEDIATELY to database for reliability.
 
         Args:
             input_tokens: Number of input tokens
@@ -868,7 +873,7 @@ class ExecutionContext:
         self.token_usage_by_agent[agent_type]["input"] += input_tokens
         self.token_usage_by_agent[agent_type]["output"] += output_tokens
 
-        # Store transaction for saving later
+        # Store transaction for saving later (backup)
         self.pending_token_transactions.append({
             "agent_type": agent_type,
             "operation": operation,
@@ -878,9 +883,111 @@ class ExecutionContext:
             "file_path": file_path
         })
 
+        # IMMEDIATE SAVE: Save token usage right away (don't wait until end)
+        # This ensures tokens are tracked even if workflow fails later
+        asyncio.create_task(self._save_token_immediately(
+            input_tokens, output_tokens, model, agent_type, operation, file_path
+        ))
+
+    async def _save_token_immediately(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        model: str,
+        agent_type: str,
+        operation: str,
+        file_path: str
+    ):
+        """Save token usage to database immediately (fire-and-forget)"""
+        if not self.user_id:
+            return  # Can't save without user_id
+
+        try:
+            from app.services.token_tracker import token_tracker
+            from app.models.usage import AgentType as AgentTypeEnum, OperationType
+
+            # Map string to enum
+            try:
+                agent_enum = AgentTypeEnum(agent_type)
+            except ValueError:
+                agent_enum = AgentTypeEnum.OTHER
+
+            try:
+                op_enum = OperationType(operation)
+            except ValueError:
+                op_enum = OperationType.OTHER
+
+            await token_tracker.log_transaction_simple(
+                user_id=str(self.user_id),
+                project_id=str(self.project_id),
+                agent_type=agent_enum,
+                operation=op_enum,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                file_path=file_path
+            )
+
+            # Also update project total_tokens incrementally
+            await self._update_project_tokens()
+
+        except Exception as e:
+            logger.warning(f"[TokenTracker] Immediate save failed (non-critical): {e}")
+
+    async def _update_project_tokens(self):
+        """Update project's total_tokens field incrementally"""
+        try:
+            from app.core.database import async_session
+            from sqlalchemy import update
+
+            async with async_session() as db:
+                await db.execute(
+                    update(Project)
+                    .where(Project.id == self.project_id)
+                    .values(total_tokens=self.total_tokens)
+                )
+                await db.commit()
+        except Exception as e:
+            # Non-critical, just log
+            logger.debug(f"[TokenTracker] Project token update skipped: {e}")
+
     @property
     def total_tokens(self) -> int:
         return self.total_input_tokens + self.total_output_tokens
+
+    def update_progress(self, planned_files: int = 0):
+        """
+        Update project progress based on files created.
+        Called automatically when files are saved.
+        """
+        if not self.project_id:
+            return
+
+        # Calculate progress (0-90% for file generation, last 10% for finalization)
+        if planned_files > 0:
+            file_progress = min(90, int((len(self.files_created) / planned_files) * 90))
+        else:
+            # Estimate based on files created
+            file_progress = min(90, len(self.files_created) * 2)
+
+        # Fire-and-forget progress update
+        asyncio.create_task(self._update_progress_db(file_progress))
+
+    async def _update_progress_db(self, progress: int):
+        """Update progress in database (fire-and-forget)"""
+        try:
+            from app.core.database import async_session
+            from sqlalchemy import update
+
+            async with async_session() as db:
+                await db.execute(
+                    update(Project)
+                    .where(Project.id == self.project_id)
+                    .values(progress=progress)
+                )
+                await db.commit()
+        except Exception as e:
+            logger.debug(f"[Progress] Update skipped: {e}")
 
 
 class AgentRegistry:
@@ -2902,15 +3009,38 @@ class DynamicOrchestrator:
                     if hasattr(context, 'features') and context.features:
                         update_values['requirements'] = context.features
                     
-                    await db.execute(
-                        update(Project)
-                        .where(Project.id == project_id)
-                        .values(**update_values)
-                    )
-                    await db.commit()
-                    logger.info(f"[Layer3-PostgreSQL] Updated project metadata for {project_id}")
+                    # Retry status update up to 3 times - THIS IS CRITICAL
+                    for retry_attempt in range(3):
+                        try:
+                            await db.execute(
+                                update(Project)
+                                .where(Project.id == project_id)
+                                .values(**update_values)
+                            )
+                            await db.commit()
+                            logger.info(f"[Layer3-PostgreSQL] Updated project metadata for {project_id} (status={final_status.value})")
+                            break  # Success, exit retry loop
+                        except Exception as retry_err:
+                            if retry_attempt < 2:
+                                logger.warning(f"[Layer3-PostgreSQL] Retry {retry_attempt + 1}/3 for project update: {retry_err}")
+                                await asyncio.sleep(1)  # Wait 1 second before retry
+                            else:
+                                logger.error(f"[Layer3-PostgreSQL] FAILED to update project after 3 retries: {retry_err}")
+                                raise  # Re-raise on final attempt
             except Exception as db_err:
-                logger.warning(f"[Layer3-PostgreSQL] Failed to update project: {db_err}")
+                logger.error(f"[Layer3-PostgreSQL] CRITICAL: Failed to update project status: {db_err}")
+                # Try one more time with a fresh session
+                try:
+                    async with async_session() as fallback_db:
+                        await fallback_db.execute(
+                            update(Project)
+                            .where(Project.id == project_id)
+                            .values(status=final_status, progress=100)
+                        )
+                        await fallback_db.commit()
+                        logger.info(f"[Layer3-PostgreSQL] Fallback update succeeded for {project_id}")
+                except Exception as fallback_err:
+                    logger.error(f"[Layer3-PostgreSQL] Fallback also failed: {fallback_err}")
 
             # Yield progress event after DB update
             yield OrchestratorEvent(
@@ -5314,6 +5444,10 @@ For Java: Use EXACT package names from PACKAGE STRUCTURE above!
                                 'saved': True,
                                 'exports': file_exports  # Track exports for dependency resolution
                             })
+
+                            # Update progress after each file saved
+                            planned_count = len(context.plan.get('files', [])) if context.plan else 0
+                            context.update_progress(planned_count)
 
                             # ============================================================
                             # INCREMENTAL SAVE: Update status to COMPLETED after save
