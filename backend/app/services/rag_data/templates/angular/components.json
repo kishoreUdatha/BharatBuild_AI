@@ -1,0 +1,20 @@
+[
+  {
+    "content": "// button.component.ts\nimport { Component, Input, Output, EventEmitter } from '@angular/core';\nimport { CommonModule } from '@angular/common';\n\n@Component({\n  selector: 'app-button',\n  standalone: true,\n  imports: [CommonModule],\n  template: `\n    <button\n      [class]=\"buttonClasses\"\n      [disabled]=\"disabled || loading\"\n      (click)=\"onClick.emit($event)\"\n    >\n      <svg *ngIf=\"loading\" class=\"animate-spin -ml-1 mr-2 h-4 w-4\" fill=\"none\" viewBox=\"0 0 24 24\">\n        <circle class=\"opacity-25\" cx=\"12\" cy=\"12\" r=\"10\" stroke=\"currentColor\" stroke-width=\"4\"></circle>\n        <path class=\"opacity-75\" fill=\"currentColor\" d=\"M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z\"></path>\n      </svg>\n      <ng-content></ng-content>\n    </button>\n  `\n})\nexport class ButtonComponent {\n  @Input() variant: 'primary' | 'secondary' | 'danger' = 'primary';\n  @Input() size: 'sm' | 'md' | 'lg' = 'md';\n  @Input() disabled = false;\n  @Input() loading = false;\n  @Output() onClick = new EventEmitter<MouseEvent>();\n\n  get buttonClasses(): string {\n    const base = 'inline-flex items-center justify-center font-medium rounded-lg transition-colors';\n    const variants = {\n      primary: 'bg-blue-600 text-white hover:bg-blue-700',\n      secondary: 'bg-gray-200 text-gray-900 hover:bg-gray-300',\n      danger: 'bg-red-600 text-white hover:bg-red-700'\n    };\n    const sizes = {\n      sm: 'px-3 py-1.5 text-sm',\n      md: 'px-4 py-2 text-base',\n      lg: 'px-6 py-3 text-lg'\n    };\n    return `${base} ${variants[this.variant]} ${sizes[this.size]}`;\n  }\n}",
+    "metadata": {
+      "title": "Angular Button Component",
+      "framework": "angular",
+      "language": "typescript",
+      "tags": ["component", "button", "angular", "standalone"]
+    }
+  },
+  {
+    "content": "// auth.service.ts\nimport { Injectable, signal, computed } from '@angular/core';\nimport { HttpClient } from '@angular/common/http';\nimport { Router } from '@angular/router';\n\ninterface User {\n  id: string;\n  email: string;\n  name: string;\n  role: 'admin' | 'user';\n}\n\ninterface AuthResponse {\n  token: string;\n  user: User;\n}\n\n@Injectable({ providedIn: 'root' })\nexport class AuthService {\n  private user = signal<User | null>(null);\n  private token = signal<string | null>(localStorage.getItem('token'));\n  \n  isAuthenticated = computed(() => !!this.user());\n  isAdmin = computed(() => this.user()?.role === 'admin');\n  currentUser = computed(() => this.user());\n\n  constructor(private http: HttpClient, private router: Router) {\n    if (this.token()) this.fetchUser();\n  }\n\n  async login(email: string, password: string): Promise<void> {\n    const res = await this.http.post<AuthResponse>('/api/auth/login', { email, password }).toPromise();\n    if (res) {\n      this.token.set(res.token);\n      this.user.set(res.user);\n      localStorage.setItem('token', res.token);\n      this.router.navigate(['/dashboard']);\n    }\n  }\n\n  logout(): void {\n    this.token.set(null);\n    this.user.set(null);\n    localStorage.removeItem('token');\n    this.router.navigate(['/login']);\n  }\n\n  private async fetchUser(): Promise<void> {\n    try {\n      const user = await this.http.get<User>('/api/auth/me').toPromise();\n      this.user.set(user || null);\n    } catch {\n      this.logout();\n    }\n  }\n\n  getToken(): string | null {\n    return this.token();\n  }\n}\n\n// auth.guard.ts\nimport { inject } from '@angular/core';\nimport { Router, CanActivateFn } from '@angular/router';\nimport { AuthService } from './auth.service';\n\nexport const authGuard: CanActivateFn = () => {\n  const auth = inject(AuthService);\n  const router = inject(Router);\n  \n  if (auth.isAuthenticated()) return true;\n  router.navigate(['/login']);\n  return false;\n};",
+    "metadata": {
+      "title": "Angular Auth Service with Signals",
+      "framework": "angular",
+      "language": "typescript",
+      "tags": ["service", "authentication", "angular", "signals", "guard"]
+    }
+  }
+]

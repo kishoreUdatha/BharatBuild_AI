@@ -1,0 +1,29 @@
+[
+  {
+    "content": "<script setup lang=\"ts\">\nimport { ref, computed } from 'vue'\n\ninterface Props {\n  variant?: 'primary' | 'secondary' | 'danger'\n  size?: 'sm' | 'md' | 'lg'\n  loading?: boolean\n  disabled?: boolean\n}\n\nconst props = withDefaults(defineProps<Props>(), {\n  variant: 'primary',\n  size: 'md',\n  loading: false,\n  disabled: false\n})\n\nconst emit = defineEmits<{\n  click: [event: MouseEvent]\n}>()\n\nconst classes = computed(() => {\n  const base = 'inline-flex items-center justify-center font-medium rounded-lg transition-colors'\n  const variants = {\n    primary: 'bg-blue-600 text-white hover:bg-blue-700',\n    secondary: 'bg-gray-200 text-gray-900 hover:bg-gray-300',\n    danger: 'bg-red-600 text-white hover:bg-red-700'\n  }\n  const sizes = {\n    sm: 'px-3 py-1.5 text-sm',\n    md: 'px-4 py-2 text-base',\n    lg: 'px-6 py-3 text-lg'\n  }\n  return `${base} ${variants[props.variant]} ${sizes[props.size]}`\n})\n</script>\n\n<template>\n  <button\n    :class=\"classes\"\n    :disabled=\"disabled || loading\"\n    @click=\"emit('click', $event)\"\n  >\n    <svg v-if=\"loading\" class=\"animate-spin -ml-1 mr-2 h-4 w-4\" fill=\"none\" viewBox=\"0 0 24 24\">\n      <circle class=\"opacity-25\" cx=\"12\" cy=\"12\" r=\"10\" stroke=\"currentColor\" stroke-width=\"4\" />\n      <path class=\"opacity-75\" fill=\"currentColor\" d=\"M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z\" />\n    </svg>\n    <slot />\n  </button>\n</template>",
+    "metadata": {
+      "title": "Vue 3 Button Component",
+      "framework": "vue",
+      "language": "typescript",
+      "tags": ["component", "button", "vue3", "composition-api"]
+    }
+  },
+  {
+    "content": "<script setup lang=\"ts\">\nimport { ref, watch } from 'vue'\n\ninterface Props {\n  modelValue: string\n  label: string\n  type?: 'text' | 'email' | 'password' | 'number'\n  placeholder?: string\n  error?: string\n  required?: boolean\n}\n\nconst props = withDefaults(defineProps<Props>(), {\n  type: 'text',\n  required: false\n})\n\nconst emit = defineEmits<{\n  'update:modelValue': [value: string]\n}>()\n\nconst focused = ref(false)\n\nconst inputClasses = computed(() => {\n  const base = 'w-full px-4 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2'\n  if (props.error) return `${base} border-red-500 focus:ring-red-200`\n  if (focused.value) return `${base} border-blue-500 focus:ring-blue-200`\n  return `${base} border-gray-300 hover:border-gray-400`\n})\n</script>\n\n<template>\n  <div class=\"mb-4\">\n    <label class=\"block text-sm font-medium text-gray-700 mb-1\">\n      {{ label }}\n      <span v-if=\"required\" class=\"text-red-500 ml-1\">*</span>\n    </label>\n    <input\n      :type=\"type\"\n      :value=\"modelValue\"\n      :placeholder=\"placeholder\"\n      :class=\"inputClasses\"\n      @input=\"emit('update:modelValue', ($event.target as HTMLInputElement).value)\"\n      @focus=\"focused = true\"\n      @blur=\"focused = false\"\n    />\n    <p v-if=\"error\" class=\"mt-1 text-sm text-red-500\">{{ error }}</p>\n  </div>\n</template>",
+    "metadata": {
+      "title": "Vue 3 Input Component",
+      "framework": "vue",
+      "language": "typescript",
+      "tags": ["component", "input", "form", "vue3", "v-model"]
+    }
+  },
+  {
+    "content": "// stores/auth.ts - Pinia Store\nimport { defineStore } from 'pinia'\nimport { ref, computed } from 'vue'\n\ninterface User {\n  id: string\n  email: string\n  name: string\n  role: 'admin' | 'user'\n}\n\nexport const useAuthStore = defineStore('auth', () => {\n  const user = ref<User | null>(null)\n  const token = ref<string | null>(localStorage.getItem('token'))\n  const loading = ref(false)\n\n  const isAuthenticated = computed(() => !!user.value)\n  const isAdmin = computed(() => user.value?.role === 'admin')\n\n  async function login(email: string, password: string) {\n    loading.value = true\n    try {\n      const res = await fetch('/api/auth/login', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify({ email, password })\n      })\n      if (!res.ok) throw new Error('Invalid credentials')\n      \n      const data = await res.json()\n      token.value = data.token\n      user.value = data.user\n      localStorage.setItem('token', data.token)\n    } finally {\n      loading.value = false\n    }\n  }\n\n  async function logout() {\n    token.value = null\n    user.value = null\n    localStorage.removeItem('token')\n  }\n\n  async function fetchUser() {\n    if (!token.value) return\n    try {\n      const res = await fetch('/api/auth/me', {\n        headers: { Authorization: `Bearer ${token.value}` }\n      })\n      if (res.ok) user.value = await res.json()\n    } catch {\n      logout()\n    }\n  }\n\n  return { user, token, loading, isAuthenticated, isAdmin, login, logout, fetchUser }\n})",
+    "metadata": {
+      "title": "Vue 3 Pinia Auth Store",
+      "framework": "vue",
+      "language": "typescript",
+      "tags": ["pinia", "store", "authentication", "vue3", "state-management"]
+    }
+  }
+]
