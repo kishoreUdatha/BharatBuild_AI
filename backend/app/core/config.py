@@ -147,6 +147,7 @@ class Settings(BaseSettings):
     # Hybrid Routing Configuration
     # Routes simple tasks to Qwen (FREE) and complex tasks to Claude
     HYBRID_ROUTING_ENABLED: bool = False  # Enable when Qwen is ready
+    QWEN_ONLY_MODE: bool = False  # Set True to use ONLY Qwen (no Claude at all)
     QWEN_MAX_PROMPT_TOKENS: int = 4000  # Use Qwen for prompts under this size
     QWEN_SIMPLE_TASK_KEYWORDS: str = "component,button,form,input,card,list,table,modal,page,layout,style,css,html"
 

@@ -38,11 +38,12 @@ class HybridClient:
 
         self._initialized = True
         self._qwen_client = None
-        self._claude_client = claude_client
+        self._claude_client = None  # Lazy load only if needed
 
         # Load config
         self.use_local_qwen = settings.USE_LOCAL_QWEN
         self.hybrid_routing = settings.HYBRID_ROUTING_ENABLED
+        self.qwen_only_mode = getattr(settings, 'QWEN_ONLY_MODE', False)
         self.max_prompt_tokens = settings.QWEN_MAX_PROMPT_TOKENS
 
         # Simple task keywords (tasks suitable for local Qwen)
@@ -59,23 +60,35 @@ class HybridClient:
 
         logger.info(
             f"HybridClient initialized: use_local_qwen={self.use_local_qwen}, "
-            f"hybrid_routing={self.hybrid_routing}"
+            f"hybrid_routing={self.hybrid_routing}, qwen_only_mode={self.qwen_only_mode}"
         )
 
     def _get_qwen_client(self):
         """Lazy-load Qwen client only when needed"""
-        if self._qwen_client is None and self.use_local_qwen:
+        if self._qwen_client is None and (self.use_local_qwen or self.qwen_only_mode):
             try:
                 from app.utils.qwen_client import qwen_client
                 self._qwen_client = qwen_client
                 logger.info("Qwen client loaded successfully")
             except ImportError as e:
                 logger.warning(f"Qwen client not available: {e}")
-                self.use_local_qwen = False
+                if not self.qwen_only_mode:
+                    self.use_local_qwen = False
             except Exception as e:
                 logger.error(f"Failed to load Qwen client: {e}")
-                self.use_local_qwen = False
+                if not self.qwen_only_mode:
+                    self.use_local_qwen = False
         return self._qwen_client
+
+    def _get_claude_client(self):
+        """Lazy-load Claude client only when needed (not in Qwen-only mode)"""
+        if self._claude_client is None and not self.qwen_only_mode:
+            try:
+                self._claude_client = claude_client
+                logger.info("Claude client loaded")
+            except Exception as e:
+                logger.error(f"Failed to load Claude client: {e}")
+        return self._claude_client
 
     def _estimate_prompt_tokens(self, prompt: str, system_prompt: str = None) -> int:
         """Rough estimation of prompt tokens (4 chars ≈ 1 token)"""
@@ -132,6 +145,10 @@ class HybridClient:
 
         Returns: "qwen" or "claude"
         """
+        # Qwen-only mode: ALWAYS use Qwen (no Claude at all)
+        if self.qwen_only_mode:
+            return "qwen"
+
         # If hybrid routing is disabled, always use Claude
         if not self.hybrid_routing:
             return "claude"
@@ -200,7 +217,7 @@ class HybridClient:
                     self.stats["qwen_requests"] += 1
 
                     # Calculate saved cost (what Claude would have charged)
-                    saved_cost = self._claude_client.calculate_cost(
+                    saved_cost = self._calculate_claude_cost(
                         result.get("input_tokens", 0),
                         result.get("output_tokens", 0),
                         model
@@ -213,12 +230,25 @@ class HybridClient:
                     return result
 
                 except Exception as e:
+                    if self.qwen_only_mode:
+                        # In Qwen-only mode, don't fall back to Claude
+                        logger.error(f"Qwen generation failed (Qwen-only mode, no fallback): {e}")
+                        raise RuntimeError(f"Qwen generation failed: {e}. Claude fallback disabled in QWEN_ONLY_MODE.")
                     logger.warning(f"Qwen generation failed, falling back to Claude: {e}")
                     self.stats["qwen_failures"] += 1
                     backend = "claude"
+            elif self.qwen_only_mode:
+                raise RuntimeError("Qwen client not available. Set USE_LOCAL_QWEN=True and ensure GPU is available.")
 
-        # Use Claude
-        result = await self._claude_client.generate(
+        # Use Claude (only if not in Qwen-only mode)
+        if self.qwen_only_mode:
+            raise RuntimeError("Claude fallback disabled in QWEN_ONLY_MODE. Ensure Qwen is properly configured.")
+
+        claude = self._get_claude_client()
+        if not claude:
+            raise RuntimeError("Claude client not available and Qwen not configured.")
+
+        result = await claude.generate(
             prompt=prompt,
             system_prompt=system_prompt,
             model=model,
@@ -232,6 +262,17 @@ class HybridClient:
         result["cost_saved_usd"] = 0.0
 
         return result
+
+    def _calculate_claude_cost(self, input_tokens: int, output_tokens: int, model: str = "haiku") -> float:
+        """Calculate what Claude would have charged (for cost savings tracking)"""
+        # Claude pricing (Jan 2025)
+        if model == "sonnet":
+            input_cost = (input_tokens / 1_000_000) * 3.00
+            output_cost = (output_tokens / 1_000_000) * 15.00
+        else:  # haiku
+            input_cost = (input_tokens / 1_000_000) * 0.80
+            output_cost = (output_tokens / 1_000_000) * 4.00
+        return input_cost + output_cost
 
     async def generate_stream(
         self,
@@ -284,12 +325,24 @@ class HybridClient:
                     return
 
                 except Exception as e:
+                    if self.qwen_only_mode:
+                        logger.error(f"Qwen streaming failed (Qwen-only mode, no fallback): {e}")
+                        raise RuntimeError(f"Qwen streaming failed: {e}. Claude fallback disabled.")
                     logger.warning(f"Qwen streaming failed, falling back to Claude: {e}")
                     self.stats["qwen_failures"] += 1
                     backend = "claude"
+            elif self.qwen_only_mode:
+                raise RuntimeError("Qwen client not available in QWEN_ONLY_MODE.")
 
-        # Use Claude
-        async for chunk in self._claude_client.generate_stream(
+        # Use Claude (only if not in Qwen-only mode)
+        if self.qwen_only_mode:
+            raise RuntimeError("Claude fallback disabled in QWEN_ONLY_MODE.")
+
+        claude = self._get_claude_client()
+        if not claude:
+            raise RuntimeError("Claude client not available and Qwen not configured.")
+
+        async for chunk in claude.generate_stream(
             prompt=prompt,
             system_prompt=system_prompt,
             model=model,
@@ -354,7 +407,7 @@ class HybridClient:
         """
         if backend == "qwen":
             return 0.0  # Local model is FREE
-        return self._claude_client.calculate_cost(input_tokens, output_tokens, model)
+        return self._calculate_claude_cost(input_tokens, output_tokens, model)
 
     def calculate_cost_in_paise(
         self,
@@ -366,7 +419,8 @@ class HybridClient:
         """Calculate cost in Indian Paise. Qwen is FREE."""
         if backend == "qwen":
             return 0  # Local model is FREE
-        return self._claude_client.calculate_cost_in_paise(input_tokens, output_tokens, model)
+        usd_cost = self._calculate_claude_cost(input_tokens, output_tokens, model)
+        return int(usd_cost * 83 * 100)  # USD to INR to paise
 
     def get_stats(self) -> Dict[str, Any]:
         """Get usage statistics"""
