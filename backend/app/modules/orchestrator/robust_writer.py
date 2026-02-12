@@ -23,7 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.logging_config import logger
-from app.utils.claude_client import ClaudeClient
+# Use hybrid_client for Qwen/Claude routing
+from app.utils.hybrid_client import HybridClient as ClaudeClient, hybrid_client
 from app.modules.automation.file_manager import FileManager
 
 

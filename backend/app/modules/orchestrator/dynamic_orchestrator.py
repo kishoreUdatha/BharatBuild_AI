@@ -44,7 +44,8 @@ def _get_preview_url(port: int) -> str:
     return f"http://localhost:{port}"
 
 
-from app.utils.claude_client import ClaudeClient
+# Use hybrid_client for Qwen/Claude routing
+from app.utils.hybrid_client import HybridClient as ClaudeClient, hybrid_client
 from app.modules.automation.file_manager import FileManager
 from app.modules.agents.base_agent import AgentContext
 from app.services.checkpoint_service import checkpoint_service, CheckpointStatus

@@ -19,7 +19,8 @@ from typing import Optional, List, Dict, Any
 import asyncio
 import json
 
-from app.utils.claude_client import claude_client
+# Use hybrid_client for Qwen/Claude routing (aliased for compatibility)
+from app.utils.hybrid_client import hybrid_client as claude_client
 from app.api.v1.endpoints.auth import get_current_user
 from app.models.user import User
 from app.core.logging_config import logger

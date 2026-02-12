@@ -7,7 +7,8 @@ The system prompt is embedded directly in the class (Bolt.new style).
 
 from typing import Dict, Any, Optional, AsyncGenerator
 from dataclasses import dataclass
-from app.utils.claude_client import ClaudeClient
+# Use hybrid_client for Qwen/Claude routing
+from app.utils.hybrid_client import HybridClient as ClaudeClient, hybrid_client
 from app.core.logging_config import logger
 
 # Color presets for user-selectable themes

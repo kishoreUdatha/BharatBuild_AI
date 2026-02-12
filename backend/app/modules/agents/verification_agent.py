@@ -20,7 +20,8 @@ import json
 
 from app.core.logging_config import logger
 from app.modules.agents.base_agent import BaseAgent, AgentContext
-from app.utils.claude_client import ClaudeClient
+# Use hybrid_client for Qwen/Claude routing
+from app.utils.hybrid_client import HybridClient as ClaudeClient, hybrid_client
 
 
 class VerificationAgent(BaseAgent):

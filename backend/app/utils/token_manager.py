@@ -207,7 +207,8 @@ class TokenManager:
         """Record a token transaction"""
 
         # Calculate cost estimate
-        from app.utils.claude_client import claude_client
+        # Use hybrid_client for Qwen/Claude routing
+        from app.utils.hybrid_client import hybrid_client as claude_client
         cost_usd = 0
         cost_inr = 0
 

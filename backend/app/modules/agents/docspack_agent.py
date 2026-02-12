@@ -9,7 +9,8 @@ Output format: <file path="...">content</file>
 """
 
 from typing import Dict, Any, List, Optional
-from app.utils.claude_client import ClaudeClient
+# Use hybrid_client for Qwen/Claude routing
+from app.utils.hybrid_client import HybridClient as ClaudeClient, hybrid_client
 from pathlib import Path
 import json
 

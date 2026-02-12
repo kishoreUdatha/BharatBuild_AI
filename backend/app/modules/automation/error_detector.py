@@ -8,7 +8,8 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 
 from app.core.logging_config import logger
-from app.utils.claude_client import claude_client
+# Use hybrid_client for Qwen/Claude routing (aliased for compatibility)
+from app.utils.hybrid_client import hybrid_client as claude_client
 
 
 @dataclass

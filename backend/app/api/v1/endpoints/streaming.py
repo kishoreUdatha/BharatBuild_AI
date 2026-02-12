@@ -9,7 +9,8 @@ import asyncio
 from app.core.database import get_db
 from app.models.user import User
 from app.modules.auth.dependencies import get_current_user
-from app.utils.claude_client import claude_client
+# Use hybrid_client for Qwen/Claude routing (aliased for compatibility)
+from app.utils.hybrid_client import hybrid_client as claude_client
 from app.utils.token_manager import token_manager
 from app.core.logging_config import logger
 

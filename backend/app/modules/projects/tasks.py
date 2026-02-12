@@ -138,7 +138,8 @@ class ProjectExecutionTask(Task):
                 project.total_tokens = total_tokens
 
                 # Calculate cost (example: Haiku pricing)
-                from app.utils.claude_client import claude_client
+                # Use hybrid_client for Qwen/Claude routing
+                from app.utils.hybrid_client import hybrid_client as claude_client
                 project.total_cost = claude_client.calculate_cost_in_paise(
                     total_tokens // 2,  # Approximate input
                     total_tokens // 2,  # Approximate output

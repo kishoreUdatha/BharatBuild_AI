@@ -12,7 +12,8 @@ import json
 import hashlib
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
-from app.utils.claude_client import claude_client
+# Use hybrid_client for Qwen/Claude routing (aliased for compatibility)
+from app.utils.hybrid_client import hybrid_client as claude_client
 from app.core.logging_config import logger
 
 

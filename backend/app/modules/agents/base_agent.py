@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 from dataclasses import dataclass, field, InitVar
-from app.utils.claude_client import claude_client
+# Use hybrid_client for Qwen/Claude routing (aliased for compatibility)
+from app.utils.hybrid_client import hybrid_client as claude_client
 from app.core.logging_config import logger
 from app.core.config import settings
 

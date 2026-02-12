@@ -16,7 +16,8 @@ The Enhancer Agent:
 """
 
 from typing import Dict, Any, List
-from app.utils.claude_client import ClaudeClient
+# Use hybrid_client for Qwen/Claude routing
+from app.utils.hybrid_client import HybridClient as ClaudeClient, hybrid_client
 from app.core.config import settings
 import json
 import re

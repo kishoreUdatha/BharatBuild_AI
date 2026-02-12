@@ -7,7 +7,8 @@ import yaml
 from typing import List, Dict, Any, AsyncGenerator, Optional, Tuple
 from pathlib import Path
 
-from app.utils.claude_client import claude_client
+# Use hybrid_client for Qwen/Claude routing (aliased for compatibility)
+from app.utils.hybrid_client import hybrid_client as claude_client
 from app.core.logging_config import logger
 
 # Token limits (approximate - 1 token ≈ 4 chars)

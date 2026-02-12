@@ -9,7 +9,8 @@ from typing import Dict, List, Optional, AsyncGenerator
 from datetime import datetime
 
 from app.core.logging_config import logger
-from app.utils.claude_client import claude_client
+# Use hybrid_client for Qwen/Claude routing (aliased for compatibility)
+from app.utils.hybrid_client import hybrid_client as claude_client
 
 # Import all automation components
 from app.modules.automation.file_manager import file_manager
