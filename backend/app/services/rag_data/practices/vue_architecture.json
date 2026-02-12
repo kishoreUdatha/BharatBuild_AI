@@ -1,0 +1,20 @@
+[
+  {
+    "content": "# Vue 3 Application Architecture\n\n## Recommended Folder Structure\n```\nsrc/\n├── assets/              # Static assets\n├── components/\n│   ├── ui/              # Reusable UI components\n│   │   ├── Button.vue\n│   │   ├── Input.vue\n│   │   └── Modal.vue\n│   ├── layout/          # Layout components\n│   │   ├── Header.vue\n│   │   └── Sidebar.vue\n│   └── features/        # Feature components\n├── composables/         # Composition API hooks\n│   ├── useAuth.ts\n│   ├── useFetch.ts\n│   └── useForm.ts\n├── stores/              # Pinia stores\n│   ├── auth.ts\n│   └── app.ts\n├── views/               # Page components\n│   ├── Home.vue\n│   └── Dashboard.vue\n├── router/              # Vue Router\n│   └── index.ts\n├── services/            # API services\n│   └── api.ts\n├── types/               # TypeScript types\n└── App.vue\n```\n\n## Key Principles\n1. **Composition API**: Use `<script setup>` for cleaner code\n2. **Pinia for State**: Replace Vuex with Pinia\n3. **Composables**: Extract reusable logic into composables\n4. **TypeScript**: Use TypeScript for type safety\n5. **Single File Components**: Keep components focused\n\n## Component Pattern\n```vue\n<script setup lang=\"ts\">\nimport { ref, computed, onMounted } from 'vue'\nimport { useAuthStore } from '@/stores/auth'\n\nconst props = defineProps<{ title: string }>()\nconst emit = defineEmits<{ update: [value: string] }>()\n\nconst auth = useAuthStore()\nconst count = ref(0)\nconst doubled = computed(() => count.value * 2)\n</script>\n\n<template>\n  <div>{{ title }}: {{ doubled }}</div>\n</template>\n```",
+    "metadata": {
+      "title": "Vue 3 Application Architecture",
+      "framework": "vue",
+      "language": "typescript",
+      "tags": ["architecture", "structure", "vue3", "composition-api", "pinia"]
+    }
+  },
+  {
+    "content": "# Vue 3 Debugging Guide\n\n## Reactivity Not Working\n\n### Problem\nData changes but UI doesn't update.\n\n### Solutions\n```typescript\n// BAD: Replacing reactive object\nlet state = reactive({ count: 0 })\nstate = reactive({ count: 1 })  // Lost reactivity!\n\n// GOOD: Mutate properties\nconst state = reactive({ count: 0 })\nstate.count = 1  // Works!\n\n// BAD: Destructuring reactive\nconst { count } = reactive({ count: 0 })  // count is not reactive!\n\n// GOOD: Use toRefs\nconst state = reactive({ count: 0 })\nconst { count } = toRefs(state)  // count.value is reactive\n\n// BAD: ref without .value in script\nconst count = ref(0)\ncount = 1  // Wrong!\n\n// GOOD: Use .value\ncount.value = 1  // Correct\n```\n\n## Watch Not Triggering\n\n```typescript\n// BAD: Watching reactive object property directly\nconst state = reactive({ user: { name: 'John' } })\nwatch(state.user, () => {})  // Won't trigger on nested changes\n\n// GOOD: Use getter or deep watch\nwatch(() => state.user, () => {}, { deep: true })\nwatch(() => state.user.name, (newName) => {})\n\n// BAD: Watching ref without callback\nwatch(count.value, () => {})  // Watching primitive!\n\n// GOOD: Watch the ref itself\nwatch(count, (newVal) => {})\n```\n\n## Pinia Store Issues\n\n```typescript\n// BAD: Destructuring store loses reactivity\nconst { user } = useAuthStore()  // Not reactive!\n\n// GOOD: Use storeToRefs\nimport { storeToRefs } from 'pinia'\nconst store = useAuthStore()\nconst { user } = storeToRefs(store)  // Reactive!\n\n// Actions can be destructured directly\nconst { login, logout } = useAuthStore()  // OK\n```",
+    "metadata": {
+      "title": "Vue 3 Debugging Guide",
+      "framework": "vue",
+      "language": "typescript",
+      "tags": ["debugging", "vue3", "reactivity", "pinia", "troubleshooting"]
+    }
+  }
+]
