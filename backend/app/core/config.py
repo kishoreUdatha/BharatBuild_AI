@@ -152,6 +152,14 @@ class Settings(BaseSettings):
     QWEN_SIMPLE_TASK_KEYWORDS: str = "component,button,form,input,card,list,table,modal,page,layout,style,css,html"
 
     # ==========================================
+    # RAG (Retrieval-Augmented Generation)
+    # ==========================================
+    # Enhances code generation with relevant templates and examples
+    USE_RAG: bool = True  # Enable RAG for better code quality
+    RAG_N_RESULTS: int = 3  # Number of references to include
+    RAG_MAX_CONTEXT_CHARS: int = 4000  # Max characters for RAG context
+
+    # ==========================================
     # Storage Configuration
     # ==========================================
     STORAGE_MODE: str = "local"  # "local", "s3", or "minio"

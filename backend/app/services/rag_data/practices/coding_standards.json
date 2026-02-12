@@ -1,0 +1,38 @@
+[
+  {
+    "content": "# React Best Practices\n\n## Component Structure\n1. Use functional components with hooks\n2. Keep components small and focused (single responsibility)\n3. Use TypeScript for type safety\n4. Implement proper error boundaries\n\n## State Management\n1. Use useState for local state\n2. Use useReducer for complex state logic\n3. Use Context for global state (auth, theme)\n4. Consider Zustand or Redux for large apps\n\n## Performance\n1. Use React.memo for expensive components\n2. Use useMemo for expensive calculations\n3. Use useCallback for function props\n4. Implement lazy loading with React.lazy\n5. Use virtualization for large lists (react-window)\n\n## Code Example:\n```tsx\n// Good: Memoized component with proper types\ninterface ItemProps {\n  id: string;\n  name: string;\n  onClick: (id: string) => void;\n}\n\nconst Item = React.memo<ItemProps>(({ id, name, onClick }) => {\n  const handleClick = useCallback(() => onClick(id), [id, onClick]);\n  return <div onClick={handleClick}>{name}</div>;\n});\n```",
+    "metadata": {
+      "title": "React Best Practices",
+      "framework": "react",
+      "language": "typescript",
+      "tags": ["best-practices", "performance", "patterns"]
+    }
+  },
+  {
+    "content": "# FastAPI Best Practices\n\n## Project Structure\n```\napp/\n  api/\n    v1/\n      endpoints/\n      router.py\n  core/\n    config.py\n    security.py\n    database.py\n  models/\n  schemas/\n  services/\n  main.py\n```\n\n## API Design\n1. Use proper HTTP methods (GET, POST, PUT, DELETE)\n2. Return appropriate status codes\n3. Use Pydantic for request/response validation\n4. Implement proper error handling\n\n## Security\n1. Use OAuth2 with JWT tokens\n2. Hash passwords with bcrypt\n3. Validate all inputs\n4. Use CORS properly\n5. Rate limit endpoints\n\n## Database\n1. Use async SQLAlchemy for better performance\n2. Implement connection pooling\n3. Use migrations (Alembic)\n4. Add proper indexes\n\n## Code Example:\n```python\n# Good: Async endpoint with proper error handling\n@router.get(\"/{id}\", response_model=ItemResponse)\nasync def get_item(\n    id: str,\n    db: AsyncSession = Depends(get_db),\n    current_user: User = Depends(get_current_user)\n):\n    item = await service.get_by_id(id)\n    if not item:\n        raise HTTPException(status_code=404, detail=\"Item not found\")\n    if item.owner_id != current_user.id:\n        raise HTTPException(status_code=403, detail=\"Not authorized\")\n    return item\n```",
+    "metadata": {
+      "title": "FastAPI Best Practices",
+      "framework": "fastapi",
+      "language": "python",
+      "tags": ["best-practices", "api-design", "security"]
+    }
+  },
+  {
+    "content": "# TypeScript Best Practices\n\n## Type Definitions\n1. Always define explicit types\n2. Use interfaces for objects\n3. Use type for unions/intersections\n4. Avoid 'any' - use 'unknown' if needed\n\n## Code Examples:\n```typescript\n// Good: Explicit types\ninterface User {\n  id: string;\n  email: string;\n  role: 'admin' | 'user';\n}\n\n// Good: Generic function\nfunction getFirst<T>(arr: T[]): T | undefined {\n  return arr[0];\n}\n\n// Good: Type guard\nfunction isUser(obj: unknown): obj is User {\n  return (\n    typeof obj === 'object' &&\n    obj !== null &&\n    'id' in obj &&\n    'email' in obj\n  );\n}\n\n// Good: Async function with proper types\nasync function fetchUser(id: string): Promise<User | null> {\n  try {\n    const res = await fetch(`/api/users/${id}`);\n    if (!res.ok) return null;\n    return res.json();\n  } catch {\n    return null;\n  }\n}\n```",
+    "metadata": {
+      "title": "TypeScript Best Practices",
+      "framework": "react",
+      "language": "typescript",
+      "tags": ["best-practices", "types", "typescript"]
+    }
+  },
+  {
+    "content": "# Tailwind CSS Best Practices\n\n## Organization\n1. Use consistent class ordering\n2. Extract common patterns to components\n3. Use @apply sparingly\n4. Configure custom colors in tailwind.config.js\n\n## Responsive Design\n1. Mobile-first approach\n2. Use breakpoint prefixes (sm:, md:, lg:, xl:)\n3. Test on real devices\n\n## Class Order Convention:\n1. Layout (flex, grid, position)\n2. Spacing (margin, padding)\n3. Sizing (width, height)\n4. Typography (font, text)\n5. Colors (bg, text color)\n6. Borders\n7. Effects (shadow, opacity)\n8. Transitions\n\n## Code Example:\n```tsx\n// Good: Organized classes\n<div className=\"\n  flex items-center justify-between    {/* Layout */}\n  p-4 mb-2                              {/* Spacing */}\n  w-full max-w-md                       {/* Sizing */}\n  text-lg font-medium                   {/* Typography */}\n  bg-white text-gray-900                {/* Colors */}\n  border border-gray-200 rounded-lg     {/* Borders */}\n  shadow-sm                             {/* Effects */}\n  transition-all hover:shadow-md        {/* Transitions */}\n\">\n  Content\n</div>\n```",
+    "metadata": {
+      "title": "Tailwind CSS Best Practices",
+      "framework": "react",
+      "language": "css",
+      "tags": ["best-practices", "tailwind", "styling"]
+    }
+  }
+]

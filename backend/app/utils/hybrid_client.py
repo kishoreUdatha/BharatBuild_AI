@@ -1,10 +1,11 @@
 """
 Hybrid AI Client - Intelligent routing between Qwen (local, FREE) and Claude (API)
 
-Routes simple code generation to local Qwen model (zero cost)
-Routes complex tasks to Claude API (when needed)
-
-Cost savings: 70-90% reduction by using local model for simple tasks
+Features:
+- Routes simple code generation to local Qwen model (zero cost)
+- Routes complex tasks to Claude API (when needed)
+- RAG (Retrieval-Augmented Generation) for enhanced context
+- Cost savings: 70-90% reduction by using local model for simple tasks
 """
 import asyncio
 from typing import Optional, Dict, List, Any, AsyncGenerator
@@ -50,17 +51,23 @@ class HybridClient:
         keywords_str = getattr(settings, 'QWEN_SIMPLE_TASK_KEYWORDS', '')
         self.simple_task_keywords = [k.strip().lower() for k in keywords_str.split(',') if k.strip()]
 
+        # RAG configuration
+        self.use_rag = getattr(settings, 'USE_RAG', True)  # Enable by default
+        self._rag_service = None
+
         # Statistics tracking
         self.stats = {
             "qwen_requests": 0,
             "claude_requests": 0,
             "qwen_failures": 0,
+            "rag_retrievals": 0,
             "total_cost_saved_usd": 0.0
         }
 
         logger.info(
             f"HybridClient initialized: use_local_qwen={self.use_local_qwen}, "
-            f"hybrid_routing={self.hybrid_routing}, qwen_only_mode={self.qwen_only_mode}"
+            f"hybrid_routing={self.hybrid_routing}, qwen_only_mode={self.qwen_only_mode}, "
+            f"use_rag={self.use_rag}"
         )
 
     def _get_qwen_client(self):
@@ -89,6 +96,92 @@ class HybridClient:
             except Exception as e:
                 logger.error(f"Failed to load Claude client: {e}")
         return self._claude_client
+
+    def _get_rag_service(self):
+        """Lazy-load RAG service only when needed"""
+        if self._rag_service is None and self.use_rag:
+            try:
+                from app.services.rag_service import rag_service
+                if rag_service.is_available():
+                    self._rag_service = rag_service
+                    logger.info("RAG service loaded successfully")
+                else:
+                    logger.warning("RAG service not available (missing dependencies)")
+                    self.use_rag = False
+            except ImportError as e:
+                logger.warning(f"RAG service not available: {e}")
+                self.use_rag = False
+            except Exception as e:
+                logger.error(f"Failed to load RAG service: {e}")
+                self.use_rag = False
+        return self._rag_service
+
+    def _get_rag_context(
+        self,
+        prompt: str,
+        framework: Optional[str] = None,
+        language: Optional[str] = None
+    ) -> str:
+        """
+        Retrieve relevant context from RAG for code generation.
+
+        Args:
+            prompt: The user's prompt
+            framework: Target framework (react, fastapi, etc.)
+            language: Programming language
+
+        Returns:
+            Context string to append to prompt, or empty string if RAG not available
+        """
+        if not self.use_rag:
+            return ""
+
+        rag = self._get_rag_service()
+        if not rag:
+            return ""
+
+        try:
+            # Detect framework from prompt if not provided
+            if not framework:
+                framework = self._detect_framework(prompt)
+
+            context = rag.retrieve_for_code_generation(
+                prompt=prompt,
+                framework=framework,
+                language=language,
+                n_results=3
+            )
+
+            if context:
+                self.stats["rag_retrievals"] += 1
+                logger.info(f"RAG context retrieved for: {prompt[:50]}...")
+
+            return context
+
+        except Exception as e:
+            logger.warning(f"RAG retrieval failed: {e}")
+            return ""
+
+    def _detect_framework(self, prompt: str) -> Optional[str]:
+        """Detect target framework from prompt"""
+        prompt_lower = prompt.lower()
+
+        frameworks = {
+            "react": ["react", "jsx", "tsx", "component", "hook", "usestate", "useeffect"],
+            "nextjs": ["next.js", "nextjs", "next js", "getserverside", "getstaticprops"],
+            "vue": ["vue", "vuejs", "vue.js", "nuxt"],
+            "fastapi": ["fastapi", "fast api", "pydantic", "uvicorn"],
+            "django": ["django", "drf", "django rest"],
+            "express": ["express", "expressjs", "node.js api"],
+            "flask": ["flask"],
+            "spring": ["spring boot", "springboot", "java api"],
+        }
+
+        for framework, keywords in frameworks.items():
+            if any(kw in prompt_lower for kw in keywords):
+                return framework
+
+        return None
 
     def _estimate_prompt_tokens(self, prompt: str, system_prompt: str = None) -> int:
         """Rough estimation of prompt tokens (4 chars ≈ 1 token)"""
@@ -175,7 +268,10 @@ class HybridClient:
         max_tokens: int = None,
         temperature: float = None,
         messages: Optional[List[Dict[str, str]]] = None,
-        force_backend: Optional[str] = None  # "qwen" or "claude" to override routing
+        force_backend: Optional[str] = None,  # "qwen" or "claude" to override routing
+        use_rag: Optional[bool] = None,  # Override RAG setting for this request
+        framework: Optional[str] = None,  # Framework hint for RAG
+        language: Optional[str] = None  # Language hint for RAG
     ) -> Dict[str, Any]:
         """
         Generate response using the best available backend.
@@ -188,6 +284,9 @@ class HybridClient:
             temperature: Temperature for generation
             messages: Optional conversation history
             force_backend: Force specific backend ("qwen" or "claude")
+            use_rag: Override RAG setting (True/False) for this request
+            framework: Framework hint for RAG retrieval (react, fastapi, etc.)
+            language: Language hint for RAG retrieval (typescript, python, etc.)
 
         Returns:
             Dict with response and metadata
@@ -200,13 +299,25 @@ class HybridClient:
 
         logger.info(f"HybridClient: routing to {backend} (model={model})")
 
+        # Enhance prompt with RAG context if enabled
+        enhanced_prompt = prompt
+        rag_used = False
+        should_use_rag = use_rag if use_rag is not None else self.use_rag
+
+        if should_use_rag:
+            rag_context = self._get_rag_context(prompt, framework, language)
+            if rag_context:
+                enhanced_prompt = f"{prompt}\n{rag_context}"
+                rag_used = True
+                logger.info(f"RAG context added ({len(rag_context)} chars)")
+
         # Try Qwen if selected
         if backend == "qwen":
             qwen = self._get_qwen_client()
             if qwen:
                 try:
                     result = await qwen.generate(
-                        prompt=prompt,
+                        prompt=enhanced_prompt,  # Use RAG-enhanced prompt
                         system_prompt=system_prompt,
                         max_tokens=max_tokens,
                         temperature=temperature,
@@ -225,8 +336,9 @@ class HybridClient:
                     self.stats["total_cost_saved_usd"] += saved_cost
                     result["cost_saved_usd"] = saved_cost
                     result["backend"] = "qwen"
+                    result["rag_used"] = rag_used
 
-                    logger.info(f"Qwen response: saved ${saved_cost:.4f}")
+                    logger.info(f"Qwen response: saved ${saved_cost:.4f}, RAG={rag_used}")
                     return result
 
                 except Exception as e:
@@ -249,7 +361,7 @@ class HybridClient:
             raise RuntimeError("Claude client not available and Qwen not configured.")
 
         result = await claude.generate(
-            prompt=prompt,
+            prompt=enhanced_prompt,  # Use RAG-enhanced prompt
             system_prompt=system_prompt,
             model=model,
             max_tokens=max_tokens,
@@ -260,6 +372,7 @@ class HybridClient:
         self.stats["claude_requests"] += 1
         result["backend"] = "claude"
         result["cost_saved_usd"] = 0.0
+        result["rag_used"] = rag_used
 
         return result
 
@@ -282,7 +395,10 @@ class HybridClient:
         max_tokens: int = None,
         temperature: float = None,
         messages: Optional[List[Dict[str, str]]] = None,
-        force_backend: Optional[str] = None
+        force_backend: Optional[str] = None,
+        use_rag: Optional[bool] = None,  # Override RAG setting for this request
+        framework: Optional[str] = None,  # Framework hint for RAG
+        language: Optional[str] = None  # Language hint for RAG
     ) -> AsyncGenerator[str, None]:
         """
         Generate streaming response using the best available backend.
@@ -295,6 +411,9 @@ class HybridClient:
             temperature: Temperature for generation
             messages: Optional conversation history
             force_backend: Force specific backend
+            use_rag: Override RAG setting for this request
+            framework: Framework hint for RAG retrieval
+            language: Language hint for RAG retrieval
 
         Yields:
             Chunks of text as they arrive
@@ -307,13 +426,24 @@ class HybridClient:
 
         logger.info(f"HybridClient streaming: routing to {backend} (model={model})")
 
+        # Enhance prompt with RAG context if enabled
+        enhanced_prompt = prompt
+        should_use_rag = use_rag if use_rag is not None else self.use_rag
+
+        if should_use_rag:
+            rag_context = self._get_rag_context(prompt, framework, language)
+            if rag_context:
+                enhanced_prompt = f"{prompt}\n{rag_context}"
+                self.stats["rag_retrievals"] += 1
+                logger.info(f"RAG context added to stream ({len(rag_context)} chars)")
+
         # Try Qwen if selected
         if backend == "qwen":
             qwen = self._get_qwen_client()
             if qwen:
                 try:
                     async for chunk in qwen.generate_stream(
-                        prompt=prompt,
+                        prompt=enhanced_prompt,  # Use RAG-enhanced prompt
                         system_prompt=system_prompt,
                         max_tokens=max_tokens,
                         temperature=temperature,
@@ -343,7 +473,7 @@ class HybridClient:
             raise RuntimeError("Claude client not available and Qwen not configured.")
 
         async for chunk in claude.generate_stream(
-            prompt=prompt,
+            prompt=enhanced_prompt,  # Use RAG-enhanced prompt
             system_prompt=system_prompt,
             model=model,
             max_tokens=max_tokens,
@@ -435,7 +565,9 @@ class HybridClient:
             "total_requests": total_requests,
             "qwen_percentage": round(qwen_percentage, 2),
             "qwen_available": self.use_local_qwen,
-            "hybrid_routing_enabled": self.hybrid_routing
+            "hybrid_routing_enabled": self.hybrid_routing,
+            "rag_enabled": self.use_rag,
+            "qwen_only_mode": self.qwen_only_mode
         }
 
     def reset_stats(self):
@@ -444,6 +576,7 @@ class HybridClient:
             "qwen_requests": 0,
             "claude_requests": 0,
             "qwen_failures": 0,
+            "rag_retrievals": 0,
             "total_cost_saved_usd": 0.0
         }
 

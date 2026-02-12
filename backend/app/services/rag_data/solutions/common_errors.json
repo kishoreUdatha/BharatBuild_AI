@@ -1,0 +1,65 @@
+[
+  {
+    "content": "## Error: Cannot read property 'map' of undefined\n\n### Cause\nTrying to call .map() on a variable that is undefined or null.\n\n### Solution\n```tsx\n// Bad\n{items.map(item => <Item key={item.id} {...item} />)}\n\n// Good - Optional chaining\n{items?.map(item => <Item key={item.id} {...item} />)}\n\n// Good - Default empty array\n{(items || []).map(item => <Item key={item.id} {...item} />)}\n\n// Good - Check before render\n{items && items.length > 0 && (\n  items.map(item => <Item key={item.id} {...item} />)\n)}\n\n// Good - Initialize state properly\nconst [items, setItems] = useState<Item[]>([]);\n```",
+    "metadata": {
+      "title": "Cannot read property map of undefined",
+      "framework": "react",
+      "language": "typescript",
+      "tags": ["error", "map", "undefined", "array"]
+    }
+  },
+  {
+    "content": "## Error: Objects are not valid as a React child\n\n### Cause\nTrying to render an object directly instead of its properties.\n\n### Solution\n```tsx\n// Bad\nconst user = { name: 'John', age: 30 };\nreturn <div>{user}</div>;\n\n// Good - Render specific properties\nreturn <div>{user.name}</div>;\n\n// Good - JSON stringify for debugging\nreturn <pre>{JSON.stringify(user, null, 2)}</pre>;\n\n// Good - Map object entries\nreturn (\n  <ul>\n    {Object.entries(user).map(([key, value]) => (\n      <li key={key}>{key}: {String(value)}</li>\n    ))}\n  </ul>\n);\n```",
+    "metadata": {
+      "title": "Objects are not valid as React child",
+      "framework": "react",
+      "language": "typescript",
+      "tags": ["error", "render", "object"]
+    }
+  },
+  {
+    "content": "## Error: Too many re-renders. React limits the number of renders\n\n### Cause\nCalling setState directly in the component body or in useEffect without proper dependencies.\n\n### Solution\n```tsx\n// Bad - Infinite loop\nfunction Component() {\n  const [count, setCount] = useState(0);\n  setCount(count + 1); // Called on every render!\n  return <div>{count}</div>;\n}\n\n// Good - Use useEffect with dependencies\nfunction Component() {\n  const [count, setCount] = useState(0);\n  \n  useEffect(() => {\n    setCount(prev => prev + 1);\n  }, []); // Empty deps = run once\n  \n  return <div>{count}</div>;\n}\n\n// Bad - onClick with immediate call\n<button onClick={handleClick()}>Click</button>\n\n// Good - Pass function reference\n<button onClick={handleClick}>Click</button>\n<button onClick={() => handleClick(id)}>Click</button>\n```",
+    "metadata": {
+      "title": "Too many re-renders",
+      "framework": "react",
+      "language": "typescript",
+      "tags": ["error", "infinite-loop", "useEffect", "useState"]
+    }
+  },
+  {
+    "content": "## Error: 422 Unprocessable Entity (FastAPI)\n\n### Cause\nRequest body doesn't match Pydantic schema validation.\n\n### Solution\n```python\n# Check your schema\nclass UserCreate(BaseModel):\n    email: EmailStr  # Must be valid email\n    password: str = Field(..., min_length=8)  # Minimum 8 chars\n    name: str\n\n# Common fixes:\n\n# 1. Make fields optional\nclass UserUpdate(BaseModel):\n    name: Optional[str] = None\n    email: Optional[EmailStr] = None\n\n# 2. Add default values\nclass Settings(BaseModel):\n    theme: str = \"light\"\n    notifications: bool = True\n\n# 3. Use validator for custom validation\nclass User(BaseModel):\n    age: int\n    \n    @validator('age')\n    def age_must_be_positive(cls, v):\n        if v < 0:\n            raise ValueError('Age must be positive')\n        return v\n\n# 4. Check request body in frontend\nconst response = await fetch('/api/users', {\n  method: 'POST',\n  headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({ email, password, name })  // Check all required fields\n});\n```",
+    "metadata": {
+      "title": "422 Unprocessable Entity FastAPI",
+      "framework": "fastapi",
+      "language": "python",
+      "tags": ["error", "validation", "pydantic", "422"]
+    }
+  },
+  {
+    "content": "## Error: CORS policy: No 'Access-Control-Allow-Origin'\n\n### Cause\nBackend not configured to allow requests from frontend origin.\n\n### Solution - FastAPI\n```python\nfrom fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\n\napp = FastAPI()\n\n# Add CORS middleware\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=[\n        \"http://localhost:3000\",\n        \"http://localhost:5173\",\n        \"https://yourdomain.com\"\n    ],\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\n### Solution - Express.js\n```javascript\nconst cors = require('cors');\n\napp.use(cors({\n  origin: ['http://localhost:3000', 'https://yourdomain.com'],\n  credentials: true,\n  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],\n  allowedHeaders: ['Content-Type', 'Authorization']\n}));\n```",
+    "metadata": {
+      "title": "CORS policy error",
+      "framework": "fastapi",
+      "language": "python",
+      "tags": ["error", "cors", "security", "api"]
+    }
+  },
+  {
+    "content": "## Error: Module not found / Cannot find module\n\n### Common Causes & Solutions\n\n```bash\n# 1. Package not installed\nnpm install <package-name>\npip install <package-name>\n\n# 2. Wrong import path\n# Bad\nimport { Button } from 'components/Button'\n# Good\nimport { Button } from '@/components/Button'\nimport { Button } from '../components/Button'\n\n# 3. Missing @types for TypeScript\nnpm install -D @types/node @types/react\n\n# 4. tsconfig.json paths not configured\n{\n  \"compilerOptions\": {\n    \"baseUrl\": \".\",\n    \"paths\": {\n      \"@/*\": [\"src/*\"]\n    }\n  }\n}\n\n# 5. Clear cache and reinstall\nrm -rf node_modules package-lock.json\nnpm install\n\n# For Python\npip cache purge\npip install -r requirements.txt\n```",
+    "metadata": {
+      "title": "Module not found error",
+      "framework": "react",
+      "language": "typescript",
+      "tags": ["error", "import", "module", "installation"]
+    }
+  },
+  {
+    "content": "## Error: Hydration mismatch (Next.js/SSR)\n\n### Cause\nServer-rendered HTML doesn't match client-side rendered HTML.\n\n### Solutions\n```tsx\n// 1. Use useEffect for client-only code\nfunction Component() {\n  const [mounted, setMounted] = useState(false);\n  \n  useEffect(() => {\n    setMounted(true);\n  }, []);\n  \n  if (!mounted) return null; // or skeleton\n  \n  return <div>{window.innerWidth}</div>;\n}\n\n// 2. Use dynamic import with ssr: false\nimport dynamic from 'next/dynamic';\n\nconst ClientOnlyComponent = dynamic(\n  () => import('./ClientComponent'),\n  { ssr: false }\n);\n\n// 3. Avoid Date/random in initial render\n// Bad\nconst date = new Date().toLocaleString();\n\n// Good\nconst [date, setDate] = useState<string>();\nuseEffect(() => {\n  setDate(new Date().toLocaleString());\n}, []);\n\n// 4. Suppress hydration warning (last resort)\n<div suppressHydrationWarning>{clientOnlyContent}</div>\n```",
+    "metadata": {
+      "title": "Hydration mismatch error",
+      "framework": "nextjs",
+      "language": "typescript",
+      "tags": ["error", "hydration", "ssr", "nextjs"]
+    }
+  }
+]
