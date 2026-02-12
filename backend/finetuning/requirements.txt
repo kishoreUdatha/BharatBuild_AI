@@ -1,0 +1,32 @@
+# Fine-tuning requirements for Qwen2.5-Coder
+# These extend the main backend requirements
+
+# Core fine-tuning (already in main requirements, listed for clarity)
+torch>=2.1.0
+transformers>=4.37.0
+peft>=0.8.0
+trl>=0.7.0
+bitsandbytes>=0.42.0
+accelerate>=0.27.0
+datasets>=2.17.0
+
+# Additional for fine-tuning
+unsloth>=2024.1  # Optional: 2x faster fine-tuning
+flash-attn>=2.5.0  # Optional: Flash Attention for faster training (requires CUDA)
+
+# Experiment tracking
+wandb>=0.16.0
+tensorboard>=2.15.0
+
+# Serving (choose one)
+vllm>=0.3.0  # High-throughput inference (recommended for production)
+# text-generation-inference  # Alternative: HF TGI
+
+# Evaluation
+evaluate>=0.4.0
+rouge-score>=0.1.2
+sacrebleu>=2.4.0
+
+# Data processing
+jsonlines>=4.0.0
+pyarrow>=15.0.0

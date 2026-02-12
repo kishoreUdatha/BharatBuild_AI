@@ -5,6 +5,22 @@ import os
 import json
 from pathlib import Path
 
+# Load .env files ONLY for local development (not AWS)
+# AWS uses ECS Task Definition for environment variables
+_is_aws = os.environ.get("AWS_EXECUTION_ENV") or os.environ.get("ECS_CONTAINER_METADATA_URI")
+if not _is_aws:
+    try:
+        from dotenv import load_dotenv
+        _config_dir = Path(__file__).resolve().parent.parent.parent
+        _env_file = _config_dir / ".env"
+        _env_local = _config_dir / ".env.local"
+        if _env_file.exists():
+            load_dotenv(_env_file)
+        if _env_local.exists():
+            load_dotenv(_env_local, override=True)  # .env.local overrides for Windows dev
+    except ImportError:
+        pass  # dotenv not installed
+
 
 def parse_cors_origins(v: Any) -> List[str]:
     """Parse CORS origins from string or list"""
@@ -117,6 +133,22 @@ class Settings(BaseSettings):
     CLAUDE_MAX_RETRIES: int = 5
     CLAUDE_RETRY_BASE_DELAY: float = 2.0  # seconds
     CLAUDE_RETRY_MAX_DELAY: float = 30.0  # seconds
+
+    # ==========================================
+    # Qwen Local Model (Fine-tuned for BharatBuild)
+    # ==========================================
+    # Enable Qwen for cost savings on simple code generation
+    USE_LOCAL_QWEN: bool = False  # Set True when model is available
+    QWEN_MODEL_PATH: str = "./finetuned_models/qwen-coder-7b/final"
+    QWEN_BASE_MODEL: str = "Qwen/Qwen2.5-Coder-7B-Instruct"
+    QWEN_MAX_TOKENS: int = 4096
+    QWEN_TEMPERATURE: float = 0.7
+
+    # Hybrid Routing Configuration
+    # Routes simple tasks to Qwen (FREE) and complex tasks to Claude
+    HYBRID_ROUTING_ENABLED: bool = False  # Enable when Qwen is ready
+    QWEN_MAX_PROMPT_TOKENS: int = 4000  # Use Qwen for prompts under this size
+    QWEN_SIMPLE_TASK_KEYWORDS: str = "component,button,form,input,card,list,table,modal,page,layout,style,css,html"
 
     # ==========================================
     # Storage Configuration
@@ -424,6 +456,25 @@ class Settings(BaseSettings):
     CONTAINER_SYNC_RETRY_BACKOFF: float = 1.5  # Exponential backoff multiplier
 
     # ==========================================
+    # EAS Build Settings (APK/IPA generation via Expo)
+    # ==========================================
+    # Get EXPO_TOKEN from https://expo.dev/accounts/[account]/settings/access-tokens
+    EXPO_TOKEN: str = ""  # Required for EAS builds
+    EAS_BUILD_TIMEOUT: int = 3600  # 1 hour max build time
+    EAS_POLL_INTERVAL: int = 30  # Poll EAS status every 30 seconds
+
+    # Apple Developer credentials (for iOS builds)
+    # Requires Apple Developer Program membership ($99/year)
+    APPLE_TEAM_ID: str = ""
+    APPLE_API_KEY_ID: str = ""
+    APPLE_API_KEY_ISSUER: str = ""
+    # Store .p8 key file securely in AWS Secrets Manager
+
+    # Build quotas (per user per month)
+    FREE_TIER_BUILDS_PER_MONTH: int = 3
+    PREMIUM_BUILDS_PER_MONTH: int = 50
+
+    # ==========================================
     # Timeouts and Intervals (in seconds/milliseconds as noted)
     # ==========================================
     SESSION_TTL: int = 3600  # 1 hour in seconds
@@ -546,7 +597,8 @@ class Settings(BaseSettings):
     # ==========================================
 
     class Config:
-        env_file = ".env"
+        # Load .env first, then .env.local overrides (for local Windows development)
+        env_file = (".env", ".env.local")
         case_sensitive = True
         extra = "ignore"  # Ignore extra fields in .env that aren't defined in Settings
 

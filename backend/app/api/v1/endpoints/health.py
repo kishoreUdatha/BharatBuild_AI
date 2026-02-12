@@ -492,3 +492,174 @@ async def claude_health_check():
         )
 
     return response
+
+
+@router.get("/ai")
+async def ai_health_check():
+    """
+    Comprehensive AI health check - Claude API + Local Qwen model + Hybrid routing.
+
+    Returns status of all AI backends and cost savings statistics.
+    """
+    start = time.time()
+
+    # Check Claude API
+    claude_check = await check_claude_api()
+
+    # Check Qwen local model (if enabled)
+    qwen_check = {"status": "disabled", "message": "Local Qwen model not enabled"}
+    hybrid_stats = None
+
+    if settings.USE_LOCAL_QWEN:
+        try:
+            from app.utils.qwen_client import qwen_client
+            if qwen_client.is_available():
+                qwen_check = {
+                    "status": "available",
+                    "model_path": settings.QWEN_MODEL_PATH,
+                    "device": qwen_client.device,
+                    "loaded": qwen_client._model_loaded,
+                    "message": "Qwen model available (lazy-loaded on first request)"
+                }
+            else:
+                qwen_check = {
+                    "status": "unavailable",
+                    "model_path": settings.QWEN_MODEL_PATH,
+                    "message": "Qwen model not available (check GPU/CUDA)"
+                }
+        except ImportError as e:
+            qwen_check = {
+                "status": "unavailable",
+                "error": str(e),
+                "message": "Qwen dependencies not installed (torch, transformers)"
+            }
+        except Exception as e:
+            qwen_check = {
+                "status": "error",
+                "error": str(e),
+                "message": "Error checking Qwen model"
+            }
+
+    # Get hybrid routing stats
+    if settings.HYBRID_ROUTING_ENABLED:
+        try:
+            from app.utils.hybrid_client import hybrid_client
+            hybrid_stats = hybrid_client.get_stats()
+        except Exception as e:
+            hybrid_stats = {"error": str(e)}
+
+    # Determine overall AI status
+    ai_ready = claude_check.get("status") == "healthy"
+    if settings.USE_LOCAL_QWEN and qwen_check.get("status") == "available":
+        ai_ready = True  # Either Claude or Qwen is enough
+
+    latency = (time.time() - start) * 1000
+
+    response = {
+        "status": "healthy" if ai_ready else "degraded",
+        "timestamp": datetime.utcnow().isoformat(),
+        "latency_ms": round(latency, 2),
+        "ai_generation_ready": ai_ready,
+        "backends": {
+            "claude": claude_check,
+            "qwen_local": qwen_check
+        },
+        "hybrid_routing": {
+            "enabled": settings.HYBRID_ROUTING_ENABLED,
+            "stats": hybrid_stats
+        },
+        "cost_optimization": {
+            "local_model_enabled": settings.USE_LOCAL_QWEN,
+            "total_cost_saved_usd": hybrid_stats.get("total_cost_saved_usd", 0) if hybrid_stats else 0,
+            "qwen_request_percentage": hybrid_stats.get("qwen_percentage", 0) if hybrid_stats else 0
+        }
+    }
+
+    return response
+
+
+@router.get("/qwen")
+async def qwen_health_check():
+    """
+    Check local Qwen model availability and status.
+
+    Returns:
+    - Model availability
+    - GPU/CUDA status
+    - Model loading status
+    - Configuration details
+    """
+    start = time.time()
+
+    if not settings.USE_LOCAL_QWEN:
+        return {
+            "status": "disabled",
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": "Local Qwen model is disabled. Set USE_LOCAL_QWEN=True to enable.",
+            "configuration": {
+                "USE_LOCAL_QWEN": False,
+                "QWEN_MODEL_PATH": settings.QWEN_MODEL_PATH,
+                "HYBRID_ROUTING_ENABLED": settings.HYBRID_ROUTING_ENABLED
+            }
+        }
+
+    try:
+        from app.utils.qwen_client import qwen_client
+
+        available = qwen_client.is_available()
+        latency = (time.time() - start) * 1000
+
+        response = {
+            "status": "available" if available else "unavailable",
+            "timestamp": datetime.utcnow().isoformat(),
+            "latency_ms": round(latency, 2),
+            "model": {
+                "path": settings.QWEN_MODEL_PATH,
+                "base_model": settings.QWEN_BASE_MODEL,
+                "loaded": qwen_client._model_loaded,
+                "device": qwen_client.device
+            },
+            "configuration": {
+                "USE_LOCAL_QWEN": settings.USE_LOCAL_QWEN,
+                "QWEN_MAX_TOKENS": settings.QWEN_MAX_TOKENS,
+                "QWEN_TEMPERATURE": settings.QWEN_TEMPERATURE,
+                "HYBRID_ROUTING_ENABLED": settings.HYBRID_ROUTING_ENABLED,
+                "QWEN_MAX_PROMPT_TOKENS": settings.QWEN_MAX_PROMPT_TOKENS
+            }
+        }
+
+        if not available:
+            response["troubleshooting"] = [
+                "Ensure CUDA-capable GPU is available",
+                "Install PyTorch with CUDA: pip install torch --index-url https://download.pytorch.org/whl/cu118",
+                "Install transformers: pip install transformers>=4.40.0 peft>=0.10.0 bitsandbytes>=0.43.0",
+                f"Fine-tuned model should be at: {settings.QWEN_MODEL_PATH}"
+            ]
+
+        return response
+
+    except ImportError as e:
+        latency = (time.time() - start) * 1000
+        return {
+            "status": "unavailable",
+            "timestamp": datetime.utcnow().isoformat(),
+            "latency_ms": round(latency, 2),
+            "error": str(e),
+            "message": "Qwen dependencies not installed",
+            "troubleshooting": [
+                "Install PyTorch: pip install torch",
+                "Install transformers: pip install transformers>=4.40.0",
+                "Install PEFT: pip install peft>=0.10.0",
+                "Install bitsandbytes: pip install bitsandbytes>=0.43.0"
+            ]
+        }
+    except Exception as e:
+        latency = (time.time() - start) * 1000
+        logger.error(f"[HealthCheck] Qwen check failed: {e}")
+        return {
+            "status": "error",
+            "timestamp": datetime.utcnow().isoformat(),
+            "latency_ms": round(latency, 2),
+            "error": str(e),
+            "message": "Error checking Qwen model"
+        }
