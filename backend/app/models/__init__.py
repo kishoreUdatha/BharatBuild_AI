@@ -45,6 +45,17 @@ from app.models.learning import (
 )
 from app.models.build import Build, BuildStatus, BuildPlatform
 from app.models.dataset import Dataset, DatasetStatus, DatasetType
+from app.models.team import (
+    Team,
+    TeamMember,
+    TeamTask,
+    TeamInvitation,
+    TeamRole,
+    TeamStatus,
+    InvitationStatus,
+    TaskStatus,
+    TaskPriority,
+)
 
 __all__ = [
     # User
@@ -125,4 +136,14 @@ __all__ = [
     "Dataset",
     "DatasetStatus",
     "DatasetType",
+    # Team Collaboration
+    "Team",
+    "TeamMember",
+    "TeamTask",
+    "TeamInvitation",
+    "TeamRole",
+    "TeamStatus",
+    "InvitationStatus",
+    "TaskStatus",
+    "TaskPriority",
 ]

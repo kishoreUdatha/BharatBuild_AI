@@ -124,5 +124,8 @@ class Project(Base):
     snapshots = relationship("Snapshot", back_populates="project", cascade="all, delete-orphan")
     datasets = relationship("Dataset", back_populates="project", cascade="all, delete-orphan")
 
+    # Team collaboration
+    team = relationship("Team", back_populates="project", uselist=False, cascade="all, delete-orphan")
+
     def __repr__(self):
         return f"<Project {self.title}>"

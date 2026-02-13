@@ -80,5 +80,8 @@ class User(Base):
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
     datasets = relationship("Dataset", back_populates="user", cascade="all, delete-orphan")
 
+    # Team collaboration
+    team_memberships = relationship("TeamMember", back_populates="user", cascade="all, delete-orphan")
+
     def __repr__(self):
         return f"<User {self.email}>"
