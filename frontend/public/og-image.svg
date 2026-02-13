@@ -1,0 +1,122 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a"/>
+      <stop offset="50%" style="stop-color:#1e293b"/>
+      <stop offset="100%" style="stop-color:#0f172a"/>
+    </linearGradient>
+    <linearGradient id="accentGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3b82f6"/>
+      <stop offset="100%" style="stop-color:#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="indiaGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#f97316"/>
+      <stop offset="50%" style="stop-color:#ffffff"/>
+      <stop offset="100%" style="stop-color:#22c55e"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#bgGradient)"/>
+
+  <!-- Decorative circles -->
+  <circle cx="100" cy="100" r="200" fill="#3b82f6" opacity="0.1"/>
+  <circle cx="1100" cy="530" r="250" fill="#06b6d4" opacity="0.1"/>
+
+  <!-- Grid pattern -->
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#334155" stroke-width="0.5"/>
+  </pattern>
+  <rect width="1200" height="630" fill="url(#grid)" opacity="0.3"/>
+
+  <!-- Logo Icon -->
+  <rect x="80" y="250" width="60" height="60" rx="12" fill="url(#accentGradient)"/>
+  <path d="M110 270 L110 300 M100 280 L120 280 M100 290 L115 290" stroke="white" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Main Title -->
+  <text x="160" y="295" font-family="system-ui, -apple-system, sans-serif" font-size="48" font-weight="bold" fill="white">BharatBuild AI</text>
+
+  <!-- Tagline -->
+  <text x="80" y="370" font-family="system-ui, -apple-system, sans-serif" font-size="36" fill="#94a3b8">India's #1 AI Code Generator</text>
+
+  <!-- Feature pills -->
+  <rect x="80" y="420" width="180" height="40" rx="20" fill="#3b82f6" opacity="0.2"/>
+  <text x="115" y="447" font-family="system-ui, sans-serif" font-size="16" fill="#60a5fa">AI Code Generation</text>
+
+  <rect x="280" y="420" width="160" height="40" rx="20" fill="#22c55e" opacity="0.2"/>
+  <text x="310" y="447" font-family="system-ui, sans-serif" font-size="16" fill="#4ade80">Live Preview</text>
+
+  <rect x="460" y="420" width="140" height="40" rx="20" fill="#f97316" opacity="0.2"/>
+  <text x="485" y="447" font-family="system-ui, sans-serif" font-size="16" fill="#fb923c">Auto-Fix</text>
+
+  <!-- Stats -->
+  <text x="80" y="530" font-family="system-ui, sans-serif" font-size="24" font-weight="bold" fill="url(#accentGradient)">10,000+</text>
+  <text x="80" y="555" font-family="system-ui, sans-serif" font-size="14" fill="#64748b">Projects Built</text>
+
+  <text x="220" y="530" font-family="system-ui, sans-serif" font-size="24" font-weight="bold" fill="url(#accentGradient)">50+</text>
+  <text x="220" y="555" font-family="system-ui, sans-serif" font-size="14" fill="#64748b">Tech Stacks</text>
+
+  <text x="320" y="530" font-family="system-ui, sans-serif" font-size="24" font-weight="bold" fill="url(#accentGradient)">31+</text>
+  <text x="320" y="555" font-family="system-ui, sans-serif" font-size="14" fill="#64748b">AI Agents</text>
+
+  <!-- Code Preview Window -->
+  <rect x="680" y="120" width="440" height="390" rx="12" fill="#1e293b" stroke="#334155" stroke-width="2"/>
+
+  <!-- Window header -->
+  <rect x="680" y="120" width="440" height="40" rx="12" fill="#0f172a"/>
+  <rect x="680" y="148" width="440" height="12" fill="#0f172a"/>
+  <circle cx="705" cy="140" r="6" fill="#ef4444"/>
+  <circle cx="725" cy="140" r="6" fill="#eab308"/>
+  <circle cx="745" cy="140" r="6" fill="#22c55e"/>
+  <text x="850" y="145" font-family="monospace" font-size="12" fill="#64748b">App.tsx</text>
+
+  <!-- Code lines -->
+  <text x="700" y="190" font-family="monospace" font-size="14" fill="#c084fc">import</text>
+  <text x="755" y="190" font-family="monospace" font-size="14" fill="white"> React </text>
+  <text x="820" y="190" font-family="monospace" font-size="14" fill="#c084fc">from</text>
+  <text x="865" y="190" font-family="monospace" font-size="14" fill="#4ade80"> 'react'</text>
+
+  <text x="700" y="220" font-family="monospace" font-size="14" fill="#c084fc">export default</text>
+  <text x="840" y="220" font-family="monospace" font-size="14" fill="#60a5fa"> function</text>
+  <text x="920" y="220" font-family="monospace" font-size="14" fill="#fbbf24"> App</text>
+  <text x="955" y="220" font-family="monospace" font-size="14" fill="white">() {'{'}</text>
+
+  <text x="720" y="250" font-family="monospace" font-size="14" fill="#c084fc">const</text>
+  <text x="770" y="250" font-family="monospace" font-size="14" fill="white"> [count, setCount] = </text>
+  <text x="935" y="250" font-family="monospace" font-size="14" fill="#60a5fa">useState</text>
+  <text x="1005" y="250" font-family="monospace" font-size="14" fill="white">(0)</text>
+
+  <text x="720" y="290" font-family="monospace" font-size="14" fill="#c084fc">return</text>
+  <text x="775" y="290" font-family="monospace" font-size="14" fill="white"> (</text>
+
+  <text x="740" y="320" font-family="monospace" font-size="14" fill="#64748b">&lt;</text>
+  <text x="755" y="320" font-family="monospace" font-size="14" fill="#f472b6">div</text>
+  <text x="785" y="320" font-family="monospace" font-size="14" fill="#60a5fa"> className</text>
+  <text x="870" y="320" font-family="monospace" font-size="14" fill="white">=</text>
+  <text x="880" y="320" font-family="monospace" font-size="14" fill="#4ade80">"app"</text>
+  <text x="920" y="320" font-family="monospace" font-size="14" fill="#64748b">&gt;</text>
+
+  <text x="760" y="350" font-family="monospace" font-size="14" fill="#64748b">&lt;</text>
+  <text x="775" y="350" font-family="monospace" font-size="14" fill="#f472b6">h1</text>
+  <text x="795" y="350" font-family="monospace" font-size="14" fill="#64748b">&gt;</text>
+  <text x="810" y="350" font-family="monospace" font-size="14" fill="white">Welcome</text>
+  <text x="885" y="350" font-family="monospace" font-size="14" fill="#64748b">&lt;/</text>
+  <text x="905" y="350" font-family="monospace" font-size="14" fill="#f472b6">h1</text>
+  <text x="925" y="350" font-family="monospace" font-size="14" fill="#64748b">&gt;</text>
+
+  <text x="760" y="380" font-family="monospace" font-size="14" fill="#64748b">&lt;</text>
+  <text x="775" y="380" font-family="monospace" font-size="14" fill="#f472b6">button</text>
+  <text x="835" y="380" font-family="monospace" font-size="14" fill="#60a5fa"> onClick</text>
+  <text x="905" y="380" font-family="monospace" font-size="14" fill="white">={...}&gt;</text>
+
+  <text x="780" y="410" font-family="monospace" font-size="14" fill="white">Count: {'{'}count{'}'}</text>
+
+  <!-- Typing cursor -->
+  <rect x="895" y="395" width="2" height="18" fill="#3b82f6">
+    <animate attributeName="opacity" values="1;0;1" dur="1s" repeatCount="indefinite"/>
+  </rect>
+
+  <!-- Made in India badge -->
+  <rect x="1000" y="530" width="120" height="35" rx="17" fill="url(#indiaGradient)" opacity="0.2"/>
+  <text x="1020" y="553" font-family="system-ui, sans-serif" font-size="14" fill="white">Made in India</text>
+</svg>
