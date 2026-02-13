@@ -85,13 +85,7 @@ export const metadata: Metadata = {
     canonical: 'https://bharatbuild.ai',
   },
   verification: {
-    // To get your Google verification code:
-    // 1. Go to https://search.google.com/search-console
-    // 2. Add your property (bharatbuild.ai)
-    // 3. Choose "HTML tag" verification method
-    // 4. Copy the content value from the meta tag
-    // 5. Replace the placeholder below with your code
-    google: process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION || '',
+    google: '7VNX8-inOI9mgtQvqIimZJyR8-ugHwo1jjhNzHsdkLc',
   },
   category: 'technology',
 }
