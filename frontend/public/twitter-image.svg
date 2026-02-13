@@ -1,0 +1,41 @@
+<svg width="1200" height="600" viewBox="0 0 1200 600" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a"/>
+      <stop offset="100%" style="stop-color:#1e293b"/>
+    </linearGradient>
+    <linearGradient id="blueGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3b82f6"/>
+      <stop offset="100%" style="stop-color:#06b6d4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="600" fill="url(#bgGrad)"/>
+
+  <!-- Decorative elements -->
+  <circle cx="50" cy="50" r="150" fill="#3b82f6" opacity="0.1"/>
+  <circle cx="1150" cy="550" r="200" fill="#06b6d4" opacity="0.1"/>
+
+  <!-- Logo -->
+  <rect x="480" y="150" width="70" height="70" rx="14" fill="url(#blueGrad)"/>
+  <path d="M515 175 L515 210 M500 188 L530 188 M500 200 L520 200" stroke="white" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Title -->
+  <text x="560" y="200" font-family="system-ui, -apple-system, sans-serif" font-size="52" font-weight="bold" fill="white">BharatBuild AI</text>
+
+  <!-- Tagline -->
+  <text x="600" y="300" font-family="system-ui, -apple-system, sans-serif" font-size="32" fill="#94a3b8" text-anchor="middle">India's No.1 AI Code and Project Generator</text>
+
+  <!-- Features -->
+  <text x="600" y="380" font-family="system-ui, -apple-system, sans-serif" font-size="22" fill="#64748b" text-anchor="middle">AI Code Generation - Live Preview - Auto-Fix - 50+ Tech Stacks</text>
+
+  <!-- CTA -->
+  <rect x="450" y="430" width="300" height="55" rx="27" fill="url(#blueGrad)"/>
+  <text x="600" y="467" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="600" fill="white" text-anchor="middle">Start Building Free</text>
+
+  <!-- Stats bar -->
+  <text x="350" y="540" font-family="system-ui, sans-serif" font-size="18" fill="#60a5fa">10K+ Projects</text>
+  <text x="530" y="540" font-family="system-ui, sans-serif" font-size="18" fill="#4ade80">31+ AI Agents</text>
+  <text x="720" y="540" font-family="system-ui, sans-serif" font-size="18" fill="#fbbf24">Free to Start</text>
+</svg>

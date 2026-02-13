@@ -1,0 +1,121 @@
+Campaign,Ad Group,Keyword,Match Type,Suggested Bid (INR),Landing Page
+Student Projects,Final Year Projects,[final year project with source code],Exact,15,/build
+Student Projects,Final Year Projects,[final year project generator],Exact,12,/build
+Student Projects,Final Year Projects,[final year project ideas],Exact,10,/build
+Student Projects,Final Year Projects,"final year project",Phrase,8,/build
+Student Projects,Final Year Projects,+final +year +project +code,Broad Modified,6,/build
+Student Projects,BTech Projects,[BTech project with source code],Exact,14,/build
+Student Projects,BTech Projects,[BTech CSE project ideas],Exact,12,/build
+Student Projects,BTech Projects,[BTech final year project],Exact,12,/build
+Student Projects,BTech Projects,"BTech project",Phrase,8,/build
+Student Projects,BTech Projects,+BTech +project +documentation,Broad Modified,6,/build
+Student Projects,MCA BCA Projects,[MCA project with source code],Exact,12,/build
+Student Projects,MCA BCA Projects,[BCA project ideas],Exact,10,/build
+Student Projects,MCA BCA Projects,[MCA final year project],Exact,12,/build
+Student Projects,MCA BCA Projects,"MCA BCA project",Phrase,7,/build
+Student Projects,Documentation,[project report generator],Exact,10,/build
+Student Projects,Documentation,[SRS document generator],Exact,8,/build
+Student Projects,Documentation,[IEEE format report generator],Exact,8,/build
+Student Projects,Documentation,[automatic PPT generator],Exact,10,/build
+Student Projects,Documentation,[viva questions generator],Exact,8,/build
+Student Projects,Documentation,"project documentation",Phrase,6,/build
+AI Code Generator,Brand Awareness,[AI code generator],Exact,25,/
+AI Code Generator,Brand Awareness,[AI code generator India],Exact,20,/
+AI Code Generator,Brand Awareness,[automatic code generation],Exact,22,/
+AI Code Generator,Brand Awareness,"AI code generator",Phrase,18,/
+AI Code Generator,Brand Awareness,+AI +code +generator,Broad Modified,12,/
+AI Code Generator,Text to Code,[code from description],Exact,20,/build
+AI Code Generator,Text to Code,[text to code generator],Exact,18,/build
+AI Code Generator,Text to Code,[generate code from text],Exact,16,/build
+AI Code Generator,Text to Code,"code from description",Phrase,14,/build
+AI Code Generator,Web App Builder,[web app builder AI],Exact,22,/build
+AI Code Generator,Web App Builder,[AI app builder],Exact,24,/build
+AI Code Generator,Web App Builder,[automatic web app generator],Exact,18,/build
+AI Code Generator,Web App Builder,"web app builder",Phrase,15,/build
+AI Code Generator,Full Stack,[full stack generator],Exact,20,/build
+AI Code Generator,Full Stack,[full stack project generator],Exact,18,/build
+AI Code Generator,Full Stack,[frontend backend generator],Exact,16,/build
+AI Code Generator,Full Stack,"full stack AI",Phrase,14,/build
+Framework Specific,React,[React app generator AI],Exact,18,/build
+Framework Specific,React,[React project generator],Exact,16,/build
+Framework Specific,React,[React code generator],Exact,15,/build
+Framework Specific,React,"React generator AI",Phrase,12,/build
+Framework Specific,Next.js,[Next.js project generator],Exact,16,/build
+Framework Specific,Next.js,[Next.js boilerplate generator],Exact,14,/build
+Framework Specific,Next.js,[Next.js app builder],Exact,15,/build
+Framework Specific,Next.js,"Next.js generator",Phrase,10,/build
+Framework Specific,Python,[Python project generator],Exact,16,/build
+Framework Specific,Python,[Django project generator],Exact,14,/build
+Framework Specific,Python,[FastAPI code generator],Exact,12,/build
+Framework Specific,Python,[Flask app generator],Exact,12,/build
+Framework Specific,Python,"Python AI generator",Phrase,10,/build
+Framework Specific,Node.js,[Node.js backend generator],Exact,14,/build
+Framework Specific,Node.js,[Express API generator],Exact,12,/build
+Framework Specific,Node.js,[Node.js project builder],Exact,14,/build
+Framework Specific,Node.js,"Node.js generator",Phrase,10,/build
+Mobile Apps,Flutter,[Flutter app generator AI],Exact,18,/build
+Mobile Apps,Flutter,[Flutter project generator],Exact,16,/build
+Mobile Apps,Flutter,[Flutter code generator],Exact,14,/build
+Mobile Apps,Flutter,"Flutter AI builder",Phrase,12,/build
+Mobile Apps,React Native,[React Native generator],Exact,16,/build
+Mobile Apps,React Native,[React Native app builder],Exact,15,/build
+Mobile Apps,React Native,"React Native AI",Phrase,12,/build
+Mobile Apps,Android,[Android app builder AI],Exact,20,/build
+Mobile Apps,Android,[APK generator online],Exact,15,/build
+Mobile Apps,Android,[build Android app AI],Exact,18,/build
+Mobile Apps,Android,"Android app generator",Phrase,14,/build
+Mobile Apps,iOS,[iOS app generator],Exact,18,/build
+Mobile Apps,iOS,[build iOS app AI],Exact,16,/build
+Mobile Apps,iOS,"iOS AI builder",Phrase,12,/build
+Competitor Keywords,Bolt Alternative,[Bolt.new alternative],Exact,30,/
+Competitor Keywords,Bolt Alternative,[Bolt.new alternative India],Exact,25,/
+Competitor Keywords,Bolt Alternative,[better than Bolt],Exact,20,/
+Competitor Keywords,Bolt Alternative,"Bolt alternative",Phrase,18,/
+Competitor Keywords,v0 Alternative,[v0.dev alternative],Exact,25,/
+Competitor Keywords,v0 Alternative,[v0 alternative India],Exact,20,/
+Competitor Keywords,v0 Alternative,"v0 alternative",Phrase,15,/
+Competitor Keywords,Copilot Alternative,[GitHub Copilot alternative],Exact,28,/
+Competitor Keywords,Copilot Alternative,[GitHub Copilot alternative free],Exact,25,/
+Competitor Keywords,Copilot Alternative,[Copilot alternative India],Exact,22,/
+Competitor Keywords,Copilot Alternative,"Copilot alternative",Phrase,18,/
+Competitor Keywords,Cursor Alternative,[Cursor AI alternative],Exact,22,/
+Competitor Keywords,Cursor Alternative,[Cursor alternative free],Exact,20,/
+Competitor Keywords,Cursor Alternative,"Cursor alternative",Phrase,15,/
+Competitor Keywords,ChatGPT Coding,[ChatGPT for coding alternative],Exact,25,/
+Competitor Keywords,ChatGPT Coding,[better than ChatGPT coding],Exact,22,/
+Competitor Keywords,ChatGPT Coding,"ChatGPT coding alternative",Phrase,18,/
+Startup MVP,MVP Builder,[MVP builder],Exact,28,/build
+Startup MVP,MVP Builder,[MVP builder for startups],Exact,25,/build
+Startup MVP,MVP Builder,[startup MVP generator],Exact,22,/build
+Startup MVP,MVP Builder,[build MVP without coding],Exact,26,/build
+Startup MVP,MVP Builder,"MVP builder AI",Phrase,20,/build
+Startup MVP,No Code,[no code app builder],Exact,30,/build
+Startup MVP,No Code,[build app without coding],Exact,28,/build
+Startup MVP,No Code,[no code platform India],Exact,22,/build
+Startup MVP,No Code,"no code builder",Phrase,20,/build
+Startup MVP,Rapid Prototyping,[rapid prototyping tool],Exact,22,/build
+Startup MVP,Rapid Prototyping,[prototype builder AI],Exact,18,/build
+Startup MVP,Rapid Prototyping,"rapid prototyping",Phrase,15,/build
+Campus Placement,Campus Drive,[campus placement platform],Exact,15,/campus-drive
+Campus Placement,Campus Drive,[campus drive management],Exact,12,/campus-drive
+Campus Placement,Campus Drive,[college placement test],Exact,14,/campus-drive
+Campus Placement,Campus Drive,"campus placement",Phrase,10,/campus-drive
+Campus Placement,Tech Hiring,[tech hiring platform India],Exact,18,/campus-drive
+Campus Placement,Tech Hiring,[fresher hiring platform],Exact,15,/campus-drive
+Campus Placement,Tech Hiring,[engineering placement],Exact,14,/campus-drive
+Campus Placement,Tech Hiring,"tech hiring freshers",Phrase,12,/campus-drive
+India Specific,Made in India,[AI code generator India],Exact,20,/
+India Specific,Made in India,[Made in India code generator],Exact,15,/
+India Specific,Made in India,[Indian AI platform],Exact,14,/
+India Specific,Made in India,[best coding tool India],Exact,18,/
+India Specific,Made in India,"AI tool India",Phrase,12,/
+India Specific,University Specific,[VTU project generator],Exact,10,/build
+India Specific,University Specific,[Anna University project],Exact,10,/build
+India Specific,University Specific,[AKTU final year project],Exact,10,/build
+India Specific,University Specific,[JNTU project ideas],Exact,8,/build
+India Specific,University Specific,[Mumbai University project],Exact,10,/build
+Research Paper,Paper Generator,[research paper generator],Exact,14,/paper
+Research Paper,Paper Generator,[IEEE paper generator],Exact,12,/paper
+Research Paper,Paper Generator,[literature review generator],Exact,12,/paper
+Research Paper,Paper Generator,[academic paper AI],Exact,14,/paper
+Research Paper,Paper Generator,"research paper AI",Phrase,10,/paper
