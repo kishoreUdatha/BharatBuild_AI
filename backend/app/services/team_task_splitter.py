@@ -122,13 +122,22 @@ async def split_project_into_tasks(
         if "modules" in project.plan_json:
             file_structure.extend(project.plan_json["modules"])
 
-    # Build member info for assignment suggestions
+    # Build member info for assignment suggestions (including skills)
     member_info = []
     for idx, member in enumerate(team_members):
+        # Get skills if available
+        skills_list = []
+        if hasattr(member, 'skills') and member.skills:
+            skills_list = [
+                f"{s.skill_name} (L{s.proficiency_level})"
+                for s in sorted(member.skills, key=lambda x: (-x.is_primary, -x.proficiency_level))[:5]
+            ]
+
         member_info.append({
             "index": idx,
             "role": member.role.value,
-            "user_id": str(member.user_id)
+            "user_id": str(member.user_id),
+            "skills": skills_list
         })
 
     # Construct the prompt
@@ -144,7 +153,7 @@ Tech Stack: {', '.join(tech_stack) if tech_stack else 'Not specified'}
 {chr(10).join(f"- {f}" for f in file_structure[:30]) if include_file_mapping and file_structure else ""}
 
 TEAM MEMBERS:
-{chr(10).join(f"- Member {m['index']}: {m['role']}" for m in member_info)}
+{chr(10).join(f"- Member {m['index']}: {m['role']}" + (f" - Skills: {', '.join(m['skills'])}" if m.get('skills') else "") for m in member_info)}
 
 REQUIREMENTS:
 - Create up to {max_tasks} tasks maximum

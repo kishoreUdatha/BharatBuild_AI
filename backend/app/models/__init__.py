@@ -55,6 +55,19 @@ from app.models.team import (
     InvitationStatus,
     TaskStatus,
     TaskPriority,
+    # New feature models
+    TaskComment,
+    TeamActivity,
+    ActivityType,
+    TeamChatMessage,
+    CodeReview,
+    ReviewStatus,
+    TaskTimeLog,
+    TeamMilestone,
+    MilestoneStatus,
+    MemberSkill,
+    TeamNotification,
+    NotificationType,
 )
 
 __all__ = [
@@ -146,4 +159,17 @@ __all__ = [
     "InvitationStatus",
     "TaskStatus",
     "TaskPriority",
+    # Team Collaboration - Extended Features
+    "TaskComment",
+    "TeamActivity",
+    "ActivityType",
+    "TeamChatMessage",
+    "CodeReview",
+    "ReviewStatus",
+    "TaskTimeLog",
+    "TeamMilestone",
+    "MilestoneStatus",
+    "MemberSkill",
+    "TeamNotification",
+    "NotificationType",
 ]

@@ -361,3 +361,416 @@ class ChatMessageEvent(WebSocketEvent):
     message_id: str
     content: str
     sender_name: str
+
+
+# ==================== Extended Feature Enums ====================
+
+class ActivityTypeEnum(str, Enum):
+    TEAM_CREATED = "team_created"
+    MEMBER_JOINED = "member_joined"
+    MEMBER_LEFT = "member_left"
+    MEMBER_REMOVED = "member_removed"
+    TASK_CREATED = "task_created"
+    TASK_UPDATED = "task_updated"
+    TASK_ASSIGNED = "task_assigned"
+    TASK_COMPLETED = "task_completed"
+    TASK_COMMENTED = "task_commented"
+    FILE_CREATED = "file_created"
+    FILE_MODIFIED = "file_modified"
+    FILE_DELETED = "file_deleted"
+    CODE_MERGED = "code_merged"
+    REVIEW_REQUESTED = "review_requested"
+    REVIEW_COMPLETED = "review_completed"
+    MILESTONE_CREATED = "milestone_created"
+    MILESTONE_COMPLETED = "milestone_completed"
+    CHAT_MESSAGE = "chat_message"
+
+
+class ReviewStatusEnum(str, Enum):
+    PENDING = "pending"
+    IN_REVIEW = "in_review"
+    APPROVED = "approved"
+    CHANGES_REQUESTED = "changes_requested"
+    REJECTED = "rejected"
+
+
+class NotificationTypeEnum(str, Enum):
+    MENTION = "mention"
+    TASK_ASSIGNED = "task_assigned"
+    TASK_DUE_SOON = "task_due_soon"
+    TASK_OVERDUE = "task_overdue"
+    REVIEW_REQUESTED = "review_requested"
+    REVIEW_COMPLETED = "review_completed"
+    MILESTONE_DUE_SOON = "milestone_due_soon"
+    INVITATION_RECEIVED = "invitation_received"
+    MEMBER_JOINED = "member_joined"
+
+
+class MilestoneStatusEnum(str, Enum):
+    PLANNING = "planning"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+# ==================== Task Comments Schemas ====================
+
+class CommentCreate(BaseModel):
+    """Create a comment on a task"""
+    content: str = Field(..., min_length=1, max_length=5000)
+    parent_id: Optional[str] = Field(None, description="Parent comment ID for replies")
+
+
+class CommentUpdate(BaseModel):
+    """Update a comment"""
+    content: str = Field(..., min_length=1, max_length=5000)
+
+
+class CommentResponse(BaseModel):
+    """Comment response"""
+    id: str
+    task_id: str
+    author_id: str
+    parent_id: Optional[str] = None
+    content: str
+    mentions: Optional[List[str]] = None
+    is_edited: bool = False
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    # Author info
+    author_name: Optional[str] = None
+    author_email: Optional[str] = None
+    author_avatar: Optional[str] = None
+
+    # Nested replies
+    replies: List["CommentResponse"] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ==================== Activity Feed Schemas ====================
+
+class ActivityResponse(BaseModel):
+    """Activity feed item"""
+    id: str
+    team_id: str
+    actor_id: Optional[str] = None
+    activity_type: ActivityTypeEnum
+    description: str
+    target_type: Optional[str] = None
+    target_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: datetime
+
+    # Actor info
+    actor_name: Optional[str] = None
+    actor_avatar: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ActivityListResponse(BaseModel):
+    """Activity feed list"""
+    activities: List[ActivityResponse]
+    total: int
+    has_more: bool = False
+
+
+# ==================== Chat Message Schemas ====================
+
+class ChatMessageCreate(BaseModel):
+    """Create a chat message"""
+    content: str = Field(..., min_length=1, max_length=2000)
+    message_type: str = Field(default="text")
+
+
+class ChatMessageResponse(BaseModel):
+    """Chat message response"""
+    id: str
+    team_id: str
+    sender_id: Optional[str] = None
+    content: str
+    mentions: Optional[List[str]] = None
+    message_type: str = "text"
+    attachment_url: Optional[str] = None
+    attachment_name: Optional[str] = None
+    is_edited: bool = False
+    is_deleted: bool = False
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    # Sender info
+    sender_name: Optional[str] = None
+    sender_avatar: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ChatHistoryResponse(BaseModel):
+    """Chat history response"""
+    messages: List[ChatMessageResponse]
+    total: int
+    has_more: bool = False
+
+
+# ==================== Code Review Schemas ====================
+
+class CodeReviewCreate(BaseModel):
+    """Create a code review request"""
+    title: str = Field(..., min_length=3, max_length=255)
+    description: Optional[str] = None
+    file_paths: List[str] = Field(..., min_length=1)
+    reviewer_id: Optional[str] = Field(None, description="Specific reviewer to assign")
+    task_id: Optional[str] = Field(None, description="Related task")
+
+
+class CodeReviewUpdate(BaseModel):
+    """Update a code review"""
+    title: Optional[str] = Field(None, min_length=3, max_length=255)
+    description: Optional[str] = None
+    reviewer_id: Optional[str] = None
+    status: Optional[ReviewStatusEnum] = None
+    feedback: Optional[str] = None
+
+
+class ReviewComment(BaseModel):
+    """Inline comment on a file"""
+    file_path: str
+    line_number: int
+    content: str
+
+
+class CodeReviewResponse(BaseModel):
+    """Code review response"""
+    id: str
+    team_id: str
+    requester_id: str
+    reviewer_id: Optional[str] = None
+    title: str
+    description: Optional[str] = None
+    status: ReviewStatusEnum
+    file_paths: List[str]
+    feedback: Optional[str] = None
+    comments: Optional[List[ReviewComment]] = None
+    task_id: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
+
+    # User info
+    requester_name: Optional[str] = None
+    reviewer_name: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CodeReviewListResponse(BaseModel):
+    """Code review list"""
+    reviews: List[CodeReviewResponse]
+    total: int
+
+
+# ==================== Time Tracking Schemas ====================
+
+class TimeLogStart(BaseModel):
+    """Start a time log"""
+    description: Optional[str] = Field(None, max_length=500)
+
+
+class TimeLogStop(BaseModel):
+    """Stop a time log"""
+    description: Optional[str] = Field(None, max_length=500)
+
+
+class TimeLogResponse(BaseModel):
+    """Time log response"""
+    id: str
+    task_id: str
+    member_id: str
+    description: Optional[str] = None
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    duration_minutes: Optional[int] = None
+    is_running: bool = False
+    created_at: datetime
+
+    # Member info
+    member_name: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TaskTimeStats(BaseModel):
+    """Time stats for a task"""
+    task_id: str
+    total_minutes: int
+    total_logs: int
+    by_member: Dict[str, int] = {}  # member_id -> minutes
+
+
+# ==================== Milestone Schemas ====================
+
+class MilestoneCreate(BaseModel):
+    """Create a milestone"""
+    title: str = Field(..., min_length=2, max_length=255)
+    description: Optional[str] = None
+    start_date: Optional[datetime] = None
+    due_date: Optional[datetime] = None
+
+
+class MilestoneUpdate(BaseModel):
+    """Update a milestone"""
+    title: Optional[str] = Field(None, min_length=2, max_length=255)
+    description: Optional[str] = None
+    status: Optional[MilestoneStatusEnum] = None
+    start_date: Optional[datetime] = None
+    due_date: Optional[datetime] = None
+    order_index: Optional[int] = None
+
+
+class MilestoneResponse(BaseModel):
+    """Milestone response"""
+    id: str
+    team_id: str
+    created_by: str
+    title: str
+    description: Optional[str] = None
+    status: MilestoneStatusEnum
+    start_date: Optional[datetime] = None
+    due_date: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    progress: int = 0
+    order_index: int = 0
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    # Task counts
+    total_tasks: int = 0
+    completed_tasks: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MilestoneListResponse(BaseModel):
+    """Milestone list"""
+    milestones: List[MilestoneResponse]
+    total: int
+
+
+# ==================== Member Skills Schemas ====================
+
+class SkillCreate(BaseModel):
+    """Add a skill to a member"""
+    skill_name: str = Field(..., min_length=1, max_length=100)
+    proficiency_level: int = Field(default=3, ge=1, le=5)
+    is_primary: bool = False
+
+
+class SkillUpdate(BaseModel):
+    """Update a skill"""
+    proficiency_level: Optional[int] = Field(None, ge=1, le=5)
+    is_primary: Optional[bool] = None
+
+
+class SkillResponse(BaseModel):
+    """Skill response"""
+    id: str
+    member_id: str
+    skill_name: str
+    proficiency_level: int
+    is_primary: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MemberSkillsResponse(BaseModel):
+    """Member with skills"""
+    member_id: str
+    user_name: Optional[str] = None
+    skills: List[SkillResponse]
+
+
+# ==================== Notification Schemas ====================
+
+class NotificationResponse(BaseModel):
+    """Notification response"""
+    id: str
+    user_id: str
+    team_id: str
+    actor_id: Optional[str] = None
+    notification_type: NotificationTypeEnum
+    title: str
+    message: Optional[str] = None
+    target_type: Optional[str] = None
+    target_id: Optional[str] = None
+    is_read: bool = False
+    read_at: Optional[datetime] = None
+    created_at: datetime
+
+    # Actor info
+    actor_name: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class NotificationListResponse(BaseModel):
+    """Notification list"""
+    notifications: List[NotificationResponse]
+    total: int
+    unread_count: int
+
+
+class MarkNotificationsRead(BaseModel):
+    """Mark notifications as read"""
+    notification_ids: List[str] = Field(default=[], description="Specific IDs, or empty for all")
+
+
+# ==================== Team Analytics Schemas ====================
+
+class TeamAnalytics(BaseModel):
+    """Team analytics/dashboard data"""
+    team_id: str
+
+    # Overview stats
+    total_members: int
+    total_tasks: int
+    completed_tasks: int
+    in_progress_tasks: int
+    overdue_tasks: int
+
+    # Time tracking
+    total_hours_logged: float
+    hours_this_week: float
+
+    # Progress
+    overall_progress: int  # 0-100
+
+    # Milestones
+    active_milestones: int
+    completed_milestones: int
+
+    # Member workload
+    workload_distribution: List[Dict[str, Any]]  # [{member_id, name, task_count, hours}]
+
+    # Recent activity
+    recent_activities: List[ActivityResponse]
+
+    # Task breakdown by status
+    tasks_by_status: Dict[str, int]
+
+    # Task breakdown by priority
+    tasks_by_priority: Dict[str, int]
+
+
+class MemberContribution(BaseModel):
+    """Individual member contribution stats"""
+    member_id: str
+    user_name: str
+    tasks_completed: int
+    tasks_in_progress: int
+    total_hours: float
+    comments_made: int
+    reviews_completed: int
+    contribution_score: int  # Calculated score

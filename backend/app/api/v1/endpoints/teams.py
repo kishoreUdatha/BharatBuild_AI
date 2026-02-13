@@ -29,7 +29,17 @@ from app.schemas.team import (
     TaskCreate, TaskUpdate, TaskResponse, TaskListResponse,
     TaskSplitRequest, TaskSplitResponse, ApplyTaskSplitRequest,
     MergeRequest, MergeResponse, MergeResolveRequest, MergeResolveResponse,
-    TeamRoleEnum, TeamStatusEnum, InvitationStatusEnum, TaskStatusEnum, TaskPriorityEnum
+    TeamRoleEnum, TeamStatusEnum, InvitationStatusEnum, TaskStatusEnum, TaskPriorityEnum,
+    # Extended features
+    CommentCreate, CommentUpdate, CommentResponse,
+    ActivityResponse, ActivityListResponse, ActivityTypeEnum,
+    ChatMessageCreate, ChatMessageResponse, ChatHistoryResponse,
+    CodeReviewCreate, CodeReviewUpdate, CodeReviewResponse, CodeReviewListResponse, ReviewStatusEnum,
+    TimeLogStart, TimeLogStop, TimeLogResponse, TaskTimeStats,
+    MilestoneCreate, MilestoneUpdate, MilestoneResponse, MilestoneListResponse, MilestoneStatusEnum,
+    SkillCreate, SkillUpdate, SkillResponse, MemberSkillsResponse,
+    NotificationResponse, NotificationListResponse, NotificationTypeEnum, MarkNotificationsRead,
+    TeamAnalytics, MemberContribution
 )
 
 
@@ -1001,3 +1011,1086 @@ async def resolve_merge_conflicts(
     )
 
     return result
+
+
+# ==================== Task Comments ====================
+
+@router.get("/{team_id}/tasks/{task_id}/comments")
+async def list_task_comments(
+    team_id: str,
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """List all comments on a task."""
+    from app.models.team import TaskComment
+    from app.schemas.team import CommentResponse
+
+    await require_team_member(team_id, current_user, db)
+
+    result = await db.execute(
+        select(TaskComment)
+        .options(selectinload(TaskComment.author))
+        .where(and_(TaskComment.task_id == task_id, TaskComment.parent_id == None))
+        .order_by(TaskComment.created_at)
+    )
+    comments = result.scalars().all()
+
+    def build_comment_response(comment):
+        return CommentResponse(
+            id=str(comment.id),
+            task_id=str(comment.task_id),
+            author_id=str(comment.author_id),
+            parent_id=str(comment.parent_id) if comment.parent_id else None,
+            content=comment.content,
+            mentions=comment.mentions,
+            is_edited=comment.is_edited,
+            created_at=comment.created_at,
+            updated_at=comment.updated_at,
+            author_name=comment.author.full_name if comment.author else None,
+            author_email=comment.author.email if comment.author else None,
+            author_avatar=comment.author.avatar_url if comment.author else None,
+            replies=[build_comment_response(r) for r in comment.replies] if hasattr(comment, 'replies') else []
+        )
+
+    return {"comments": [build_comment_response(c) for c in comments], "total": len(comments)}
+
+
+@router.post("/{team_id}/tasks/{task_id}/comments", status_code=status.HTTP_201_CREATED)
+async def create_task_comment(
+    team_id: str,
+    task_id: str,
+    comment_data: "CommentCreate",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Add a comment to a task."""
+    from app.models.team import TaskComment, TeamActivity, ActivityType
+    from app.schemas.team import CommentCreate, CommentResponse
+
+    await require_team_member(team_id, current_user, db)
+
+    # Parse mentions from content
+    import re
+    mentions = re.findall(r'@\[([^\]]+)\]\(([^)]+)\)', comment_data.content)
+    mention_ids = [m[1] for m in mentions] if mentions else None
+
+    comment = TaskComment(
+        task_id=task_id,
+        author_id=str(current_user.id),
+        parent_id=comment_data.parent_id,
+        content=comment_data.content,
+        mentions=mention_ids
+    )
+    db.add(comment)
+
+    # Log activity
+    activity = TeamActivity(
+        team_id=team_id,
+        actor_id=str(current_user.id),
+        activity_type=ActivityType.TASK_COMMENTED,
+        description=f"commented on task",
+        target_type="task",
+        target_id=task_id
+    )
+    db.add(activity)
+
+    await db.commit()
+    await db.refresh(comment)
+
+    return CommentResponse(
+        id=str(comment.id),
+        task_id=str(comment.task_id),
+        author_id=str(comment.author_id),
+        parent_id=str(comment.parent_id) if comment.parent_id else None,
+        content=comment.content,
+        mentions=comment.mentions,
+        is_edited=comment.is_edited,
+        created_at=comment.created_at,
+        updated_at=comment.updated_at,
+        author_name=current_user.full_name,
+        author_email=current_user.email,
+        replies=[]
+    )
+
+
+@router.delete("/{team_id}/tasks/{task_id}/comments/{comment_id}")
+async def delete_task_comment(
+    team_id: str,
+    task_id: str,
+    comment_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a comment. Author or leader only."""
+    from app.models.team import TaskComment
+
+    member = await require_team_member(team_id, current_user, db)
+
+    result = await db.execute(
+        select(TaskComment).where(TaskComment.id == comment_id)
+    )
+    comment = result.scalar_one_or_none()
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    if comment.author_id != str(current_user.id) and member.role != TeamRole.LEADER:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this comment")
+
+    await db.delete(comment)
+    await db.commit()
+
+    return {"success": True, "message": "Comment deleted"}
+
+
+# ==================== Activity Feed ====================
+
+@router.get("/{team_id}/activities")
+async def list_team_activities(
+    team_id: str,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    activity_type: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get team activity feed."""
+    from app.models.team import TeamActivity, ActivityType
+    from app.schemas.team import ActivityResponse, ActivityListResponse, ActivityTypeEnum
+
+    await require_team_member(team_id, current_user, db)
+
+    query = select(TeamActivity).options(selectinload(TeamActivity.actor)).where(TeamActivity.team_id == team_id)
+
+    if activity_type:
+        query = query.where(TeamActivity.activity_type == ActivityType(activity_type))
+
+    query = query.order_by(TeamActivity.created_at.desc()).offset(offset).limit(limit + 1)
+
+    result = await db.execute(query)
+    activities = result.scalars().all()
+
+    has_more = len(activities) > limit
+    activities = activities[:limit]
+
+    return ActivityListResponse(
+        activities=[
+            ActivityResponse(
+                id=str(a.id),
+                team_id=str(a.team_id),
+                actor_id=str(a.actor_id) if a.actor_id else None,
+                activity_type=ActivityTypeEnum(a.activity_type.value),
+                description=a.description,
+                target_type=a.target_type,
+                target_id=str(a.target_id) if a.target_id else None,
+                metadata=a.metadata,
+                created_at=a.created_at,
+                actor_name=a.actor.full_name if a.actor else None,
+                actor_avatar=a.actor.avatar_url if a.actor else None
+            )
+            for a in activities
+        ],
+        total=len(activities),
+        has_more=has_more
+    )
+
+
+# ==================== Chat History ====================
+
+@router.get("/{team_id}/chat")
+async def get_chat_history(
+    team_id: str,
+    limit: int = Query(50, ge=1, le=100),
+    before: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get chat message history."""
+    from app.models.team import TeamChatMessage
+    from app.schemas.team import ChatMessageResponse, ChatHistoryResponse
+
+    await require_team_member(team_id, current_user, db)
+
+    query = (
+        select(TeamChatMessage)
+        .options(selectinload(TeamChatMessage.sender))
+        .where(and_(TeamChatMessage.team_id == team_id, TeamChatMessage.is_deleted == False))
+    )
+
+    if before:
+        query = query.where(TeamChatMessage.id < before)
+
+    query = query.order_by(TeamChatMessage.created_at.desc()).limit(limit + 1)
+
+    result = await db.execute(query)
+    messages = result.scalars().all()
+
+    has_more = len(messages) > limit
+    messages = list(reversed(messages[:limit]))  # Return in chronological order
+
+    return ChatHistoryResponse(
+        messages=[
+            ChatMessageResponse(
+                id=str(m.id),
+                team_id=str(m.team_id),
+                sender_id=str(m.sender_id) if m.sender_id else None,
+                content=m.content,
+                mentions=m.mentions,
+                message_type=m.message_type,
+                attachment_url=m.attachment_url,
+                attachment_name=m.attachment_name,
+                is_edited=m.is_edited,
+                is_deleted=m.is_deleted,
+                created_at=m.created_at,
+                updated_at=m.updated_at,
+                sender_name=m.sender.full_name if m.sender else None,
+                sender_avatar=m.sender.avatar_url if m.sender else None
+            )
+            for m in messages
+        ],
+        total=len(messages),
+        has_more=has_more
+    )
+
+
+@router.post("/{team_id}/chat", status_code=status.HTTP_201_CREATED)
+async def send_chat_message(
+    team_id: str,
+    message_data: "ChatMessageCreate",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Send a chat message (persisted)."""
+    from app.models.team import TeamChatMessage
+    from app.schemas.team import ChatMessageCreate, ChatMessageResponse
+
+    await require_team_member(team_id, current_user, db)
+
+    # Parse mentions
+    import re
+    mentions = re.findall(r'@\[([^\]]+)\]\(([^)]+)\)', message_data.content)
+    mention_ids = [m[1] for m in mentions] if mentions else None
+
+    message = TeamChatMessage(
+        team_id=team_id,
+        sender_id=str(current_user.id),
+        content=message_data.content,
+        message_type=message_data.message_type,
+        mentions=mention_ids
+    )
+    db.add(message)
+    await db.commit()
+    await db.refresh(message)
+
+    return ChatMessageResponse(
+        id=str(message.id),
+        team_id=str(message.team_id),
+        sender_id=str(message.sender_id),
+        content=message.content,
+        mentions=message.mentions,
+        message_type=message.message_type,
+        is_edited=False,
+        is_deleted=False,
+        created_at=message.created_at,
+        sender_name=current_user.full_name,
+        sender_avatar=current_user.avatar_url
+    )
+
+
+# ==================== Code Reviews ====================
+
+@router.get("/{team_id}/reviews")
+async def list_code_reviews(
+    team_id: str,
+    status_filter: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """List code reviews for a team."""
+    from app.models.team import CodeReview, ReviewStatus
+    from app.schemas.team import CodeReviewResponse, CodeReviewListResponse, ReviewStatusEnum
+
+    await require_team_member(team_id, current_user, db)
+
+    query = select(CodeReview).where(CodeReview.team_id == team_id)
+
+    if status_filter:
+        query = query.where(CodeReview.status == ReviewStatus(status_filter))
+
+    query = query.order_by(CodeReview.created_at.desc())
+
+    result = await db.execute(query)
+    reviews = result.scalars().all()
+
+    return CodeReviewListResponse(
+        reviews=[
+            CodeReviewResponse(
+                id=str(r.id),
+                team_id=str(r.team_id),
+                requester_id=str(r.requester_id),
+                reviewer_id=str(r.reviewer_id) if r.reviewer_id else None,
+                title=r.title,
+                description=r.description,
+                status=ReviewStatusEnum(r.status.value),
+                file_paths=r.file_paths,
+                feedback=r.feedback,
+                task_id=str(r.task_id) if r.task_id else None,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+                reviewed_at=r.reviewed_at
+            )
+            for r in reviews
+        ],
+        total=len(reviews)
+    )
+
+
+@router.post("/{team_id}/reviews", status_code=status.HTTP_201_CREATED)
+async def create_code_review(
+    team_id: str,
+    review_data: "CodeReviewCreate",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Create a code review request."""
+    from app.models.team import CodeReview, TeamActivity, ActivityType, TeamNotification, NotificationType
+    from app.schemas.team import CodeReviewCreate, CodeReviewResponse, ReviewStatusEnum
+
+    member = await require_team_member(team_id, current_user, db)
+
+    review = CodeReview(
+        team_id=team_id,
+        requester_id=str(member.id),
+        reviewer_id=review_data.reviewer_id,
+        title=review_data.title,
+        description=review_data.description,
+        file_paths=review_data.file_paths,
+        task_id=review_data.task_id
+    )
+    db.add(review)
+
+    # Log activity
+    activity = TeamActivity(
+        team_id=team_id,
+        actor_id=str(current_user.id),
+        activity_type=ActivityType.REVIEW_REQUESTED,
+        description=f"requested code review: {review_data.title}",
+        target_type="review",
+        target_id=str(review.id)
+    )
+    db.add(activity)
+
+    # Create notification for reviewer
+    if review_data.reviewer_id:
+        reviewer_result = await db.execute(
+            select(TeamMember).where(TeamMember.id == review_data.reviewer_id)
+        )
+        reviewer = reviewer_result.scalar_one_or_none()
+        if reviewer:
+            notification = TeamNotification(
+                user_id=str(reviewer.user_id),
+                team_id=team_id,
+                actor_id=str(current_user.id),
+                notification_type=NotificationType.REVIEW_REQUESTED,
+                title="Code review requested",
+                message=f"{current_user.full_name} requested your review on: {review_data.title}",
+                target_type="review",
+                target_id=str(review.id)
+            )
+            db.add(notification)
+
+    await db.commit()
+    await db.refresh(review)
+
+    return CodeReviewResponse(
+        id=str(review.id),
+        team_id=str(review.team_id),
+        requester_id=str(review.requester_id),
+        reviewer_id=str(review.reviewer_id) if review.reviewer_id else None,
+        title=review.title,
+        description=review.description,
+        status=ReviewStatusEnum(review.status.value),
+        file_paths=review.file_paths,
+        task_id=str(review.task_id) if review.task_id else None,
+        created_at=review.created_at
+    )
+
+
+@router.put("/{team_id}/reviews/{review_id}")
+async def update_code_review(
+    team_id: str,
+    review_id: str,
+    review_data: "CodeReviewUpdate",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update a code review (add feedback, change status)."""
+    from app.models.team import CodeReview, ReviewStatus, TeamActivity, ActivityType
+    from app.schemas.team import CodeReviewUpdate, CodeReviewResponse, ReviewStatusEnum
+
+    await require_team_member(team_id, current_user, db)
+
+    result = await db.execute(
+        select(CodeReview).where(and_(CodeReview.id == review_id, CodeReview.team_id == team_id))
+    )
+    review = result.scalar_one_or_none()
+    if not review:
+        raise HTTPException(status_code=404, detail="Code review not found")
+
+    if review_data.status:
+        review.status = ReviewStatus(review_data.status.value)
+        if review_data.status in [ReviewStatusEnum.APPROVED, ReviewStatusEnum.REJECTED, ReviewStatusEnum.CHANGES_REQUESTED]:
+            review.reviewed_at = datetime.utcnow()
+
+    if review_data.feedback:
+        review.feedback = review_data.feedback
+
+    if review_data.reviewer_id is not None:
+        review.reviewer_id = review_data.reviewer_id
+
+    await db.commit()
+    await db.refresh(review)
+
+    return CodeReviewResponse(
+        id=str(review.id),
+        team_id=str(review.team_id),
+        requester_id=str(review.requester_id),
+        reviewer_id=str(review.reviewer_id) if review.reviewer_id else None,
+        title=review.title,
+        description=review.description,
+        status=ReviewStatusEnum(review.status.value),
+        file_paths=review.file_paths,
+        feedback=review.feedback,
+        task_id=str(review.task_id) if review.task_id else None,
+        created_at=review.created_at,
+        updated_at=review.updated_at,
+        reviewed_at=review.reviewed_at
+    )
+
+
+# ==================== Time Tracking ====================
+
+@router.post("/{team_id}/tasks/{task_id}/time/start")
+async def start_time_tracking(
+    team_id: str,
+    task_id: str,
+    time_data: Optional["TimeLogStart"] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Start tracking time on a task."""
+    from app.models.team import TaskTimeLog
+    from app.schemas.team import TimeLogStart, TimeLogResponse
+
+    member = await require_team_member(team_id, current_user, db)
+
+    # Check if there's already a running timer
+    result = await db.execute(
+        select(TaskTimeLog).where(
+            and_(
+                TaskTimeLog.member_id == str(member.id),
+                TaskTimeLog.is_running == True
+            )
+        )
+    )
+    existing = result.scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=400, detail="You already have a running timer. Stop it first.")
+
+    log = TaskTimeLog(
+        task_id=task_id,
+        member_id=str(member.id),
+        description=time_data.description if time_data else None
+    )
+    db.add(log)
+    await db.commit()
+    await db.refresh(log)
+
+    return TimeLogResponse(
+        id=str(log.id),
+        task_id=str(log.task_id),
+        member_id=str(log.member_id),
+        description=log.description,
+        started_at=log.started_at,
+        is_running=True,
+        created_at=log.created_at,
+        member_name=current_user.full_name
+    )
+
+
+@router.post("/{team_id}/tasks/{task_id}/time/stop")
+async def stop_time_tracking(
+    team_id: str,
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Stop tracking time on a task."""
+    from app.models.team import TaskTimeLog
+    from app.schemas.team import TimeLogResponse
+
+    member = await require_team_member(team_id, current_user, db)
+
+    result = await db.execute(
+        select(TaskTimeLog).where(
+            and_(
+                TaskTimeLog.task_id == task_id,
+                TaskTimeLog.member_id == str(member.id),
+                TaskTimeLog.is_running == True
+            )
+        )
+    )
+    log = result.scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="No running timer found for this task")
+
+    log.stop()
+    await db.commit()
+    await db.refresh(log)
+
+    return TimeLogResponse(
+        id=str(log.id),
+        task_id=str(log.task_id),
+        member_id=str(log.member_id),
+        description=log.description,
+        started_at=log.started_at,
+        ended_at=log.ended_at,
+        duration_minutes=log.duration_minutes,
+        is_running=False,
+        created_at=log.created_at,
+        member_name=current_user.full_name
+    )
+
+
+@router.get("/{team_id}/tasks/{task_id}/time")
+async def get_task_time_logs(
+    team_id: str,
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all time logs for a task."""
+    from app.models.team import TaskTimeLog
+    from app.schemas.team import TimeLogResponse, TaskTimeStats
+
+    await require_team_member(team_id, current_user, db)
+
+    result = await db.execute(
+        select(TaskTimeLog)
+        .options(selectinload(TaskTimeLog.member).selectinload(TeamMember.user))
+        .where(TaskTimeLog.task_id == task_id)
+        .order_by(TaskTimeLog.started_at.desc())
+    )
+    logs = result.scalars().all()
+
+    total_minutes = sum(l.duration_minutes or 0 for l in logs)
+    by_member = {}
+    for log in logs:
+        member_id = str(log.member_id)
+        by_member[member_id] = by_member.get(member_id, 0) + (log.duration_minutes or 0)
+
+    return {
+        "logs": [
+            TimeLogResponse(
+                id=str(l.id),
+                task_id=str(l.task_id),
+                member_id=str(l.member_id),
+                description=l.description,
+                started_at=l.started_at,
+                ended_at=l.ended_at,
+                duration_minutes=l.duration_minutes,
+                is_running=l.is_running,
+                created_at=l.created_at,
+                member_name=l.member.user.full_name if l.member and l.member.user else None
+            )
+            for l in logs
+        ],
+        "stats": TaskTimeStats(
+            task_id=task_id,
+            total_minutes=total_minutes,
+            total_logs=len(logs),
+            by_member=by_member
+        )
+    }
+
+
+# ==================== Milestones ====================
+
+@router.get("/{team_id}/milestones")
+async def list_milestones(
+    team_id: str,
+    status_filter: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """List all milestones for a team."""
+    from app.models.team import TeamMilestone, MilestoneStatus
+    from app.schemas.team import MilestoneResponse, MilestoneListResponse, MilestoneStatusEnum
+
+    await require_team_member(team_id, current_user, db)
+
+    query = select(TeamMilestone).where(TeamMilestone.team_id == team_id)
+
+    if status_filter:
+        query = query.where(TeamMilestone.status == MilestoneStatus(status_filter))
+
+    query = query.order_by(TeamMilestone.order_index, TeamMilestone.created_at)
+
+    result = await db.execute(query)
+    milestones = result.scalars().all()
+
+    # Get task counts per milestone
+    milestone_responses = []
+    for m in milestones:
+        total_result = await db.execute(
+            select(func.count(TeamTask.id)).where(TeamTask.milestone_id == str(m.id))
+        )
+        total_tasks = total_result.scalar() or 0
+
+        completed_result = await db.execute(
+            select(func.count(TeamTask.id)).where(
+                and_(TeamTask.milestone_id == str(m.id), TeamTask.status == TaskStatus.COMPLETED)
+            )
+        )
+        completed_tasks = completed_result.scalar() or 0
+
+        milestone_responses.append(MilestoneResponse(
+            id=str(m.id),
+            team_id=str(m.team_id),
+            created_by=str(m.created_by),
+            title=m.title,
+            description=m.description,
+            status=MilestoneStatusEnum(m.status.value),
+            start_date=m.start_date,
+            due_date=m.due_date,
+            completed_at=m.completed_at,
+            progress=m.progress,
+            order_index=m.order_index,
+            created_at=m.created_at,
+            updated_at=m.updated_at,
+            total_tasks=total_tasks,
+            completed_tasks=completed_tasks
+        ))
+
+    return MilestoneListResponse(milestones=milestone_responses, total=len(milestones))
+
+
+@router.post("/{team_id}/milestones", status_code=status.HTTP_201_CREATED)
+async def create_milestone(
+    team_id: str,
+    milestone_data: "MilestoneCreate",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Create a new milestone. Leader only."""
+    from app.models.team import TeamMilestone, TeamActivity, ActivityType
+    from app.schemas.team import MilestoneCreate, MilestoneResponse, MilestoneStatusEnum
+
+    await require_team_leader(team_id, current_user, db)
+
+    milestone = TeamMilestone(
+        team_id=team_id,
+        created_by=str(current_user.id),
+        title=milestone_data.title,
+        description=milestone_data.description,
+        start_date=milestone_data.start_date,
+        due_date=milestone_data.due_date
+    )
+    db.add(milestone)
+
+    activity = TeamActivity(
+        team_id=team_id,
+        actor_id=str(current_user.id),
+        activity_type=ActivityType.MILESTONE_CREATED,
+        description=f"created milestone: {milestone_data.title}",
+        target_type="milestone",
+        target_id=str(milestone.id)
+    )
+    db.add(activity)
+
+    await db.commit()
+    await db.refresh(milestone)
+
+    return MilestoneResponse(
+        id=str(milestone.id),
+        team_id=str(milestone.team_id),
+        created_by=str(milestone.created_by),
+        title=milestone.title,
+        description=milestone.description,
+        status=MilestoneStatusEnum(milestone.status.value),
+        start_date=milestone.start_date,
+        due_date=milestone.due_date,
+        progress=0,
+        order_index=milestone.order_index,
+        created_at=milestone.created_at,
+        total_tasks=0,
+        completed_tasks=0
+    )
+
+
+@router.put("/{team_id}/milestones/{milestone_id}")
+async def update_milestone(
+    team_id: str,
+    milestone_id: str,
+    milestone_data: "MilestoneUpdate",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update a milestone. Leader only."""
+    from app.models.team import TeamMilestone, MilestoneStatus
+    from app.schemas.team import MilestoneUpdate, MilestoneResponse, MilestoneStatusEnum
+
+    await require_team_leader(team_id, current_user, db)
+
+    result = await db.execute(
+        select(TeamMilestone).where(and_(TeamMilestone.id == milestone_id, TeamMilestone.team_id == team_id))
+    )
+    milestone = result.scalar_one_or_none()
+    if not milestone:
+        raise HTTPException(status_code=404, detail="Milestone not found")
+
+    if milestone_data.title is not None:
+        milestone.title = milestone_data.title
+    if milestone_data.description is not None:
+        milestone.description = milestone_data.description
+    if milestone_data.status is not None:
+        milestone.status = MilestoneStatus(milestone_data.status.value)
+        if milestone_data.status == MilestoneStatusEnum.COMPLETED:
+            milestone.completed_at = datetime.utcnow()
+    if milestone_data.start_date is not None:
+        milestone.start_date = milestone_data.start_date
+    if milestone_data.due_date is not None:
+        milestone.due_date = milestone_data.due_date
+    if milestone_data.order_index is not None:
+        milestone.order_index = milestone_data.order_index
+
+    await db.commit()
+    await db.refresh(milestone)
+
+    return MilestoneResponse(
+        id=str(milestone.id),
+        team_id=str(milestone.team_id),
+        created_by=str(milestone.created_by),
+        title=milestone.title,
+        description=milestone.description,
+        status=MilestoneStatusEnum(milestone.status.value),
+        start_date=milestone.start_date,
+        due_date=milestone.due_date,
+        completed_at=milestone.completed_at,
+        progress=milestone.progress,
+        order_index=milestone.order_index,
+        created_at=milestone.created_at,
+        updated_at=milestone.updated_at,
+        total_tasks=0,
+        completed_tasks=0
+    )
+
+
+# ==================== Member Skills ====================
+
+@router.get("/{team_id}/members/{member_id}/skills")
+async def get_member_skills(
+    team_id: str,
+    member_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get skills for a team member."""
+    from app.models.team import MemberSkill
+    from app.schemas.team import SkillResponse, MemberSkillsResponse
+
+    await require_team_member(team_id, current_user, db)
+
+    result = await db.execute(
+        select(MemberSkill).where(MemberSkill.member_id == member_id).order_by(MemberSkill.is_primary.desc())
+    )
+    skills = result.scalars().all()
+
+    return MemberSkillsResponse(
+        member_id=member_id,
+        skills=[
+            SkillResponse(
+                id=str(s.id),
+                member_id=str(s.member_id),
+                skill_name=s.skill_name,
+                proficiency_level=s.proficiency_level,
+                is_primary=s.is_primary,
+                created_at=s.created_at
+            )
+            for s in skills
+        ]
+    )
+
+
+@router.post("/{team_id}/members/{member_id}/skills", status_code=status.HTTP_201_CREATED)
+async def add_member_skill(
+    team_id: str,
+    member_id: str,
+    skill_data: "SkillCreate",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Add a skill to a team member. Member or leader only."""
+    from app.models.team import MemberSkill
+    from app.schemas.team import SkillCreate, SkillResponse
+
+    member = await require_team_member(team_id, current_user, db)
+
+    # Check permission: member can only edit their own, leader can edit anyone
+    if str(member.id) != member_id and member.role != TeamRole.LEADER:
+        raise HTTPException(status_code=403, detail="Can only add skills to your own profile")
+
+    skill = MemberSkill(
+        member_id=member_id,
+        skill_name=skill_data.skill_name,
+        proficiency_level=skill_data.proficiency_level,
+        is_primary=skill_data.is_primary
+    )
+    db.add(skill)
+    await db.commit()
+    await db.refresh(skill)
+
+    return SkillResponse(
+        id=str(skill.id),
+        member_id=str(skill.member_id),
+        skill_name=skill.skill_name,
+        proficiency_level=skill.proficiency_level,
+        is_primary=skill.is_primary,
+        created_at=skill.created_at
+    )
+
+
+@router.delete("/{team_id}/members/{member_id}/skills/{skill_id}")
+async def remove_member_skill(
+    team_id: str,
+    member_id: str,
+    skill_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Remove a skill from a team member."""
+    from app.models.team import MemberSkill
+
+    member = await require_team_member(team_id, current_user, db)
+
+    if str(member.id) != member_id and member.role != TeamRole.LEADER:
+        raise HTTPException(status_code=403, detail="Can only remove your own skills")
+
+    result = await db.execute(
+        select(MemberSkill).where(and_(MemberSkill.id == skill_id, MemberSkill.member_id == member_id))
+    )
+    skill = result.scalar_one_or_none()
+    if not skill:
+        raise HTTPException(status_code=404, detail="Skill not found")
+
+    await db.delete(skill)
+    await db.commit()
+
+    return {"success": True, "message": "Skill removed"}
+
+
+# ==================== Notifications ====================
+
+@router.get("/{team_id}/notifications")
+async def get_notifications(
+    team_id: str,
+    unread_only: bool = False,
+    limit: int = Query(50, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get notifications for the current user in a team."""
+    from app.models.team import TeamNotification
+    from app.schemas.team import NotificationResponse, NotificationListResponse, NotificationTypeEnum
+
+    await require_team_member(team_id, current_user, db)
+
+    query = select(TeamNotification).where(
+        and_(TeamNotification.team_id == team_id, TeamNotification.user_id == str(current_user.id))
+    )
+
+    if unread_only:
+        query = query.where(TeamNotification.is_read == False)
+
+    query = query.order_by(TeamNotification.created_at.desc()).limit(limit)
+
+    result = await db.execute(query)
+    notifications = result.scalars().all()
+
+    # Get unread count
+    unread_result = await db.execute(
+        select(func.count(TeamNotification.id)).where(
+            and_(
+                TeamNotification.team_id == team_id,
+                TeamNotification.user_id == str(current_user.id),
+                TeamNotification.is_read == False
+            )
+        )
+    )
+    unread_count = unread_result.scalar() or 0
+
+    return NotificationListResponse(
+        notifications=[
+            NotificationResponse(
+                id=str(n.id),
+                user_id=str(n.user_id),
+                team_id=str(n.team_id),
+                actor_id=str(n.actor_id) if n.actor_id else None,
+                notification_type=NotificationTypeEnum(n.notification_type.value),
+                title=n.title,
+                message=n.message,
+                target_type=n.target_type,
+                target_id=str(n.target_id) if n.target_id else None,
+                is_read=n.is_read,
+                read_at=n.read_at,
+                created_at=n.created_at
+            )
+            for n in notifications
+        ],
+        total=len(notifications),
+        unread_count=unread_count
+    )
+
+
+@router.post("/{team_id}/notifications/read")
+async def mark_notifications_read(
+    team_id: str,
+    mark_data: "MarkNotificationsRead",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Mark notifications as read."""
+    from app.models.team import TeamNotification
+    from app.schemas.team import MarkNotificationsRead
+
+    await require_team_member(team_id, current_user, db)
+
+    query = select(TeamNotification).where(
+        and_(
+            TeamNotification.team_id == team_id,
+            TeamNotification.user_id == str(current_user.id),
+            TeamNotification.is_read == False
+        )
+    )
+
+    if mark_data.notification_ids:
+        query = query.where(TeamNotification.id.in_(mark_data.notification_ids))
+
+    result = await db.execute(query)
+    notifications = result.scalars().all()
+
+    for n in notifications:
+        n.is_read = True
+        n.read_at = datetime.utcnow()
+
+    await db.commit()
+
+    return {"success": True, "marked_count": len(notifications)}
+
+
+# ==================== Team Analytics ====================
+
+@router.get("/{team_id}/analytics")
+async def get_team_analytics(
+    team_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get team analytics and dashboard data."""
+    from app.models.team import TeamMilestone, TaskTimeLog, TeamActivity, MilestoneStatus
+    from app.schemas.team import TeamAnalytics, ActivityResponse, ActivityTypeEnum
+
+    team = await get_team_or_404(team_id, db)
+    await require_team_member(team_id, current_user, db)
+
+    # Member count
+    active_members = [m for m in team.members if m.is_active]
+
+    # Task stats
+    result = await db.execute(select(TeamTask).where(TeamTask.team_id == team_id))
+    tasks = result.scalars().all()
+
+    total_tasks = len(tasks)
+    completed_tasks = sum(1 for t in tasks if t.status == TaskStatus.COMPLETED)
+    in_progress_tasks = sum(1 for t in tasks if t.status == TaskStatus.IN_PROGRESS)
+    overdue_tasks = sum(1 for t in tasks if t.due_date and t.due_date < datetime.utcnow() and t.status != TaskStatus.COMPLETED)
+
+    tasks_by_status = {}
+    tasks_by_priority = {}
+    for t in tasks:
+        tasks_by_status[t.status.value] = tasks_by_status.get(t.status.value, 0) + 1
+        tasks_by_priority[t.priority.value] = tasks_by_priority.get(t.priority.value, 0) + 1
+
+    # Time tracking
+    result = await db.execute(select(TaskTimeLog).where(TaskTimeLog.task_id.in_([str(t.id) for t in tasks])))
+    time_logs = result.scalars().all()
+    total_minutes = sum(l.duration_minutes or 0 for l in time_logs)
+
+    # This week's hours
+    from datetime import timedelta
+    week_ago = datetime.utcnow() - timedelta(days=7)
+    week_logs = [l for l in time_logs if l.started_at >= week_ago]
+    week_minutes = sum(l.duration_minutes or 0 for l in week_logs)
+
+    # Milestones
+    result = await db.execute(select(TeamMilestone).where(TeamMilestone.team_id == team_id))
+    milestones = result.scalars().all()
+    active_milestones = sum(1 for m in milestones if m.status == MilestoneStatus.ACTIVE)
+    completed_milestones = sum(1 for m in milestones if m.status == MilestoneStatus.COMPLETED)
+
+    # Workload distribution
+    workload = []
+    for member in active_members:
+        member_tasks = [t for t in tasks if t.assignee_id == str(member.id)]
+        member_hours = sum(l.duration_minutes or 0 for l in time_logs if l.member_id == str(member.id)) / 60
+        workload.append({
+            "member_id": str(member.id),
+            "name": member.user.full_name if member.user else "Unknown",
+            "task_count": len(member_tasks),
+            "hours": round(member_hours, 1)
+        })
+
+    # Recent activities
+    result = await db.execute(
+        select(TeamActivity)
+        .options(selectinload(TeamActivity.actor))
+        .where(TeamActivity.team_id == team_id)
+        .order_by(TeamActivity.created_at.desc())
+        .limit(10)
+    )
+    recent_activities = result.scalars().all()
+
+    # Progress
+    overall_progress = int((completed_tasks / total_tasks * 100) if total_tasks > 0 else 0)
+
+    return TeamAnalytics(
+        team_id=team_id,
+        total_members=len(active_members),
+        total_tasks=total_tasks,
+        completed_tasks=completed_tasks,
+        in_progress_tasks=in_progress_tasks,
+        overdue_tasks=overdue_tasks,
+        total_hours_logged=round(total_minutes / 60, 1),
+        hours_this_week=round(week_minutes / 60, 1),
+        overall_progress=overall_progress,
+        active_milestones=active_milestones,
+        completed_milestones=completed_milestones,
+        workload_distribution=workload,
+        recent_activities=[
+            ActivityResponse(
+                id=str(a.id),
+                team_id=str(a.team_id),
+                actor_id=str(a.actor_id) if a.actor_id else None,
+                activity_type=ActivityTypeEnum(a.activity_type.value),
+                description=a.description,
+                target_type=a.target_type,
+                target_id=str(a.target_id) if a.target_id else None,
+                metadata=a.metadata,
+                created_at=a.created_at,
+                actor_name=a.actor.full_name if a.actor else None
+            )
+            for a in recent_activities
+        ],
+        tasks_by_status=tasks_by_status,
+        tasks_by_priority=tasks_by_priority
+    )
