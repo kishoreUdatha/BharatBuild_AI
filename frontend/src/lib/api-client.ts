@@ -320,6 +320,242 @@ class ApiClient {
     return response.data
   }
 
+  // ==================== ML Projects ====================
+  async getMLModels() {
+    const response = await this.axiosInstance.get('/ml/models')
+    return response.data
+  }
+
+  async getMLModelDetails(modelType: string) {
+    const response = await this.axiosInstance.get(`/ml/models/${modelType}`)
+    return response.data
+  }
+
+  async getMLTemplate(modelType: string, projectName: string = 'my_ml_project') {
+    const response = await this.axiosInstance.get(`/ml/template/${modelType}`, {
+      params: { project_name: projectName }
+    })
+    return response.data
+  }
+
+  async generateMLProject(config: {
+    model_type: string;
+    project_name: string;
+    num_classes?: number;
+    input_size?: number;
+    max_length?: number;
+    hidden_dim?: number;
+    batch_size?: number;
+    epochs?: number;
+    learning_rate?: number;
+    customization_prompt?: string;
+  }) {
+    const response = await this.axiosInstance.post('/ml/generate', { config })
+    return response.data
+  }
+
+  async customizeMLProject(params: {
+    model_type: string;
+    project_name: string;
+    prompt: string;
+    base_template?: boolean;
+    config?: Record<string, any>;
+  }) {
+    const response = await this.axiosInstance.post('/ml/customize', params)
+    return response.data
+  }
+
+  async getMLCategories() {
+    const response = await this.axiosInstance.get('/ml/categories')
+    return response.data
+  }
+
+  async getMLFrameworks() {
+    const response = await this.axiosInstance.get('/ml/frameworks')
+    return response.data
+  }
+
+  async getTabularModels() {
+    const response = await this.axiosInstance.get('/ml/tabular-models')
+    return response.data
+  }
+
+  async generateMLProjectWithDataset(params: {
+    model_type: string;
+    project_name: string;
+    dataset_id: string;
+    target_column: string;
+    feature_columns?: string[];
+    num_classes?: number;
+    batch_size?: number;
+    epochs?: number;
+    learning_rate?: number;
+    test_size?: number;
+    workspace_id?: string;
+  }) {
+    const response = await this.axiosInstance.post('/ml/generate-with-dataset', params)
+    return response.data
+  }
+
+  // ==================== Datasets ====================
+  async uploadDataset(formData: FormData) {
+    const response = await this.axiosInstance.post('/datasets/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
+    return response.data
+  }
+
+  async configureDataset(params: {
+    dataset_id: string;
+    target_column: string;
+    feature_columns?: string[];
+    project_id?: string;
+  }) {
+    const response = await this.axiosInstance.post('/datasets/configure', params)
+    return response.data
+  }
+
+  async getDataset(datasetId: string) {
+    const response = await this.axiosInstance.get(`/datasets/${datasetId}`)
+    return response.data
+  }
+
+  async listDatasets(params?: { page?: number; page_size?: number; status_filter?: string }) {
+    const response = await this.axiosInstance.get('/datasets', { params })
+    return response.data
+  }
+
+  async deleteDataset(datasetId: string) {
+    const response = await this.axiosInstance.delete(`/datasets/${datasetId}`)
+    return response.data
+  }
+
+  async getDatasetPreview(datasetId: string, rows: number = 10) {
+    const response = await this.axiosInstance.get(`/datasets/${datasetId}/preview`, {
+      params: { rows }
+    })
+    return response.data
+  }
+
+  // ==================== Image Datasets ====================
+  async uploadImageDataset(formData: FormData) {
+    const response = await this.axiosInstance.post('/datasets/upload-images', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      timeout: 300000, // 5 minutes for large image uploads
+    })
+    return response.data
+  }
+
+  async configureImageDataset(params: {
+    dataset_id: string;
+    input_size?: number;
+    augmentation?: boolean;
+    normalize?: boolean;
+    project_id?: string;
+  }) {
+    const response = await this.axiosInstance.post('/datasets/configure-images', params)
+    return response.data
+  }
+
+  async getVisionModels() {
+    const response = await this.axiosInstance.get('/ml/vision-models')
+    return response.data
+  }
+
+  async generateMLProjectWithImageDataset(params: {
+    model_type: string;
+    project_name: string;
+    dataset_id: string;
+    input_size?: number;
+    augmentation?: boolean;
+    num_classes?: number;
+    batch_size?: number;
+    epochs?: number;
+    learning_rate?: number;
+    pretrained?: boolean;
+    freeze_layers?: boolean;
+    workspace_id?: string;
+  }) {
+    const response = await this.axiosInstance.post('/ml/generate-with-image-dataset', params)
+    return response.data
+  }
+
+  // ==================== Prompt-Based ML Generation ====================
+  async analyzeMLPrompt(prompt: string) {
+    const response = await this.axiosInstance.post('/ml/analyze-prompt', { prompt })
+    return response.data
+  }
+
+  async generateMLProjectFromPrompt(params: {
+    prompt: string;
+    project_name?: string;
+    workspace_id?: string;
+    model_type?: string;
+    num_classes?: number;
+    input_size?: number;
+  }) {
+    const response = await this.axiosInstance.post('/ml/generate-from-prompt', params)
+    return response.data
+  }
+
+  // ==================== Mobile Builds ====================
+  async getBuildQuota() {
+    const response = await this.axiosInstance.get('/builds/quota')
+    return response.data
+  }
+
+  async startAPKBuild(projectId: string, config: {
+    app_name?: string;
+    version?: string;
+    build_number?: number;
+    bundle_id?: string;
+  }) {
+    const response = await this.axiosInstance.post(`/builds/${projectId}/apk`, config)
+    return response.data
+  }
+
+  async startIPABuild(projectId: string, config: {
+    app_name?: string;
+    version?: string;
+    build_number?: number;
+    bundle_id?: string;
+  }) {
+    const response = await this.axiosInstance.post(`/builds/${projectId}/ipa`, config)
+    return response.data
+  }
+
+  async getBuildStatus(projectId: string, buildId?: string) {
+    const url = buildId
+      ? `/builds/${projectId}/status?build_id=${buildId}`
+      : `/builds/${projectId}/status`
+    const response = await this.axiosInstance.get(url)
+    return response.data
+  }
+
+  async getBuildDownloadUrl(projectId: string, buildId?: string) {
+    const url = buildId
+      ? `/builds/${projectId}/download?build_id=${buildId}`
+      : `/builds/${projectId}/download`
+    const response = await this.axiosInstance.get(url)
+    return response.data
+  }
+
+  async cancelBuild(projectId: string, reason?: string) {
+    const response = await this.axiosInstance.delete(`/builds/${projectId}/cancel`, {
+      data: reason ? { reason } : undefined
+    })
+    return response.data
+  }
+
+  async getBuildHistory(projectId: string, params?: { platform?: string; limit?: number }) {
+    const response = await this.axiosInstance.get(`/builds/${projectId}/history`, { params })
+    return response.data
+  }
+
   // ==================== Generic request methods ====================
   async get<T = any>(url: string, config?: any): Promise<T> {
     const response = await this.axiosInstance.get(url, config)

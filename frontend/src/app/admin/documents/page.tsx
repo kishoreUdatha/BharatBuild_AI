@@ -14,7 +14,6 @@ import {
   ChevronUp,
   ChevronDown,
   Loader2,
-  X,
   FileSpreadsheet,
   Presentation,
   FileQuestion,
@@ -93,12 +92,9 @@ export default function AdminDocumentsPage() {
   const [stats, setStats] = useState<DocumentStats | null>(null)
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
 
-  // User filter states
-  const [users, setUsers] = useState<Array<{ id: string; email: string; full_name: string | null }>>([])
-  const [userFilter, setUserFilter] = useState('')
-  const [userSearchInput, setUserSearchInput] = useState('')
-  const [showUserSuggestions, setShowUserSuggestions] = useState(false)
-  const [selectedUserName, setSelectedUserName] = useState('')
+  // Simple text filters (like User Management page)
+  const [userSearchFilter, setUserSearchFilter] = useState('')
+  const [projectSearchFilter, setProjectSearchFilter] = useState('')
 
   const isDark = theme === 'dark'
 
@@ -113,7 +109,8 @@ export default function AdminDocumentsPage() {
       })
       if (searchInput) params.append('search', searchInput)
       if (docTypeFilter) params.append('doc_type', docTypeFilter)
-      if (userFilter) params.append('user_id', userFilter)
+      if (userSearchFilter) params.append('user_search', userSearchFilter)
+      if (projectSearchFilter) params.append('project_search', projectSearchFilter)
 
       const data = await apiClient.get<any>(`/admin/documents?${params.toString()}`)
       setDocuments(data.items || [])
@@ -124,7 +121,7 @@ export default function AdminDocumentsPage() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, searchInput, docTypeFilter, userFilter, sortBy, sortOrder])
+  }, [page, pageSize, searchInput, docTypeFilter, userSearchFilter, projectSearchFilter, sortBy, sortOrder])
 
   const fetchStats = useCallback(async () => {
     try {
@@ -135,23 +132,13 @@ export default function AdminDocumentsPage() {
     }
   }, [])
 
-  const fetchUsers = useCallback(async () => {
-    try {
-      const data = await apiClient.get<any>('/admin/users?page_size=1000')
-      setUsers(data.items || [])
-    } catch (err) {
-      console.error('Failed to fetch users:', err)
-    }
-  }, [])
-
   useEffect(() => {
     fetchDocuments()
   }, [fetchDocuments])
 
   useEffect(() => {
     fetchStats()
-    fetchUsers()
-  }, [fetchStats, fetchUsers])
+  }, [fetchStats])
 
   const handleSort = (field: string) => {
     if (sortBy === field) {
@@ -194,32 +181,6 @@ export default function AdminDocumentsPage() {
     } finally {
       setDownloadingId(null)
     }
-  }
-
-  // User filter functions
-  const filteredUsers = userSearchInput.trim()
-    ? users.filter(user => {
-        const searchLower = userSearchInput.toLowerCase()
-        return (
-          user.email.toLowerCase().includes(searchLower) ||
-          (user.full_name && user.full_name.toLowerCase().includes(searchLower))
-        )
-      }).slice(0, 10)
-    : []
-
-  const handleUserSelect = (user: { id: string; email: string; full_name: string | null }) => {
-    setUserFilter(user.id)
-    setSelectedUserName(user.full_name || user.email)
-    setUserSearchInput('')
-    setShowUserSuggestions(false)
-    setPage(1)
-  }
-
-  const clearUserFilter = () => {
-    setUserFilter('')
-    setSelectedUserName('')
-    setUserSearchInput('')
-    setPage(1)
   }
 
   const formatDate = (dateString: string | null) => {
@@ -331,74 +292,42 @@ export default function AdminDocumentsPage() {
             ))}
           </select>
 
-          {/* User Search/Filter */}
-          <div className="relative min-w-[220px]">
-            {selectedUserName ? (
-              <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${
+          {/* User Filter - Simple Text Input */}
+          <div className="relative min-w-[180px]">
+            <User className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${
+              isDark ? 'text-gray-500' : 'text-gray-400'
+            }`} />
+            <input
+              type="text"
+              placeholder="Filter by user..."
+              value={userSearchFilter}
+              onChange={(e) => { setUserSearchFilter(e.target.value); setPage(1); }}
+              className={`w-full pl-10 pr-4 py-2 rounded-lg border text-sm ${
                 isDark
-                  ? 'bg-[#252525] border-[#333] text-white'
-                  : 'bg-gray-50 border-gray-200 text-gray-900'
-              }`}>
-                <User className="w-4 h-4 text-blue-400 flex-shrink-0" />
-                <span className="truncate flex-1">{selectedUserName}</span>
-                <button
-                  onClick={clearUserFilter}
-                  className={`p-0.5 rounded hover:bg-gray-600/30 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            ) : (
-              <>
-                <User className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${
-                  isDark ? 'text-gray-500' : 'text-gray-400'
-                }`} />
-                <input
-                  type="text"
-                  placeholder="Search by user..."
-                  value={userSearchInput}
-                  onChange={(e) => {
-                    setUserSearchInput(e.target.value)
-                    setShowUserSuggestions(true)
-                  }}
-                  onFocus={() => setShowUserSuggestions(true)}
-                  className={`w-full pl-10 pr-4 py-2 rounded-lg border text-sm ${
-                    isDark
-                      ? 'bg-[#252525] border-[#333] text-white placeholder-gray-500'
-                      : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400'
-                  } outline-none focus:border-blue-500`}
-                />
-              </>
-            )}
-
-            {showUserSuggestions && filteredUsers.length > 0 && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setShowUserSuggestions(false)} />
-                <div className={`absolute top-full left-0 right-0 mt-1 rounded-lg shadow-lg border z-50 max-h-60 overflow-y-auto ${
-                  isDark ? 'bg-[#1a1a1a] border-[#333]' : 'bg-white border-gray-200'
-                }`}>
-                  {filteredUsers.map((user) => (
-                    <button
-                      key={user.id}
-                      onClick={() => handleUserSelect(user)}
-                      className={`w-full flex flex-col px-4 py-2 text-left text-sm ${
-                        isDark ? 'hover:bg-[#252525]' : 'hover:bg-gray-100'
-                      }`}
-                    >
-                      <span className={isDark ? 'text-white' : 'text-gray-900'}>
-                        {user.full_name || user.email}
-                      </span>
-                      {user.full_name && (
-                        <span className={`text-xs ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
-                          {user.email}
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
+                  ? 'bg-[#252525] border-[#333] text-white placeholder-gray-500'
+                  : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400'
+              } outline-none focus:border-blue-500`}
+            />
           </div>
+
+          {/* Project Filter - Simple Text Input */}
+          <div className="relative min-w-[180px]">
+            <FolderKanban className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${
+              isDark ? 'text-gray-500' : 'text-gray-400'
+            }`} />
+            <input
+              type="text"
+              placeholder="Filter by project..."
+              value={projectSearchFilter}
+              onChange={(e) => { setProjectSearchFilter(e.target.value); setPage(1); }}
+              className={`w-full pl-10 pr-4 py-2 rounded-lg border text-sm ${
+                isDark
+                  ? 'bg-[#252525] border-[#333] text-white placeholder-gray-500'
+                  : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400'
+              } outline-none focus:border-blue-500`}
+            />
+          </div>
+
         </div>
 
         {/* Table */}
@@ -497,16 +426,29 @@ export default function AdminDocumentsPage() {
                         </span>
                       </td>
                       <td className="px-4 py-4">
-                        <div className="flex items-center gap-2">
-                          <FolderKanban className="w-4 h-4 text-gray-400" />
-                          <span className={`text-sm ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
-                            {doc.project_title}
-                          </span>
+                        <div className={`flex items-center gap-2 px-2 py-1 rounded-lg ${isDark ? 'bg-blue-500/10' : 'bg-blue-50'}`}>
+                          <FolderKanban className="w-4 h-4 text-blue-400 flex-shrink-0" />
+                          <div className="min-w-0">
+                            <div className={`text-sm font-medium truncate ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>
+                              {doc.project_title}
+                            </div>
+                            <div className={`text-xs truncate ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+                              ID: {doc.project_id?.slice(0, 8)}...
+                            </div>
+                          </div>
                         </div>
                       </td>
                       <td className="px-4 py-4">
-                        <div className={`text-sm ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
-                          {doc.user_name || doc.user_email}
+                        <div className={`flex items-center gap-2 px-2 py-1 rounded-lg ${isDark ? 'bg-green-500/10' : 'bg-green-50'}`}>
+                          <User className="w-4 h-4 text-green-400 flex-shrink-0" />
+                          <div className="min-w-0">
+                            <div className={`text-sm font-medium truncate ${isDark ? 'text-green-300' : 'text-green-700'}`}>
+                              {doc.user_name || 'No Name'}
+                            </div>
+                            <div className={`text-xs truncate ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+                              {doc.user_email}
+                            </div>
+                          </div>
                         </div>
                       </td>
                       <td className={`px-4 py-4 text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>

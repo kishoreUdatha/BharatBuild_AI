@@ -23,6 +23,7 @@ import {
   Zap,
   Download,
   ExternalLink,
+  GraduationCap,
 } from 'lucide-react'
 import { useChatStore } from '@/store/chatStore'
 import { useProjectStore } from '@/store/projectStore'
@@ -95,6 +96,16 @@ interface SummaryContent {
   downloadUrl?: string
 }
 
+// Learn stage content
+interface LearnContent {
+  filesReviewed: number
+  totalFiles: number
+  quizScore: number | null
+  quizPassed: boolean
+  canDownload: boolean
+  overallProgress: number
+}
+
 export function ProjectStagesPanel() {
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const stageRefs = useRef<{ [key: string]: HTMLDivElement | null }>({})
@@ -129,6 +140,7 @@ export function ProjectStagesPanel() {
     abstract: true,
     plan: true,
     build: true,
+    learn: true,
     documents: true,
     summary: true,
   })
@@ -325,6 +337,12 @@ export function ProjectStagesPanel() {
         if (allStepsComplete) return 'active'
         return 'pending'
 
+      case 'learn':
+        // Learn stage comes after build
+        if (isLoadedProject) return 'pending' // Show as available for loaded projects
+        if (allFilesComplete) return 'pending' // Ready for learning after build
+        return 'pending'
+
       case 'documents':
         // Check if documents were skipped (user not eligible)
         if (documentsSkippedStep) return 'completed'
@@ -455,6 +473,21 @@ export function ProjectStagesPanel() {
         totalFiles: fileOperations.length,
         completedFiles: fileOperations.filter((f: any) => f.status === 'complete').length,
       },
+    },
+    {
+      id: 'learn',
+      title: 'LEARN',
+      icon: GraduationCap,
+      status: getStageStatus('learn'),
+      content: {
+        filesReviewed: 0,
+        totalFiles: isLoadedProject ? loadedFiles.length : fileOperations.length,
+        quizScore: null,
+        quizPassed: false,
+        canDownload: false,
+        overallProgress: 0,
+      } as LearnContent,
+      summary: 'Complete learning checkpoints to download',
     },
     {
       id: 'documents',
@@ -757,6 +790,11 @@ export function ProjectStagesPanel() {
                           )
                         )}
 
+                        {/* Learn Content */}
+                        {stage.id === 'learn' && (
+                          <LearnStageContent content={stage.content as LearnContent} />
+                        )}
+
                         {/* Documents Content */}
                         {stage.id === 'documents' && (
                           <DocumentsStageContent content={stage.content} />
@@ -1035,6 +1073,93 @@ function DocumentsStageContent({ content }: { content: DocumentsContent }) {
           )}
         </div>
       ))}
+    </div>
+  )
+}
+
+// Learn Stage Content Component
+function LearnStageContent({ content }: { content: LearnContent }) {
+  if (!content) {
+    return (
+      <div className="pt-3 py-4 text-center">
+        <p className="text-xs text-gray-600">Complete code generation to start learning...</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="pt-3 space-y-3">
+      {/* Learning Progress */}
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm text-gray-400">Learning Progress</span>
+        <span className="text-sm font-medium text-white">{content.overallProgress}%</span>
+      </div>
+      <div className="h-2 rounded-full bg-gray-800 overflow-hidden">
+        <div
+          className="h-full bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-500 transition-all duration-300"
+          style={{ width: `${content.overallProgress}%` }}
+        />
+      </div>
+
+      {/* Checkpoints */}
+      <div className="space-y-2">
+        {/* Checkpoint 1: Code Understanding */}
+        <div className={`flex items-center gap-2 p-2 rounded-lg ${
+          content.filesReviewed >= 5 ? 'bg-green-500/10' : 'bg-gray-800/50'
+        }`}>
+          <BookOpen className={`w-4 h-4 ${content.filesReviewed >= 5 ? 'text-green-400' : 'text-gray-500'}`} />
+          <div className="flex-1">
+            <span className={`text-xs ${content.filesReviewed >= 5 ? 'text-green-400' : 'text-gray-400'}`}>
+              Code Understanding
+            </span>
+            <p className="text-[10px] text-gray-500">
+              {content.filesReviewed} / 5 files reviewed
+            </p>
+          </div>
+          {content.filesReviewed >= 5 && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+        </div>
+
+        {/* Checkpoint 2: Quiz */}
+        <div className={`flex items-center gap-2 p-2 rounded-lg ${
+          content.quizPassed ? 'bg-green-500/10' : 'bg-gray-800/50'
+        }`}>
+          <Shield className={`w-4 h-4 ${content.quizPassed ? 'text-green-400' : 'text-gray-500'}`} />
+          <div className="flex-1">
+            <span className={`text-xs ${content.quizPassed ? 'text-green-400' : 'text-gray-400'}`}>
+              Concept Quiz
+            </span>
+            <p className="text-[10px] text-gray-500">
+              {content.quizScore !== null ? `Score: ${content.quizScore}%` : 'Not started'}
+            </p>
+          </div>
+          {content.quizPassed && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+        </div>
+      </div>
+
+      {/* Download Status */}
+      <div className={`flex items-center gap-2 p-2 rounded-lg ${
+        content.canDownload
+          ? 'bg-green-500/10 border border-green-500/30'
+          : 'bg-yellow-500/10 border border-yellow-500/30'
+      }`}>
+        {content.canDownload ? (
+          <>
+            <CheckCircle2 className="w-4 h-4 text-green-500" />
+            <span className="text-xs text-green-400">Download Unlocked!</span>
+          </>
+        ) : (
+          <>
+            <Shield className="w-4 h-4 text-yellow-500" />
+            <span className="text-xs text-yellow-400">Pass quiz (70%) to unlock download</span>
+          </>
+        )}
+      </div>
+
+      {/* Action Button */}
+      <button className="w-full flex items-center justify-center gap-2 p-2 rounded-lg bg-gradient-to-r from-purple-500 to-blue-500 text-white text-xs font-medium hover:from-purple-600 hover:to-blue-600 transition-colors">
+        <GraduationCap className="w-3.5 h-3.5" />
+        Open Learning Mode
+      </button>
     </div>
   )
 }

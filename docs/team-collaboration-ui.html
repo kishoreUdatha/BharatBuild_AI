@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BharatBuild AI - Team Collaboration UI/UX Mockups</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; background: #0a0a1a; }
+    .gradient-text { background: linear-gradient(135deg, #0099ff 0%, #00ff99 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
+    .screen-container { max-width: 1400px; margin: 0 auto; }
+  </style>
+</head>
+<body class="text-white">
+
+  <!-- Header -->
+  <div class="bg-gradient-to-r from-blue-600 to-cyan-500 py-8 px-6">
+    <div class="screen-container">
+      <h1 class="text-3xl font-bold mb-2">BharatBuild AI - Team Collaboration</h1>
+      <p class="text-white/80">UI/UX Mockups for 3-Student Team Project Feature</p>
+    </div>
+  </div>
+
+  <div class="screen-container p-6 space-y-16">
+
+    <!-- Screen 1: Team Project Dashboard -->
+    <section>
+      <h2 class="text-2xl font-bold mb-2 gradient-text">Screen 1: Team Project Dashboard</h2>
+      <p class="text-gray-400 mb-6">Main view showing project overview with team members and progress</p>
+
+      <div class="glass rounded-2xl overflow-hidden">
+        <!-- Top Bar -->
+        <div class="bg-[#12122a] px-6 py-4 flex items-center justify-between border-b border-white/10">
+          <div class="flex items-center gap-4">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
+              <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+            </div>
+            <div>
+              <h3 class="font-semibold text-lg">E-Commerce App</h3>
+              <p class="text-sm text-gray-400">Team Project - 3 members</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-4">
+            <!-- Progress -->
+            <div class="flex items-center gap-3 px-4 py-2 bg-white/5 rounded-lg">
+              <span class="text-sm text-gray-400">Progress</span>
+              <div class="w-32 h-2 bg-white/10 rounded-full overflow-hidden">
+                <div class="w-[65%] h-full bg-gradient-to-r from-blue-500 to-cyan-500"></div>
+              </div>
+              <span class="text-sm font-medium">65%</span>
+            </div>
+            <button class="flex items-center gap-2 px-4 py-2 bg-blue-500 rounded-lg hover:bg-blue-600">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path></svg>
+              Invite
+            </button>
+          </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="px-6 py-3 bg-[#12122a] border-b border-white/10 flex gap-2">
+          <button class="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
+            Task Board
+          </button>
+          <button class="px-4 py-2 text-gray-400 hover:bg-white/5 rounded-lg text-sm font-medium flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"></path></svg>
+            AI Task Split
+          </button>
+          <button class="px-4 py-2 text-gray-400 hover:bg-white/5 rounded-lg text-sm font-medium flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z"></path></svg>
+            Team (3)
+          </button>
+        </div>
+
+        <!-- Team Members Row -->
+        <div class="px-6 py-4 bg-[#0d0d20] flex gap-4 overflow-x-auto">
+          <!-- Member 1 - Active -->
+          <div class="flex-shrink-0 flex items-center gap-3 px-4 py-3 bg-green-500/10 border border-green-500/30 rounded-xl">
+            <div class="relative">
+              <div class="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center font-bold">R</div>
+              <div class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-green-500 rounded-full border-2 border-[#0d0d20]"></div>
+            </div>
+            <div>
+              <div class="font-medium text-sm">Rahul Kumar</div>
+              <div class="text-xs text-green-400 flex items-center gap-1">
+                <span class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span>
+                Coding Authentication
+              </div>
+            </div>
+            <div class="ml-4 text-right">
+              <div class="text-lg font-bold text-green-400">3/5</div>
+              <div class="text-xs text-gray-500">tasks</div>
+            </div>
+          </div>
+
+          <!-- Member 2 -->
+          <div class="flex-shrink-0 flex items-center gap-3 px-4 py-3 bg-blue-500/10 border border-blue-500/30 rounded-xl">
+            <div class="relative">
+              <div class="w-10 h-10 rounded-full bg-gradient-to-br from-pink-500 to-orange-500 flex items-center justify-center font-bold">P</div>
+              <div class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-blue-500 rounded-full border-2 border-[#0d0d20]"></div>
+            </div>
+            <div>
+              <div class="font-medium text-sm">Priya Sharma</div>
+              <div class="text-xs text-blue-400">Working on Products</div>
+            </div>
+            <div class="ml-4 text-right">
+              <div class="text-lg font-bold text-blue-400">2/4</div>
+              <div class="text-xs text-gray-500">tasks</div>
+            </div>
+          </div>
+
+          <!-- Member 3 -->
+          <div class="flex-shrink-0 flex items-center gap-3 px-4 py-3 bg-white/5 border border-white/10 rounded-xl">
+            <div class="relative">
+              <div class="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-500 to-green-500 flex items-center justify-center font-bold">A</div>
+              <div class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-gray-500 rounded-full border-2 border-[#0d0d20]"></div>
+            </div>
+            <div>
+              <div class="font-medium text-sm">Amit Patel</div>
+              <div class="text-xs text-gray-400">Offline</div>
+            </div>
+            <div class="ml-4 text-right">
+              <div class="text-lg font-bold">1/3</div>
+              <div class="text-xs text-gray-500">tasks</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Kanban Board -->
+        <div class="p-6 flex gap-4 overflow-x-auto bg-[#0a0a1a]">
+          <!-- To Do Column -->
+          <div class="flex-shrink-0 w-72">
+            <div class="flex items-center gap-2 mb-4">
+              <div class="w-3 h-3 rounded-full bg-gray-400"></div>
+              <h4 class="font-medium">To Do</h4>
+              <span class="text-sm text-gray-500 bg-white/5 px-2 py-0.5 rounded-full">2</span>
+            </div>
+            <div class="space-y-3">
+              <div class="p-4 bg-[#12122a] rounded-xl border border-white/10 hover:border-blue-500/50 cursor-pointer">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="text-xs px-2 py-0.5 bg-red-500/20 text-red-400 rounded-full">High</span>
+                </div>
+                <h5 class="font-medium mb-1">Checkout Flow</h5>
+                <p class="text-sm text-gray-400 mb-3">Payment integration and order confirmation</p>
+                <div class="flex items-center justify-between text-xs text-gray-500">
+                  <div class="flex items-center gap-1">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    2 files
+                  </div>
+                  <div class="flex items-center gap-1">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    4h
+                  </div>
+                </div>
+              </div>
+              <div class="p-4 bg-[#12122a] rounded-xl border border-white/10">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="text-xs px-2 py-0.5 bg-yellow-500/20 text-yellow-400 rounded-full">Medium</span>
+                </div>
+                <h5 class="font-medium mb-1">Shopping Cart</h5>
+                <p class="text-sm text-gray-400 mb-3">Cart with add/remove items</p>
+                <div class="flex items-center justify-between">
+                  <div class="w-6 h-6 rounded-full bg-gradient-to-br from-cyan-500 to-green-500 flex items-center justify-center text-xs font-bold">A</div>
+                  <span class="text-xs text-gray-500">2h</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- In Progress Column -->
+          <div class="flex-shrink-0 w-72">
+            <div class="flex items-center gap-2 mb-4">
+              <div class="w-3 h-3 rounded-full bg-blue-500"></div>
+              <h4 class="font-medium">In Progress</h4>
+              <span class="text-sm text-gray-500 bg-white/5 px-2 py-0.5 rounded-full">2</span>
+            </div>
+            <div class="space-y-3">
+              <div class="p-4 bg-[#12122a] rounded-xl border border-blue-500/50 shadow-lg shadow-blue-500/10">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="text-xs px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded-full flex items-center gap-1">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"></path></svg>
+                    AI
+                  </span>
+                  <span class="text-xs px-2 py-0.5 bg-red-500/20 text-red-400 rounded-full">High</span>
+                </div>
+                <h5 class="font-medium mb-1">User Authentication</h5>
+                <p class="text-sm text-gray-400 mb-3">Login, register, password reset</p>
+                <div class="flex flex-wrap gap-1 mb-3">
+                  <span class="text-xs px-2 py-1 bg-white/5 rounded">login.tsx</span>
+                  <span class="text-xs px-2 py-1 bg-white/5 rounded">register.tsx</span>
+                  <span class="text-xs px-2 py-1 bg-white/5 rounded">+1</span>
+                </div>
+                <div class="flex items-center justify-between pt-3 border-t border-white/10">
+                  <div class="flex items-center gap-2">
+                    <div class="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-xs font-bold">R</div>
+                    <span class="text-xs text-green-400">Coding...</span>
+                  </div>
+                  <div class="w-16 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                    <div class="w-[60%] h-full bg-blue-500"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="p-4 bg-[#12122a] rounded-xl border border-white/10">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="text-xs px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded-full flex items-center gap-1">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"></path></svg>
+                    AI
+                  </span>
+                </div>
+                <h5 class="font-medium mb-1">Product Catalog</h5>
+                <p class="text-sm text-gray-400 mb-3">Product listing with filters</p>
+                <div class="flex items-center justify-between">
+                  <div class="w-6 h-6 rounded-full bg-gradient-to-br from-pink-500 to-orange-500 flex items-center justify-center text-xs font-bold">P</div>
+                  <span class="text-xs text-gray-500">3h</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Review Column -->
+          <div class="flex-shrink-0 w-72">
+            <div class="flex items-center gap-2 mb-4">
+              <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+              <h4 class="font-medium">Code Review</h4>
+              <span class="text-sm text-gray-500 bg-white/5 px-2 py-0.5 rounded-full">1</span>
+            </div>
+            <div class="space-y-3">
+              <div class="p-4 bg-[#12122a] rounded-xl border border-yellow-500/30">
+                <h5 class="font-medium mb-1">API Integration</h5>
+                <p class="text-sm text-gray-400 mb-3">Connect frontend with backend</p>
+                <div class="flex items-center justify-between">
+                  <div class="flex -space-x-2">
+                    <div class="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-xs font-bold border-2 border-[#12122a]">R</div>
+                    <div class="w-6 h-6 rounded-full bg-gradient-to-br from-pink-500 to-orange-500 flex items-center justify-center text-xs font-bold border-2 border-[#12122a]">P</div>
+                  </div>
+                  <span class="text-xs text-yellow-400">Reviewing</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Done Column -->
+          <div class="flex-shrink-0 w-72">
+            <div class="flex items-center gap-2 mb-4">
+              <div class="w-3 h-3 rounded-full bg-green-500"></div>
+              <h4 class="font-medium">Done</h4>
+              <span class="text-sm text-gray-500 bg-white/5 px-2 py-0.5 rounded-full">3</span>
+            </div>
+            <div class="space-y-3">
+              <div class="p-4 bg-[#12122a] rounded-xl border border-green-500/30 opacity-75">
+                <h5 class="font-medium mb-1 flex items-center gap-2">
+                  <svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                  Project Setup
+                </h5>
+                <p class="text-sm text-gray-500">Next.js, Tailwind, TypeScript</p>
+              </div>
+              <div class="p-4 bg-[#12122a] rounded-xl border border-green-500/30 opacity-75">
+                <h5 class="font-medium mb-1 flex items-center gap-2">
+                  <svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                  Database Schema
+                </h5>
+                <p class="text-sm text-gray-500">Users, Products, Orders tables</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Screen 2: AI Task Split -->
+    <section>
+      <h2 class="text-2xl font-bold mb-2 gradient-text">Screen 2: AI Task Split</h2>
+      <p class="text-gray-400 mb-6">AI automatically splits project into tasks and assigns to team members</p>
+
+      <div class="glass rounded-2xl overflow-hidden">
+        <div class="p-6 bg-[#12122a] border-b border-white/10">
+          <h3 class="text-lg font-semibold mb-2">AI Task Splitter</h3>
+          <p class="text-gray-400 text-sm">Describe your project and AI will create tasks for each team member</p>
+        </div>
+
+        <div class="p-6 bg-[#0a0a1a]">
+          <!-- Project Input -->
+          <div class="mb-6">
+            <label class="block text-sm font-medium mb-2">Project Description</label>
+            <div class="p-4 bg-[#12122a] rounded-xl border border-white/10">
+              <p class="text-gray-300">Build an e-commerce website with user authentication, product catalog, shopping cart, and checkout with payment integration. Use React/Next.js frontend and Node.js backend.</p>
+            </div>
+          </div>
+
+          <!-- Team Members Selection -->
+          <div class="mb-6">
+            <label class="block text-sm font-medium mb-3">Team Members (3)</label>
+            <div class="flex gap-3">
+              <div class="flex items-center gap-2 px-4 py-2 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-sm font-bold">R</div>
+                <span class="text-sm">Rahul</span>
+                <span class="text-xs text-blue-400 bg-blue-500/20 px-2 py-0.5 rounded">Backend</span>
+              </div>
+              <div class="flex items-center gap-2 px-4 py-2 bg-pink-500/10 border border-pink-500/30 rounded-lg">
+                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-pink-500 to-orange-500 flex items-center justify-center text-sm font-bold">P</div>
+                <span class="text-sm">Priya</span>
+                <span class="text-xs text-pink-400 bg-pink-500/20 px-2 py-0.5 rounded">Frontend</span>
+              </div>
+              <div class="flex items-center gap-2 px-4 py-2 bg-cyan-500/10 border border-cyan-500/30 rounded-lg">
+                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-500 to-green-500 flex items-center justify-center text-sm font-bold">A</div>
+                <span class="text-sm">Amit</span>
+                <span class="text-xs text-cyan-400 bg-cyan-500/20 px-2 py-0.5 rounded">Full Stack</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- AI Generated Tasks -->
+          <div class="mb-6">
+            <div class="flex items-center gap-2 mb-4">
+              <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"></path></svg>
+              <span class="font-medium">AI Generated Task Split</span>
+              <span class="text-xs text-purple-400 bg-purple-500/20 px-2 py-0.5 rounded-full">8 tasks created</span>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <!-- Rahul's Tasks -->
+              <div class="p-4 bg-[#12122a] rounded-xl border border-blue-500/30">
+                <div class="flex items-center gap-2 mb-3">
+                  <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-sm font-bold">R</div>
+                  <div>
+                    <div class="font-medium text-sm">Rahul Kumar</div>
+                    <div class="text-xs text-gray-500">3 tasks assigned</div>
+                  </div>
+                </div>
+                <div class="space-y-2">
+                  <div class="p-3 bg-white/5 rounded-lg">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-sm font-medium">User Authentication</span>
+                      <span class="text-xs text-red-400">High</span>
+                    </div>
+                    <p class="text-xs text-gray-500">Login, Register, JWT tokens</p>
+                    <div class="flex gap-1 mt-2">
+                      <span class="text-xs px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">auth/</span>
+                      <span class="text-xs px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">api/</span>
+                    </div>
+                  </div>
+                  <div class="p-3 bg-white/5 rounded-lg">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-sm font-medium">Database Models</span>
+                      <span class="text-xs text-yellow-400">Medium</span>
+                    </div>
+                    <p class="text-xs text-gray-500">User, Product, Order schemas</p>
+                  </div>
+                  <div class="p-3 bg-white/5 rounded-lg">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-sm font-medium">Payment API</span>
+                      <span class="text-xs text-red-400">High</span>
+                    </div>
+                    <p class="text-xs text-gray-500">Razorpay integration</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Priya's Tasks -->
+              <div class="p-4 bg-[#12122a] rounded-xl border border-pink-500/30">
+                <div class="flex items-center gap-2 mb-3">
+                  <div class="w-8 h-8 rounded-full bg-gradient-to-br from-pink-500 to-orange-500 flex items-center justify-center text-sm font-bold">P</div>
+                  <div>
+                    <div class="font-medium text-sm">Priya Sharma</div>
+                    <div class="text-xs text-gray-500">3 tasks assigned</div>
+                  </div>
+                </div>
+                <div class="space-y-2">
+                  <div class="p-3 bg-white/5 rounded-lg">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-sm font-medium">Product Catalog UI</span>
+                      <span class="text-xs text-yellow-400">Medium</span>
+                    </div>
+                    <p class="text-xs text-gray-500">Grid view, filters, search</p>
+                    <div class="flex gap-1 mt-2">
+                      <span class="text-xs px-1.5 py-0.5 bg-pink-500/20 text-pink-400 rounded">pages/</span>
+                      <span class="text-xs px-1.5 py-0.5 bg-pink-500/20 text-pink-400 rounded">components/</span>
+                    </div>
+                  </div>
+                  <div class="p-3 bg-white/5 rounded-lg">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-sm font-medium">Shopping Cart UI</span>
+                      <span class="text-xs text-yellow-400">Medium</span>
+                    </div>
+                    <p class="text-xs text-gray-500">Cart page, item management</p>
+                  </div>
+                  <div class="p-3 bg-white/5 rounded-lg">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-sm font-medium">Checkout Flow UI</span>
+                      <span class="text-xs text-red-400">High</span>
+                    </div>
+                    <p class="text-xs text-gray-500">Multi-step checkout form</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Amit's Tasks -->
+              <div class="p-4 bg-[#12122a] rounded-xl border border-cyan-500/30">
+                <div class="flex items-center gap-2 mb-3">
+                  <div class="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-500 to-green-500 flex items-center justify-center text-sm font-bold">A</div>
+                  <div>
+                    <div class="font-medium text-sm">Amit Patel</div>
+                    <div class="text-xs text-gray-500">2 tasks assigned</div>
+                  </div>
+                </div>
+                <div class="space-y-2">
+                  <div class="p-3 bg-white/5 rounded-lg">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-sm font-medium">API Integration</span>
+                      <span class="text-xs text-red-400">High</span>
+                    </div>
+                    <p class="text-xs text-gray-500">Connect frontend & backend</p>
+                    <div class="flex gap-1 mt-2">
+                      <span class="text-xs px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 rounded">hooks/</span>
+                      <span class="text-xs px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 rounded">services/</span>
+                    </div>
+                  </div>
+                  <div class="p-3 bg-white/5 rounded-lg">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-sm font-medium">State Management</span>
+                      <span class="text-xs text-yellow-400">Medium</span>
+                    </div>
+                    <p class="text-xs text-gray-500">Zustand stores setup</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div class="flex items-center justify-between pt-4 border-t border-white/10">
+            <button class="flex items-center gap-2 px-4 py-2 text-gray-400 hover:text-white">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+              Re-generate Split
+            </button>
+            <button class="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-lg font-medium hover:from-blue-600 hover:to-cyan-600">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+              Start All Tasks
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Screen 3: Individual Workspace -->
+    <section>
+      <h2 class="text-2xl font-bold mb-2 gradient-text">Screen 3: Individual Workspace</h2>
+      <p class="text-gray-400 mb-6">Each student's personal coding workspace with their assigned tasks</p>
+
+      <div class="glass rounded-2xl overflow-hidden">
+        <!-- Header -->
+        <div class="flex items-center justify-between px-4 py-3 bg-[#12122a] border-b border-white/10">
+          <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2 px-3 py-1.5 bg-white/5 rounded-lg">
+              <div class="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-xs font-bold">R</div>
+              <span class="text-sm font-medium">Rahul's Workspace</span>
+            </div>
+            <div class="flex items-center gap-1 text-sm text-gray-400">
+              <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+              Working on: User Authentication
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button class="px-3 py-1.5 bg-blue-500 text-white text-sm rounded-lg">Code</button>
+            <button class="px-3 py-1.5 text-gray-400 text-sm rounded-lg hover:bg-white/5">Preview</button>
+          </div>
+        </div>
+
+        <!-- Content -->
+        <div class="flex h-[500px]">
+          <!-- Left Panel - Task & Chat -->
+          <div class="w-80 border-r border-white/10 flex flex-col bg-[#0d0d20]">
+            <!-- Current Task -->
+            <div class="p-4 border-b border-white/10">
+              <div class="text-xs text-gray-500 mb-2">CURRENT TASK</div>
+              <div class="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                <h4 class="font-medium text-sm mb-1">User Authentication</h4>
+                <p class="text-xs text-gray-400 mb-2">Implement login, register, password reset</p>
+                <div class="flex items-center justify-between text-xs">
+                  <span class="text-blue-400">3 files remaining</span>
+                  <span class="text-gray-500">~2h</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- AI Chat -->
+            <div class="flex-1 p-4 overflow-y-auto">
+              <div class="space-y-4">
+                <div class="flex gap-2">
+                  <div class="w-6 h-6 rounded-full bg-purple-500 flex items-center justify-center flex-shrink-0">
+                    <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"></path></svg>
+                  </div>
+                  <div class="p-3 bg-white/5 rounded-lg rounded-tl-none text-sm">
+                    <p>I'm creating the authentication system for your task. Starting with <code class="px-1 bg-white/10 rounded">login.tsx</code>...</p>
+                  </div>
+                </div>
+
+                <div class="flex gap-2">
+                  <div class="w-6 h-6 rounded-full bg-purple-500 flex items-center justify-center flex-shrink-0">
+                    <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"></path></svg>
+                  </div>
+                  <div class="p-3 bg-white/5 rounded-lg rounded-tl-none text-sm">
+                    <div class="flex items-center gap-2 mb-2">
+                      <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                      <span class="text-green-400">Created login.tsx</span>
+                    </div>
+                    <div class="flex items-center gap-2 mb-2">
+                      <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                      <span class="text-green-400">Created register.tsx</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <svg class="w-4 h-4 text-blue-400 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                      <span class="text-blue-400">Creating AuthContext.tsx...</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Chat Input -->
+            <div class="p-4 border-t border-white/10">
+              <div class="flex items-center gap-2 p-3 bg-white/5 rounded-lg">
+                <input type="text" placeholder="Ask AI about your task..." class="flex-1 bg-transparent text-sm outline-none" />
+                <button class="p-1.5 bg-blue-500 rounded-lg">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Panel - Code Editor -->
+          <div class="flex-1 flex flex-col bg-[#1e1e2e]">
+            <!-- File Tabs -->
+            <div class="flex items-center gap-1 px-2 py-1 bg-[#12122a] border-b border-white/10">
+              <div class="flex items-center gap-2 px-3 py-1.5 bg-[#1e1e2e] rounded-t text-sm border-b-2 border-blue-500">
+                <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                login.tsx
+              </div>
+              <div class="flex items-center gap-2 px-3 py-1.5 text-gray-500 text-sm hover:bg-white/5 rounded-t">
+                register.tsx
+              </div>
+              <div class="flex items-center gap-2 px-3 py-1.5 text-gray-500 text-sm hover:bg-white/5 rounded-t">
+                AuthContext.tsx
+              </div>
+            </div>
+
+            <!-- Code Content -->
+            <div class="flex-1 p-4 font-mono text-sm overflow-auto">
+              <pre class="text-gray-300"><code><span class="text-purple-400">import</span> { useState } <span class="text-purple-400">from</span> <span class="text-green-400">'react'</span>
+<span class="text-purple-400">import</span> { useRouter } <span class="text-purple-400">from</span> <span class="text-green-400">'next/navigation'</span>
+<span class="text-purple-400">import</span> { useAuth } <span class="text-purple-400">from</span> <span class="text-green-400">'@/hooks/useAuth'</span>
+
+<span class="text-purple-400">export default function</span> <span class="text-yellow-400">LoginPage</span>() {
+  <span class="text-purple-400">const</span> [email, setEmail] = <span class="text-yellow-400">useState</span>(<span class="text-green-400">''</span>)
+  <span class="text-purple-400">const</span> [password, setPassword] = <span class="text-yellow-400">useState</span>(<span class="text-green-400">''</span>)
+  <span class="text-purple-400">const</span> { login, isLoading } = <span class="text-yellow-400">useAuth</span>()
+  <span class="text-purple-400">const</span> router = <span class="text-yellow-400">useRouter</span>()
+
+  <span class="text-purple-400">const</span> <span class="text-yellow-400">handleSubmit</span> = <span class="text-purple-400">async</span> (e) => {
+    e.<span class="text-yellow-400">preventDefault</span>()
+    <span class="text-purple-400">await</span> <span class="text-yellow-400">login</span>(email, password)
+    router.<span class="text-yellow-400">push</span>(<span class="text-green-400">'/dashboard'</span>)
+  }
+
+  <span class="text-purple-400">return</span> (
+    <span class="text-gray-500">&lt;</span><span class="text-blue-400">div</span> <span class="text-cyan-400">className</span>=<span class="text-green-400">"min-h-screen flex items-center"</span><span class="text-gray-500">&gt;</span>
+      <span class="text-gray-600">// Login form UI...</span>
+    <span class="text-gray-500">&lt;/</span><span class="text-blue-400">div</span><span class="text-gray-500">&gt;</span>
+  )
+}</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- Team Status Bar -->
+        <div class="flex items-center justify-between px-4 py-2 bg-[#12122a] border-t border-white/10 text-xs">
+          <div class="flex items-center gap-4">
+            <span class="text-gray-500">Team Status:</span>
+            <div class="flex items-center gap-1">
+              <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+              <span class="text-gray-400">Rahul coding</span>
+            </div>
+            <div class="flex items-center gap-1">
+              <span class="w-2 h-2 bg-blue-500 rounded-full"></span>
+              <span class="text-gray-400">Priya coding</span>
+            </div>
+            <div class="flex items-center gap-1">
+              <span class="w-2 h-2 bg-gray-500 rounded-full"></span>
+              <span class="text-gray-400">Amit offline</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-4">
+            <span class="text-gray-500">Files: 12/20</span>
+            <span class="text-green-400">Auto-merging enabled</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Screen 4: Code Merge View -->
+    <section>
+      <h2 class="text-2xl font-bold mb-2 gradient-text">Screen 4: Code Merge & Integration</h2>
+      <p class="text-gray-400 mb-6">View how code from all team members merges together</p>
+
+      <div class="glass rounded-2xl overflow-hidden p-6 bg-[#0a0a1a]">
+        <div class="flex items-center justify-between mb-6">
+          <h3 class="text-lg font-semibold">Project Integration Status</h3>
+          <button class="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+            Merge All
+          </button>
+        </div>
+
+        <div class="grid grid-cols-3 gap-6">
+          <!-- Rahul's Branch -->
+          <div class="p-4 bg-[#12122a] rounded-xl border border-blue-500/30">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center font-bold">R</div>
+              <div>
+                <div class="font-medium">Rahul's Branch</div>
+                <div class="text-xs text-gray-500">feature/auth</div>
+              </div>
+              <span class="ml-auto text-xs text-green-400 bg-green-500/20 px-2 py-0.5 rounded-full">Ready</span>
+            </div>
+            <div class="space-y-2 text-sm">
+              <div class="flex items-center gap-2 text-green-400">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                src/auth/login.tsx
+              </div>
+              <div class="flex items-center gap-2 text-green-400">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                src/auth/register.tsx
+              </div>
+              <div class="flex items-center gap-2 text-green-400">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                src/context/AuthContext.tsx
+              </div>
+            </div>
+            <div class="mt-4 pt-4 border-t border-white/10 flex items-center justify-between text-xs">
+              <span class="text-gray-500">5 commits</span>
+              <span class="text-green-400">No conflicts</span>
+            </div>
+          </div>
+
+          <!-- Priya's Branch -->
+          <div class="p-4 bg-[#12122a] rounded-xl border border-pink-500/30">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-10 h-10 rounded-full bg-gradient-to-br from-pink-500 to-orange-500 flex items-center justify-center font-bold">P</div>
+              <div>
+                <div class="font-medium">Priya's Branch</div>
+                <div class="text-xs text-gray-500">feature/products</div>
+              </div>
+              <span class="ml-auto text-xs text-blue-400 bg-blue-500/20 px-2 py-0.5 rounded-full">In Progress</span>
+            </div>
+            <div class="space-y-2 text-sm">
+              <div class="flex items-center gap-2 text-green-400">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                src/pages/products.tsx
+              </div>
+              <div class="flex items-center gap-2 text-green-400">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                src/components/ProductCard.tsx
+              </div>
+              <div class="flex items-center gap-2 text-yellow-400">
+                <svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                src/pages/cart.tsx
+              </div>
+            </div>
+            <div class="mt-4 pt-4 border-t border-white/10 flex items-center justify-between text-xs">
+              <span class="text-gray-500">3 commits</span>
+              <span class="text-yellow-400">1 file pending</span>
+            </div>
+          </div>
+
+          <!-- Amit's Branch -->
+          <div class="p-4 bg-[#12122a] rounded-xl border border-cyan-500/30">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-500 to-green-500 flex items-center justify-center font-bold">A</div>
+              <div>
+                <div class="font-medium">Amit's Branch</div>
+                <div class="text-xs text-gray-500">feature/api</div>
+              </div>
+              <span class="ml-auto text-xs text-green-400 bg-green-500/20 px-2 py-0.5 rounded-full">Ready</span>
+            </div>
+            <div class="space-y-2 text-sm">
+              <div class="flex items-center gap-2 text-green-400">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                src/api/index.ts
+              </div>
+              <div class="flex items-center gap-2 text-green-400">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                src/hooks/useApi.ts
+              </div>
+              <div class="flex items-center gap-2 text-green-400">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                src/store/index.ts
+              </div>
+            </div>
+            <div class="mt-4 pt-4 border-t border-white/10 flex items-center justify-between text-xs">
+              <span class="text-gray-500">4 commits</span>
+              <span class="text-green-400">No conflicts</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Merge Timeline -->
+        <div class="mt-8 p-4 bg-[#12122a] rounded-xl">
+          <h4 class="font-medium mb-4">Auto-Merge Timeline</h4>
+          <div class="relative">
+            <div class="absolute left-4 top-0 bottom-0 w-0.5 bg-white/10"></div>
+            <div class="space-y-4">
+              <div class="flex items-center gap-4 ml-2">
+                <div class="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center z-10">
+                  <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                </div>
+                <div>
+                  <div class="text-sm font-medium">Auth module merged</div>
+                  <div class="text-xs text-gray-500">Rahul's code integrated - 10 min ago</div>
+                </div>
+              </div>
+              <div class="flex items-center gap-4 ml-2">
+                <div class="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center z-10">
+                  <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                </div>
+                <div>
+                  <div class="text-sm font-medium">API layer merged</div>
+                  <div class="text-xs text-gray-500">Amit's code integrated - 5 min ago</div>
+                </div>
+              </div>
+              <div class="flex items-center gap-4 ml-2">
+                <div class="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center z-10 animate-pulse">
+                  <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                </div>
+                <div>
+                  <div class="text-sm font-medium">Waiting for Products module</div>
+                  <div class="text-xs text-gray-500">Priya's code - 1 file remaining</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Mobile Screens -->
+    <section>
+      <h2 class="text-2xl font-bold mb-2 gradient-text">Mobile Views</h2>
+      <p class="text-gray-400 mb-6">Responsive design for mobile devices</p>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <!-- Mobile Task List -->
+        <div class="w-[320px] mx-auto">
+          <div class="glass rounded-3xl overflow-hidden">
+            <div class="bg-[#12122a] px-4 py-3 flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-sm font-bold">R</div>
+                <span class="font-medium text-sm">My Tasks</span>
+              </div>
+              <span class="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded-full">3/5 done</span>
+            </div>
+            <div class="p-4 space-y-3 bg-[#0a0a1a]">
+              <div class="p-3 bg-[#12122a] rounded-xl border-l-4 border-green-500">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-sm font-medium">Login Page</span>
+                  <svg class="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                </div>
+                <p class="text-xs text-gray-500">Completed</p>
+              </div>
+              <div class="p-3 bg-[#12122a] rounded-xl border-l-4 border-blue-500">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-sm font-medium">Register Page</span>
+                  <span class="text-xs text-blue-400">In Progress</span>
+                </div>
+                <div class="w-full h-1.5 bg-white/10 rounded-full mt-2">
+                  <div class="w-[60%] h-full bg-blue-500 rounded-full"></div>
+                </div>
+              </div>
+              <div class="p-3 bg-[#12122a] rounded-xl border-l-4 border-gray-500">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-sm font-medium">Auth Context</span>
+                  <span class="text-xs text-gray-400">Pending</span>
+                </div>
+                <p class="text-xs text-gray-500">Waiting for Register</p>
+              </div>
+            </div>
+            <div class="p-4 bg-[#12122a] border-t border-white/10">
+              <button class="w-full py-3 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-xl font-medium text-sm">
+                Continue Coding
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mobile Team View -->
+        <div class="w-[320px] mx-auto">
+          <div class="glass rounded-3xl overflow-hidden">
+            <div class="bg-[#12122a] px-4 py-3">
+              <h3 class="font-medium text-sm">Team Activity</h3>
+            </div>
+            <div class="p-4 space-y-4 bg-[#0a0a1a]">
+              <div class="flex items-center gap-3">
+                <div class="relative">
+                  <div class="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center font-bold">R</div>
+                  <span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 rounded-full border-2 border-[#0a0a1a]"></span>
+                </div>
+                <div class="flex-1">
+                  <div class="flex items-center justify-between">
+                    <span class="text-sm font-medium">Rahul</span>
+                    <span class="text-xs text-green-400">Active</span>
+                  </div>
+                  <p class="text-xs text-gray-500">Working on login.tsx</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <div class="relative">
+                  <div class="w-10 h-10 rounded-full bg-gradient-to-br from-pink-500 to-orange-500 flex items-center justify-center font-bold">P</div>
+                  <span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-blue-500 rounded-full border-2 border-[#0a0a1a]"></span>
+                </div>
+                <div class="flex-1">
+                  <div class="flex items-center justify-between">
+                    <span class="text-sm font-medium">Priya</span>
+                    <span class="text-xs text-blue-400">Coding</span>
+                  </div>
+                  <p class="text-xs text-gray-500">Working on products.tsx</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <div class="relative">
+                  <div class="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-500 to-green-500 flex items-center justify-center font-bold">A</div>
+                  <span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-gray-500 rounded-full border-2 border-[#0a0a1a]"></span>
+                </div>
+                <div class="flex-1">
+                  <div class="flex items-center justify-between">
+                    <span class="text-sm font-medium">Amit</span>
+                    <span class="text-xs text-gray-400">Offline</span>
+                  </div>
+                  <p class="text-xs text-gray-500">Last seen 2h ago</p>
+                </div>
+              </div>
+            </div>
+            <div class="p-4 bg-[#12122a] border-t border-white/10">
+              <div class="text-center">
+                <div class="text-2xl font-bold gradient-text">65%</div>
+                <div class="text-xs text-gray-500">Project Complete</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mobile Quick Actions -->
+        <div class="w-[320px] mx-auto">
+          <div class="glass rounded-3xl overflow-hidden">
+            <div class="bg-[#12122a] px-4 py-3">
+              <h3 class="font-medium text-sm">Quick Actions</h3>
+            </div>
+            <div class="p-4 grid grid-cols-2 gap-3 bg-[#0a0a1a]">
+              <button class="p-4 bg-[#12122a] rounded-xl text-center hover:bg-white/5">
+                <div class="w-10 h-10 mx-auto mb-2 rounded-xl bg-blue-500/20 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg>
+                </div>
+                <span class="text-xs font-medium">My Code</span>
+              </button>
+              <button class="p-4 bg-[#12122a] rounded-xl text-center hover:bg-white/5">
+                <div class="w-10 h-10 mx-auto mb-2 rounded-xl bg-green-500/20 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                </div>
+                <span class="text-xs font-medium">Preview</span>
+              </button>
+              <button class="p-4 bg-[#12122a] rounded-xl text-center hover:bg-white/5">
+                <div class="w-10 h-10 mx-auto mb-2 rounded-xl bg-purple-500/20 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
+                </div>
+                <span class="text-xs font-medium">Team Chat</span>
+              </button>
+              <button class="p-4 bg-[#12122a] rounded-xl text-center hover:bg-white/5">
+                <div class="w-10 h-10 mx-auto mb-2 rounded-xl bg-yellow-500/20 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
+                </div>
+                <span class="text-xs font-medium">All Tasks</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Summary -->
+    <section class="pb-16">
+      <h2 class="text-2xl font-bold mb-6 gradient-text">Feature Summary</h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="glass p-6 rounded-xl">
+          <div class="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center mb-4">
+            <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+          </div>
+          <h3 class="font-semibold mb-2">Team of 3</h3>
+          <p class="text-sm text-gray-400">3 students collaborate on one project simultaneously</p>
+        </div>
+        <div class="glass p-6 rounded-xl">
+          <div class="w-12 h-12 rounded-xl bg-purple-500/20 flex items-center justify-center mb-4">
+            <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"></path></svg>
+          </div>
+          <h3 class="font-semibold mb-2">AI Task Split</h3>
+          <p class="text-sm text-gray-400">AI automatically divides project into balanced tasks</p>
+        </div>
+        <div class="glass p-6 rounded-xl">
+          <div class="w-12 h-12 rounded-xl bg-green-500/20 flex items-center justify-center mb-4">
+            <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+          </div>
+          <h3 class="font-semibold mb-2">Isolated Coding</h3>
+          <p class="text-sm text-gray-400">Each member works in their own Docker container</p>
+        </div>
+        <div class="glass p-6 rounded-xl">
+          <div class="w-12 h-12 rounded-xl bg-cyan-500/20 flex items-center justify-center mb-4">
+            <svg class="w-6 h-6 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+          </div>
+          <h3 class="font-semibold mb-2">Auto Merge</h3>
+          <p class="text-sm text-gray-400">Code automatically merges with conflict prevention</p>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <footer class="text-center py-8 text-gray-500 text-sm">
+    BharatBuild AI - Team Collaboration UI/UX Mockups
+  </footer>
+
+</body>
+</html>

@@ -92,9 +92,17 @@ def get_docker_client(timeout: int = 30) -> Optional[docker.DockerClient]:
     Returns:
         docker.DockerClient or None if connection fails
     """
-    # ALWAYS fetch from SSM with TTL cache (fixes ASG IP change issue)
-    # Don't use env var - it's stale after container starts
-    sandbox_docker_host = _get_ssm_param_cached("/bharatbuild/sandbox/docker-host", "docker_host")
+    # Check if running locally (not AWS) - use env var directly
+    is_aws = os.environ.get("AWS_EXECUTION_ENV") or os.environ.get("ECS_CONTAINER_METADATA_URI")
+
+    if not is_aws:
+        # Local development: use SANDBOX_DOCKER_HOST env var
+        sandbox_docker_host = os.environ.get("SANDBOX_DOCKER_HOST", "")
+        if sandbox_docker_host:
+            logger.info(f"[DockerHelper] Using local Docker host from env: {sandbox_docker_host}")
+    else:
+        # AWS: fetch from SSM with TTL cache (fixes ASG IP change issue)
+        sandbox_docker_host = _get_ssm_param_cached("/bharatbuild/sandbox/docker-host", "docker_host")
 
     if not sandbox_docker_host:
         # Fallback to local Docker

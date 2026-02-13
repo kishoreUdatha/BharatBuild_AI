@@ -20,7 +20,18 @@ import {
   ChevronUp,
   ChevronDown,
   CheckSquare,
-  Square
+  Square,
+  Eye,
+  X,
+  Mail,
+  Calendar,
+  Clock,
+  Briefcase,
+  CreditCard,
+  Code,
+  CheckCircle,
+  XCircle,
+  User as UserIcon
 } from 'lucide-react'
 
 // Action Menu Component with Portal
@@ -28,6 +39,7 @@ function ActionMenu({
   user,
   isDark,
   onClose,
+  onView,
   onSuspend,
   onActivate,
   onDelete,
@@ -37,6 +49,7 @@ function ActionMenu({
   user: AdminUser
   isDark: boolean
   onClose: () => void
+  onView: () => void
   onSuspend: () => void
   onActivate: () => void
   onDelete: () => void
@@ -93,6 +106,17 @@ function ActionMenu({
       }`}
     >
       <button
+        onClick={onView}
+        className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
+          isDark
+            ? 'text-gray-200 hover:bg-[#333]'
+            : 'text-gray-700 hover:bg-gray-100'
+        }`}
+      >
+        <Eye className="w-4 h-4 text-blue-400" />
+        View Details
+      </button>
+      <button
         onClick={user.is_active ? onSuspend : onActivate}
         className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
           isDark
@@ -130,6 +154,239 @@ function ActionMenu({
 
   if (typeof window !== 'undefined') {
     return createPortal(menuContent, document.body)
+  }
+
+  return null
+}
+
+// User Details Modal Component
+function UserDetailsModal({
+  user,
+  isDark,
+  onClose
+}: {
+  user: AdminUser
+  isDark: boolean
+  onClose: () => void
+}) {
+  const formatDate = (dateString: string | null) => {
+    if (!dateString) return '—'
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    })
+  }
+
+  const formatTime = (dateString: string | null) => {
+    if (!dateString) return ''
+    return new Date(dateString).toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  }
+
+  const getRoleBadge = (role: string) => {
+    const styles: Record<string, string> = {
+      admin: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+      faculty: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
+      developer: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+      founder: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400',
+      api_partner: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400',
+      student: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+    }
+    return styles[role] || styles.student
+  }
+
+  const modalContent = (
+    <div className="fixed inset-0 z-[9999] overflow-y-auto">
+      {/* Backdrop */}
+      <div className="fixed inset-0 bg-black/40 transition-opacity" onClick={onClose} />
+
+      {/* Modal Container */}
+      <div className="flex min-h-full items-center justify-center p-4">
+        <div
+          className={`relative w-full max-w-2xl rounded-lg shadow-xl ${
+            isDark ? 'bg-[#1f1f23]' : 'bg-white'
+          }`}
+        >
+          {/* Header */}
+          <div className={`flex items-center justify-between px-6 py-4 border-b ${
+            isDark ? 'border-gray-700' : 'border-gray-200'
+          }`}>
+            <div>
+              <h2 className={`text-xl font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                User Profile
+              </h2>
+              <p className={`text-sm mt-0.5 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                Complete user information and activity
+              </p>
+            </div>
+            <button
+              onClick={onClose}
+              className={`p-2 rounded-md transition-colors ${
+                isDark ? 'hover:bg-gray-700 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Content */}
+          <div className="px-6 py-6">
+            {/* Profile Section */}
+            <div className="flex items-start gap-5 mb-8">
+              <div className={`w-20 h-20 rounded-lg flex items-center justify-center text-2xl font-bold text-white flex-shrink-0 ${
+                user.role === 'admin' ? 'bg-gradient-to-br from-red-500 to-red-600' :
+                user.role === 'faculty' ? 'bg-gradient-to-br from-purple-500 to-purple-600' :
+                user.role === 'developer' ? 'bg-gradient-to-br from-blue-500 to-blue-600' :
+                'bg-gradient-to-br from-emerald-500 to-emerald-600'
+              }`}>
+                {user.avatar_url ? (
+                  <img src={user.avatar_url} alt="" className="w-full h-full object-cover rounded-lg" />
+                ) : (
+                  user.full_name?.charAt(0)?.toUpperCase() || user.email.charAt(0).toUpperCase()
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className={`text-xl font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                      {user.full_name || 'Unnamed User'}
+                    </h3>
+                    <p className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                      @{user.username || 'no-username'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium capitalize ${getRoleBadge(user.role)}`}>
+                      {user.role}
+                    </span>
+                    {user.is_superuser && (
+                      <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                        Superuser
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-4 mt-3">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${user.is_active ? 'bg-emerald-500' : 'bg-gray-400'}`} />
+                    <span className={`text-sm ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
+                      {user.is_active ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {user.is_verified ? (
+                      <CheckCircle className="w-4 h-4 text-blue-500" />
+                    ) : (
+                      <XCircle className="w-4 h-4 text-gray-400" />
+                    )}
+                    <span className={`text-sm ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
+                      {user.is_verified ? 'Verified' : 'Not Verified'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Stats Grid */}
+            <div className={`grid grid-cols-3 gap-4 p-4 rounded-lg mb-6 ${
+              isDark ? 'bg-gray-800/50' : 'bg-gray-50'
+            }`}>
+              <div className="text-center">
+                <div className={`text-2xl font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {user.projects_count}
+                </div>
+                <div className={`text-xs font-medium uppercase tracking-wide mt-1 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Projects
+                </div>
+              </div>
+              <div className={`text-center border-x ${isDark ? 'border-gray-700' : 'border-gray-200'}`}>
+                <div className={`text-2xl font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {(user.tokens_used / 1000).toFixed(1)}K
+                </div>
+                <div className={`text-xs font-medium uppercase tracking-wide mt-1 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Tokens Used
+                </div>
+              </div>
+              <div className="text-center">
+                <div className={`text-2xl font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {user.subscription_plan || 'Free'}
+                </div>
+                <div className={`text-xs font-medium uppercase tracking-wide mt-1 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Plan
+                </div>
+              </div>
+            </div>
+
+            {/* Details Grid */}
+            <div className="grid grid-cols-2 gap-x-8 gap-y-5">
+              <div>
+                <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Email Address
+                </label>
+                <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {user.email}
+                </p>
+              </div>
+              <div>
+                <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Organization
+                </label>
+                <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {user.organization || '—'}
+                </p>
+              </div>
+              <div>
+                <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Member Since
+                </label>
+                <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {formatDate(user.created_at)}
+                </p>
+              </div>
+              <div>
+                <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Last Login
+                </label>
+                <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {formatDate(user.last_login)}
+                  {user.last_login && (
+                    <span className={`ml-2 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                      at {formatTime(user.last_login)}
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className={`flex items-center justify-between px-6 py-4 border-t ${
+            isDark ? 'border-gray-700 bg-gray-800/30' : 'border-gray-200 bg-gray-50'
+          }`}>
+            <span className={`text-xs font-mono ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+              ID: {user.id}
+            </span>
+            <button
+              onClick={onClose}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                isDark
+                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                  : 'bg-gray-900 hover:bg-gray-800 text-white'
+              }`}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+
+  if (typeof window !== 'undefined') {
+    return createPortal(modalContent, document.body)
   }
 
   return null
@@ -192,6 +449,7 @@ export default function AdminUsersPage() {
   const [selectedStatus, setSelectedStatus] = useState('')
   const [actionMenuUser, setActionMenuUser] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [viewingUser, setViewingUser] = useState<AdminUser | null>(null)
 
   const isDark = theme === 'dark'
   const debouncedSearch = useDebounce(searchInput, 300)
@@ -578,6 +836,10 @@ export default function AdminUsersPage() {
                               isDark={isDark}
                               buttonId={`action-btn-${user.id}`}
                               onClose={() => setActionMenuUser(null)}
+                              onView={() => {
+                                setActionMenuUser(null)
+                                setViewingUser(user)
+                              }}
                               onSuspend={() => {
                                 setActionMenuUser(null)
                                 suspendUser(user.id)
@@ -617,6 +879,15 @@ export default function AdminUsersPage() {
           )}
         </div>
       </div>
+
+      {/* User Details Modal */}
+      {viewingUser && (
+        <UserDetailsModal
+          user={viewingUser}
+          isDark={isDark}
+          onClose={() => setViewingUser(null)}
+        />
+      )}
     </div>
   )
 }

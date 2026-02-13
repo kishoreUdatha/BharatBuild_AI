@@ -12,6 +12,7 @@ import { ProjectSelector } from './ProjectSelector'
 import { ProjectRunControls } from './ProjectRunControls'
 import { BuildDocumentsPanel } from './BuildDocumentsPanel'
 import { ProjectStagesPanel } from './ProjectStagesPanel'
+import { MLModelSelector } from './MLModelSelector'
 // WelcomeScreen and QuickActions removed - now showing clean empty state
 
 // Dynamically import XTerminal to avoid SSR issues
@@ -51,6 +52,9 @@ import {
   Check,
   FileText,
   Lock,
+  GraduationCap,
+  Brain,
+  Database,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useTerminal } from '@/hooks/useTerminal'
@@ -61,6 +65,8 @@ import { useProject } from '@/hooks/useProject'
 import { useAuth } from '@/hooks/useAuth'
 import { useProjectStore } from '@/store/projectStore'
 import { usePlanStatus } from '@/hooks/usePlanStatus'
+import { useLearningProgress } from '@/hooks/useLearningProgress'
+import { useUpgrade } from '@/contexts/UpgradeContext'
 // import { useConnectionHealth } from '@/hooks/useConnectionHealth' // Disabled - was causing header blinking
 import { ReconnectionBanner } from '@/components/ReconnectionBanner'
 
@@ -77,6 +83,11 @@ interface FileNode {
   isLoaded?: boolean  // True if content has been fetched
 }
 
+interface MobilePreviewInfo {
+  expoUrl: string
+  qrBase64: string
+}
+
 interface BoltLayoutProps {
   onSendMessage: (message: string) => void
   onStopGeneration?: () => void
@@ -87,6 +98,7 @@ interface BoltLayoutProps {
   livePreview?: React.ReactNode
   onServerStart?: (url: string) => void
   onServerStop?: () => void
+  onMobilePreviewChange?: (mobilePreview: MobilePreviewInfo | null) => void  // For React Native QR code
   onGenerateProject?: () => void
 }
 
@@ -100,10 +112,13 @@ export function BoltLayout({
   livePreview,
   onServerStart,
   onServerStop,
+  onMobilePreviewChange,
   onGenerateProject,
 }: BoltLayoutProps) {
   const router = useRouter()
   const { user, logout } = useAuth()
+  const { showUpgradePrompt } = useUpgrade()
+  const { status: planStatus, isLoading: planLoading, canCreateProject, needsUpgrade, planName, projectsCreated, projectLimit, isPremium, isFree, features } = usePlanStatus()
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
   const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false)
@@ -112,6 +127,7 @@ export function BoltLayout({
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null)
   const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'docs'>('preview')
   const [isPlanViewVisible, setIsPlanViewVisible] = useState(true)
+  const [showMLPanel, setShowMLPanel] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
 
@@ -195,6 +211,22 @@ export function BoltLayout({
     addLog({ type: 'output', content: `Command received: ${cmd}` })
   }, [addLog])
 
+  // Subscription check wrapper for sending messages
+  const handleSendWithSubscriptionCheck = useCallback((message: string) => {
+    // Check if user has an active subscription
+    if (needsUpgrade || !canCreateProject) {
+      showUpgradePrompt({
+        feature: 'project_generation',
+        currentPlan: planName || 'Free',
+        upgradeTo: 'Premium',
+        message: 'You need an active subscription to generate projects. Please subscribe to continue.'
+      })
+      return
+    }
+    // User has subscription, proceed with sending message
+    onSendMessage(message)
+  }, [needsUpgrade, canCreateProject, planName, showUpgradePrompt, onSendMessage])
+
   // Version control hooks
   const { canUndo, canRedo, undo, redo, history } = useVersionControl()
 
@@ -232,8 +264,11 @@ export function BoltLayout({
   // Get chat store for clearing messages and updating message state
   const { clearMessages, addMessage, addFileOperation, updateFileOperation, updateMessageStatus, appendToMessage, addThinkingStep, updateThinkingStep } = useChatStore()
 
-  // Get plan status for project limits
-  const { projectsCreated, projectLimit, isPremium, isFree, needsUpgrade, features } = usePlanStatus()
+  // Plan status values extracted from usePlanStatus at top of component
+
+  // Learning mode progress - gates download until quiz is passed
+  const projectIdForLearning = currentProject?.id && currentProject.id !== 'default-project' ? currentProject.id : null
+  const { canDownload: learningCanDownload, learningProgress } = useLearningProgress(projectIdForLearning)
 
   // Resume generation state
   const [canResume, setCanResume] = useState(false)
@@ -874,6 +909,14 @@ export function BoltLayout({
                 onServerStop()
               }
             }}
+            onMobilePreviewChange={(preview) => {
+              if (preview) {
+                onMobilePreviewChange?.(preview)
+                setActiveTab('preview')  // Switch to preview tab when mobile preview is ready
+              } else {
+                onMobilePreviewChange?.(null)
+              }
+            }}
             onOutput={(line) => {
               // Add output to terminal buffer (terminal is already opened by onStartSession)
               addLog({
@@ -926,6 +969,17 @@ export function BoltLayout({
               <Lock className="w-4 h-4" />
               Export (Premium)
             </a>
+          ) : currentProject?.mode === 'student' && !learningCanDownload && learningProgress < 100 ? (
+            // Show learning mode gating for student projects
+            <button
+              disabled
+              className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium bg-purple-500/10 border border-purple-500/30 text-purple-400 cursor-not-allowed"
+              title={`Complete Learning Mode to Download (${learningProgress}% complete)`}
+            >
+              <GraduationCap className="w-4 h-4" />
+              <span className="hidden sm:inline">Learn to Download</span>
+              <span className="text-xs opacity-75">({learningProgress}%)</span>
+            </button>
           ) : (
             <button
               onClick={handleExportProject}
@@ -1148,9 +1202,50 @@ export function BoltLayout({
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Input */}
+          {/* ML Upload Panel */}
+          {showMLPanel && (
+            <div className="border-t border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))]">
+              <div className="max-h-[400px] overflow-y-auto">
+                <MLModelSelector
+                  onProjectCreated={async (projectId) => {
+                    setShowMLPanel(false)
+                    console.log('[BoltLayout] ML Project created:', projectId)
+
+                    // Load the created project using the store's switchProject
+                    const { switchProject } = useProjectStore.getState()
+                    try {
+                      await switchProject(projectId, true)
+                      console.log('[BoltLayout] ML Project loaded successfully:', projectId)
+                    } catch (error) {
+                      console.error('[BoltLayout] Failed to load ML project:', error)
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Input with ML Button */}
           <div className="border-t border-[hsl(var(--bolt-border))]">
-            <ChatInput onSend={onSendMessage} onStop={onStopGeneration} isLoading={isLoading} />
+            <div className="flex items-center gap-2 px-3 py-2 bg-[hsl(var(--bolt-bg-secondary))] border-b border-[hsl(var(--bolt-border))]">
+              <button
+                onClick={() => setShowMLPanel(!showMLPanel)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  showMLPanel
+                    ? 'bg-[hsl(var(--bolt-accent))] text-white'
+                    : 'bg-[hsl(var(--bolt-bg-tertiary))] text-[hsl(var(--bolt-text-secondary))] hover:bg-[hsl(var(--bolt-bg-primary))] hover:text-[hsl(var(--bolt-text-primary))]'
+                }`}
+                title="ML Project with Data Upload"
+              >
+                <Brain className="w-4 h-4" />
+                <span>ML Project</span>
+                <Database className="w-3 h-3" />
+              </button>
+              <span className="text-xs text-[hsl(var(--bolt-text-tertiary))]">
+                {showMLPanel ? 'Select model & upload data' : 'Or type a prompt below'}
+              </span>
+            </div>
+            <ChatInput onSend={handleSendWithSubscriptionCheck} onStop={onStopGeneration} isLoading={isLoading} />
           </div>
         </div>
 

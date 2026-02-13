@@ -39,6 +39,7 @@
     --bolt-bg-primary: 0 0% 100%;
     --bolt-bg-secondary: 210 40% 98%;
     --bolt-bg-tertiary: 210 40% 96%;
+    --bolt-bg-quaternary: 210 40% 94%;
     --bolt-border: 214 32% 91%;
     --bolt-text-primary: 222 47% 11%;
     --bolt-text-secondary: 215 16% 47%;
@@ -72,6 +73,7 @@
     --bolt-bg-primary: 222 47% 11%;
     --bolt-bg-secondary: 222 47% 13%;
     --bolt-bg-tertiary: 222 47% 15%;
+    --bolt-bg-quaternary: 222 47% 17%;
     --bolt-border: 215 28% 17%;
     --bolt-text-primary: 213 31% 91%;
     --bolt-text-secondary: 215 20% 65%;

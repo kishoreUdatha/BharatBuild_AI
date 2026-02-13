@@ -1,10 +1,16 @@
 'use client'
 
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
-import { AlertCircle, RefreshCw, ExternalLink, Play, AlertTriangle } from 'lucide-react'
+import { AlertCircle, RefreshCw, ExternalLink, Play, AlertTriangle, Smartphone, Monitor } from 'lucide-react'
 import { useErrorStore } from '@/store/errorStore'
 import { useFileChangeEvents } from '@/hooks/useFileChangeEvents'
 import { useErrorCollector } from '@/hooks/useErrorCollector'
+import { MobilePreviewQR } from './MobilePreviewQR'
+
+interface MobilePreviewInfo {
+  expoUrl: string
+  qrBase64: string
+}
 
 interface LivePreviewProps {
   files: Record<string, string>
@@ -13,6 +19,7 @@ interface LivePreviewProps {
   isServerRunning?: boolean
   projectId?: string  // Project ID for file change events
   autoReloadOnFix?: boolean  // Auto-reload when files are fixed (default: true)
+  mobilePreview?: MobilePreviewInfo | null  // Mobile preview data for React Native/Expo
   onError?: (error: { message: string; file?: string; line?: number; column?: number; stack?: string }) => void
   onReload?: () => void  // Callback when preview is reloaded
 }
@@ -24,13 +31,14 @@ export function LivePreview({
   isServerRunning = false,
   projectId,
   autoReloadOnFix = true,
+  mobilePreview,
   onError,
   onReload
 }: LivePreviewProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [previewMode, setPreviewMode] = useState<'static' | 'server'>('static')
+  const [previewMode, setPreviewMode] = useState<'static' | 'server' | 'mobile'>('static')
   const [refreshKey, setRefreshKey] = useState(0)
   const [autoReloadIndicator, setAutoReloadIndicator] = useState(false)
   const [autoFixStatus, setAutoFixStatus] = useState<'idle' | 'fixing' | 'completed' | 'failed'>('idle')
@@ -121,8 +129,14 @@ export function LivePreview({
 
   // Switch to server mode when server is running
   useEffect(() => {
-    console.log('[LivePreview] State update:', { isServerRunning, serverUrl, previewMode })
-    if (isServerRunning && serverUrl) {
+    console.log('[LivePreview] State update:', { isServerRunning, serverUrl, previewMode, hasMobilePreview: !!mobilePreview })
+    if (mobilePreview) {
+      // Mobile preview takes priority for React Native/Expo projects
+      console.log('[LivePreview] Switching to mobile preview mode')
+      setPreviewMode('mobile')
+      setIsLoading(false)
+      setError(null)
+    } else if (isServerRunning && serverUrl) {
       console.log('[LivePreview] Switching to server mode with URL:', serverUrl)
       setPreviewMode('server')
       setIsLoading(true) // Reset loading state when switching to server mode
@@ -134,7 +148,7 @@ export function LivePreview({
       setPreviewMode('static')
       setRetryStatus('idle')
     }
-  }, [isServerRunning, serverUrl])
+  }, [isServerRunning, serverUrl, mobilePreview])
 
   // Cleanup retry timeout on unmount
   useEffect(() => {
@@ -479,11 +493,16 @@ export function LivePreview({
       <div className="flex items-center justify-between px-3 py-2 border-b border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))]">
         <div className="flex items-center gap-2">
           {/* Status indicator */}
-          <div className={`w-2 h-2 rounded-full ${isServerRunning ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+          <div className={`w-2 h-2 rounded-full ${previewMode === 'mobile' ? 'bg-purple-500 animate-pulse' : isServerRunning ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
           <span className="text-xs text-[hsl(var(--bolt-text-secondary))]">
-            {isServerRunning ? 'Server Running' : 'Static Preview'}
+            {previewMode === 'mobile' ? 'Mobile Preview' : isServerRunning ? 'Server Running' : 'Static Preview'}
           </span>
-          {serverUrl && isServerRunning && (
+          {previewMode === 'mobile' && mobilePreview && (
+            <span className="text-xs text-[hsl(var(--bolt-text-tertiary))] font-mono truncate max-w-[150px]">
+              {mobilePreview.expoUrl.substring(0, 30)}...
+            </span>
+          )}
+          {serverUrl && isServerRunning && previewMode !== 'mobile' && (
             <span className="text-xs text-[hsl(var(--bolt-text-tertiary))] font-mono">
               {serverUrl}
             </span>
@@ -528,6 +547,30 @@ export function LivePreview({
         </div>
 
         <div className="flex items-center gap-1">
+          {/* Mobile/Web toggle - only show when mobile preview is available */}
+          {mobilePreview && (
+            <button
+              onClick={() => setPreviewMode(previewMode === 'mobile' ? 'server' : 'mobile')}
+              className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
+                previewMode === 'mobile'
+                  ? 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
+                  : 'bg-[hsl(var(--bolt-bg-tertiary))] text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))]'
+              }`}
+              title={previewMode === 'mobile' ? 'Switch to Web Preview' : 'Switch to Mobile Preview'}
+            >
+              {previewMode === 'mobile' ? (
+                <>
+                  <Monitor className="w-3.5 h-3.5" />
+                  <span>Web</span>
+                </>
+              ) : (
+                <>
+                  <Smartphone className="w-3.5 h-3.5" />
+                  <span>Mobile</span>
+                </>
+              )}
+            </button>
+          )}
           {/* Error count badge */}
           {errorCount.total > 0 && (
             <div
@@ -565,6 +608,14 @@ export function LivePreview({
               <p className="text-xs text-gray-500">{error}</p>
             </div>
           </div>
+        ) : previewMode === 'mobile' && mobilePreview ? (
+          // Mobile preview mode - show QR code for Expo Go
+          <MobilePreviewQR
+            expoUrl={mobilePreview.expoUrl}
+            qrBase64={mobilePreview.qrBase64}
+            webFallbackUrl={serverUrl}
+            onSwitchToWeb={() => setPreviewMode('server')}
+          />
         ) : previewMode === 'server' && serverUrl ? (
           // Server mode - point to running server
           // Note: Cross-origin issues may occur. User can click "Open in new tab" to view

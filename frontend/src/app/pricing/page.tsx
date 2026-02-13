@@ -510,7 +510,7 @@ export default function PricingPage() {
           <div className="flex flex-wrap justify-center gap-6 mb-6 text-sm text-gray-500">
             <Link href="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link>
             <Link href="/terms" className="hover:text-white transition-colors">Terms of Service</Link>
-            <Link href="/contact" className="hover:text-white transition-colors">Contact</Link>
+            <a href="mailto:info@bharatbuild.ai" className="hover:text-white transition-colors">Contact</a>
           </div>
           <div className="text-center text-gray-600 text-sm">
             © 2025 BharatBuild AI. All rights reserved.

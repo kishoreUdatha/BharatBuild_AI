@@ -122,6 +122,7 @@ class Project(Base):
     messages = relationship("ProjectMessage", back_populates="project", cascade="all, delete-orphan")
     sandbox_instances = relationship("SandboxInstance", back_populates="project", cascade="all, delete-orphan")
     snapshots = relationship("Snapshot", back_populates="project", cascade="all, delete-orphan")
+    datasets = relationship("Dataset", back_populates="project", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Project {self.title}>"

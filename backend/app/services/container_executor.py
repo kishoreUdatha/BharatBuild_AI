@@ -14,6 +14,23 @@ Supported Technologies:
 - Go (Golang projects)
 """
 
+# Load .env files for local development (Windows worker processes need this)
+import os as _os
+_is_aws = _os.environ.get("AWS_EXECUTION_ENV") or _os.environ.get("ECS_CONTAINER_METADATA_URI")
+if not _is_aws:
+    try:
+        from dotenv import load_dotenv as _load_dotenv
+        from pathlib import Path as _Path
+        _config_dir = _Path(__file__).resolve().parent.parent.parent
+        _env_file = _config_dir / ".env"
+        _env_local = _config_dir / ".env.local"
+        if _env_file.exists():
+            _load_dotenv(_env_file)
+        if _env_local.exists():
+            _load_dotenv(_env_local, override=True)
+    except ImportError:
+        pass
+
 import asyncio
 import socket
 import subprocess
@@ -46,6 +63,7 @@ from app.modules.agents.production_fixer_agent import production_fixer_agent
 from app.modules.agents.base_agent import AgentContext
 from app.services.project_sanitizer import sanitize_project_file
 from app.services.technology_validator import technology_validator
+from app.services.mobile_preview import parse_expo_url, generate_qr_code, detect_expo_ready
 
 # =============================================================================
 # PREVIEW URL - Use centralized function from app.core.preview_url
@@ -429,9 +447,10 @@ TECHNOLOGY_CONFIGS: Dict[Technology, ContainerConfig] = {
     Technology.REACT_NATIVE: ContainerConfig(
         image="node:20-alpine",
         # Use npm (pre-installed) - simpler and works with generated package-lock.json
-        build_command="npm install --legacy-peer-deps && npx expo export:web",
-        run_command="npx serve dist -l 3000",
-        port=3000,  # Web preview for React Native
+        # Try tunnel mode for QR code mobile preview, fallback to web if tunnel fails
+        build_command="npm install --legacy-peer-deps",
+        run_command="npx expo start --tunnel --non-interactive 2>&1 || npx expo start --web --port 3000",
+        port=8081,  # Metro bundler port (Expo uses 8081 by default)
         memory_limit="1g"
     ),
     Technology.FLUTTER: ContainerConfig(
@@ -1018,15 +1037,18 @@ class ContainerExecutor:
             # Local mode: use os.listdir
             files = os.listdir(project_path) if os.path.exists(project_path) else []
 
-        # Node.js detection - check for Vite first
+        # Node.js detection - check for React Native/Expo first, then Vite
         if "package.json" in files:
-            # Check for Vite config files
-            vite_configs = ["vite.config.js", "vite.config.ts", "vite.config.mjs", "vite.config.cjs"]
-            if any(vf in files for vf in vite_configs):
-                logger.info(f"[ContainerExecutor] Detected Vite project (config file found)")
-                return Technology.NODEJS_VITE
+            # Check for React Native/Expo project
+            # Indicators: app.json (Expo), expo or react-native in dependencies
+            is_react_native = False
 
-            # Also check package.json for vite dependency
+            # Check for app.json (Expo config file)
+            if "app.json" in files:
+                is_react_native = True
+                logger.info(f"[ContainerExecutor] Detected React Native/Expo project (app.json found)")
+
+            # Also check package.json for expo or react-native dependency
             try:
                 import json
                 pkg_path = os.path.join(path_str, "package.json")
@@ -1035,11 +1057,32 @@ class ContainerExecutor:
                         pkg = json.load(f)
                         deps = pkg.get("dependencies", {})
                         dev_deps = pkg.get("devDependencies", {})
+
+                        # Check for React Native/Expo
+                        if "expo" in deps or "expo" in dev_deps or "react-native" in deps:
+                            is_react_native = True
+                            logger.info(f"[ContainerExecutor] Detected React Native/Expo project (package.json)")
+
+                        # If React Native detected, return early
+                        if is_react_native:
+                            return Technology.REACT_NATIVE
+
+                        # Check for Vite
                         if "vite" in deps or "vite" in dev_deps:
                             logger.info(f"[ContainerExecutor] Detected Vite project (package.json)")
                             return Technology.NODEJS_VITE
             except Exception as e:
                 logger.warning(f"[ContainerExecutor] Error reading package.json: {e}")
+
+            # If React Native was detected via app.json but package.json check failed
+            if is_react_native:
+                return Technology.REACT_NATIVE
+
+            # Check for Vite config files
+            vite_configs = ["vite.config.js", "vite.config.ts", "vite.config.mjs", "vite.config.cjs"]
+            if any(vf in files for vf in vite_configs):
+                logger.info(f"[ContainerExecutor] Detected Vite project (config file found)")
+                return Technology.NODEJS_VITE
 
             return Technology.NODEJS
 
@@ -6679,6 +6722,8 @@ echo "Done"
             # The Docker SDK's logs() is synchronous, so we use a queue-based async pattern
             server_started = False
             has_fatal_error = False
+            expo_qr_sent = False  # Track if QR code has been sent for React Native/Expo
+            expo_url = None  # Store parsed Expo URL
 
             # Gap #9: Improved port detection patterns for complex URLs
             # These patterns capture ports from various URL formats and log messages
@@ -6904,6 +6949,29 @@ echo "Done"
                             # Store error context lines
                             log_bus.add_docker_error(line)
                             exec_ctx.add_stderr(line)
+
+                    # ================================================================
+                    # MOBILE PREVIEW: Detect Expo URL and emit QR code for React Native
+                    # ================================================================
+                    if technology == Technology.REACT_NATIVE and not expo_qr_sent and not has_fatal_error:
+                        # Try to parse Expo URL from output
+                        if not expo_url:
+                            url_result = parse_expo_url(clean_line)
+                            if url_result:
+                                expo_url, url_type = url_result
+                                logger.info(f"[ContainerExecutor] Found Expo URL: {expo_url} (type: {url_type})")
+
+                        # Generate and emit QR code when Expo is ready
+                        if expo_url and detect_expo_ready(clean_line):
+                            qr_base64 = generate_qr_code(expo_url)
+                            if qr_base64:
+                                yield f"\n📱 MOBILE PREVIEW READY!\n"
+                                yield f"Scan QR code with Expo Go app on your phone.\n\n"
+                                yield f"__MOBILE_QR__:{qr_base64}\n"
+                                yield f"__EXPO_URL__:{expo_url}\n"
+                                expo_qr_sent = True
+                                logger.info(f"[ContainerExecutor] Mobile preview QR code emitted for: {expo_url}")
+                                log_bus.add_docker_log(f"Mobile preview ready: {expo_url}")
 
                     # Check for server start patterns (only if no fatal error)
                     # Use clean_line (ANSI stripped) for reliable pattern matching

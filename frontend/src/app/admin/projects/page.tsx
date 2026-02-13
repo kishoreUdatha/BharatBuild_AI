@@ -43,8 +43,11 @@ const STATUS_OPTIONS = [
   { value: '', label: 'All Status' },
   { value: 'draft', label: 'Draft' },
   { value: 'in_progress', label: 'In Progress' },
+  { value: 'processing', label: 'Processing' },
+  { value: 'partial_completed', label: 'Partial Completed' },
   { value: 'completed', label: 'Completed' },
   { value: 'failed', label: 'Failed' },
+  { value: 'cancelled', label: 'Cancelled' },
 ]
 
 export default function AdminProjectsPage() {
@@ -234,15 +237,18 @@ export default function AdminProjectsPage() {
     setShowUploadModal(true)
   }
 
-  // Filter users based on search input
-  const filteredUsers = userSearchInput.trim()
-    ? users.filter(user => {
-        const searchLower = userSearchInput.toLowerCase()
-        return (
-          user.email.toLowerCase().includes(searchLower) ||
-          (user.full_name && user.full_name.toLowerCase().includes(searchLower))
-        )
-      }).slice(0, 10) // Limit to 10 suggestions
+  // Filter users based on search input - show all when focused, filter when typing
+  const filteredUsers = showUserSuggestions
+    ? (userSearchInput.trim()
+        ? users.filter(user => {
+            const searchLower = userSearchInput.toLowerCase()
+            return (
+              user.email.toLowerCase().includes(searchLower) ||
+              (user.full_name && user.full_name.toLowerCase().includes(searchLower))
+            )
+          })
+        : users
+      ).slice(0, 10) // Limit to 10 suggestions
     : []
 
   const handleUserSelect = (user: { id: string; email: string; full_name: string | null }) => {
@@ -285,14 +291,33 @@ export default function AdminProjectsPage() {
   }
 
   const getStatusBadge = (status: string) => {
+    // Normalize to lowercase for case-insensitive matching
+    const normalizedStatus = status?.toLowerCase() || 'draft'
     const colors: Record<string, string> = {
       draft: 'bg-gray-500/20 text-gray-400',
       in_progress: 'bg-blue-500/20 text-blue-400',
       processing: 'bg-yellow-500/20 text-yellow-400',
+      partial_completed: 'bg-purple-500/20 text-purple-400',
       completed: 'bg-green-500/20 text-green-400',
       failed: 'bg-red-500/20 text-red-400',
+      cancelled: 'bg-gray-500/20 text-gray-400',
     }
-    return colors[status] || colors.draft
+    return colors[normalizedStatus] || colors.draft
+  }
+
+  const formatStatus = (status: string) => {
+    // Convert status to readable format
+    const labels: Record<string, string> = {
+      draft: 'Draft',
+      in_progress: 'In Progress',
+      processing: 'Processing',
+      partial_completed: 'Partial',
+      completed: 'Completed',
+      failed: 'Failed',
+      cancelled: 'Cancelled',
+    }
+    const normalizedStatus = status?.toLowerCase() || 'draft'
+    return labels[normalizedStatus] || status
   }
 
   return (
@@ -413,30 +438,36 @@ export default function AdminProjectsPage() {
             )}
 
             {/* User Suggestions Dropdown */}
-            {showUserSuggestions && filteredUsers.length > 0 && (
+            {showUserSuggestions && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowUserSuggestions(false)} />
                 <div className={`absolute top-full left-0 right-0 mt-1 rounded-lg shadow-lg border z-50 max-h-60 overflow-y-auto ${
                   isDark ? 'bg-[#1a1a1a] border-[#333]' : 'bg-white border-gray-200'
                 }`}>
-                  {filteredUsers.map((user) => (
-                    <button
-                      key={user.id}
-                      onClick={() => handleUserSelect(user)}
-                      className={`w-full flex flex-col px-4 py-2 text-left text-sm ${
-                        isDark ? 'hover:bg-[#252525]' : 'hover:bg-gray-100'
-                      }`}
-                    >
-                      <span className={isDark ? 'text-white' : 'text-gray-900'}>
-                        {user.full_name || user.email}
-                      </span>
-                      {user.full_name && (
-                        <span className={`text-xs ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
-                          {user.email}
+                  {filteredUsers.length > 0 ? (
+                    filteredUsers.map((user) => (
+                      <button
+                        key={user.id}
+                        onClick={() => handleUserSelect(user)}
+                        className={`w-full flex flex-col px-4 py-2 text-left text-sm ${
+                          isDark ? 'hover:bg-[#252525]' : 'hover:bg-gray-100'
+                        }`}
+                      >
+                        <span className={isDark ? 'text-white' : 'text-gray-900'}>
+                          {user.full_name || user.email}
                         </span>
-                      )}
-                    </button>
-                  ))}
+                        {user.full_name && (
+                          <span className={`text-xs ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+                            {user.email}
+                          </span>
+                        )}
+                      </button>
+                    ))
+                  ) : (
+                    <div className={`px-4 py-3 text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                      {users.length === 0 ? 'Loading users...' : 'No matching users'}
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -539,7 +570,7 @@ export default function AdminProjectsPage() {
                       </td>
                       <td className="px-4 py-4">
                         <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${getStatusBadge(project.status)}`}>
-                          {project.status}
+                          {formatStatus(project.status)}
                         </span>
                       </td>
                       <td className={`px-4 py-4 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>

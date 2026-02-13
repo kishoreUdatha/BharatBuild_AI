@@ -33,6 +33,7 @@ export default function BuildPage() {
   const [isGenerationModalOpen, setIsGenerationModalOpen] = useState(false)
   const [isServerRunning, setIsServerRunning] = useState(false)
   const [serverUrl, setServerUrl] = useState<string | undefined>(undefined)
+  const [mobilePreview, setMobilePreview] = useState<{ expoUrl: string; qrBase64: string } | null>(null)
   const [isMounted, setIsMounted] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
   const [projectReloaded, setProjectReloaded] = useState(false)
@@ -260,6 +261,7 @@ export default function BuildPage() {
             isServerRunning={isServerRunning}
             serverUrl={serverUrl}
             projectId={currentProject?.id}
+            mobilePreview={mobilePreview}
           />
         }
         onGenerateProject={() => setIsGenerationModalOpen(true)}
@@ -271,6 +273,12 @@ export default function BuildPage() {
         onServerStop={() => {
           setServerUrl(undefined)
           setIsServerRunning(false)
+        }}
+        onMobilePreviewChange={(preview) => {
+          setMobilePreview(preview)
+          if (preview) {
+            setIsServerRunning(true)  // Treat mobile preview as server running for status display
+          }
         }}
       />
 

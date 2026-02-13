@@ -158,9 +158,9 @@ RUN pip install torch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 \
     --index-url https://download.pytorch.org/whl/cu121
 
 # ============================================
-# Install TensorFlow with GPU support
+# Install TensorFlow (CPU version - faster build, GPU not needed for web backend)
 # ============================================
-RUN pip install tensorflow[and-cuda]==2.15.0
+RUN pip install tensorflow==2.15.0
 
 # ============================================
 # Copy and install Python requirements

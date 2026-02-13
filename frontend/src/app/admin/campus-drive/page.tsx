@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { useAdminTheme } from '@/contexts/AdminThemeContext'
 import AdminHeader from '@/components/admin/AdminHeader'
 import apiClient from '@/lib/api-client'
@@ -23,7 +24,11 @@ import {
   MessageSquare,
   Plus,
   Eye,
-  Percent
+  Percent,
+  X,
+  Hash,
+  Calendar,
+  Target
 } from 'lucide-react'
 
 interface CampusDrive {
@@ -73,6 +78,276 @@ interface DriveStats {
   lowest_score: number
 }
 
+// Registration Details Modal Component
+function RegistrationDetailsModal({
+  registration,
+  driveName,
+  passingPercentage,
+  isDark,
+  onClose
+}: {
+  registration: Registration
+  driveName: string
+  passingPercentage: number
+  isDark: boolean
+  onClose: () => void
+}) {
+  const formatDate = (dateString: string | null) => {
+    if (!dateString) return '—'
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    })
+  }
+
+  const isQualified = registration.is_qualified
+  const hasScore = registration.percentage !== null && registration.percentage !== undefined
+
+  const modalContent = (
+    <div className="fixed inset-0 z-[9999] overflow-y-auto">
+      {/* Backdrop */}
+      <div className="fixed inset-0 bg-black/40 transition-opacity" onClick={onClose} />
+
+      {/* Modal Container */}
+      <div className="flex min-h-full items-center justify-center p-4">
+        <div
+          className={`relative w-full max-w-2xl rounded-lg shadow-xl ${
+            isDark ? 'bg-[#1f1f23]' : 'bg-white'
+          }`}
+        >
+          {/* Header */}
+          <div className={`flex items-center justify-between px-6 py-4 border-b ${
+            isDark ? 'border-gray-700' : 'border-gray-200'
+          }`}>
+            <div>
+              <h2 className={`text-xl font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                Registration Details
+              </h2>
+              <p className={`text-sm mt-0.5 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                Campus drive registration and quiz results
+              </p>
+            </div>
+            <button
+              onClick={onClose}
+              className={`p-2 rounded-md transition-colors ${
+                isDark ? 'hover:bg-gray-700 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Content */}
+          <div className="px-6 py-6">
+            {/* Profile Section */}
+            <div className="flex items-start gap-5 mb-6">
+              <div className={`w-20 h-20 rounded-lg flex items-center justify-center text-2xl font-bold text-white flex-shrink-0 ${
+                hasScore
+                  ? isQualified
+                    ? 'bg-gradient-to-br from-emerald-500 to-emerald-600'
+                    : 'bg-gradient-to-br from-red-500 to-red-600'
+                  : 'bg-gradient-to-br from-gray-500 to-gray-600'
+              }`}>
+                {registration.full_name.charAt(0).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className={`text-xl font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                      {registration.full_name}
+                    </h3>
+                    <p className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                      {registration.roll_number || 'No Roll Number'} • {registration.year_of_study}
+                    </p>
+                  </div>
+                  <span className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium flex-shrink-0 ${
+                    hasScore
+                      ? isQualified
+                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                        : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                      : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400'
+                  }`}>
+                    {hasScore ? (isQualified ? 'Qualified' : 'Not Qualified') : 'Quiz Pending'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Score Section */}
+            {hasScore && (
+              <div className={`p-5 rounded-lg mb-6 ${
+                isQualified
+                  ? isDark ? 'bg-emerald-900/20 border border-emerald-800/30' : 'bg-emerald-50 border border-emerald-100'
+                  : isDark ? 'bg-red-900/20 border border-red-800/30' : 'bg-red-50 border border-red-100'
+              }`}>
+                <div className="flex items-center justify-between mb-5">
+                  <div>
+                    <div className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                      Overall Score
+                    </div>
+                    <div className={`text-4xl font-bold mt-1 ${isQualified ? 'text-emerald-500' : 'text-red-500'}`}>
+                      {registration.percentage?.toFixed(1)}%
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                      Passing Score
+                    </div>
+                    <div className={`text-2xl font-bold mt-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+                      {passingPercentage}%
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section Scores */}
+                <div className={`grid grid-cols-4 gap-3 pt-4 border-t ${
+                  isQualified
+                    ? isDark ? 'border-emerald-800/30' : 'border-emerald-200'
+                    : isDark ? 'border-red-800/30' : 'border-red-200'
+                }`}>
+                  <div className={`text-center p-3 rounded-md ${isDark ? 'bg-gray-800/50' : 'bg-white'}`}>
+                    <Brain className="w-5 h-5 text-blue-500 mx-auto" />
+                    <div className={`text-xl font-bold mt-2 ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                      {registration.logical_score}
+                    </div>
+                    <div className={`text-xs font-medium uppercase tracking-wide mt-1 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                      Logical
+                    </div>
+                  </div>
+                  <div className={`text-center p-3 rounded-md ${isDark ? 'bg-gray-800/50' : 'bg-white'}`}>
+                    <Code className="w-5 h-5 text-green-500 mx-auto" />
+                    <div className={`text-xl font-bold mt-2 ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                      {registration.technical_score}
+                    </div>
+                    <div className={`text-xs font-medium uppercase tracking-wide mt-1 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                      Technical
+                    </div>
+                  </div>
+                  <div className={`text-center p-3 rounded-md ${isDark ? 'bg-gray-800/50' : 'bg-white'}`}>
+                    <BookOpen className="w-5 h-5 text-purple-500 mx-auto" />
+                    <div className={`text-xl font-bold mt-2 ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                      {registration.ai_ml_score}
+                    </div>
+                    <div className={`text-xs font-medium uppercase tracking-wide mt-1 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                      AI/ML
+                    </div>
+                  </div>
+                  <div className={`text-center p-3 rounded-md ${isDark ? 'bg-gray-800/50' : 'bg-white'}`}>
+                    <MessageSquare className="w-5 h-5 text-orange-500 mx-auto" />
+                    <div className={`text-xl font-bold mt-2 ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                      {registration.english_score}
+                    </div>
+                    <div className={`text-xs font-medium uppercase tracking-wide mt-1 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                      English
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Campus Drive Info */}
+            <div className={`flex items-center gap-4 p-4 rounded-lg mb-6 ${
+              isDark ? 'bg-blue-900/20 border border-blue-800/30' : 'bg-blue-50 border border-blue-100'
+            }`}>
+              <div className="w-12 h-12 rounded-lg bg-blue-500/20 flex items-center justify-center flex-shrink-0">
+                <Target className="w-6 h-6 text-blue-500" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-blue-400' : 'text-blue-600'}`}>
+                  Campus Drive
+                </div>
+                <div className={`text-lg font-semibold mt-0.5 ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {driveName}
+                </div>
+              </div>
+            </div>
+
+            {/* Details Grid */}
+            <div className="grid grid-cols-2 gap-x-8 gap-y-5">
+              <div>
+                <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  College
+                </label>
+                <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {registration.college_name}
+                </p>
+              </div>
+              <div>
+                <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Department
+                </label>
+                <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {registration.department}
+                </p>
+              </div>
+              {registration.cgpa && (
+                <div>
+                  <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                    CGPA
+                  </label>
+                  <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                    {registration.cgpa}
+                  </p>
+                </div>
+              )}
+              <div>
+                <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Email Address
+                </label>
+                <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {registration.email}
+                </p>
+              </div>
+              <div>
+                <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Phone Number
+                </label>
+                <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {registration.phone}
+                </p>
+              </div>
+              <div>
+                <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Registration Date
+                </label>
+                <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {formatDate(registration.created_at)}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className={`flex items-center justify-between px-6 py-4 border-t ${
+            isDark ? 'border-gray-700 bg-gray-800/30' : 'border-gray-200 bg-gray-50'
+          }`}>
+            <span className={`text-xs font-mono ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+              ID: {registration.id}
+            </span>
+            <button
+              onClick={onClose}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                isDark
+                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                  : 'bg-gray-900 hover:bg-gray-800 text-white'
+              }`}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+
+  if (typeof window !== 'undefined') {
+    return createPortal(modalContent, document.body)
+  }
+
+  return null
+}
+
 export default function AdminCampusDrivePage() {
   const { theme } = useAdminTheme()
   const isDark = theme === 'dark'
@@ -86,6 +361,7 @@ export default function AdminCampusDrivePage() {
   const [filterQualified, setFilterQualified] = useState<string>('all')
   const [sortBy, setSortBy] = useState<string>('percentage')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  const [viewingRegistration, setViewingRegistration] = useState<Registration | null>(null)
 
   const fetchDrives = async () => {
     try {
@@ -495,13 +771,18 @@ export default function AdminCampusDrivePage() {
                   }`}>
                     Status
                   </th>
+                  <th className={`px-3 py-2 text-center font-medium uppercase whitespace-nowrap ${
+                    isDark ? 'text-gray-400' : 'text-gray-500'
+                  }`}>
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className={`divide-y ${isDark ? 'divide-[#333]' : 'divide-gray-200'}`}>
                 {loading ? (
                   [...Array(5)].map((_, i) => (
                     <tr key={i}>
-                      <td colSpan={10} className="px-3 py-3">
+                      <td colSpan={11} className="px-3 py-3">
                         <div className="animate-pulse flex items-center gap-3">
                           <div className={`w-8 h-8 rounded-full ${isDark ? 'bg-[#333]' : 'bg-gray-200'}`} />
                           <div className="flex-1 space-y-1">
@@ -514,7 +795,7 @@ export default function AdminCampusDrivePage() {
                   ))
                 ) : filteredRegistrations.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className={`px-3 py-6 text-center text-sm ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+                    <td colSpan={11} className={`px-3 py-6 text-center text-sm ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
                       No registrations found
                     </td>
                   </tr>
@@ -598,6 +879,17 @@ export default function AdminCampusDrivePage() {
                       <td className="px-3 py-2 text-center">
                         {getStatusBadge(reg)}
                       </td>
+                      <td className="px-3 py-2 text-center">
+                        <button
+                          onClick={() => setViewingRegistration(reg)}
+                          className={`p-1.5 rounded-lg transition-colors ${
+                            isDark ? 'hover:bg-[#333] text-blue-400' : 'hover:bg-gray-100 text-blue-600'
+                          }`}
+                          title="View Details"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -613,6 +905,17 @@ export default function AdminCampusDrivePage() {
           </div>
         )}
       </div>
+
+      {/* Registration Details Modal */}
+      {viewingRegistration && selectedDrive && (
+        <RegistrationDetailsModal
+          registration={viewingRegistration}
+          driveName={selectedDrive.name}
+          passingPercentage={selectedDrive.passing_percentage}
+          isDark={isDark}
+          onClose={() => setViewingRegistration(null)}
+        />
+      )}
     </div>
   )
 }

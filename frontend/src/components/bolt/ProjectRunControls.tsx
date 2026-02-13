@@ -67,6 +67,24 @@ const parsePreviewReady = (output: string): string | null => {
   return null
 }
 
+// Parse __MOBILE_QR__ marker - QR code data for React Native/Expo mobile preview
+const parseMobileQR = (output: string): string | null => {
+  const qrMatch = output.match(/__MOBILE_QR__:(.+)/)
+  if (qrMatch && qrMatch[1]) {
+    return qrMatch[1].trim()
+  }
+  return null
+}
+
+// Parse __EXPO_URL__ marker - Expo URL for mobile preview
+const parseExpoUrl = (output: string): string | null => {
+  const urlMatch = output.match(/__EXPO_URL__:(.+)/)
+  if (urlMatch && urlMatch[1]) {
+    return urlMatch[1].trim()
+  }
+  return null
+}
+
 // COST OPTIMIZATION: Increased to 6 for Java/Spring Boot projects with complex multi-file dependencies
 // Java projects often need more attempts due to Entity/DTO/Service/Controller consistency requirements
 const MAX_AUTO_FIX_ATTEMPTS = 6
@@ -88,9 +106,15 @@ interface ErrorInfo {
   phase: 'install' | 'build' | 'runtime' | 'unknown'
 }
 
+interface MobilePreviewInfo {
+  expoUrl: string
+  qrBase64: string
+}
+
 interface ProjectRunControlsProps {
   onOpenTerminal?: () => void
   onPreviewUrlChange?: (url: string | null) => void
+  onMobilePreviewChange?: (mobilePreview: MobilePreviewInfo | null) => void  // For React Native QR code
   onOutput?: (line: string) => void
   autoFix?: boolean // Enable automatic error fixing
   onStartSession?: () => void  // Called when run starts to keep terminal open
@@ -98,7 +122,7 @@ interface ProjectRunControlsProps {
   onClearLogs?: () => void     // Called to clear terminal logs for fresh run
 }
 
-export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutput, autoFix = true, onStartSession, onEndSession, onClearLogs }: ProjectRunControlsProps) {
+export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onMobilePreviewChange, onOutput, autoFix = true, onStartSession, onEndSession, onClearLogs }: ProjectRunControlsProps) {
   const { currentProject, loadFromBackend } = useProjectStore()
   const [status, setStatus] = useState<RunStatus>('idle')
 
@@ -109,6 +133,10 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
   const [executionMode, setExecutionMode] = useState<ExecutionMode>('docker')
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+
+  // Mobile preview state for React Native/Expo projects
+  const [mobilePreview, setMobilePreview] = useState<MobilePreviewInfo | null>(null)
+  const pendingQRRef = useRef<string | null>(null)  // Buffer for QR data before URL arrives
 
   // Auto-fix state with synchronized refs and state
   const [lastError, setLastError] = useState<ErrorInfo | null>(null)
@@ -277,6 +305,28 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       setPreviewUrl(readyUrl)
       setStatus('running')
       onPreviewUrlChange?.(readyUrl)
+      // IMPORTANT: Tell error collector server is running - stops auto-fix
+      setServerRunning(true)
+      return true
+    }
+
+    // MOBILE PREVIEW: Check for __MOBILE_QR__ marker (React Native/Expo)
+    const qrData = parseMobileQR(cleanOutput)
+    if (qrData) {
+      console.log('[DetectServer] Found __MOBILE_QR__ marker')
+      pendingQRRef.current = qrData
+    }
+
+    // MOBILE PREVIEW: Check for __EXPO_URL__ marker and combine with QR data
+    const expoUrl = parseExpoUrl(cleanOutput)
+    if (expoUrl && pendingQRRef.current) {
+      console.log('[DetectServer] Found __EXPO_URL__ marker, activating mobile preview:', expoUrl)
+      const mobilePreviewData = { expoUrl, qrBase64: pendingQRRef.current }
+      setMobilePreview(mobilePreviewData)
+      onMobilePreviewChange?.(mobilePreviewData)
+      pendingQRRef.current = null  // Clear pending QR after using
+      serverStartedRef.current = true
+      setStatus('running')
       // IMPORTANT: Tell error collector server is running - stops auto-fix
       setServerRunning(true)
       return true
@@ -1564,6 +1614,9 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
     setStatus('creating')
     setPreviewUrl(null)
+    setMobilePreview(null)  // Reset mobile preview for fresh run
+    onMobilePreviewChange?.(null)
+    pendingQRRef.current = null
 
     onStartSession?.()
     // NOTE: Terminal is NOT auto-opened here. User must click "Code" tab to see terminal.
@@ -1774,7 +1827,9 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
     if (startedFromExistingServerRef.current) {
       setStatus('stopped')
       setPreviewUrl(null)
+      setMobilePreview(null)
       onPreviewUrlChange?.(null)
+      onMobilePreviewChange?.(null)
       onOutput?.('🛑 Preview closed (external server still running)')
       startedFromExistingServerRef.current = false
       return
@@ -1844,9 +1899,11 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
     setStatus('stopped')
     setPreviewUrl(null)
+    setMobilePreview(null)  // Clear mobile preview on stop
     onPreviewUrlChange?.(null)
+    onMobilePreviewChange?.(null)
     onOutput?.('🛑 Project stopped')
-  }, [currentProject?.id, executionMode, onPreviewUrlChange, onOutput])
+  }, [currentProject?.id, executionMode, onPreviewUrlChange, onMobilePreviewChange, onOutput])
 
   // Restart
   const handleRestart = useCallback(async () => {

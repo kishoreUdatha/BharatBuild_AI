@@ -19,6 +19,7 @@ export interface Project {
   name: string
   description?: string
   workspaceId?: string
+  mode?: 'student' | 'developer' | 'founder' | 'college'  // Project mode from backend
   files: ProjectFile[]
   createdAt: Date
   updatedAt: Date

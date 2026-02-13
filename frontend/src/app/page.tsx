@@ -24,7 +24,9 @@ import {
   Monitor,
   Database,
   Shield,
-  GitBranch
+  GitBranch,
+  Menu,
+  X
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
@@ -39,6 +41,7 @@ export default function Home() {
   const [demoStep, setDemoStep] = useState(0)
   const [demoCode, setDemoCode] = useState('')
   const [isTyping, setIsTyping] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const placeholders = [
     'Build a React dashboard with TypeScript and Tailwind CSS',
     'Create a Flutter mobile app with Firebase backend',
@@ -111,6 +114,16 @@ export default function App() {
     }
   }, [demoStep])
 
+  // Handle navigation with auth check
+  const handleAuthNavigation = (path: string) => {
+    if (!checkAuth()) {
+      sessionStorage.setItem('redirectAfterLogin', path)
+      router.push('/login')
+      return
+    }
+    router.push(path)
+  }
+
   const handlePromptSubmit = (prompt: string) => {
     if (!prompt.trim()) return
 
@@ -139,16 +152,17 @@ export default function App() {
       <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-transparent to-cyan-500/5" />
 
       {/* Header */}
-      <header className="relative z-10 border-b border-[hsl(var(--bolt-border))]">
-        <div className="container mx-auto px-6 py-4 flex items-center justify-between">
+      <header className="relative z-20 border-b border-[hsl(var(--bolt-border))]">
+        <div className="container mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
               <Zap className="w-5 h-5 text-white" />
             </div>
-            <span className="font-bold text-xl text-[hsl(var(--bolt-text-primary))]">BharatBuild</span>
-            <span className="text-xs px-2 py-0.5 rounded-full bg-gradient-to-r from-orange-500 to-green-500 text-white font-medium">AI</span>
+            <span className="font-bold text-lg sm:text-xl text-[hsl(var(--bolt-text-primary))]">BharatBuild</span>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-gradient-to-r from-orange-500 to-green-500 text-white font-medium hidden sm:inline">AI</span>
           </Link>
 
+          {/* Desktop Navigation */}
           <nav className="hidden md:flex items-center gap-8">
             <button
               onClick={() => document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' })}
@@ -162,12 +176,16 @@ export default function App() {
             >
               How It Works
             </button>
+            <Link href="/showcase" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors">
+              Showcase
+            </Link>
             <Link href="/pricing" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors">
               Pricing
             </Link>
           </nav>
 
-          <div className="flex items-center gap-4">
+          {/* Desktop Auth Buttons */}
+          <div className="hidden md:flex items-center gap-4">
             {isAuthenticated ? (
               <Link href="/build">
                 <Button className="bolt-gradient hover:opacity-90 transition-opacity">
@@ -189,7 +207,69 @@ export default function App() {
               </>
             )}
           </div>
+
+          {/* Mobile Menu Button */}
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="md:hidden p-2 text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))]"
+          >
+            {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+          </button>
         </div>
+
+        {/* Mobile Menu */}
+        {mobileMenuOpen && (
+          <div className="md:hidden border-t border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-primary))]">
+            <nav className="container mx-auto px-4 py-4 flex flex-col gap-4">
+              <button
+                onClick={() => {
+                  document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' })
+                  setMobileMenuOpen(false)
+                }}
+                className="text-left py-2 text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors"
+              >
+                Features
+              </button>
+              <button
+                onClick={() => {
+                  document.getElementById('how-it-works')?.scrollIntoView({ behavior: 'smooth' })
+                  setMobileMenuOpen(false)
+                }}
+                className="text-left py-2 text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors"
+              >
+                How It Works
+              </button>
+              <Link href="/showcase" className="py-2 text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors" onClick={() => setMobileMenuOpen(false)}>
+                Showcase
+              </Link>
+              <Link href="/pricing" className="py-2 text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors" onClick={() => setMobileMenuOpen(false)}>
+                Pricing
+              </Link>
+              <div className="border-t border-[hsl(var(--bolt-border))] pt-4 mt-2 flex flex-col gap-3">
+                {isAuthenticated ? (
+                  <Link href="/build" onClick={() => setMobileMenuOpen(false)}>
+                    <Button className="w-full bolt-gradient hover:opacity-90 transition-opacity">
+                      Go to Dashboard
+                    </Button>
+                  </Link>
+                ) : (
+                  <>
+                    <Link href="/login" onClick={() => setMobileMenuOpen(false)}>
+                      <Button variant="outline" className="w-full">
+                        Sign In
+                      </Button>
+                    </Link>
+                    <Link href="/register" onClick={() => setMobileMenuOpen(false)}>
+                      <Button className="w-full bolt-gradient hover:opacity-90 transition-opacity">
+                        Get Started Free
+                      </Button>
+                    </Link>
+                  </>
+                )}
+              </div>
+            </nav>
+          </div>
+        )}
       </header>
 
       {/* Hero Section */}
@@ -214,7 +294,7 @@ export default function App() {
             </p>
 
             {/* Prompt Input */}
-            <div className="max-w-3xl mx-auto mb-6">
+            <div className="max-w-3xl mx-auto mb-6 px-2 sm:px-0">
               <div className="group relative">
                 <div className="absolute -inset-1 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-2xl blur opacity-20 group-hover:opacity-40 transition duration-200"></div>
                 <div className="relative bg-[hsl(var(--bolt-bg-secondary))] border-2 border-[hsl(var(--bolt-border))] rounded-2xl p-2 hover:border-[hsl(var(--bolt-accent))] transition-all">
@@ -226,13 +306,13 @@ export default function App() {
                       handlePromptSubmit(prompt)
                     }
                   }}>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                       <input
                         type="text"
                         placeholder={placeholders[placeholderIndex]}
-                        className="flex-1 bg-transparent border-none outline-none text-[hsl(var(--bolt-text-primary))] placeholder:text-[hsl(var(--bolt-text-secondary))] px-4 py-3 text-base transition-all duration-500"
+                        className="flex-1 bg-transparent border-none outline-none text-[hsl(var(--bolt-text-primary))] placeholder:text-[hsl(var(--bolt-text-secondary))] px-4 py-3 text-sm sm:text-base transition-all duration-500"
                       />
-                      <Button type="submit" className="bolt-gradient hover:opacity-90 transition-opacity px-6 py-3">
+                      <Button type="submit" className="bolt-gradient hover:opacity-90 transition-opacity px-4 sm:px-6 py-3 whitespace-nowrap">
                         Build Now
                         <ArrowRight className="ml-2 w-4 h-4" />
                       </Button>
@@ -243,7 +323,7 @@ export default function App() {
             </div>
 
             {/* Quick Examples */}
-            <div className="flex flex-wrap gap-2 justify-center mb-8">
+            <div className="flex flex-wrap gap-2 justify-center mb-8 px-2 sm:px-0">
               {[
                 { prompt: 'Build a Flutter mobile app with Firebase', label: '📱 Flutter App', color: 'from-blue-500/20 to-cyan-500/20' },
                 { prompt: 'Create an e-commerce website with React', label: '🛍️ E-commerce', color: 'from-purple-500/20 to-pink-500/20' },
@@ -262,7 +342,7 @@ export default function App() {
             </div>
 
             {/* Stats */}
-            <div className="flex flex-wrap justify-center gap-8 mb-8">
+            <div className="grid grid-cols-2 sm:flex sm:flex-wrap justify-center gap-4 sm:gap-8 mb-8 px-4 sm:px-0">
               {[
                 { value: '50+', label: 'Tech Stacks' },
                 { value: '10K+', label: 'Projects Built' },
@@ -285,13 +365,13 @@ export default function App() {
                 <Play className="w-5 h-5" />
                 Watch Demo
               </button>
-              <Link
-                href="/build"
-                className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-[hsl(var(--bolt-bg-secondary))] border border-[hsl(var(--bolt-border))] text-[hsl(var(--bolt-text-secondary))] hover:border-[hsl(var(--bolt-accent))] hover:text-[hsl(var(--bolt-text-primary))] transition-all"
+              <button
+                onClick={() => handleAuthNavigation('/build')}
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-[hsl(var(--bolt-bg-secondary))] border border-[hsl(var(--bolt-border))] text-[hsl(var(--bolt-text-secondary))] hover:border-[hsl(var(--bolt-accent))] hover:text-[hsl(var(--bolt-text-primary))] transition-all cursor-pointer"
               >
                 <ArrowRight className="w-5 h-5" />
                 Try It Free
-              </Link>
+              </button>
             </div>
           </div>
         </div>
@@ -444,10 +524,10 @@ export default function App() {
                 {/* Download Buttons - Show when complete */}
                 {demoStep === 4 && (
                   <div className="mt-4 flex gap-3 justify-center">
-                    <Button size="sm" className="bolt-gradient" onClick={() => router.push('/build')}>
+                    <Button size="sm" className="bolt-gradient" onClick={() => handleAuthNavigation('/build')}>
                       <Play className="w-4 h-4 mr-2" /> Try It Now
                     </Button>
-                    <Button size="sm" variant="outline">
+                    <Button size="sm" variant="outline" onClick={() => handleAuthNavigation('/build')} title="Build your project first to download">
                       <Download className="w-4 h-4 mr-2" /> Download ZIP
                     </Button>
                   </div>
@@ -973,8 +1053,8 @@ export default function App() {
             <div>
               <h4 className="font-semibold text-[hsl(var(--bolt-text-primary))] mb-4">Product</h4>
               <ul className="space-y-2 text-[hsl(var(--bolt-text-secondary))] text-sm">
-                <li><Link href="/build" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Build App</Link></li>
-                <li><Link href="/projects" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">My Projects</Link></li>
+                <li><button onClick={() => handleAuthNavigation('/build')} className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Build App</button></li>
+                <li><button onClick={() => handleAuthNavigation('/projects')} className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">My Projects</button></li>
                 <li><Link href="/pricing" className="hover:text-[hsl(var(--bolt-text-primary))] transition-colors">Pricing</Link></li>
               </ul>
             </div>

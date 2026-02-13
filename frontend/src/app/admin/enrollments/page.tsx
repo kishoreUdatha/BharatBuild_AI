@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { useAdminTheme } from '@/contexts/AdminThemeContext'
 import AdminHeader from '@/components/admin/AdminHeader'
 import { Pagination } from '@/components/ui/Pagination'
@@ -16,7 +17,13 @@ import {
   Building,
   Calendar,
   CheckCircle,
-  XCircle
+  XCircle,
+  Eye,
+  X,
+  User,
+  BookOpen,
+  Hash,
+  MoreVertical
 } from 'lucide-react'
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -31,6 +38,195 @@ function useDebounce<T>(value: T, delay: number): T {
   }, [value, delay])
 
   return debouncedValue
+}
+
+// Enrollment Details Modal Component
+function EnrollmentDetailsModal({
+  enrollment,
+  isDark,
+  onClose
+}: {
+  enrollment: WorkshopEnrollment
+  isDark: boolean
+  onClose: () => void
+}) {
+  const formatDate = (dateString: string | null) => {
+    if (!dateString) return '—'
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    })
+  }
+
+  const getYearBadge = (year: string) => {
+    const y = year.toLowerCase()
+    if (y.includes('1')) return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+    if (y.includes('2')) return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+    if (y.includes('3')) return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+    if (y.includes('4')) return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+    return 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400'
+  }
+
+  const modalContent = (
+    <div className="fixed inset-0 z-[9999] overflow-y-auto">
+      {/* Backdrop */}
+      <div className="fixed inset-0 bg-black/40 transition-opacity" onClick={onClose} />
+
+      {/* Modal Container */}
+      <div className="flex min-h-full items-center justify-center p-4">
+        <div
+          className={`relative w-full max-w-2xl rounded-lg shadow-xl ${
+            isDark ? 'bg-[#1f1f23]' : 'bg-white'
+          }`}
+        >
+          {/* Header */}
+          <div className={`flex items-center justify-between px-6 py-4 border-b ${
+            isDark ? 'border-gray-700' : 'border-gray-200'
+          }`}>
+            <div>
+              <h2 className={`text-xl font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                Enrollment Details
+              </h2>
+              <p className={`text-sm mt-0.5 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                Workshop registration information
+              </p>
+            </div>
+            <button
+              onClick={onClose}
+              className={`p-2 rounded-md transition-colors ${
+                isDark ? 'hover:bg-gray-700 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Content */}
+          <div className="px-6 py-6">
+            {/* Profile Section */}
+            <div className="flex items-start gap-5 mb-8">
+              <div className="w-20 h-20 rounded-lg flex items-center justify-center text-2xl font-bold text-white flex-shrink-0 bg-gradient-to-br from-teal-500 to-teal-600">
+                {enrollment.full_name.charAt(0).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className={`text-xl font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                      {enrollment.full_name}
+                    </h3>
+                    {enrollment.roll_number && (
+                      <p className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                        Roll No: {enrollment.roll_number}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium ${getYearBadge(enrollment.year_of_study)}`}>
+                      {enrollment.year_of_study}
+                    </span>
+                    <span className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium ${
+                      enrollment.is_confirmed
+                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                        : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                    }`}>
+                      {enrollment.is_confirmed ? 'Confirmed' : 'Pending'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Workshop Info */}
+            <div className={`flex items-center gap-4 p-4 rounded-lg mb-6 ${
+              isDark ? 'bg-teal-900/20 border border-teal-800/30' : 'bg-teal-50 border border-teal-100'
+            }`}>
+              <div className="w-12 h-12 rounded-lg bg-teal-500/20 flex items-center justify-center flex-shrink-0">
+                <GraduationCap className="w-6 h-6 text-teal-500" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-teal-400' : 'text-teal-600'}`}>
+                  Workshop
+                </div>
+                <div className={`text-lg font-semibold mt-0.5 ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {enrollment.workshop_name}
+                </div>
+              </div>
+            </div>
+
+            {/* Details Grid */}
+            <div className="grid grid-cols-2 gap-x-8 gap-y-5 mb-6">
+              <div>
+                <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  College
+                </label>
+                <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {enrollment.college_name}
+                </p>
+              </div>
+              <div>
+                <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Department
+                </label>
+                <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {enrollment.department}
+                </p>
+              </div>
+              <div>
+                <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Email Address
+                </label>
+                <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {enrollment.email}
+                </p>
+              </div>
+              <div>
+                <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Phone Number
+                </label>
+                <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {enrollment.phone}
+                </p>
+              </div>
+              <div className="col-span-2">
+                <label className={`text-xs font-medium uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Registration Date
+                </label>
+                <p className={`mt-1 text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                  {formatDate(enrollment.created_at)}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className={`flex items-center justify-between px-6 py-4 border-t ${
+            isDark ? 'border-gray-700 bg-gray-800/30' : 'border-gray-200 bg-gray-50'
+          }`}>
+            <span className={`text-xs font-mono ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+              ID: {enrollment.id}
+            </span>
+            <button
+              onClick={onClose}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                isDark
+                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                  : 'bg-gray-900 hover:bg-gray-800 text-white'
+              }`}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+
+  if (typeof window !== 'undefined') {
+    return createPortal(modalContent, document.body)
+  }
+
+  return null
 }
 
 export default function AdminEnrollmentsPage() {
@@ -59,6 +255,7 @@ export default function AdminEnrollmentsPage() {
 
   const [searchInput, setSearchInput] = useState('')
   const [selectedWorkshop, setSelectedWorkshop] = useState('')
+  const [viewingEnrollment, setViewingEnrollment] = useState<WorkshopEnrollment | null>(null)
 
   const isDark = theme === 'dark'
   const debouncedSearch = useDebounce(searchInput, 300)
@@ -322,13 +519,18 @@ export default function AdminEnrollmentsPage() {
                       <SortIcon field="created_at" />
                     </div>
                   </th>
+                  <th className={`px-3 py-2 text-center font-medium uppercase whitespace-nowrap ${
+                    isDark ? 'text-gray-400' : 'text-gray-500'
+                  }`}>
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className={`divide-y ${isDark ? 'divide-[#333]' : 'divide-gray-200'}`}>
                 {loading ? (
                   [...Array(5)].map((_, i) => (
                     <tr key={i}>
-                      <td colSpan={8} className="px-3 py-3">
+                      <td colSpan={9} className="px-3 py-3">
                         <div className="animate-pulse flex items-center gap-3">
                           <div className={`w-8 h-8 rounded-full ${isDark ? 'bg-[#333]' : 'bg-gray-200'}`} />
                           <div className="flex-1 space-y-1">
@@ -341,7 +543,7 @@ export default function AdminEnrollmentsPage() {
                   ))
                 ) : enrollments.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className={`px-3 py-6 text-center text-sm ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+                    <td colSpan={9} className={`px-3 py-6 text-center text-sm ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
                       No enrollments found
                     </td>
                   </tr>
@@ -418,6 +620,17 @@ export default function AdminEnrollmentsPage() {
                       <td className={`px-3 py-2 whitespace-nowrap ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
                         {formatDate(enrollment.created_at)}
                       </td>
+                      <td className="px-3 py-2 text-center">
+                        <button
+                          onClick={() => setViewingEnrollment(enrollment)}
+                          className={`p-1.5 rounded-lg transition-colors ${
+                            isDark ? 'hover:bg-[#333] text-blue-400' : 'hover:bg-gray-100 text-blue-600'
+                          }`}
+                          title="View Details"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -440,6 +653,15 @@ export default function AdminEnrollmentsPage() {
           )}
         </div>
       </div>
+
+      {/* Enrollment Details Modal */}
+      {viewingEnrollment && (
+        <EnrollmentDetailsModal
+          enrollment={viewingEnrollment}
+          isDark={isDark}
+          onClose={() => setViewingEnrollment(null)}
+        />
+      )}
     </div>
   )
 }

@@ -36,6 +36,15 @@ from app.models.coupon import (
     WalletTransactionType,
     WalletTransactionSource,
 )
+from app.models.learning import (
+    ProjectLearningProgress,
+    LearningQuizQuestion,
+    LearningFileExplanation,
+    LearningCertificate,
+    LearningCheckpointType,
+)
+from app.models.build import Build, BuildStatus, BuildPlatform
+from app.models.dataset import Dataset, DatasetStatus, DatasetType
 
 __all__ = [
     # User
@@ -102,4 +111,18 @@ __all__ = [
     "WalletTransaction",
     "WalletTransactionType",
     "WalletTransactionSource",
+    # Learning Mode
+    "ProjectLearningProgress",
+    "LearningQuizQuestion",
+    "LearningFileExplanation",
+    "LearningCertificate",
+    "LearningCheckpointType",
+    # Mobile Builds
+    "Build",
+    "BuildStatus",
+    "BuildPlatform",
+    # Datasets
+    "Dataset",
+    "DatasetStatus",
+    "DatasetType",
 ]

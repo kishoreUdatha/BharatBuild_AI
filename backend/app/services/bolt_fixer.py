@@ -882,7 +882,7 @@ No explanations. Only the <file> block."""
         logger.info(f"[BoltFixer:{project_id}] SVG error in file: {error_file}")
 
         # Read the file
-        content = await self._read_file(project_path, error_file)
+        content = await self._read_file_content(project_path, error_file)
         if not content:
             logger.warning(f"[BoltFixer:{project_id}] Could not read file: {error_file}")
             return None
@@ -895,7 +895,8 @@ No explanations. Only the <file> block."""
             return None
 
         # Write the fixed file
-        if not await self._write_file(project_path, error_file, fixed_content):
+        full_file_path = project_path / error_file
+        if not self._write_file(full_file_path, fixed_content, project_id):
             logger.error(f"[BoltFixer:{project_id}] Failed to write fixed file: {error_file}")
             return None
 

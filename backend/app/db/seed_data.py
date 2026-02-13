@@ -12,6 +12,7 @@ import uuid
 
 from passlib.context import CryptContext
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
 
 from app.core.database import AsyncSessionLocal, init_db
 from app.models.user import User, UserRole
@@ -25,6 +26,8 @@ from app.models.document import Document, DocumentType
 from app.models.agent_task import AgentTask, AgentTaskStatus
 from app.models.token_balance import TokenBalance, TokenTransaction, TokenPurchase
 from app.models.usage import UsageLog, TokenUsage
+from app.models.workshop_enrollment import WorkshopEnrollment
+from app.models.campus_drive import CampusDrive, CampusDriveRegistration, RegistrationStatus
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -96,11 +99,11 @@ SAMPLE_PROJECTS_FOUNDER = [
 ]
 
 SAMPLE_COLLEGES = [
-    {"name": "Indian Institute of Technology Delhi", "code": "IITD", "domain": "iitd.ac.in", "city": "New Delhi", "state": "Delhi"},
-    {"name": "National Institute of Technology Trichy", "code": "NITT", "domain": "nitt.edu", "city": "Tiruchirappalli", "state": "Tamil Nadu"},
-    {"name": "BITS Pilani", "code": "BITS", "domain": "bits-pilani.ac.in", "city": "Pilani", "state": "Rajasthan"},
-    {"name": "VIT Vellore", "code": "VIT", "domain": "vit.ac.in", "city": "Vellore", "state": "Tamil Nadu"},
-    {"name": "Delhi Technological University", "code": "DTU", "domain": "dtu.ac.in", "city": "Delhi", "state": "Delhi"},
+    {"name": "Indian Institute of Technology Delhi", "code": "IITD", "city": "New Delhi", "state": "Delhi"},
+    {"name": "National Institute of Technology Trichy", "code": "NITT", "city": "Tiruchirappalli", "state": "Tamil Nadu"},
+    {"name": "BITS Pilani", "code": "BITS", "city": "Pilani", "state": "Rajasthan"},
+    {"name": "VIT Vellore", "code": "VIT", "city": "Vellore", "state": "Tamil Nadu"},
+    {"name": "Delhi Technological University", "code": "DTU", "city": "Delhi", "state": "Delhi"},
 ]
 
 SAMPLE_DOCUMENTS = [
@@ -117,6 +120,81 @@ TOKEN_PACKAGES = [
     {"name": "starter", "tokens": 50000, "amount": 9900, "currency": "INR"},
     {"name": "pro", "tokens": 200000, "amount": 29900, "currency": "INR"},
     {"name": "unlimited", "tokens": 1000000, "amount": 99900, "currency": "INR"},
+]
+
+SAMPLE_WORKSHOPS = [
+    "AI/ML Workshop 2024",
+    "Full Stack Development Bootcamp",
+    "Cloud Computing Masterclass",
+    "Data Science with Python",
+    "React & Node.js Workshop",
+]
+
+SAMPLE_DEPARTMENTS = [
+    "Computer Science and Engineering",
+    "Information Technology",
+    "Electronics and Communication",
+    "Electrical Engineering",
+    "Mechanical Engineering",
+    "Civil Engineering",
+    "Artificial Intelligence",
+]
+
+SAMPLE_COLLEGES_NAMES = [
+    "Indian Institute of Technology Delhi",
+    "National Institute of Technology Trichy",
+    "BITS Pilani",
+    "VIT Vellore",
+    "Delhi Technological University",
+    "IIIT Hyderabad",
+    "SRM Institute Chennai",
+    "Manipal Institute of Technology",
+    "JNTU Hyderabad",
+    "Anna University Chennai",
+    "PES University Bangalore",
+    "RV College of Engineering",
+    "BMS College of Engineering",
+    "MS Ramaiah Institute",
+    "Christ University Bangalore",
+]
+
+SAMPLE_FIRST_NAMES = [
+    "Rahul", "Priya", "Amit", "Sneha", "Vikram", "Ananya", "Rohan", "Kavya",
+    "Arjun", "Meera", "Karthik", "Divya", "Suresh", "Pooja", "Aditya", "Neha",
+    "Rajesh", "Lakshmi", "Srinivas", "Aarti", "Venkat", "Deepika", "Harish", "Swati",
+    "Manoj", "Rashmi", "Vijay", "Anjali", "Prakash", "Nandini", "Sanjay", "Rekha",
+    "Ganesh", "Bhavya", "Krishna", "Shruthi", "Mohan", "Pallavi", "Ramesh", "Vidya"
+]
+
+SAMPLE_LAST_NAMES = [
+    "Sharma", "Patel", "Kumar", "Reddy", "Singh", "Gupta", "Mehta", "Nair",
+    "Verma", "Shah", "Rajan", "Krishnan", "Babu", "Iyer", "Rao", "Agarwal",
+    "Menon", "Devi", "Naidu", "Joshi", "Pillai", "Bhat", "Shetty", "Yadav",
+    "Mishra", "Chopra", "Kapoor", "Malhotra", "Saxena", "Bansal"
+]
+
+SAMPLE_CAMPUS_DRIVES = [
+    {
+        "name": "BharatBuild AI Campus Hiring 2024",
+        "company_name": "BharatBuild AI",
+        "description": "Campus placement drive for fresh graduates in AI/ML and Full Stack roles",
+        "passing_percentage": 60.0,
+        "total_questions": 30
+    },
+    {
+        "name": "TechCorp India Summer Internship",
+        "company_name": "TechCorp India",
+        "description": "Summer internship program for pre-final year students",
+        "passing_percentage": 55.0,
+        "total_questions": 25
+    },
+    {
+        "name": "InnovateTech Graduate Program 2024",
+        "company_name": "InnovateTech Solutions",
+        "description": "Graduate trainee program for B.Tech/M.Tech freshers",
+        "passing_percentage": 65.0,
+        "total_questions": 35
+    }
 ]
 
 
@@ -191,7 +269,8 @@ async def seed_colleges(db: AsyncSession) -> List[College]:
         college = College(
             name=college_data["name"],
             code=college_data["code"],
-            domain=college_data["domain"],
+            city=college_data["city"],
+            state=college_data["state"],
             address=f"{college_data['city']}, {college_data['state']}, India",
             is_active=True
         )
@@ -565,6 +644,178 @@ async def seed_usage_logs(db: AsyncSession, users: List[User], projects: List[Pr
     return logs
 
 
+async def seed_workshop_enrollments(db: AsyncSession) -> List[WorkshopEnrollment]:
+    """Create sample workshop enrollments"""
+    enrollments = []
+    years = ["1st Year", "2nd Year", "3rd Year", "4th Year"]
+
+    # Create 50 workshop enrollments
+    for i in range(50):
+        first_name = random.choice(SAMPLE_FIRST_NAMES)
+        last_name = random.choice(SAMPLE_LAST_NAMES)
+        full_name = f"{first_name} {last_name}"
+        email = f"{first_name.lower()}.{last_name.lower()}{random.randint(1, 999)}@student.edu"
+        phone = f"+91 {random.randint(70000, 99999)}{random.randint(10000, 99999)}"
+
+        enrollment = WorkshopEnrollment(
+            full_name=full_name,
+            email=email,
+            phone=phone,
+            college_name=random.choice(SAMPLE_COLLEGES_NAMES),
+            department=random.choice(SAMPLE_DEPARTMENTS),
+            year_of_study=random.choice(years),
+            roll_number=f"{random.choice(['21', '22', '23', '24'])}{random.choice(['CS', 'IT', 'EC', 'EE', 'AI'])}{random.randint(100, 999)}",
+            workshop_name=random.choice(SAMPLE_WORKSHOPS),
+            is_confirmed=random.choice([True, True, True, False]),  # 75% confirmed
+            payment_status=random.choice(["completed", "completed", "completed", "pending", "waived"]),
+            previous_experience=random.choice([
+                "Basic Python programming",
+                "Web development with HTML/CSS",
+                "No prior experience",
+                "Completed online courses on Coursera",
+                "Built small projects in college"
+            ]) if random.random() > 0.3 else None,
+            expectations=random.choice([
+                "Want to learn practical AI/ML skills",
+                "Looking to build portfolio projects",
+                "Preparing for placements",
+                "Interested in startup opportunities",
+                "Want hands-on coding experience"
+            ]) if random.random() > 0.3 else None,
+            how_did_you_hear=random.choice([
+                "College notice board",
+                "Social media",
+                "Friend referral",
+                "Email newsletter",
+                "Faculty recommendation"
+            ]) if random.random() > 0.4 else None,
+            created_at=datetime.utcnow() - timedelta(days=random.randint(1, 60))
+        )
+        db.add(enrollment)
+        enrollments.append(enrollment)
+
+    await db.flush()
+    print(f"Created {len(enrollments)} workshop enrollments")
+    return enrollments
+
+
+async def seed_campus_drives(db: AsyncSession) -> List[CampusDrive]:
+    """Create sample campus drives"""
+    drives = []
+
+    for drive_data in SAMPLE_CAMPUS_DRIVES:
+        drive = CampusDrive(
+            name=drive_data["name"],
+            company_name=drive_data["company_name"],
+            description=drive_data["description"],
+            registration_start=datetime.utcnow() - timedelta(days=random.randint(30, 60)),
+            registration_end=datetime.utcnow() + timedelta(days=random.randint(5, 30)),
+            quiz_date=datetime.utcnow() + timedelta(days=random.randint(7, 45)),
+            quiz_duration_minutes=60,
+            passing_percentage=drive_data["passing_percentage"],
+            total_questions=drive_data["total_questions"],
+            logical_questions=5,
+            technical_questions=10,
+            ai_ml_questions=10,
+            english_questions=5,
+            coding_questions=5 if drive_data["total_questions"] >= 35 else 0,
+            is_active=True,
+            created_at=datetime.utcnow() - timedelta(days=random.randint(30, 90))
+        )
+        db.add(drive)
+        drives.append(drive)
+
+    await db.flush()
+    print(f"Created {len(drives)} campus drives")
+    return drives
+
+
+async def seed_campus_drive_registrations(db: AsyncSession, drives: List[CampusDrive]) -> List[CampusDriveRegistration]:
+    """Create sample campus drive registrations"""
+    registrations = []
+    years = ["1st Year", "2nd Year", "3rd Year", "4th Year"]
+    statuses = [
+        RegistrationStatus.REGISTERED,
+        RegistrationStatus.QUIZ_COMPLETED,
+        RegistrationStatus.QUALIFIED,
+        RegistrationStatus.NOT_QUALIFIED
+    ]
+
+    for drive in drives:
+        # Create 30-50 registrations per drive
+        num_registrations = random.randint(30, 50)
+
+        for i in range(num_registrations):
+            first_name = random.choice(SAMPLE_FIRST_NAMES)
+            last_name = random.choice(SAMPLE_LAST_NAMES)
+            full_name = f"{first_name} {last_name}"
+            email = f"{first_name.lower()}.{last_name.lower()}{random.randint(1, 999)}@student.edu"
+            phone = f"+91 {random.randint(70000, 99999)}{random.randint(10000, 99999)}"
+
+            status = random.choice(statuses)
+
+            # Generate scores based on status
+            if status == RegistrationStatus.REGISTERED:
+                # Not attempted quiz yet
+                logical_score = 0
+                technical_score = 0
+                ai_ml_score = 0
+                english_score = 0
+                coding_score = 0
+                percentage = None
+                is_qualified = False
+            else:
+                # Attempted quiz - generate realistic scores
+                logical_score = random.randint(1, 5)  # out of 5
+                technical_score = random.randint(3, 10)  # out of 10
+                ai_ml_score = random.randint(3, 10)  # out of 10
+                english_score = random.randint(2, 5)  # out of 5
+                coding_score = random.randint(0, 5) if drive.coding_questions > 0 else 0
+
+                total_score = logical_score + technical_score + ai_ml_score + english_score + coding_score
+                total_marks = drive.total_questions
+                percentage = (total_score / total_marks) * 100
+
+                is_qualified = percentage >= drive.passing_percentage
+
+                # Adjust status based on qualification
+                if is_qualified:
+                    status = RegistrationStatus.QUALIFIED
+                elif percentage is not None:
+                    status = RegistrationStatus.NOT_QUALIFIED
+
+            registration = CampusDriveRegistration(
+                campus_drive_id=drive.id,
+                full_name=full_name,
+                email=email,
+                phone=phone,
+                college_name=random.choice(SAMPLE_COLLEGES_NAMES),
+                department=random.choice(SAMPLE_DEPARTMENTS),
+                year_of_study=random.choice(years),
+                roll_number=f"{random.choice(['21', '22', '23', '24'])}{random.choice(['CS', 'IT', 'EC', 'EE', 'AI'])}{random.randint(100, 999)}",
+                cgpa=round(random.uniform(6.0, 9.5), 2),
+                status=status,
+                quiz_start_time=datetime.utcnow() - timedelta(hours=random.randint(1, 72)) if status != RegistrationStatus.REGISTERED else None,
+                quiz_end_time=datetime.utcnow() - timedelta(hours=random.randint(0, 71)) if status != RegistrationStatus.REGISTERED else None,
+                quiz_score=total_score if status != RegistrationStatus.REGISTERED else None,
+                total_marks=total_marks if status != RegistrationStatus.REGISTERED else None,
+                percentage=round(percentage, 2) if percentage is not None else None,
+                is_qualified=is_qualified,
+                logical_score=logical_score,
+                technical_score=technical_score,
+                ai_ml_score=ai_ml_score,
+                english_score=english_score,
+                coding_score=coding_score,
+                created_at=datetime.utcnow() - timedelta(days=random.randint(1, 30))
+            )
+            db.add(registration)
+            registrations.append(registration)
+
+    await db.flush()
+    print(f"Created {len(registrations)} campus drive registrations")
+    return registrations
+
+
 # ==================== Main Seed Function ====================
 
 async def seed_all():
@@ -577,30 +828,83 @@ async def seed_all():
     await init_db()
 
     async with AsyncSessionLocal() as db:
+        users = []
+        workspaces = []
+        projects = []
+
+        # Seed users
         try:
-            # Seed in order of dependencies
             users = await seed_users(db)
-            workspaces = await seed_workspaces(db, users)
-            colleges = await seed_colleges(db)
-            projects = await seed_projects(db, users, workspaces)
-            await seed_project_files(db, projects)
-            await seed_documents(db, projects)
-            await seed_api_keys(db, users)
-            await seed_token_balances(db, users)
-            await seed_token_transactions(db, users, projects)
-            await seed_agent_tasks(db, projects)
-            await seed_subscriptions(db, users)
-            await seed_usage_logs(db, users, projects)
-
             await db.commit()
-            print("=" * 50)
-            print("Database seeding completed successfully!")
-            print("=" * 50)
-
         except Exception as e:
             await db.rollback()
-            print(f"Error seeding database: {e}")
-            raise
+            print(f"Error seeding users: {e}")
+
+        # Seed workspaces
+        try:
+            if users:
+                workspaces = await seed_workspaces(db, users)
+                await db.commit()
+        except Exception as e:
+            await db.rollback()
+            print(f"Error seeding workspaces: {e}")
+
+        # Seed colleges
+        try:
+            await seed_colleges(db)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            print(f"Error seeding colleges: {e}")
+
+        # Seed projects
+        try:
+            if users and workspaces:
+                projects = await seed_projects(db, users, workspaces)
+                await db.commit()
+        except Exception as e:
+            await db.rollback()
+            print(f"Error seeding projects: {e}")
+
+        # Seed subscriptions
+        try:
+            if users:
+                await seed_subscriptions(db, users)
+                await db.commit()
+        except Exception as e:
+            await db.rollback()
+            print(f"Error seeding subscriptions: {e}")
+
+        # Seed token balances
+        try:
+            if users:
+                await seed_token_balances(db, users)
+                await db.commit()
+        except Exception as e:
+            await db.rollback()
+            print(f"Error seeding token balances: {e}")
+
+        # Seed workshop enrollments
+        try:
+            await seed_workshop_enrollments(db)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            print(f"Error seeding workshop enrollments: {e}")
+
+        # Seed campus drives and registrations
+        try:
+            drives = await seed_campus_drives(db)
+            await db.commit()
+            await seed_campus_drive_registrations(db, drives)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            print(f"Error seeding campus drives: {e}")
+
+        print("=" * 50)
+        print("Database seeding completed!")
+        print("=" * 50)
 
 
 async def clear_all():
@@ -608,22 +912,34 @@ async def clear_all():
     print("Clearing all data...")
     async with AsyncSessionLocal() as db:
         # Delete in reverse order of dependencies
-        await db.execute("DELETE FROM usage_logs")
-        await db.execute("DELETE FROM token_transactions")
-        await db.execute("DELETE FROM token_balances")
-        await db.execute("DELETE FROM token_purchases")
-        await db.execute("DELETE FROM subscriptions")
-        await db.execute("DELETE FROM api_keys")
-        await db.execute("DELETE FROM agent_tasks")
-        await db.execute("DELETE FROM documents")
-        await db.execute("DELETE FROM project_files")
-        await db.execute("DELETE FROM projects")
-        await db.execute("DELETE FROM workspaces")
-        await db.execute("DELETE FROM students")
-        await db.execute("DELETE FROM batches")
-        await db.execute("DELETE FROM faculty")
-        await db.execute("DELETE FROM colleges")
-        await db.execute("DELETE FROM users")
+        tables_to_clear = [
+            "usage_logs",
+            "token_transactions",
+            "token_balances",
+            "token_purchases",
+            "subscriptions",
+            "api_keys",
+            "agent_tasks",
+            "documents",
+            "project_files",
+            "projects",
+            "workspaces",
+            "students",
+            "batches",
+            "faculty",
+            "colleges",
+            "workshop_enrollments",
+            "campus_drive_responses",
+            "campus_drive_registrations",
+            "campus_drive_questions",
+            "campus_drives",
+            "users",
+        ]
+        for table in tables_to_clear:
+            try:
+                await db.execute(text(f"DELETE FROM {table}"))
+            except Exception as e:
+                print(f"Warning: Could not clear {table}: {e}")
         await db.commit()
         print("All data cleared!")
 

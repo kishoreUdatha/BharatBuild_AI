@@ -1,6 +1,7 @@
 """
 Admin Document Management endpoints.
 Allows admins to view and download user-generated academic documents.
+Supports filtering by user name/email and project title.
 """
 from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -26,7 +27,9 @@ async def list_documents(
     search: Optional[str] = None,
     doc_type: Optional[str] = None,
     user_id: Optional[str] = None,
+    user_search: Optional[str] = None,  # Search by user name/email
     project_id: Optional[str] = None,
+    project_search: Optional[str] = None,  # Search by project title
     sort_by: str = Query("created_at", regex="^(created_at|title|doc_type|file_size)$"),
     sort_order: str = Query("desc", regex="^(asc|desc)$"),
     db: AsyncSession = Depends(get_db),
@@ -66,8 +69,19 @@ async def list_documents(
     if user_id:
         conditions.append(Project.user_id == user_id)
 
+    if user_search:
+        user_term = f"%{user_search}%"
+        conditions.append(or_(
+            User.email.ilike(user_term),
+            User.full_name.ilike(user_term)
+        ))
+
     if project_id:
         conditions.append(Document.project_id == project_id)
+
+    if project_search:
+        project_term = f"%{project_search}%"
+        conditions.append(Project.title.ilike(project_term))
 
     if conditions:
         query = query.where(and_(*conditions))
