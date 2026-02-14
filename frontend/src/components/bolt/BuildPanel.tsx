@@ -371,7 +371,7 @@ export function BuildPanel() {
             {/* Build Button */}
             <button
               onClick={handleStartBuild}
-              disabled={isBuilding || !config.app_name || (quota && !quota.can_build)}
+              disabled={isBuilding || !config.app_name || Boolean(quota && !quota.can_build)}
               className="w-full py-3 rounded-lg bg-[hsl(var(--bolt-accent))] text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {selectedPlatform === 'android' ? (
