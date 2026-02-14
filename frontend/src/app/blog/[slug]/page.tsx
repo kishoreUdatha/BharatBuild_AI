@@ -10,6 +10,793 @@ const blogContent: Record<string, {
   category: string
   content: string
 }> = {
+  'react-vs-nextjs-which-to-choose-2025': {
+    title: 'React vs Next.js: Which Should You Learn in 2025?',
+    excerpt: 'Complete comparison of React and Next.js. Learn the differences, use cases, and which framework is best for your project.',
+    date: '2025-02-14',
+    readTime: '10 min',
+    category: 'Guide',
+    content: `
+Choosing between React and Next.js is one of the most common decisions for web developers. This guide will help you make the right choice.
+
+## What is React?
+
+React is a JavaScript library for building user interfaces. Created by Facebook, it focuses on component-based architecture.
+
+### React Strengths
+
+- **Flexibility**: Use any tools you want
+- **Large Ecosystem**: Thousands of packages
+- **Component Reusability**: Build once, use everywhere
+- **Strong Community**: Massive support and resources
+
+## What is Next.js?
+
+Next.js is a React framework that adds server-side rendering, routing, and more out of the box.
+
+### Next.js Strengths
+
+- **Server-Side Rendering (SSR)**: Better SEO and performance
+- **File-based Routing**: No router configuration needed
+- **API Routes**: Build backend in the same project
+- **Image Optimization**: Automatic image handling
+- **Static Generation**: Pre-render pages at build time
+
+## Key Differences
+
+### 1. Routing
+
+- **React**: Requires react-router or similar library
+- **Next.js**: Built-in file-based routing
+
+### 2. SEO
+
+- **React**: Client-side rendering can hurt SEO
+- **Next.js**: SSR and SSG for excellent SEO
+
+### 3. Performance
+
+- **React**: Manual optimization needed
+- **Next.js**: Automatic code splitting and optimization
+
+### 4. Learning Curve
+
+- **React**: Simpler to start, more decisions later
+- **Next.js**: More concepts upfront, easier scaling
+
+## When to Choose React
+
+Choose React when:
+
+- Building a single-page application (SPA)
+- SEO is not critical
+- You want maximum flexibility
+- You need to integrate with existing tools
+
+## When to Choose Next.js
+
+Choose Next.js when:
+
+- SEO is important
+- You need server-side rendering
+- You want faster development
+- Building a full-stack application
+- Performance is critical
+
+## Project Examples
+
+### Use React For
+
+- Admin dashboards
+- Internal tools
+- Mobile apps (React Native)
+- Widgets and embeds
+
+### Use Next.js For
+
+- Marketing websites
+- E-commerce stores
+- Blogs and content sites
+- SaaS applications
+
+## 2025 Recommendation
+
+For most new projects in 2025, **Next.js is the better choice** because:
+
+1. Built-in performance optimization
+2. Better SEO out of the box
+3. Full-stack capabilities
+4. Active development and support
+
+## Conclusion
+
+Both are excellent choices. Next.js is better for most web applications, while React gives more flexibility for specific use cases.
+
+BharatBuild AI supports both React and Next.js for project generation.
+    `,
+  },
+  'flutter-app-development-beginners-guide': {
+    title: 'Flutter App Development: Complete Beginner Guide 2025',
+    excerpt: 'Learn Flutter from scratch. Build cross-platform mobile apps for iOS and Android with this comprehensive tutorial.',
+    date: '2025-02-10',
+    readTime: '15 min',
+    category: 'Tutorial',
+    content: `
+Flutter is Google's UI toolkit for building beautiful, natively compiled applications for mobile, web, and desktop from a single codebase.
+
+## Why Learn Flutter in 2025?
+
+### Advantages
+
+- **Cross-Platform**: One codebase for iOS, Android, Web, Desktop
+- **Hot Reload**: See changes instantly
+- **Beautiful UI**: Material Design and Cupertino widgets
+- **Fast Performance**: Compiled to native code
+- **Growing Demand**: More companies adopting Flutter
+
+## Getting Started
+
+### Step 1: Install Flutter
+
+1. Download Flutter SDK from flutter.dev
+2. Extract to a folder
+3. Add Flutter to PATH
+4. Run flutter doctor to verify
+
+### Step 2: Set Up Editor
+
+Recommended: VS Code with Flutter extension
+
+- Install VS Code
+- Add Flutter extension
+- Add Dart extension
+
+### Step 3: Create First App
+
+Open terminal and run:
+
+- flutter create my_first_app
+- cd my_first_app
+- flutter run
+
+## Flutter Basics
+
+### Widgets
+
+Everything in Flutter is a widget:
+
+- **StatelessWidget**: Doesn't change state
+- **StatefulWidget**: Can change over time
+
+### Common Widgets
+
+- **Container**: Box with styling
+- **Row/Column**: Layout widgets
+- **Text**: Display text
+- **Image**: Show images
+- **ListView**: Scrollable list
+- **Button**: Clickable element
+
+## Building Your First App
+
+### Simple Counter App
+
+1. Create new project
+2. Edit lib/main.dart
+3. Add state management
+4. Run and test
+
+### Key Concepts
+
+- **State Management**: Provider, Riverpod, BLoC
+- **Navigation**: Named routes, Navigator 2.0
+- **HTTP Requests**: http package, Dio
+- **Local Storage**: SharedPreferences, Hive
+
+## Project Ideas for Practice
+
+### Beginner Projects
+
+1. **Todo App**: Learn state management
+2. **Calculator**: Practice layouts
+3. **Weather App**: API integration
+4. **Quiz App**: Navigation and state
+
+### Intermediate Projects
+
+5. **E-commerce App**: Full CRUD operations
+6. **Chat App**: Real-time with Firebase
+7. **Expense Tracker**: Charts and local DB
+8. **Social Media Clone**: Complex UI
+
+## Best Practices
+
+### Code Organization
+
+- Separate UI and logic
+- Use proper folder structure
+- Follow naming conventions
+
+### Performance
+
+- Use const widgets
+- Avoid unnecessary rebuilds
+- Optimize images
+- Lazy load when possible
+
+## Learning Resources
+
+### Official
+
+- Flutter documentation
+- Flutter YouTube channel
+- DartPad for practice
+
+### Community
+
+- Flutter Community on Medium
+- r/FlutterDev on Reddit
+- Flutter Discord
+
+## Conclusion
+
+Flutter is an excellent choice for mobile development in 2025. Start with basics, build projects, and keep learning.
+
+BharatBuild AI can generate complete Flutter projects with source code and documentation.
+    `,
+  },
+  'machine-learning-projects-for-students': {
+    title: 'Top 20 Machine Learning Projects for Students with Source Code',
+    excerpt: 'Best ML projects for beginners and final year students. Includes Python source code, datasets, and step-by-step guides.',
+    date: '2025-02-05',
+    readTime: '18 min',
+    category: 'Ideas',
+    content: `
+Machine Learning projects are essential for building your portfolio and landing jobs. Here are 20 projects with increasing difficulty.
+
+## Beginner Projects
+
+### 1. Iris Flower Classification
+
+- **Difficulty**: Easy
+- **Tech**: Python, Scikit-learn
+- **Dataset**: Iris dataset (built-in)
+- **Skills**: Classification basics
+
+### 2. House Price Prediction
+
+- **Difficulty**: Easy
+- **Tech**: Python, Linear Regression
+- **Dataset**: Boston Housing
+- **Skills**: Regression, feature engineering
+
+### 3. Spam Email Detection
+
+- **Difficulty**: Easy
+- **Tech**: Python, NLP, Naive Bayes
+- **Dataset**: SMS Spam Collection
+- **Skills**: Text classification
+
+### 4. Movie Recommendation System
+
+- **Difficulty**: Easy-Medium
+- **Tech**: Python, Collaborative Filtering
+- **Dataset**: MovieLens
+- **Skills**: Recommendation algorithms
+
+### 5. Handwritten Digit Recognition
+
+- **Difficulty**: Medium
+- **Tech**: Python, TensorFlow/Keras
+- **Dataset**: MNIST
+- **Skills**: Neural networks, CNN
+
+## Intermediate Projects
+
+### 6. Sentiment Analysis
+
+- **Difficulty**: Medium
+- **Tech**: Python, NLTK, LSTM
+- **Dataset**: Twitter/Reviews
+- **Skills**: NLP, Deep Learning
+
+### 7. Customer Churn Prediction
+
+- **Difficulty**: Medium
+- **Tech**: Python, XGBoost
+- **Dataset**: Telco Customer Churn
+- **Skills**: Business analytics
+
+### 8. Face Detection System
+
+- **Difficulty**: Medium
+- **Tech**: Python, OpenCV, dlib
+- **Dataset**: Custom or LFW
+- **Skills**: Computer vision
+
+### 9. Stock Price Prediction
+
+- **Difficulty**: Medium
+- **Tech**: Python, LSTM, TensorFlow
+- **Dataset**: Yahoo Finance API
+- **Skills**: Time series, RNN
+
+### 10. Image Classification (CIFAR-10)
+
+- **Difficulty**: Medium
+- **Tech**: Python, CNN, TensorFlow
+- **Dataset**: CIFAR-10
+- **Skills**: Deep learning, CNN
+
+## Advanced Projects
+
+### 11. Object Detection System
+
+- **Difficulty**: Hard
+- **Tech**: Python, YOLO, TensorFlow
+- **Dataset**: COCO
+- **Skills**: Advanced CV
+
+### 12. Chatbot with NLP
+
+- **Difficulty**: Hard
+- **Tech**: Python, Transformers, BERT
+- **Dataset**: Custom dialogues
+- **Skills**: NLP, Seq2Seq
+
+### 13. Disease Prediction from Symptoms
+
+- **Difficulty**: Medium-Hard
+- **Tech**: Python, Random Forest
+- **Dataset**: Medical datasets
+- **Skills**: Healthcare AI
+
+### 14. Fake News Detection
+
+- **Difficulty**: Medium-Hard
+- **Tech**: Python, NLP, Deep Learning
+- **Dataset**: Kaggle Fake News
+- **Skills**: Text classification
+
+### 15. Music Genre Classification
+
+- **Difficulty**: Hard
+- **Tech**: Python, Librosa, CNN
+- **Dataset**: GTZAN
+- **Skills**: Audio processing
+
+## Expert Projects
+
+### 16. Autonomous Driving Simulation
+
+- **Difficulty**: Expert
+- **Tech**: Python, Reinforcement Learning
+- **Dataset**: CARLA Simulator
+- **Skills**: RL, Computer Vision
+
+### 17. GANs for Image Generation
+
+- **Difficulty**: Expert
+- **Tech**: Python, PyTorch, GANs
+- **Dataset**: CelebA
+- **Skills**: Generative models
+
+### 18. Speech Recognition System
+
+- **Difficulty**: Expert
+- **Tech**: Python, DeepSpeech
+- **Dataset**: LibriSpeech
+- **Skills**: Audio, RNN
+
+### 19. Language Translation
+
+- **Difficulty**: Expert
+- **Tech**: Python, Transformer
+- **Dataset**: WMT
+- **Skills**: Seq2Seq, Attention
+
+### 20. AI Game Player
+
+- **Difficulty**: Expert
+- **Tech**: Python, Deep Q-Learning
+- **Dataset**: OpenAI Gym
+- **Skills**: Reinforcement Learning
+
+## How to Build These Projects
+
+### Step 1: Understand the Problem
+
+Research similar solutions and understand requirements.
+
+### Step 2: Gather Data
+
+Find or create datasets. Clean and preprocess.
+
+### Step 3: Choose Algorithm
+
+Select appropriate ML algorithm based on problem type.
+
+### Step 4: Train Model
+
+Split data, train, validate, and tune hyperparameters.
+
+### Step 5: Evaluate
+
+Use appropriate metrics (accuracy, F1, RMSE).
+
+### Step 6: Deploy
+
+Create web interface or API for your model.
+
+## Conclusion
+
+Start with beginner projects and gradually move to advanced ones. Each project teaches valuable skills.
+
+BharatBuild AI can generate complete ML projects with code, documentation, and deployment guides.
+    `,
+  },
+  'how-to-write-srs-document': {
+    title: 'How to Write SRS Document: Software Requirements Specification Guide',
+    excerpt: 'Complete guide to writing SRS documents. Learn IEEE format, sections, examples, and download free templates.',
+    date: '2025-01-28',
+    readTime: '12 min',
+    category: 'Documentation',
+    content: `
+SRS (Software Requirements Specification) is a crucial document for any software project. This guide covers everything you need to know.
+
+## What is SRS Document?
+
+SRS describes what the software will do and how it will perform. It's a contract between developers and stakeholders.
+
+### Why is SRS Important?
+
+- **Clear Requirements**: Everyone understands what to build
+- **Reduces Errors**: Fewer misunderstandings
+- **Project Planning**: Better time and cost estimates
+- **Testing Basis**: Test cases derived from requirements
+- **Documentation**: Reference throughout development
+
+## IEEE SRS Format
+
+IEEE 830 is the standard format for SRS documents.
+
+### 1. Introduction
+
+#### 1.1 Purpose
+
+Describe the purpose of this SRS document.
+
+#### 1.2 Scope
+
+Define the software being specified.
+
+#### 1.3 Definitions and Acronyms
+
+List technical terms and abbreviations.
+
+#### 1.4 References
+
+List related documents and standards.
+
+#### 1.5 Overview
+
+Describe document organization.
+
+### 2. Overall Description
+
+#### 2.1 Product Perspective
+
+How the software fits in larger system.
+
+#### 2.2 Product Functions
+
+Major functions the software will perform.
+
+#### 2.3 User Characteristics
+
+Describe target users.
+
+#### 2.4 Constraints
+
+Limitations and restrictions.
+
+#### 2.5 Assumptions and Dependencies
+
+What you assume to be true.
+
+### 3. Specific Requirements
+
+#### 3.1 Functional Requirements
+
+Detailed functional specifications.
+
+#### 3.2 Non-Functional Requirements
+
+- **Performance**: Response time, throughput
+- **Security**: Authentication, authorization
+- **Reliability**: Uptime, error handling
+- **Scalability**: User capacity, data volume
+
+#### 3.3 External Interface Requirements
+
+- **User Interfaces**: UI mockups
+- **Hardware Interfaces**: Device requirements
+- **Software Interfaces**: API specifications
+- **Communication Interfaces**: Protocols
+
+### 4. Appendices
+
+Supporting information, diagrams, prototypes.
+
+## Writing Tips
+
+### Be Specific
+
+Bad: The system should be fast.
+Good: The system shall respond within 2 seconds for 95% of requests.
+
+### Use Consistent Language
+
+- **Shall**: Mandatory requirement
+- **Should**: Recommended
+- **May**: Optional
+
+### Include Examples
+
+Provide use cases and scenarios.
+
+### Involve Stakeholders
+
+Get input from users, developers, testers.
+
+## Common Mistakes
+
+1. **Vague Requirements**: Be specific and measurable
+2. **Missing Requirements**: Cover all scenarios
+3. **Technical Jargon**: Use simple language
+4. **No Prioritization**: Mark requirements as essential/optional
+5. **Not Updated**: Keep document current
+
+## SRS Template Sections
+
+- Title Page
+- Revision History
+- Table of Contents
+- Introduction
+- Overall Description
+- System Features
+- External Interface Requirements
+- Non-Functional Requirements
+- Other Requirements
+- Appendices
+
+## Example: E-commerce SRS
+
+### Functional Requirement Example
+
+FR-001: User Registration
+
+- The system shall allow users to register with email and password
+- The system shall validate email format
+- The system shall enforce password minimum 8 characters
+- The system shall send verification email within 1 minute
+
+### Non-Functional Requirement Example
+
+NFR-001: Performance
+
+- The website shall load within 3 seconds on 4G connection
+- The system shall support 10,000 concurrent users
+- Database queries shall complete within 500ms
+
+## Conclusion
+
+A well-written SRS is foundation of successful software project. Take time to write it properly.
+
+BharatBuild AI can automatically generate SRS documents based on your project requirements.
+    `,
+  },
+  'best-tech-stack-for-web-development-2025': {
+    title: 'Best Tech Stack for Web Development in 2025: Complete Guide',
+    excerpt: 'Compare MERN, MEAN, Next.js, Django, and more. Find the perfect tech stack for your web project.',
+    date: '2025-01-20',
+    readTime: '14 min',
+    category: 'Guide',
+    content: `
+Choosing the right tech stack is crucial for your project's success. This guide compares popular stacks for 2025.
+
+## What is a Tech Stack?
+
+A tech stack is the combination of technologies used to build a web application:
+
+- **Frontend**: What users see (React, Vue, Angular)
+- **Backend**: Server logic (Node.js, Python, Java)
+- **Database**: Data storage (MongoDB, PostgreSQL, MySQL)
+- **DevOps**: Deployment (AWS, Docker, Kubernetes)
+
+## Popular Tech Stacks in 2025
+
+### 1. MERN Stack
+
+- **MongoDB**: NoSQL database
+- **Express.js**: Backend framework
+- **React**: Frontend library
+- **Node.js**: Runtime environment
+
+#### Best For
+
+- Single-page applications
+- Real-time applications
+- Startups and MVPs
+
+#### Pros
+
+- JavaScript everywhere
+- Large community
+- Fast development
+- Flexible architecture
+
+#### Cons
+
+- NoSQL limitations for complex queries
+- Callback complexity
+- Security requires attention
+
+### 2. Next.js + Prisma Stack
+
+- **Next.js**: React framework
+- **Prisma**: Database ORM
+- **PostgreSQL**: Relational database
+- **Vercel**: Deployment
+
+#### Best For
+
+- SEO-focused websites
+- E-commerce platforms
+- SaaS applications
+
+#### Pros
+
+- Server-side rendering
+- Full-stack capabilities
+- Type safety with TypeScript
+- Easy deployment
+
+#### Cons
+
+- Learning curve
+- Vercel lock-in (optional)
+
+### 3. Django Stack
+
+- **Django**: Python framework
+- **PostgreSQL**: Database
+- **React/Vue**: Frontend
+- **AWS/Heroku**: Deployment
+
+#### Best For
+
+- Complex applications
+- Data-heavy projects
+- AI/ML integration
+
+#### Pros
+
+- Batteries included
+- Admin panel built-in
+- Security features
+- Python ecosystem
+
+#### Cons
+
+- Monolithic architecture
+- Slower than Node.js
+- Less frontend flexibility
+
+### 4. Laravel Stack
+
+- **Laravel**: PHP framework
+- **MySQL**: Database
+- **Vue.js**: Frontend
+- **Forge/Vapor**: Deployment
+
+#### Best For
+
+- Content management
+- E-commerce
+- Traditional web apps
+
+#### Pros
+
+- Elegant syntax
+- Rich ecosystem
+- Great documentation
+- Built-in features
+
+#### Cons
+
+- PHP performance
+- Scaling challenges
+- Less trendy
+
+### 5. Go + React Stack
+
+- **Go**: Backend language
+- **Gin/Fiber**: Framework
+- **React**: Frontend
+- **PostgreSQL**: Database
+
+#### Best For
+
+- High-performance APIs
+- Microservices
+- System tools
+
+#### Pros
+
+- Extremely fast
+- Concurrent processing
+- Simple language
+- Low memory usage
+
+#### Cons
+
+- Smaller ecosystem
+- Verbose code
+- Learning curve
+
+## Comparison Table
+
+| Stack | Performance | Learning Curve | Scalability | Best For |
+|-------|-------------|----------------|-------------|----------|
+| MERN | Good | Medium | Good | Startups |
+| Next.js | Excellent | Medium | Excellent | SaaS |
+| Django | Good | Easy | Good | Enterprise |
+| Laravel | Good | Easy | Medium | CMS |
+| Go+React | Excellent | Hard | Excellent | APIs |
+
+## How to Choose
+
+### Consider These Factors
+
+1. **Team Expertise**: What does your team know?
+2. **Project Type**: Web app, API, real-time?
+3. **Scale**: Startup MVP or enterprise?
+4. **Timeline**: How fast do you need to launch?
+5. **Budget**: Hosting and development costs
+
+### Decision Guide
+
+- **Quick MVP**: MERN or Next.js
+- **SEO Important**: Next.js
+- **Data Science**: Django
+- **Traditional Web**: Laravel
+- **High Performance**: Go or Next.js
+
+## 2025 Recommendation
+
+For most new projects, we recommend:
+
+### Primary Choice: Next.js + PostgreSQL
+
+- Full-stack capabilities
+- Excellent performance
+- Great developer experience
+- Future-proof
+
+### Alternative: MERN Stack
+
+- Faster initial development
+- JavaScript only
+- Good for real-time apps
+
+## Conclusion
+
+There's no perfect tech stack. Choose based on your specific needs, team skills, and project requirements.
+
+BharatBuild AI supports 50+ tech stacks including all mentioned above.
+    `,
+  },
   'complete-final-year-project-with-ai': {
     title: 'How to Complete Your Final Year Project in 2 Days Using AI',
     excerpt: 'Learn how to generate complete final year projects with source code, documentation, PPT & viva Q&A using AI.',
