@@ -8,8 +8,8 @@ import { OrganizationJsonLd, SoftwareApplicationJsonLd, FAQJsonLd, WebsiteJsonLd
 
 const inter = Inter({ subsets: ['latin'] })
 
-// Google Analytics Measurement ID - Replace with your actual GA4 ID
-const GA_MEASUREMENT_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID || 'G-XXXXXXXXXX'
+// Google Analytics Measurement ID
+const GA_MEASUREMENT_ID = 'G-B2BF49W8R1'
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://bharatbuild.ai'),
