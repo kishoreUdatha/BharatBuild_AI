@@ -244,3 +244,60 @@ export function WebsiteJsonLd() {
     />
   )
 }
+
+// Article Schema for Blog Posts
+export function ArticleJsonLd({
+  title,
+  description,
+  url,
+  datePublished,
+  dateModified,
+  authorName = 'BharatBuild AI',
+  image = 'https://bharatbuild.ai/og-image.png',
+}: {
+  title: string
+  description: string
+  url: string
+  datePublished: string
+  dateModified?: string
+  authorName?: string
+  image?: string
+}) {
+  const schema = {
+    '@context': 'https://schema.org',
+    '@type': 'Article',
+    headline: title,
+    description: description,
+    url: url,
+    datePublished: datePublished,
+    dateModified: dateModified || datePublished,
+    author: {
+      '@type': 'Organization',
+      name: authorName,
+      url: 'https://bharatbuild.ai',
+    },
+    publisher: {
+      '@type': 'Organization',
+      name: 'BharatBuild AI',
+      logo: {
+        '@type': 'ImageObject',
+        url: 'https://bharatbuild.ai/logo.png',
+      },
+    },
+    image: {
+      '@type': 'ImageObject',
+      url: image,
+    },
+    mainEntityOfPage: {
+      '@type': 'WebPage',
+      '@id': url,
+    },
+  }
+
+  return (
+    <script
+      type="application/ld+json"
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}
+    />
+  )
+}

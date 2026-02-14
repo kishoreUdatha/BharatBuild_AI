@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { ArrowLeft, Clock, ArrowRight, Twitter, Linkedin, Copy } from 'lucide-react'
 import { Metadata } from 'next'
+import { BreadcrumbJsonLd, ArticleJsonLd } from '@/components/seo/JsonLd'
 
 const blogContent: Record<string, {
   title: string
@@ -800,7 +801,7 @@ BharatBuild AI supports 50+ tech stacks including all mentioned above.
   'complete-final-year-project-with-ai': {
     title: 'How to Complete Your Final Year Project in 2 Days Using AI',
     excerpt: 'Learn how to generate complete final year projects with source code, documentation, PPT & viva Q&A using AI.',
-    date: '2024-12-15',
+    date: '2025-01-15',
     readTime: '8 min',
     category: 'Guide',
     content: `
@@ -879,7 +880,7 @@ AI tools like BharatBuild can significantly accelerate your final year project. 
   'ieee-format-project-report-guide': {
     title: 'IEEE Format Project Report: Complete Guide with Free Template',
     excerpt: 'Complete guide to writing IEEE format project reports. Learn structure, formatting rules, and download free templates.',
-    date: '2024-12-10',
+    date: '2025-01-10',
     readTime: '12 min',
     category: 'Documentation',
     content: `
@@ -984,7 +985,7 @@ BharatBuild AI can generate IEEE format reports automatically based on your proj
   'ai-code-generators-compared': {
     title: 'AI Code Generators Compared: BharatBuild vs Bolt vs v0 vs Cursor',
     excerpt: 'Comprehensive comparison of AI code generators. Compare features, pricing, and capabilities.',
-    date: '2024-12-05',
+    date: '2025-01-05',
     readTime: '15 min',
     category: 'Comparison',
     content: `
@@ -1087,7 +1088,7 @@ Choose based on your specific needs. BharatBuild excels for complete project gen
   'build-mvp-without-coding': {
     title: 'Build Your MVP Without a Technical Co-founder',
     excerpt: 'Learn how to build your startup MVP without coding. Use AI tools to create production-ready products.',
-    date: '2024-11-28',
+    date: '2025-01-02',
     readTime: '10 min',
     category: 'Startup',
     content: `
@@ -1175,9 +1176,9 @@ AI tools have democratized software development. You can now build and validate 
     `,
   },
   '50-final-year-project-ideas-cse': {
-    title: '50 Final Year Project Ideas for CSE Students (2024)',
+    title: '50 Final Year Project Ideas for CSE Students (2025)',
     excerpt: 'Top 50 final year project ideas for CSE, IT, and computer science students with tech stack details.',
-    date: '2024-11-20',
+    date: '2025-01-01',
     readTime: '20 min',
     category: 'Ideas',
     content: `
@@ -1263,9 +1264,48 @@ export async function generateMetadata({ params }: { params: { slug: string } })
   if (!post) {
     return { title: 'Post Not Found | BharatBuild AI' }
   }
+
+  const url = `https://bharatbuild.ai/blog/${params.slug}`
+
   return {
     title: `${post.title} | BharatBuild AI Blog`,
     description: post.excerpt,
+    keywords: [
+      post.category.toLowerCase(),
+      'BharatBuild AI',
+      'AI code generator',
+      'final year project',
+      'student project',
+      'coding tutorial',
+    ],
+    authors: [{ name: 'BharatBuild AI', url: 'https://bharatbuild.ai' }],
+    openGraph: {
+      title: post.title,
+      description: post.excerpt,
+      url: url,
+      siteName: 'BharatBuild AI',
+      type: 'article',
+      publishedTime: post.date,
+      authors: ['BharatBuild AI'],
+      images: [
+        {
+          url: '/og-image.png',
+          width: 1200,
+          height: 630,
+          alt: post.title,
+        },
+      ],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: post.title,
+      description: post.excerpt,
+      images: ['/twitter-image.png'],
+      creator: '@bharatbuild',
+    },
+    alternates: {
+      canonical: url,
+    },
   }
 }
 
@@ -1287,8 +1327,21 @@ export default function BlogPost({ params }: { params: { slug: string } }) {
     .filter(([slug]) => slug !== params.slug)
     .slice(0, 3)
 
+  const breadcrumbItems = [
+    { name: 'Home', url: 'https://bharatbuild.ai' },
+    { name: 'Blog', url: 'https://bharatbuild.ai/blog' },
+    { name: post.title, url: `https://bharatbuild.ai/blog/${params.slug}` },
+  ]
+
   return (
     <div className="min-h-screen bg-[#0a0a0f]">
+      <BreadcrumbJsonLd items={breadcrumbItems} />
+      <ArticleJsonLd
+        title={post.title}
+        description={post.excerpt}
+        url={`https://bharatbuild.ai/blog/${params.slug}`}
+        datePublished={post.date}
+      />
       {/* Header */}
       <header className="border-b border-white/10 sticky top-0 bg-[#0a0a0f]/90 backdrop-blur-md z-50">
         <div className="max-w-3xl mx-auto px-6 py-4">
