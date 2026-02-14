@@ -7,11 +7,11 @@ const blogPosts = [
   { slug: 'machine-learning-projects-for-students', date: '2025-02-05' },
   { slug: 'how-to-write-srs-document', date: '2025-01-28' },
   { slug: 'best-tech-stack-for-web-development-2025', date: '2025-01-20' },
-  { slug: 'complete-final-year-project-with-ai', date: '2024-12-15' },
-  { slug: 'ieee-format-project-report-guide', date: '2024-12-10' },
-  { slug: 'ai-code-generators-compared', date: '2024-12-05' },
-  { slug: 'build-mvp-without-coding', date: '2024-11-28' },
-  { slug: '50-final-year-project-ideas-cse', date: '2024-11-20' },
+  { slug: 'complete-final-year-project-with-ai', date: '2025-01-15' },
+  { slug: 'ieee-format-project-report-guide', date: '2025-01-10' },
+  { slug: 'ai-code-generators-compared', date: '2025-01-05' },
+  { slug: 'build-mvp-without-coding', date: '2025-01-02' },
+  { slug: '50-final-year-project-ideas-cse', date: '2025-01-01' },
 ]
 
 export default function sitemap(): MetadataRoute.Sitemap {
