@@ -6,6 +6,46 @@ import { Clock, ArrowRight, Search, ArrowUpRight } from 'lucide-react'
 
 const blogPosts = [
   {
+    slug: 'react-vs-nextjs-which-to-choose-2025',
+    title: 'React vs Next.js: Which Should You Learn in 2025?',
+    excerpt: 'Complete comparison of React and Next.js. Learn the differences, use cases, and which framework is best for your project.',
+    date: '2025-02-14',
+    readTime: '10 min',
+    category: 'Guide',
+  },
+  {
+    slug: 'flutter-app-development-beginners-guide',
+    title: 'Flutter App Development: Complete Beginner Guide 2025',
+    excerpt: 'Learn Flutter from scratch. Build cross-platform mobile apps for iOS and Android with this comprehensive tutorial.',
+    date: '2025-02-10',
+    readTime: '15 min',
+    category: 'Tutorial',
+  },
+  {
+    slug: 'machine-learning-projects-for-students',
+    title: 'Top 20 Machine Learning Projects for Students with Source Code',
+    excerpt: 'Best ML projects for beginners and final year students. Includes Python source code, datasets, and step-by-step guides.',
+    date: '2025-02-05',
+    readTime: '18 min',
+    category: 'Ideas',
+  },
+  {
+    slug: 'how-to-write-srs-document',
+    title: 'How to Write SRS Document: Software Requirements Specification Guide',
+    excerpt: 'Complete guide to writing SRS documents. Learn IEEE format, sections, examples, and download free templates.',
+    date: '2025-01-28',
+    readTime: '12 min',
+    category: 'Documentation',
+  },
+  {
+    slug: 'best-tech-stack-for-web-development-2025',
+    title: 'Best Tech Stack for Web Development in 2025: Complete Guide',
+    excerpt: 'Compare MERN, MEAN, Next.js, Django, and more. Find the perfect tech stack for your web project.',
+    date: '2025-01-20',
+    readTime: '14 min',
+    category: 'Guide',
+  },
+  {
     slug: 'complete-final-year-project-with-ai',
     title: 'How to Complete Your Final Year Project in 2 Days Using AI',
     excerpt: 'Learn how to generate complete final year projects with source code, documentation, PPT & viva Q&A using AI.',
@@ -47,7 +87,7 @@ const blogPosts = [
   },
 ]
 
-const categories = ['All', 'Guide', 'Documentation', 'Comparison', 'Startup', 'Ideas']
+const categories = ['All', 'Guide', 'Tutorial', 'Documentation', 'Comparison', 'Startup', 'Ideas']
 
 export default function BlogPage() {
   const [activeCategory, setActiveCategory] = useState('All')

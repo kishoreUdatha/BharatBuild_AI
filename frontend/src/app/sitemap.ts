@@ -2,6 +2,11 @@ import { MetadataRoute } from 'next'
 
 // Blog post slugs for sitemap
 const blogPosts = [
+  { slug: 'react-vs-nextjs-which-to-choose-2025', date: '2025-02-14' },
+  { slug: 'flutter-app-development-beginners-guide', date: '2025-02-10' },
+  { slug: 'machine-learning-projects-for-students', date: '2025-02-05' },
+  { slug: 'how-to-write-srs-document', date: '2025-01-28' },
+  { slug: 'best-tech-stack-for-web-development-2025', date: '2025-01-20' },
   { slug: 'complete-final-year-project-with-ai', date: '2024-12-15' },
   { slug: 'ieee-format-project-report-guide', date: '2024-12-10' },
   { slug: 'ai-code-generators-compared', date: '2024-12-05' },
