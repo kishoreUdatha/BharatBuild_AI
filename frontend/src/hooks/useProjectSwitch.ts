@@ -264,17 +264,33 @@ export function useProjectSwitch() {
             data = await apiClient.get(`/projects/${newProjectId}/metadata`)
             console.log(`[ProjectSwitch] Metadata response received:`, JSON.stringify(data, null, 2))
           } catch (metadataErr: any) {
-            console.warn(`[ProjectSwitch] /metadata endpoint failed:`, {
-              message: metadataErr.message,
-              status: metadataErr.response?.status,
-              data: metadataErr.response?.data
-            })
+            // Enhanced error logging for production debugging
+            const errorDetails = {
+              message: metadataErr?.message || 'Unknown error',
+              status: metadataErr?.response?.status || metadataErr?.status,
+              statusText: metadataErr?.response?.statusText,
+              data: metadataErr?.response?.data,
+              name: metadataErr?.name,
+              code: metadataErr?.code,
+              // Stringify the entire error for debugging
+              fullError: JSON.stringify(metadataErr, Object.getOwnPropertyNames(metadataErr || {}), 2)
+            }
+            console.error(`[ProjectSwitch] /metadata endpoint failed:`, errorDetails)
             useMetadataEndpoint = false
 
             // Fallback to old /sync/files endpoint (loads content too, but works)
             console.log('[ProjectSwitch] Falling back to /sync/files/' + newProjectId)
-            data = await apiClient.get(`/sync/files/${newProjectId}`)
-            console.log(`[ProjectSwitch] Fallback /sync/files response:`, JSON.stringify(data, null, 2))
+            try {
+              data = await apiClient.get(`/sync/files/${newProjectId}`)
+              console.log(`[ProjectSwitch] Fallback /sync/files response:`, JSON.stringify(data, null, 2))
+            } catch (syncErr: any) {
+              console.error(`[ProjectSwitch] /sync/files also failed:`, {
+                message: syncErr?.message,
+                status: syncErr?.response?.status,
+                data: syncErr?.response?.data
+              })
+              throw syncErr
+            }
           }
 
           // Handle response from either endpoint
