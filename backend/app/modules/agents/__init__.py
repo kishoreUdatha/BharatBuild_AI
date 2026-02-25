@@ -10,7 +10,7 @@ from app.modules.agents.tester_agent import tester_agent, TesterAgent
 from app.modules.agents.debugger_agent import debugger_agent, DebuggerAgent
 from app.modules.agents.explainer_agent import explainer_agent, ExplainerAgent
 from app.modules.agents.document_generator_agent import document_generator_agent, DocumentGeneratorAgent
-from app.modules.agents.naac_nba_agent import naac_nba_agent, NAACNBAAgent, AccreditationDocType
+from app.modules.agents.naac_nba_agent import naac_nba_agent, NAACNBAAgent, AccreditationDocType, NAACCriterion
 from app.modules.agents.orchestrator import orchestrator, MultiAgentOrchestrator, WorkflowMode
 
 __all__ = [
@@ -43,4 +43,5 @@ __all__ = [
     # Enums
     'WorkflowMode',
     'AccreditationDocType',
+    'NAACCriterion',
 ]
