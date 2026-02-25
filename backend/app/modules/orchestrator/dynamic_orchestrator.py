@@ -706,6 +706,7 @@ class AgentType(str, Enum):
     ANALYZER = "analyzer"
     BOLT_INSTANT = "bolt_instant"  # FAST: Single-call generator like Bolt.new
     MEMORY = "memory"  # NEW: Memory Agent for context/file awareness (like Claude Code)
+    NAAC_NBA = "naac_nba"  # NEW: NAAC/NBA Accreditation document generator
 
 
 class EventType(str, Enum):
