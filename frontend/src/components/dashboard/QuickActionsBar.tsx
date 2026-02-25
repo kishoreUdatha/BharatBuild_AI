@@ -6,7 +6,8 @@ import {
   FolderKanban,
   FileText,
   Sparkles,
-  Coins
+  Coins,
+  Award
 } from 'lucide-react'
 
 interface QuickActionsBarProps {
@@ -41,6 +42,12 @@ export function QuickActionsBar({ onCreateProject }: QuickActionsBarProps) {
       label: 'Buy Tokens',
       description: 'Purchase more tokens',
       onClick: () => router.push('/pricing')
+    },
+    {
+      icon: Award,
+      label: 'NAAC/NBA',
+      description: 'Accreditation documents',
+      onClick: () => router.push('/accreditation')
     }
   ]
 

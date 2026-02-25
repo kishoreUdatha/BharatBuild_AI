@@ -320,6 +320,211 @@ class ApiClient {
     return response.data
   }
 
+  // ==================== NAAC/NBA Accreditation ====================
+
+  /**
+   * Get NAAC criteria overview
+   */
+  async getAccreditationOverview() {
+    const response = await this.axiosInstance.get('/accreditation/overview')
+    return response.data
+  }
+
+  /**
+   * Get all NAAC criteria details
+   */
+  async getAccreditationCriteria() {
+    const response = await this.axiosInstance.get('/accreditation/criteria')
+    return response.data
+  }
+
+  /**
+   * Get supported document types
+   */
+  async getAccreditationDocumentTypes() {
+    const response = await this.axiosInstance.get('/accreditation/document-types')
+    return response.data
+  }
+
+  /**
+   * Generate complete SSR (Self Study Report)
+   */
+  async generateSSR(data: {
+    institution: {
+      name: string
+      type: string
+      location: string
+      state: string
+      established_year: number
+      naac_cycle?: number
+      previous_grade?: string
+      programs_offered?: string[]
+      total_students?: number
+      total_faculty?: number
+    }
+    academic_year?: string
+    naac_cycle?: number
+  }) {
+    const response = await this.axiosInstance.post('/accreditation/ssr/generate', data)
+    return response.data
+  }
+
+  /**
+   * Generate criterion-specific documents (1-7)
+   */
+  async generateCriterionDocuments(criterionNumber: number, data: {
+    institution: {
+      name: string
+      type: string
+      location: string
+      state: string
+      established_year: number
+    }
+    criterion: string
+    academic_year?: string
+    additional_context?: string
+  }) {
+    const response = await this.axiosInstance.post(`/accreditation/criterion/${criterionNumber}`, data)
+    return response.data
+  }
+
+  /**
+   * Generate Course Outcomes with Bloom's Taxonomy
+   */
+  async generateCourseOutcomes(data: {
+    course_info: {
+      course_name: string
+      course_code: string
+      department: string
+      semester: number
+      credits: number
+      program_name?: string
+    }
+    project_description: string
+  }) {
+    const response = await this.axiosInstance.post('/accreditation/obe/course-outcomes', data)
+    return response.data
+  }
+
+  /**
+   * Generate CO-PO Mapping Matrix
+   */
+  async generateCOPOMapping(data: {
+    course_info: {
+      course_name: string
+      course_code: string
+      department: string
+      semester: number
+      credits: number
+    }
+    course_outcomes: string[]
+  }) {
+    const response = await this.axiosInstance.post('/accreditation/obe/co-po-mapping', data)
+    return response.data
+  }
+
+  /**
+   * Generate Assessment Rubrics
+   */
+  async generateRubrics(data: {
+    course_info: {
+      course_name: string
+      course_code: string
+      department: string
+      semester: number
+      credits: number
+    }
+    assessment_type?: string
+    criteria_count?: number
+  }) {
+    const response = await this.axiosInstance.post('/accreditation/obe/rubrics', data)
+    return response.data
+  }
+
+  /**
+   * Generate Attainment Calculation Template
+   */
+  async generateAttainment(data: {
+    course_info: {
+      course_name: string
+      course_code: string
+      department: string
+      semester: number
+      credits: number
+    }
+    project_description: string
+  }) {
+    const response = await this.axiosInstance.post('/accreditation/obe/attainment', data)
+    return response.data
+  }
+
+  /**
+   * Generate IQAC Documentation
+   */
+  async generateIQACReport(data: {
+    institution: {
+      name: string
+      type: string
+      location: string
+      state: string
+      established_year: number
+    }
+    academic_year?: string
+  }) {
+    const response = await this.axiosInstance.post('/accreditation/iqac/report', data)
+    return response.data
+  }
+
+  /**
+   * Generate Best Practices Documentation
+   */
+  async generateBestPractices(data: {
+    institution: {
+      name: string
+      type: string
+      location: string
+      state: string
+      established_year: number
+    }
+    focus_areas?: string[]
+  }) {
+    const response = await this.axiosInstance.post('/accreditation/best-practices', data)
+    return response.data
+  }
+
+  /**
+   * Generate Green/Environmental Audit
+   */
+  async generateGreenAudit(data: {
+    institution: {
+      name: string
+      type: string
+      location: string
+      state: string
+      established_year: number
+    }
+    audit_year?: string
+  }) {
+    const response = await this.axiosInstance.post('/accreditation/green-audit', data)
+    return response.data
+  }
+
+  /**
+   * Get NBA Program Outcomes (12 POs)
+   */
+  async getProgramOutcomes() {
+    const response = await this.axiosInstance.get('/accreditation/program-outcomes')
+    return response.data
+  }
+
+  /**
+   * Get Bloom's Taxonomy levels
+   */
+  async getBloomsTaxonomy() {
+    const response = await this.axiosInstance.get('/accreditation/blooms-taxonomy')
+    return response.data
+  }
+
   // ==================== Generic request methods ====================
   async get<T = any>(url: string, config?: any): Promise<T> {
     const response = await this.axiosInstance.get(url, config)
