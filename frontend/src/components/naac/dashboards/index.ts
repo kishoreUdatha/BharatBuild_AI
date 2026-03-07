@@ -1,0 +1,6 @@
+export { default as HeadOfInstitutionDashboard } from './HeadOfInstitutionDashboard'
+export { default as IQACCoordinatorDashboard } from './IQACCoordinatorDashboard'
+export { default as CriterionCoordinatorDashboard } from './CriterionCoordinatorDashboard'
+export { default as DepartmentCoordinatorDashboard } from './DepartmentCoordinatorDashboard'
+export { default as DocumentationTeamDashboard } from './DocumentationTeamDashboard'
+export { default as RoleDashboardRouter } from './RoleDashboardRouter'

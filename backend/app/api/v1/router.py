@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import auth, projects, api_keys, billing, tokens, streaming, bolt, automation, orchestrator, logs, execution, documents, adventure, resume, download, containers, preview, preview_proxy, jobs, agentic, classify, sync, payments, import_project, paper, feedback, sandbox, workspace, log_stream, retrieval, users, sdk_agents, errors, autofixer_metrics, health, workshop, campus_drive, coupons, accreditation
+from app.api.v1.endpoints import auth, projects, api_keys, billing, tokens, streaming, bolt, automation, orchestrator, logs, execution, documents, adventure, resume, download, containers, preview, preview_proxy, jobs, agentic, classify, sync, payments, import_project, paper, feedback, sandbox, workspace, log_stream, retrieval, users, sdk_agents, errors, autofixer_metrics, health, workshop, campus_drive, coupons, accreditation, accreditation_extended, naac_rbac, college_onboarding
 from app.api.v1.endpoints.admin import admin_router
 
 api_router = APIRouter()
@@ -232,5 +232,8 @@ api_router.include_router(errors.router, prefix="/errors", tags=["Unified Error 
 api_router.include_router(autofixer_metrics.router, prefix="/autofixer", tags=["Auto-Fixer Metrics"])
 api_router.include_router(coupons.router, tags=["Coupons"])
 api_router.include_router(accreditation.router, prefix="/accreditation", tags=["NAAC/NBA Accreditation"])
+api_router.include_router(accreditation_extended.router, prefix="/accreditation", tags=["NAAC/NBA Accreditation Extended"])
+api_router.include_router(naac_rbac.router, tags=["NAAC RBAC"])
+api_router.include_router(college_onboarding.router, prefix="/onboarding", tags=["College Onboarding"])
 api_router.include_router(admin_router)
 

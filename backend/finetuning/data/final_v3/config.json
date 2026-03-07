@@ -1,0 +1,44 @@
+{
+  "dataset_version": "v3_final",
+  "created_at": "2026-02-19T21:21:39.281936",
+  "statistics": {
+    "train_examples": 70370,
+    "eval_examples": 3828,
+    "estimated_train_tokens": 13447575,
+    "estimated_eval_tokens": 850466
+  },
+  "composition": {
+    "multifile": 116,
+    "debugging": 15,
+    "refactoring": 3,
+    "explanation": 4,
+    "code_generation": 23249,
+    "simple": 46983
+  },
+  "sources": [
+    "CodeAlpaca-20k (Hugging Face)",
+    "Magicoder-OSS-Instruct-75K (Hugging Face)",
+    "Evol-Instruct-Code-80k (Hugging Face)",
+    "Python-Codes-25k (Hugging Face)",
+    "Python-Instructions-18k (Hugging Face)",
+    "Custom Multi-file Projects (Generated)",
+    "Custom Complex Tasks (Generated)"
+  ],
+  "training_config": {
+    "base_model": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "method": "LoRA",
+    "lora_r": 64,
+    "lora_alpha": 128,
+    "lora_dropout": 0.05,
+    "learning_rate": 0.0002,
+    "batch_size": 4,
+    "gradient_accumulation_steps": 4,
+    "epochs": 3,
+    "max_seq_length": 4096,
+    "warmup_ratio": 0.03
+  },
+  "files": {
+    "train": "C:\\Users\\Lekhana\\Kishore_projects\\BharatBuild_AI\\backend\\finetuning\\data\\final_v3\\train.jsonl",
+    "eval": "C:\\Users\\Lekhana\\Kishore_projects\\BharatBuild_AI\\backend\\finetuning\\data\\final_v3\\eval.jsonl"
+  }
+}

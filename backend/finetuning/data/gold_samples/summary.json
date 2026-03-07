@@ -1,0 +1,18 @@
+{
+  "total_samples": 515,
+  "categories": {
+    "spec_to_implementation": 145,
+    "bug_fix": 150,
+    "add_tests": 108,
+    "refactor": 50,
+    "security": 50,
+    "pytorch": 4,
+    "tensorflow": 2,
+    "sklearn": 1,
+    "huggingface": 1,
+    "pandas": 1,
+    "computer_vision": 1,
+    "nlp": 1,
+    "mlops": 1
+  }
+}

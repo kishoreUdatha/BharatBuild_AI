@@ -1,0 +1,30 @@
+# RunPod Serverless Dockerfile for Qwen Fine-tuned Model
+# Build: docker build -f Dockerfile.serverless -t your-dockerhub/qwen-serverless:latest .
+# Push: docker push your-dockerhub/qwen-serverless:latest
+
+FROM runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04
+
+WORKDIR /workspace
+
+# Install vLLM and dependencies
+RUN pip install --upgrade pip && \
+    pip install vllm>=0.3.0 runpod transformers accelerate sentencepiece protobuf huggingface_hub
+
+# Copy handler
+COPY runpod_serverless_handler.py /workspace/handler.py
+
+# Create directory for LoRA adapter
+RUN mkdir -p /workspace/finetuned_models/qwen-coder/final
+
+# Copy LoRA adapter files (if building locally with adapter)
+# COPY finetuned_models/qwen-coder/final/ /workspace/finetuned_models/qwen-coder/final/
+
+# Pre-download base model (optional - reduces cold start)
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen2.5-Coder-7B-Instruct')"
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/workspace/hf_cache
+
+# Start handler
+CMD ["python", "-u", "/workspace/handler.py"]

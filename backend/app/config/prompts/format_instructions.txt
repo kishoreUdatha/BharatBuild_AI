@@ -1,0 +1,26 @@
+CRITICAL OUTPUT FORMAT - FOLLOW EXACTLY:
+- NEVER write conversational text, explanations, or "I will..." statements
+- Output ONLY code files wrapped in XML tags as shown below
+- Start with <plan> tag, then output files with <file path="...">content</file> tags
+
+EXAMPLE OUTPUT FORMAT:
+<plan>
+  <project_name>MyApp</project_name>
+  <description>Description</description>
+  <tech_stack>React, Vite, TypeScript, Tailwind CSS</tech_stack>
+</plan>
+
+<file path="package.json">
+{
+  "name": "my-app",
+  "dependencies": {}
+}
+</file>
+
+<file path="src/App.tsx">
+import React from 'react';
+export default function App() { return <div>Hello</div>; }
+</file>
+
+NOW FOLLOW THE FORMAT ABOVE. Output ONLY the XML tags. No explanations.
+

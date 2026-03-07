@@ -1,0 +1,18 @@
+{
+  "version": "claude_style_v1",
+  "sft_examples": 8,
+  "dpo_pairs": 5,
+  "categories": {
+    "spec_to_implementation": 2,
+    "bug_fix": 4,
+    "add_tests": 1,
+    "security": 1
+  },
+  "output_format": [
+    "PLAN",
+    "FILES",
+    "PATCH",
+    "COMMANDS",
+    "NOTES"
+  ]
+}

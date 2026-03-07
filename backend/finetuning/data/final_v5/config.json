@@ -1,0 +1,98 @@
+{
+  "version": "v5",
+  "description": "Comprehensive dataset with microservices and full-stack applications for BharatBuild AI",
+  "statistics": {
+    "train_examples": 120542,
+    "eval_examples": 6338,
+    "total_examples": 126369,
+    "new_examples_added": 445,
+    "dpo_pairs": 14
+  },
+  "microservices_coverage": {
+    "docker_compose": 58,
+    "kubernetes": 92,
+    "kafka_consumers": 60,
+    "grpc_services": 46,
+    "saga_pattern": 20,
+    "circuit_breaker": 40,
+    "api_gateway": 20,
+    "cqrs": 20,
+    "service_discovery": 20,
+    "service_mesh_istio": 12
+  },
+  "fullstack_stacks": {
+    "mern": 15,
+    "nextjs_prisma": 15,
+    "vue_fastapi": 15,
+    "angular_nestjs": 15,
+    "react_spring": 15
+  },
+  "training_config": {
+    "base_model": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "max_seq_length": 4096,
+    "epochs": 3,
+    "batch_size": 4,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 0.0002,
+    "lora_r": 64,
+    "lora_alpha": 128,
+    "lora_dropout": 0.05,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ]
+  },
+  "dpo_config": {
+    "beta": 0.1,
+    "learning_rate": 5e-05,
+    "epochs": 1,
+    "max_length": 2048
+  },
+  "evaluation_metrics": {
+    "build_pass_rate": "Percentage of generated code that compiles/runs",
+    "test_pass_rate": "Percentage of generated tests that pass",
+    "security_score": "OWASP compliance check",
+    "output_format_compliance": "Percentage following PLAN/FILES/PATCH/COMMANDS/NOTES format"
+  },
+  "coding_agent_data": {
+    "sft_examples": 18,
+    "categories": [
+      "spec_to_implementation",
+      "bug_to_fix",
+      "tdd"
+    ]
+  },
+  "claude_style_format": {
+    "output_sections": [
+      "PLAN",
+      "FILES",
+      "PATCH",
+      "COMMANDS",
+      "NOTES"
+    ],
+    "patch_format": "unified_diff",
+    "examples_added": 8
+  },
+  "gold_samples": {
+    "total_samples": 503,
+    "categories": {
+      "spec_to_implementation": 145,
+      "bug_fix": 150,
+      "add_tests": 108,
+      "refactor": 50,
+      "security": 50
+    },
+    "output_format": [
+      "PLAN",
+      "FILES",
+      "PATCH",
+      "COMMANDS",
+      "NOTES"
+    ]
+  }
+}

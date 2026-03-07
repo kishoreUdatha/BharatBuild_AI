@@ -16,9 +16,15 @@ import {
   Loader2,
   Download,
   CheckCircle2,
-  Info
+  Info,
+  Sparkles,
+  FolderKanban,
+  RefreshCw,
+  ExternalLink,
+  AlertCircle
 } from 'lucide-react'
 import { apiClient } from '@/lib/api-client'
+import { useAuth } from '@/hooks/useAuth'
 
 interface CriterionInfo {
   number: number
@@ -49,6 +55,35 @@ interface CourseForm {
   program_name: string
 }
 
+interface UserProfile {
+  id: string
+  email: string
+  full_name: string
+  role: string
+  roll_number?: string
+  college_name?: string
+  university_name?: string
+  department?: string
+  course?: string
+  year_semester?: string
+  batch?: string
+  guide_name?: string
+  guide_designation?: string
+  hod_name?: string
+}
+
+interface Project {
+  id: string
+  title: string
+  description: string | null
+  mode: string
+  status: string
+  tech_stack?: any
+  framework?: string
+  domain?: string
+  created_at: string
+}
+
 const CRITERIA_ICONS = [
   BookOpen,      // Criterion 1: Curricular
   GraduationCap, // Criterion 2: Teaching-Learning
@@ -61,6 +96,8 @@ const CRITERIA_ICONS = [
 
 export default function AccreditationPage() {
   const router = useRouter()
+  const { user, isAuthenticated, isLoading: authLoading } = useAuth()
+
   const [criteria, setCriteria] = useState<CriterionInfo[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<'overview' | 'ssr' | 'obe' | 'criterion'>('overview')
@@ -68,6 +105,12 @@ export default function AccreditationPage() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [generatedDoc, setGeneratedDoc] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+
+  // User profile and projects for auto-fill
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
+  const [projects, setProjects] = useState<Project[]>([])
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null)
+  const [isAutoFilled, setIsAutoFilled] = useState(false)
 
   // Form states
   const [institutionForm, setInstitutionForm] = useState<InstitutionForm>({
@@ -94,9 +137,137 @@ export default function AccreditationPage() {
 
   const [projectDescription, setProjectDescription] = useState('')
 
+  // Fetch user profile and projects for auto-fill
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchUserProfile()
+      fetchUserProjects()
+    }
+  }, [isAuthenticated])
+
   useEffect(() => {
     fetchCriteria()
   }, [])
+
+  // Auto-fill forms when user profile is loaded
+  useEffect(() => {
+    if (userProfile && !isAutoFilled) {
+      autoFillFromProfile(userProfile)
+    }
+  }, [userProfile])
+
+  // Auto-fill project description when project is selected
+  useEffect(() => {
+    if (selectedProject) {
+      autoFillFromProject(selectedProject)
+    }
+  }, [selectedProject])
+
+  const fetchUserProfile = async () => {
+    try {
+      const profile = await apiClient.getMe()
+      setUserProfile(profile)
+    } catch (err) {
+      console.error('Failed to fetch user profile:', err)
+    }
+  }
+
+  const fetchUserProjects = async () => {
+    try {
+      const response = await apiClient.getProjects({ page: 1, limit: 50 })
+      setProjects(response.projects || [])
+      // Auto-select the most recent completed project
+      const completedProjects = (response.projects || []).filter(
+        (p: Project) => p.status === 'completed'
+      )
+      if (completedProjects.length > 0) {
+        setSelectedProject(completedProjects[0])
+      }
+    } catch (err) {
+      console.error('Failed to fetch projects:', err)
+    }
+  }
+
+  const autoFillFromProfile = (profile: UserProfile) => {
+    // Auto-fill institution form from user's college details
+    if (profile.college_name) {
+      setInstitutionForm(prev => ({
+        ...prev,
+        name: profile.college_name || prev.name,
+        // Try to extract state from college name or use default
+        state: prev.state || 'Telangana'
+      }))
+    }
+
+    // Auto-fill course form from user's academic details
+    setCourseForm(prev => ({
+      ...prev,
+      department: profile.department || prev.department,
+      program_name: profile.course || prev.program_name,
+      semester: extractSemester(profile.year_semester) || prev.semester
+    }))
+
+    setIsAutoFilled(true)
+  }
+
+  const autoFillFromProject = (project: Project) => {
+    // Extract project description
+    let description = project.description || ''
+
+    // Add tech stack info to description
+    if (project.tech_stack) {
+      const techInfo = typeof project.tech_stack === 'string'
+        ? project.tech_stack
+        : JSON.stringify(project.tech_stack)
+      description += `\n\nTechnologies Used: ${techInfo}`
+    }
+
+    if (project.framework) {
+      description += `\nFramework: ${project.framework}`
+    }
+
+    if (project.domain) {
+      description += `\nDomain: ${project.domain}`
+    }
+
+    setProjectDescription(description.trim())
+
+    // Auto-fill course name from project title
+    setCourseForm(prev => ({
+      ...prev,
+      course_name: prev.course_name || generateCourseName(project),
+      course_code: prev.course_code || generateCourseCode(project)
+    }))
+  }
+
+  const extractSemester = (yearSemester?: string): number | null => {
+    if (!yearSemester) return null
+    // Try to extract semester number from strings like "4th Year / 8th Semester"
+    const match = yearSemester.match(/(\d+)\s*(th|st|nd|rd)?\s*sem/i)
+    if (match) return parseInt(match[1])
+    // Try just a number
+    const numMatch = yearSemester.match(/(\d+)/)
+    if (numMatch) return parseInt(numMatch[1])
+    return null
+  }
+
+  const generateCourseName = (project: Project): string => {
+    // Generate course name based on project domain/framework
+    if (project.domain) {
+      return `${project.domain} Project`
+    }
+    if (project.framework) {
+      return `${project.framework} Development`
+    }
+    return 'Software Engineering Project'
+  }
+
+  const generateCourseCode = (project: Project): string => {
+    // Generate a course code based on department and semester
+    const dept = courseForm.department?.substring(0, 2).toUpperCase() || 'CS'
+    const sem = courseForm.semester || 6
+    return `${dept}${sem}01`
+  }
 
   const fetchCriteria = async () => {
     try {
@@ -198,7 +369,52 @@ export default function AccreditationPage() {
     }
   }
 
-  if (isLoading) {
+  const handleGenerateCOPOMapping = async () => {
+    if (!courseForm.course_name) {
+      setError('Please fill in course details')
+      return
+    }
+
+    setIsGenerating(true)
+    setError(null)
+    try {
+      const response = await apiClient.generateCOPOMapping({
+        course_info: courseForm,
+        course_outcomes: [] // Will be generated based on project
+      })
+      setGeneratedDoc(response)
+    } catch (err: any) {
+      setError(err.message || 'Failed to generate CO-PO Mapping')
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  const handleGenerateAttainment = async () => {
+    if (!courseForm.course_name || !projectDescription) {
+      setError('Please fill in course details and project description')
+      return
+    }
+
+    setIsGenerating(true)
+    setError(null)
+    try {
+      const response = await apiClient.generateAttainment({
+        course_info: courseForm,
+        project_description: projectDescription
+      })
+      setGeneratedDoc(response)
+    } catch (err: any) {
+      setError(err.message || 'Failed to generate Attainment')
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  // Check if user is faculty/admin - show banner to access admin dashboard
+  const isAdminOrFaculty = user?.role === 'admin' || user?.role === 'faculty'
+
+  if (isLoading || authLoading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
@@ -208,6 +424,25 @@ export default function AccreditationPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
+      {/* Admin/Faculty Banner */}
+      {isAdminOrFaculty && (
+        <div className="bg-gradient-to-r from-blue-600 to-cyan-600 text-white">
+          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Shield className="w-5 h-5" />
+              <span className="font-medium">You have IQAC Coordinator access</span>
+            </div>
+            <button
+              onClick={() => router.push('/admin/accreditation')}
+              className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors"
+            >
+              Open Admin Dashboard
+              <ExternalLink className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
@@ -215,12 +450,23 @@ export default function AccreditationPage() {
             <Award className="w-8 h-8 text-orange-500" />
             <div>
               <h1 className="text-xl font-bold">NAAC/NBA Accreditation</h1>
-              <p className="text-sm text-slate-400">Generate accreditation documents for all 7 criteria</p>
+              <p className="text-sm text-slate-400">
+                {isAdminOrFaculty
+                  ? 'Student OBE Documents - For full dashboard, use Admin Portal'
+                  : 'Generate OBE documents for your projects'
+                }
+              </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            {isAutoFilled && (
+              <span className="bg-green-500/20 text-green-400 px-3 py-1 rounded-full text-sm flex items-center gap-1">
+                <Sparkles className="w-3 h-3" />
+                Auto-filled
+              </span>
+            )}
             <span className="bg-green-500/20 text-green-400 px-3 py-1 rounded-full text-sm">
-              700 Total Marks
+              OBE Compliant
             </span>
           </div>
         </div>
@@ -320,6 +566,42 @@ export default function AccreditationPage() {
                 ))}
               </div>
             </div>
+
+            {/* Quick Actions - New Features */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+              <h3 className="font-semibold mb-4 flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-purple-500" />
+                Quick Actions
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <button
+                  onClick={() => router.push('/curriculum')}
+                  className="p-4 bg-gradient-to-r from-blue-600/20 to-cyan-600/20 border border-blue-500/30 rounded-xl hover:border-blue-500 transition-all text-left"
+                >
+                  <BookOpen className="w-8 h-8 text-blue-400 mb-3" />
+                  <h4 className="font-semibold text-white mb-1">Curriculum Mapping</h4>
+                  <p className="text-sm text-slate-400">Map course syllabus to industry projects with CO-PO alignment</p>
+                </button>
+
+                <button
+                  onClick={() => router.push('/evaluation')}
+                  className="p-4 bg-gradient-to-r from-emerald-600/20 to-teal-600/20 border border-emerald-500/30 rounded-xl hover:border-emerald-500 transition-all text-left"
+                >
+                  <ClipboardCheck className="w-8 h-8 text-emerald-400 mb-3" />
+                  <h4 className="font-semibold text-white mb-1">Project Evaluation</h4>
+                  <p className="text-sm text-slate-400">Automated rubric-based assessment with CO attainment</p>
+                </button>
+
+                <button
+                  onClick={() => router.push('/certificates')}
+                  className="p-4 bg-gradient-to-r from-purple-600/20 to-pink-600/20 border border-purple-500/30 rounded-xl hover:border-purple-500 transition-all text-left"
+                >
+                  <Award className="w-8 h-8 text-purple-400 mb-3" />
+                  <h4 className="font-semibold text-white mb-1">Skill Certificates</h4>
+                  <p className="text-sm text-slate-400">Generate certificates with OBE metrics and verification</p>
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -331,6 +613,11 @@ export default function AccreditationPage() {
               <h3 className="font-semibold mb-4 flex items-center gap-2">
                 <Building2 className="w-5 h-5 text-orange-500" />
                 Institution Details
+                {isAutoFilled && (
+                  <span className="ml-2 text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
+                    Auto-filled from profile
+                  </span>
+                )}
               </h3>
               <div className="space-y-4">
                 <div>
@@ -535,116 +822,204 @@ export default function AccreditationPage() {
           </div>
         )}
 
-        {/* OBE Tab */}
+        {/* OBE Tab - with Auto-fill */}
         {activeTab === 'obe' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            {/* Course Form */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-              <h3 className="font-semibold mb-4 flex items-center gap-2">
-                <GraduationCap className="w-5 h-5 text-orange-500" />
-                Course Details
-              </h3>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">Course Name *</label>
-                  <input
-                    type="text"
-                    value={courseForm.course_name}
-                    onChange={e => setCourseForm({ ...courseForm, course_name: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 focus:outline-none focus:border-orange-500"
-                    placeholder="e.g., Software Engineering"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm text-slate-400 mb-1">Course Code *</label>
-                    <input
-                      type="text"
-                      value={courseForm.course_code}
-                      onChange={e => setCourseForm({ ...courseForm, course_code: e.target.value })}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 focus:outline-none focus:border-orange-500"
-                      placeholder="e.g., CS601"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-slate-400 mb-1">Department</label>
-                    <input
-                      type="text"
-                      value={courseForm.department}
-                      onChange={e => setCourseForm({ ...courseForm, department: e.target.value })}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 focus:outline-none focus:border-orange-500"
-                      placeholder="e.g., CSE"
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm text-slate-400 mb-1">Semester</label>
-                    <input
-                      type="number"
-                      value={courseForm.semester}
-                      onChange={e => setCourseForm({ ...courseForm, semester: parseInt(e.target.value) })}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 focus:outline-none focus:border-orange-500"
-                      min={1}
-                      max={8}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-slate-400 mb-1">Credits</label>
-                    <input
-                      type="number"
-                      value={courseForm.credits}
-                      onChange={e => setCourseForm({ ...courseForm, credits: parseInt(e.target.value) })}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 focus:outline-none focus:border-orange-500"
-                      min={1}
-                      max={6}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">Project/Course Description *</label>
-                  <textarea
-                    value={projectDescription}
-                    onChange={e => setProjectDescription(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 focus:outline-none focus:border-orange-500 h-24"
-                    placeholder="Describe the course content or project..."
-                  />
-                </div>
+            {/* Project Selector + Course Form */}
+            <div className="space-y-6">
+              {/* Project Selector - NEW */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+                <h3 className="font-semibold mb-4 flex items-center gap-2">
+                  <FolderKanban className="w-5 h-5 text-orange-500" />
+                  Select Your Project
+                  <span className="ml-auto text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full">
+                    Auto-fills details
+                  </span>
+                </h3>
 
-                <div className="grid grid-cols-2 gap-4 pt-4">
-                  <button
-                    onClick={handleGenerateCourseOutcomes}
-                    disabled={isGenerating}
-                    className="bg-orange-500 hover:bg-orange-600 disabled:bg-orange-500/50 text-white font-semibold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors"
-                  >
-                    {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                    Course Outcomes
-                  </button>
-                  <button
-                    onClick={handleGenerateRubrics}
-                    disabled={isGenerating}
-                    className="bg-blue-500 hover:bg-blue-600 disabled:bg-blue-500/50 text-white font-semibold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors"
-                  >
-                    {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <ClipboardCheck className="w-4 h-4" />}
-                    Rubrics
-                  </button>
+                {projects.length > 0 ? (
+                  <div className="space-y-3">
+                    <select
+                      value={selectedProject?.id || ''}
+                      onChange={e => {
+                        const project = projects.find(p => p.id === e.target.value)
+                        setSelectedProject(project || null)
+                      }}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 focus:outline-none focus:border-orange-500"
+                    >
+                      <option value="">-- Select a project --</option>
+                      {projects.map(project => (
+                        <option key={project.id} value={project.id}>
+                          {project.title} ({project.status})
+                        </option>
+                      ))}
+                    </select>
+
+                    {selectedProject && (
+                      <div className="bg-slate-800 rounded-lg p-4 border border-green-500/30">
+                        <div className="flex items-center gap-2 text-green-400 text-sm mb-2">
+                          <CheckCircle2 className="w-4 h-4" />
+                          Project selected - details auto-filled
+                        </div>
+                        <p className="text-sm text-slate-400">
+                          <strong>{selectedProject.title}</strong>
+                          {selectedProject.description && (
+                            <span className="block mt-1 text-xs">{selectedProject.description.substring(0, 100)}...</span>
+                          )}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-center py-6 text-slate-500">
+                    <FolderKanban className="w-10 h-10 mx-auto mb-2 opacity-50" />
+                    <p>No projects found</p>
+                    <button
+                      onClick={() => router.push('/build')}
+                      className="mt-3 text-orange-500 hover:text-orange-400 text-sm"
+                    >
+                      Create a project first →
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Course Form */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+                <h3 className="font-semibold mb-4 flex items-center gap-2">
+                  <GraduationCap className="w-5 h-5 text-orange-500" />
+                  Course Details
+                  {userProfile?.department && (
+                    <span className="ml-2 text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
+                      Auto-filled
+                    </span>
+                  )}
+                </h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm text-slate-400 mb-1">Course Name *</label>
+                    <input
+                      type="text"
+                      value={courseForm.course_name}
+                      onChange={e => setCourseForm({ ...courseForm, course_name: e.target.value })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 focus:outline-none focus:border-orange-500"
+                      placeholder="e.g., Software Engineering"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">Course Code *</label>
+                      <input
+                        type="text"
+                        value={courseForm.course_code}
+                        onChange={e => setCourseForm({ ...courseForm, course_code: e.target.value })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 focus:outline-none focus:border-orange-500"
+                        placeholder="e.g., CS601"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">Department</label>
+                      <input
+                        type="text"
+                        value={courseForm.department}
+                        onChange={e => setCourseForm({ ...courseForm, department: e.target.value })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 focus:outline-none focus:border-orange-500"
+                        placeholder="e.g., CSE"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">Semester</label>
+                      <input
+                        type="number"
+                        value={courseForm.semester}
+                        onChange={e => setCourseForm({ ...courseForm, semester: parseInt(e.target.value) })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 focus:outline-none focus:border-orange-500"
+                        min={1}
+                        max={8}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">Credits</label>
+                      <input
+                        type="number"
+                        value={courseForm.credits}
+                        onChange={e => setCourseForm({ ...courseForm, credits: parseInt(e.target.value) })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 focus:outline-none focus:border-orange-500"
+                        min={1}
+                        max={6}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-slate-400 mb-1">
+                      Project/Course Description *
+                      {selectedProject && (
+                        <span className="ml-2 text-green-400">(Auto-filled from project)</span>
+                      )}
+                    </label>
+                    <textarea
+                      value={projectDescription}
+                      onChange={e => setProjectDescription(e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 focus:outline-none focus:border-orange-500 h-32"
+                      placeholder="Describe the course content or project..."
+                    />
+                  </div>
+
+                  {/* OBE Generation Buttons */}
+                  <div className="grid grid-cols-2 gap-3 pt-4">
+                    <button
+                      onClick={handleGenerateCourseOutcomes}
+                      disabled={isGenerating}
+                      className="bg-orange-500 hover:bg-orange-600 disabled:bg-orange-500/50 text-white font-semibold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    >
+                      {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                      Course Outcomes
+                    </button>
+                    <button
+                      onClick={handleGenerateCOPOMapping}
+                      disabled={isGenerating}
+                      className="bg-blue-500 hover:bg-blue-600 disabled:bg-blue-500/50 text-white font-semibold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    >
+                      {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <ClipboardCheck className="w-4 h-4" />}
+                      CO-PO Mapping
+                    </button>
+                    <button
+                      onClick={handleGenerateRubrics}
+                      disabled={isGenerating}
+                      className="bg-green-500 hover:bg-green-600 disabled:bg-green-500/50 text-white font-semibold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    >
+                      {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Award className="w-4 h-4" />}
+                      Rubrics
+                    </button>
+                    <button
+                      onClick={handleGenerateAttainment}
+                      disabled={isGenerating}
+                      className="bg-purple-500 hover:bg-purple-600 disabled:bg-purple-500/50 text-white font-semibold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    >
+                      {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <GraduationCap className="w-4 h-4" />}
+                      Attainment
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* OBE Quick Actions */}
-            <div className="space-y-4">
+            {/* Right Side - Document Types + Generated Output */}
+            <div className="space-y-6">
+              {/* OBE Document Types Info */}
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
                 <h3 className="font-semibold mb-4">OBE Document Types</h3>
                 <div className="space-y-3">
                   {[
-                    { name: 'Course Outcomes (COs)', desc: 'With Bloom\'s Taxonomy levels', color: 'orange' },
-                    { name: 'CO-PO Mapping', desc: '12 Program Outcomes matrix', color: 'blue' },
-                    { name: 'Assessment Rubrics', desc: '4-level performance criteria', color: 'green' },
-                    { name: 'Attainment Calculation', desc: 'Direct & indirect methods', color: 'purple' },
+                    { name: 'Course Outcomes (COs)', desc: 'With Bloom\'s Taxonomy levels (L1-L6)', color: 'bg-orange-500' },
+                    { name: 'CO-PO Mapping', desc: '12 NBA Program Outcomes matrix', color: 'bg-blue-500' },
+                    { name: 'Assessment Rubrics', desc: '4-level performance criteria', color: 'bg-green-500' },
+                    { name: 'Attainment Calculation', desc: 'Direct & indirect methods', color: 'bg-purple-500' },
                   ].map((item, i) => (
                     <div key={i} className="flex items-center gap-3 p-3 bg-slate-800 rounded-lg">
-                      <div className={`w-2 h-2 rounded-full bg-${item.color}-500`} />
+                      <div className={`w-3 h-3 rounded-full ${item.color}`} />
                       <div>
                         <div className="font-medium">{item.name}</div>
                         <div className="text-xs text-slate-400">{item.desc}</div>
@@ -654,17 +1029,61 @@ export default function AccreditationPage() {
                 </div>
               </div>
 
+              {/* Generated Document */}
               {generatedDoc && (
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
                   <h3 className="font-semibold mb-4 flex items-center gap-2">
                     <CheckCircle2 className="w-5 h-5 text-green-500" />
                     Generated Document
                   </h3>
-                  <div className="bg-slate-800 rounded-lg p-4 max-h-64 overflow-auto">
+                  <div className="bg-slate-800 rounded-lg p-4 max-h-80 overflow-auto">
                     <pre className="text-sm text-slate-300 whitespace-pre-wrap">
                       {JSON.stringify(generatedDoc, null, 2)}
                     </pre>
                   </div>
+                  <button className="w-full mt-4 bg-green-500 hover:bg-green-600 text-white font-semibold py-2 rounded-lg flex items-center justify-center gap-2">
+                    <Download className="w-5 h-5" />
+                    Download Document
+                  </button>
+                </div>
+              )}
+
+              {/* User Info Card */}
+              {userProfile && (
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+                  <h3 className="font-semibold mb-4 flex items-center gap-2">
+                    <Users className="w-5 h-5 text-orange-500" />
+                    Your Academic Profile
+                  </h3>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Name:</span>
+                      <span>{userProfile.full_name || 'Not set'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">College:</span>
+                      <span>{userProfile.college_name || 'Not set'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Department:</span>
+                      <span>{userProfile.department || 'Not set'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Semester:</span>
+                      <span>{userProfile.year_semester || 'Not set'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Guide:</span>
+                      <span>{userProfile.guide_name || 'Not set'}</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => router.push('/complete-profile')}
+                    className="w-full mt-4 text-orange-500 hover:text-orange-400 text-sm flex items-center justify-center gap-1"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Update Profile for better auto-fill
+                  </button>
                 </div>
               )}
             </div>

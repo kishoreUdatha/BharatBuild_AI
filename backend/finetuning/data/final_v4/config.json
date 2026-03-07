@@ -1,0 +1,110 @@
+{
+  "version": "v4",
+  "description": "Comprehensive all-technologies dataset for BharatBuild AI",
+  "statistics": {
+    "train_examples": 119594,
+    "eval_examples": 6294,
+    "total_examples": 125888,
+    "technology_coverage": {
+      "frontend": 3321,
+      "backend_python": 74436,
+      "database": 3147,
+      "backend_java": 8817,
+      "mobile_flutter": 59,
+      "backend_go": 3737,
+      "mobile_swift": 1934,
+      "backend_php": 1107,
+      "mobile_react_native": 272,
+      "backend_rust": 913,
+      "backend_csharp": 683,
+      "general": 25684,
+      "devops": 59,
+      "backend_js": 1446,
+      "mobile_kotlin": 42,
+      "backend_ruby": 231
+    }
+  },
+  "data_sources": [
+    "comprehensive_datasets - Multi-language code from Hugging Face",
+    "public_datasets - CodeAlpaca, Magicoder, Evol-Instruct",
+    "all_frameworks - Vue, Angular, Flutter, Spring Boot, Go multi-file projects",
+    "multifile - React+FastAPI full-stack projects",
+    "complex_tasks - Debugging, explanation, refactoring examples"
+  ],
+  "technologies_covered": {
+    "frontend": [
+      "React",
+      "Vue",
+      "Angular",
+      "Svelte",
+      "Next.js",
+      "Nuxt"
+    ],
+    "backend_python": [
+      "FastAPI",
+      "Django",
+      "Flask"
+    ],
+    "backend_js": [
+      "Express",
+      "NestJS",
+      "Node.js"
+    ],
+    "backend_java": [
+      "Spring Boot",
+      "Spring"
+    ],
+    "backend_go": [
+      "Go",
+      "Gin",
+      "Fiber"
+    ],
+    "backend_rust": [
+      "Rust",
+      "Actix",
+      "Tokio"
+    ],
+    "backend_csharp": [
+      ".NET",
+      "ASP.NET",
+      "Blazor"
+    ],
+    "backend_ruby": [
+      "Rails",
+      "Ruby"
+    ],
+    "backend_php": [
+      "Laravel",
+      "PHP"
+    ],
+    "mobile": [
+      "Flutter",
+      "React Native",
+      "Swift",
+      "Kotlin"
+    ],
+    "database": [
+      "SQL",
+      "MongoDB",
+      "Redis",
+      "GraphQL"
+    ],
+    "devops": [
+      "Docker",
+      "Kubernetes",
+      "Terraform",
+      "CI/CD"
+    ]
+  },
+  "training_config": {
+    "base_model": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "max_seq_length": 4096,
+    "epochs": 3,
+    "batch_size": 4,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 0.0002,
+    "lora_r": 64,
+    "lora_alpha": 128,
+    "lora_dropout": 0.05
+  }
+}

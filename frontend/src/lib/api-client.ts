@@ -525,6 +525,511 @@ class ApiClient {
     return response.data
   }
 
+  // ==================== Criterion 1: Curricular Aspects ====================
+
+  /**
+   * Get Criterion 1 dashboard statistics
+   */
+  async getCriterion1Dashboard(academicYear?: string) {
+    const params = academicYear ? `?academic_year=${academicYear}` : ''
+    const response = await this.axiosInstance.get(`/accreditation/criterion1/dashboard${params}`)
+    return response.data
+  }
+
+  /**
+   * Generate Criterion 1 report
+   */
+  async generateCriterion1Report(data: {
+    institution_name: string
+    academic_year: string
+    include_sections?: string[]
+    format?: 'docx' | 'pdf'
+    include_evidence_list?: boolean
+    include_analytics?: boolean
+  }) {
+    const response = await this.axiosInstance.post('/accreditation/criterion1/generate-report', data)
+    return response.data
+  }
+
+  // Feedback Management
+  async createFeedback(data: {
+    feedback_type: string
+    department: string
+    academic_year: string
+    feedback_content: string
+    respondent_name?: string
+    respondent_email?: string
+    program?: string
+    rating?: number
+    suggestions?: string
+  }) {
+    const response = await this.axiosInstance.post('/accreditation/criterion1/feedback', data)
+    return response.data
+  }
+
+  async listFeedback(params?: {
+    feedback_type?: string
+    status?: string
+    department?: string
+    academic_year?: string
+    page?: number
+    page_size?: number
+  }) {
+    const queryParams = new URLSearchParams()
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) queryParams.append(key, String(value))
+      })
+    }
+    const response = await this.axiosInstance.get(`/accreditation/criterion1/feedback?${queryParams.toString()}`)
+    return response.data
+  }
+
+  async updateFeedbackAction(feedbackId: string, data: {
+    action_taken: string
+    action_evidence?: string
+  }) {
+    const response = await this.axiosInstance.put(`/accreditation/criterion1/feedback/${feedbackId}/action`, data)
+    return response.data
+  }
+
+  async generateFeedbackReport(data: {
+    academic_year: string
+    department?: string
+    feedback_types?: string[]
+    include_pending?: boolean
+  }) {
+    const response = await this.axiosInstance.post('/accreditation/criterion1/feedback/generate-report', data)
+    return response.data
+  }
+
+  // Evidence Management
+  async uploadEvidence(formData: FormData) {
+    const response = await this.axiosInstance.post('/accreditation/criterion1/evidence/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+    return response.data
+  }
+
+  async listEvidence(params?: {
+    key_indicator?: string
+    evidence_type?: string
+    academic_year?: string
+    is_verified?: boolean
+    page?: number
+    page_size?: number
+  }) {
+    const queryParams = new URLSearchParams()
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) queryParams.append(key, String(value))
+      })
+    }
+    const response = await this.axiosInstance.get(`/accreditation/criterion1/evidence?${queryParams.toString()}`)
+    return response.data
+  }
+
+  async verifyEvidence(evidenceId: string, data: {
+    verified_by: string
+    verification_remarks?: string
+  }) {
+    const response = await this.axiosInstance.post(`/accreditation/criterion1/evidence/${evidenceId}/verify`, data)
+    return response.data
+  }
+
+  async deleteEvidence(evidenceId: string) {
+    const response = await this.axiosInstance.delete(`/accreditation/criterion1/evidence/${evidenceId}`)
+    return response.data
+  }
+
+  // Industry Partners
+  async createIndustryPartner(data: {
+    name: string
+    partner_type: string
+    industry_sector?: string
+    website?: string
+    contact_person?: string
+    contact_email?: string
+    department?: string
+    collaboration_areas?: string[]
+  }) {
+    const response = await this.axiosInstance.post('/accreditation/criterion1/industry-partners', data)
+    return response.data
+  }
+
+  async listIndustryPartners(params?: {
+    partner_type?: string
+    mou_status?: string
+    department?: string
+    page?: number
+    page_size?: number
+  }) {
+    const queryParams = new URLSearchParams()
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) queryParams.append(key, String(value))
+      })
+    }
+    const response = await this.axiosInstance.get(`/accreditation/criterion1/industry-partners?${queryParams.toString()}`)
+    return response.data
+  }
+
+  async updateIndustryPartner(partnerId: string, data: any) {
+    const response = await this.axiosInstance.put(`/accreditation/criterion1/industry-partners/${partnerId}`, data)
+    return response.data
+  }
+
+  // Value-Added Courses
+  async createValueAddedCourse(data: {
+    course_name: string
+    course_type: string
+    department: string
+    academic_year: string
+    duration_hours: number
+    course_code?: string
+    course_mode?: string
+    description?: string
+    instructor_name?: string
+    certification_provided?: boolean
+  }) {
+    const response = await this.axiosInstance.post('/accreditation/criterion1/value-added-courses', data)
+    return response.data
+  }
+
+  async listValueAddedCourses(params?: {
+    course_type?: string
+    department?: string
+    academic_year?: string
+    is_active?: boolean
+    page?: number
+    page_size?: number
+  }) {
+    const queryParams = new URLSearchParams()
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) queryParams.append(key, String(value))
+      })
+    }
+    const response = await this.axiosInstance.get(`/accreditation/criterion1/value-added-courses?${queryParams.toString()}`)
+    return response.data
+  }
+
+  async recordCourseEnrollment(courseId: string, data: {
+    student_id: string
+    student_name: string
+    enrollment_date: string
+    student_email?: string
+    department?: string
+    batch?: string
+  }) {
+    const response = await this.axiosInstance.post(`/accreditation/criterion1/value-added-courses/${courseId}/enrollments`, data)
+    return response.data
+  }
+
+  // Internships
+  async recordInternship(data: {
+    student_id: string
+    student_name: string
+    department: string
+    academic_year: string
+    internship_type: string
+    company_name: string
+    start_date: string
+    student_email?: string
+    industry_sector?: string
+    location?: string
+    is_remote?: boolean
+    end_date?: string
+    duration_weeks?: number
+    role_title?: string
+    is_paid?: boolean
+    stipend_amount?: number
+  }) {
+    const response = await this.axiosInstance.post('/accreditation/criterion1/internships', data)
+    return response.data
+  }
+
+  async listInternships(params?: {
+    internship_type?: string
+    status?: string
+    department?: string
+    academic_year?: string
+    page?: number
+    page_size?: number
+  }) {
+    const queryParams = new URLSearchParams()
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) queryParams.append(key, String(value))
+      })
+    }
+    const response = await this.axiosInstance.get(`/accreditation/criterion1/internships?${queryParams.toString()}`)
+    return response.data
+  }
+
+  async getInternshipAnalytics(academicYear?: string) {
+    const params = academicYear ? `?academic_year=${academicYear}` : ''
+    const response = await this.axiosInstance.get(`/accreditation/criterion1/internships/analytics${params}`)
+    return response.data
+  }
+
+  // ==================== NAAC RBAC System ====================
+
+  /**
+   * Get available NAAC roles
+   */
+  async getNAACRoles() {
+    const response = await this.axiosInstance.get('/naac/rbac/roles')
+    return response.data
+  }
+
+  /**
+   * Get current user's NAAC roles
+   */
+  async getMyNAACRoles() {
+    const response = await this.axiosInstance.get('/naac/rbac/my-roles')
+    return response.data
+  }
+
+  /**
+   * Assign NAAC role to user
+   */
+  async assignNAACRole(data: {
+    user_id: string
+    role_type: string
+    criterion_number?: number
+    department?: string
+    valid_from?: string
+    valid_until?: string
+    assignment_notes?: string
+  }) {
+    const response = await this.axiosInstance.post('/naac/rbac/assign-role', data)
+    return response.data
+  }
+
+  /**
+   * Revoke NAAC role assignment
+   */
+  async revokeNAACRole(assignmentId: string) {
+    const response = await this.axiosInstance.delete(`/naac/rbac/revoke-role/${assignmentId}`)
+    return response.data
+  }
+
+  /**
+   * Get users with NAAC roles
+   */
+  async getUsersWithNAACRoles(params?: {
+    role_type?: string
+    criterion?: number
+    department?: string
+    page?: number
+    page_size?: number
+  }) {
+    const queryParams = new URLSearchParams()
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) queryParams.append(key, String(value))
+      })
+    }
+    const response = await this.axiosInstance.get(`/naac/rbac/users-with-roles?${queryParams.toString()}`)
+    return response.data
+  }
+
+  /**
+   * Check NAAC permission
+   */
+  async checkNAACPermission(data: {
+    resource: string
+    action: string
+    criterion_number?: number
+    department?: string
+  }) {
+    const response = await this.axiosInstance.post('/naac/rbac/check-permission', data)
+    return response.data
+  }
+
+  /**
+   * Get accessible scope for current user
+   */
+  async getAccessibleScope() {
+    const response = await this.axiosInstance.get('/naac/rbac/accessible-scope')
+    return response.data
+  }
+
+  /**
+   * Create NAAC task
+   */
+  async createNAACTask(data: {
+    title: string
+    description?: string
+    task_type?: string
+    criterion_number?: number
+    key_indicator?: string
+    department?: string
+    academic_year?: string
+    assigned_to?: string
+    priority?: string
+    due_date?: string
+    related_record_type?: string
+    related_record_id?: string
+    attachments?: string[]
+    extra_data?: Record<string, any>
+  }) {
+    const response = await this.axiosInstance.post('/naac/rbac/tasks', data)
+    return response.data
+  }
+
+  /**
+   * Get NAAC tasks
+   */
+  async getNAACTasks(params?: {
+    status_filter?: string
+    priority?: string
+    criterion?: number
+    department?: string
+    assigned_to_me?: boolean
+    created_by_me?: boolean
+    page?: number
+    page_size?: number
+  }) {
+    const queryParams = new URLSearchParams()
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) queryParams.append(key, String(value))
+      })
+    }
+    const response = await this.axiosInstance.get(`/naac/rbac/tasks?${queryParams.toString()}`)
+    return response.data
+  }
+
+  /**
+   * Get NAAC task by ID
+   */
+  async getNAACTask(taskId: string) {
+    const response = await this.axiosInstance.get(`/naac/rbac/tasks/${taskId}`)
+    return response.data
+  }
+
+  /**
+   * Update NAAC task
+   */
+  async updateNAACTask(taskId: string, data: {
+    title?: string
+    description?: string
+    task_type?: string
+    assigned_to?: string
+    status?: string
+    priority?: string
+    due_date?: string
+    progress_percentage?: number
+    attachments?: string[]
+    extra_data?: Record<string, any>
+  }) {
+    const response = await this.axiosInstance.put(`/naac/rbac/tasks/${taskId}`, data)
+    return response.data
+  }
+
+  /**
+   * Add comment to NAAC task
+   */
+  async addNAACTaskComment(taskId: string, data: {
+    content: string
+    attachments?: string[]
+  }) {
+    const response = await this.axiosInstance.post(`/naac/rbac/tasks/${taskId}/comments`, data)
+    return response.data
+  }
+
+  /**
+   * Get NAAC task comments
+   */
+  async getNAACTaskComments(taskId: string) {
+    const response = await this.axiosInstance.get(`/naac/rbac/tasks/${taskId}/comments`)
+    return response.data
+  }
+
+  /**
+   * Submit record for approval
+   */
+  async submitForApproval(data: {
+    record_type: string
+    record_id: string
+    criterion_number?: number
+    department?: string
+    academic_year?: string
+    remarks?: string
+  }) {
+    const response = await this.axiosInstance.post('/naac/rbac/approval/submit', data)
+    return response.data
+  }
+
+  /**
+   * Perform approval action
+   */
+  async performApprovalAction(workflowId: string, data: {
+    action: 'approve' | 'reject' | 'revision'
+    remarks?: string
+  }) {
+    const response = await this.axiosInstance.post(`/naac/rbac/approval/${workflowId}/action`, data)
+    return response.data
+  }
+
+  /**
+   * Get pending approvals
+   */
+  async getPendingApprovals() {
+    const response = await this.axiosInstance.get('/naac/rbac/approval/pending')
+    return response.data
+  }
+
+  /**
+   * Get approval workflow details
+   */
+  async getApprovalWorkflow(workflowId: string) {
+    const response = await this.axiosInstance.get(`/naac/rbac/approval/${workflowId}`)
+    return response.data
+  }
+
+  /**
+   * Get NAAC notifications
+   */
+  async getNAACNotifications(params?: { unread_only?: boolean; limit?: number }) {
+    const queryParams = new URLSearchParams()
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) queryParams.append(key, String(value))
+      })
+    }
+    const response = await this.axiosInstance.get(`/naac/rbac/notifications?${queryParams.toString()}`)
+    return response.data
+  }
+
+  /**
+   * Mark notifications as read
+   */
+  async markNAACNotificationsRead(notificationIds: string[]) {
+    const response = await this.axiosInstance.post('/naac/rbac/notifications/mark-read', {
+      notification_ids: notificationIds
+    })
+    return response.data
+  }
+
+  /**
+   * Mark all notifications as read
+   */
+  async markAllNAACNotificationsRead() {
+    const response = await this.axiosInstance.post('/naac/rbac/notifications/mark-all-read')
+    return response.data
+  }
+
+  /**
+   * Get NAAC dashboard data
+   */
+  async getNAACDashboard() {
+    const response = await this.axiosInstance.get('/naac/rbac/dashboard')
+    return response.data
+  }
+
   // ==================== Generic request methods ====================
   async get<T = any>(url: string, config?: any): Promise<T> {
     const response = await this.axiosInstance.get(url, config)
