@@ -2,6 +2,9 @@
 # BharatBuild AI Backend Requirements
 # ============================================
 
+# Core dependencies
+setuptools>=69.0.0  # Required for pkg_resources (used by razorpay)
+
 # FastAPI and dependencies
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
