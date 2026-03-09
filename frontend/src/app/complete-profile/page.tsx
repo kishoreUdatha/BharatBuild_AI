@@ -89,6 +89,13 @@ export default function CompleteProfilePage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+
+    // Validate phone number
+    if (!formData.phone || formData.phone.trim().length < 10) {
+      setError('Please enter a valid phone number (at least 10 digits)')
+      return
+    }
+
     setLoading(true)
 
     try {
@@ -165,13 +172,16 @@ export default function CompleteProfilePage() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="phone">Phone Number</Label>
+                    <Label htmlFor="phone">Phone Number *</Label>
                     <Input
                       id="phone"
+                      type="tel"
                       value={formData.phone}
                       onChange={(e) => handleChange('phone', e.target.value)}
                       placeholder="+91 9876543210"
+                      required
                     />
+                    <p className="text-xs text-gray-500">Required for account verification and important updates.</p>
                   </div>
                 </div>
 

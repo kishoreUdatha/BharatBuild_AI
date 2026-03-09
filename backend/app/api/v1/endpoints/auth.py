@@ -613,10 +613,22 @@ class ProfileCompletionRequest(BaseModel):
     """Request to complete user profile after OAuth signup"""
     # Basic info
     full_name: Optional[str] = None
-    phone: Optional[str] = None
+    phone: str  # MANDATORY for OAuth users
 
     # Role selection
     role: Optional[str] = None
+
+    @field_validator('phone')
+    @classmethod
+    def validate_phone(cls, v: str) -> str:
+        """Validate phone number is provided and has valid format"""
+        if not v or not v.strip():
+            raise ValueError('Phone number is required')
+        # Remove spaces and validate
+        phone = v.strip().replace(' ', '').replace('-', '')
+        if len(phone) < 10:
+            raise ValueError('Phone number must be at least 10 digits')
+        return v.strip()
 
     # Student Academic Details
     roll_number: Optional[str] = None
@@ -644,7 +656,23 @@ async def complete_profile(
 
     Used after OAuth signup to collect additional information
     like student academic details, role selection, etc.
+    Phone number is MANDATORY for OAuth users.
     """
+    # Validate phone number is unique (if different from current)
+    if profile_data.phone and profile_data.phone != current_user.phone:
+        result = await db.execute(
+            select(User).where(
+                User.phone == profile_data.phone,
+                User.id != current_user.id
+            )
+        )
+        existing_phone_user = result.scalar_one_or_none()
+        if existing_phone_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This phone number is already registered with another account"
+            )
+
     # Update basic info
     if profile_data.full_name:
         current_user.full_name = profile_data.full_name
@@ -723,12 +751,18 @@ async def get_profile_status(
     Returns whether the user needs to complete their profile
     (e.g., after OAuth signup).
     """
-    # For students, check if academic details are filled
+    is_oauth_user = current_user.oauth_provider is not None
     is_student = current_user.role == UserRole.STUDENT
 
     profile_complete = True
     missing_fields = []
 
+    # Phone is mandatory for OAuth users (Google/GitHub)
+    if is_oauth_user and not current_user.phone:
+        profile_complete = False
+        missing_fields.append("phone")
+
+    # For students, check if academic details are filled
     if is_student:
         if not current_user.roll_number:
             profile_complete = False
@@ -744,7 +778,8 @@ async def get_profile_status(
         "profile_complete": profile_complete,
         "missing_fields": missing_fields,
         "role": current_user.role.value,
-        "is_oauth_user": current_user.oauth_provider is not None
+        "is_oauth_user": is_oauth_user,
+        "phone_required": is_oauth_user and not current_user.phone
     }
 
 
