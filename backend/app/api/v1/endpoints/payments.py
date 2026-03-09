@@ -65,6 +65,24 @@ def get_razorpay_client():
 router = APIRouter()
 
 
+# ========== Debug Endpoint ==========
+
+@router.get("/debug-config")
+async def debug_payment_config():
+    """Debug endpoint to check payment configuration (remove in production)"""
+    key_id = settings.RAZORPAY_KEY_ID
+    key_secret = settings.RAZORPAY_KEY_SECRET
+
+    return {
+        "razorpay_sdk_available": RAZORPAY_SDK_AVAILABLE,
+        "razorpay_sdk_version": razorpay.__version__ if RAZORPAY_SDK_AVAILABLE and razorpay else None,
+        "key_id_configured": bool(key_id),
+        "key_id_prefix": key_id[:10] + "..." if key_id and len(key_id) > 10 else "EMPTY",
+        "key_secret_configured": bool(key_secret),
+        "key_secret_length": len(key_secret) if key_secret else 0,
+    }
+
+
 # ========== Request/Response Models ==========
 
 class CreateOrderRequest(BaseModel):
