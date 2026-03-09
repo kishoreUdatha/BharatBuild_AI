@@ -51,8 +51,8 @@ boto3==1.34.34
 minio==7.2.3
 
 # Authentication & OAuth
-google-auth==2.27.0
-google-auth-oauthlib==1.2.0
+google-auth>=2.47.0  # Updated for google-genai compatibility
+google-auth-oauthlib>=1.2.0
 google-genai>=1.0.0  # Google Gemini API for chatbot
 httpx==0.26.0
 authlib==1.3.0
