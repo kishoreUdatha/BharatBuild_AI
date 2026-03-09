@@ -718,7 +718,9 @@ async def get_project_files(
                             continue
 
                         file_path = pf.path
-                        content = contents_dict.get(file_path, "")
+                        # Normalize path: convert backslashes to forward slashes
+                        file_path = file_path.replace('\\', '/')
+                        content = contents_dict.get(pf.path, "") or contents_dict.get(file_path, "")
 
                         # Detect language from extension
                         ext = file_path.rsplit(".", 1)[-1] if "." in file_path else ""

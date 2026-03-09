@@ -35,7 +35,7 @@ import { useAuth } from '@/hooks/useAuth'
 
 export default function Home() {
   const { createWorkspaceWithProject } = useWorkspaceStore()
-  const { isAuthenticated, checkAuth } = useAuth()
+  const { isAuthenticated, isLoading, checkAuth } = useAuth()
   const router = useRouter()
   const [placeholderIndex, setPlaceholderIndex] = useState(0)
   const [demoStep, setDemoStep] = useState(0)
@@ -185,22 +185,24 @@ export default function App() {
           </nav>
 
           {/* Desktop Auth Buttons */}
-          <div className="hidden md:flex items-center gap-4">
-            {isAuthenticated ? (
+          <div className="flex items-center gap-4">
+            {isLoading ? (
+              <div className="w-24 h-9 bg-gray-700 rounded-md animate-pulse" />
+            ) : isAuthenticated ? (
               <Link href="/build">
-                <Button className="bolt-gradient hover:opacity-90 transition-opacity">
+                <Button className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white hover:opacity-90 transition-opacity">
                   Go to Dashboard
                 </Button>
               </Link>
             ) : (
               <>
                 <Link href="/login">
-                  <Button variant="ghost" className="text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))]">
+                  <Button className="bg-white text-black hover:bg-gray-100 font-medium px-6">
                     Sign In
                   </Button>
                 </Link>
                 <Link href="/register">
-                  <Button className="bolt-gradient hover:opacity-90 transition-opacity">
+                  <Button className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white hover:opacity-90 transition-opacity">
                     Get Started Free
                   </Button>
                 </Link>
@@ -246,7 +248,9 @@ export default function App() {
                 Pricing
               </Link>
               <div className="border-t border-[hsl(var(--bolt-border))] pt-4 mt-2 flex flex-col gap-3">
-                {isAuthenticated ? (
+                {isLoading ? (
+                  <div className="w-full h-10 bg-[hsl(var(--bolt-bg-tertiary))] rounded-md animate-pulse" />
+                ) : isAuthenticated ? (
                   <Link href="/build" onClick={() => setMobileMenuOpen(false)}>
                     <Button className="w-full bolt-gradient hover:opacity-90 transition-opacity">
                       Go to Dashboard
@@ -255,7 +259,7 @@ export default function App() {
                 ) : (
                   <>
                     <Link href="/login" onClick={() => setMobileMenuOpen(false)}>
-                      <Button variant="outline" className="w-full">
+                      <Button variant="outline" className="w-full border-[hsl(var(--bolt-border))]">
                         Sign In
                       </Button>
                     </Link>

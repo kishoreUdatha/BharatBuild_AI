@@ -10,11 +10,16 @@ from app.core.types import GUID, generate_uuid
 
 class PlanType(str, enum.Enum):
     """Plan types - Student-focused tiers"""
-    FREE = "free"              # Trial/Demo
-    STUDENT = "student"        # Students - Basic features
-    BASIC = "basic"            # Hobbyists - More features
-    PRO = "pro"                # Professionals - Full features
-    ENTERPRISE = "enterprise"  # Organizations - Unlimited
+    FREE = "free"              # Preview only
+    STANDARD = "standard"      # ₹1,999 - Code + DB + Auth + GitHub
+    PLUS = "plus"              # ₹2,999 - Code + Report + PPT + Viva
+    PREMIUM = "premium"        # ₹4,499 - Everything + SRS/SDS + UML + APK
+    COLLEGE_BULK = "college_bulk"  # ₹2,499/student - 10+ students
+    # Legacy types (for backward compatibility)
+    STUDENT = "student"
+    BASIC = "basic"
+    PRO = "pro"
+    ENTERPRISE = "enterprise"
 
 
 class SubscriptionStatus(str, enum.Enum):

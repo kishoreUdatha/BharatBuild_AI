@@ -66,6 +66,14 @@ class User(Base):
     reset_token_hash = Column(String(255), nullable=True)
     reset_token_expires = Column(DateTime, nullable=True)
 
+    # Subscription reminder tracking
+    reminder_2_hour_sent = Column(Boolean, default=False)
+    reminder_2_hour_sent_at = Column(DateTime, nullable=True)
+    reminder_3_day_sent = Column(Boolean, default=False)
+    reminder_3_day_sent_at = Column(DateTime, nullable=True)
+    reminder_7_day_sent = Column(Boolean, default=False)
+    reminder_7_day_sent_at = Column(DateTime, nullable=True)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -186,10 +186,27 @@ async def lifespan(app: FastAPI):
     log_stream_manager.set_fix_callback(execute_fix)
     logger.info("Auto-fix callback registered - errors will be fixed automatically!")
 
+    # ========== SUBSCRIPTION REMINDER SERVICE ==========
+    # Send reminders to users who haven't subscribed
+    try:
+        from app.services.subscription_reminder_service import subscription_reminder_service
+        await subscription_reminder_service.start()
+        logger.info("Started subscription reminder service")
+    except Exception as e:
+        logger.warning(f"Failed to start subscription reminder service: {e}")
+
     yield
 
     # Shutdown
     logger.info("Shutting down BharatBuild AI Platform...")
+
+    # Stop subscription reminder service
+    try:
+        from app.services.subscription_reminder_service import subscription_reminder_service
+        await subscription_reminder_service.stop()
+        logger.info("Stopped subscription reminder service")
+    except Exception:
+        pass
 
     # Stop sandbox cleanup service
     if settings.SANDBOX_CLEANUP_ENABLED:

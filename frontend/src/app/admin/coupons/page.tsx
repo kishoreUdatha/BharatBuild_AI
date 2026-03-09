@@ -27,7 +27,7 @@ interface Coupon {
   owner_name: string | null
   owner_email: string | null
   owner_phone: string | null
-  category: 'student' | 'faculty' | 'college' | 'media'
+  category: 'STUDENT' | 'FACULTY' | 'COLLEGE' | 'MEDIA'
   name: string | null
   description: string | null
   discount_amount: number
@@ -37,7 +37,7 @@ interface Coupon {
   total_uses: number
   total_discount_given: number
   total_reward_earned: number
-  status: 'active' | 'inactive' | 'expired'
+  status: 'ACTIVE' | 'INACTIVE' | 'EXPIRED'
   is_active: boolean
   valid_from: string
   valid_until: string | null
@@ -83,7 +83,7 @@ export default function AdminCouponsPage() {
     owner_name: '',
     owner_email: '',
     owner_phone: '',
-    category: 'student',
+    category: 'STUDENT',
     name: '',
     description: '',
     discount_amount: 10000,
@@ -100,7 +100,7 @@ export default function AdminCouponsPage() {
     owner_name: '',
     owner_email: '',
     owner_phone: '',
-    category: 'student',
+    category: 'STUDENT',
     discount_amount: 10000,
     reward_amount: 10000,
     is_active: true,
@@ -176,7 +176,7 @@ export default function AdminCouponsPage() {
         owner_name: '',
         owner_email: '',
         owner_phone: '',
-        category: 'student',
+        category: 'STUDENT',
         name: '',
         description: '',
         discount_amount: 10000,
@@ -365,9 +365,9 @@ export default function AdminCouponsPage() {
               } outline-none focus:border-blue-500`}
             >
               <option value="">All Status</option>
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-              <option value="expired">Expired</option>
+              <option value="ACTIVE">Active</option>
+              <option value="INACTIVE">Inactive</option>
+              <option value="EXPIRED">Expired</option>
             </select>
 
             {/* Category Filter */}
@@ -381,10 +381,10 @@ export default function AdminCouponsPage() {
               } outline-none focus:border-blue-500`}
             >
               <option value="">All Categories</option>
-              <option value="student">Student</option>
-              <option value="faculty">Faculty</option>
-              <option value="college">College</option>
-              <option value="media">Media</option>
+              <option value="STUDENT">Student</option>
+              <option value="FACULTY">Faculty</option>
+              <option value="COLLEGE">College</option>
+              <option value="MEDIA">Media</option>
             </select>
           </div>
 
@@ -582,10 +582,10 @@ export default function AdminCouponsPage() {
                         : 'bg-gray-50 border-gray-200 text-gray-900'
                     } outline-none focus:border-blue-500`}
                   >
-                    <option value="student">Student</option>
-                    <option value="faculty">Faculty</option>
-                    <option value="college">College</option>
-                    <option value="media">Media</option>
+                    <option value="STUDENT">Student</option>
+                    <option value="FACULTY">Faculty</option>
+                    <option value="COLLEGE">College</option>
+                    <option value="MEDIA">Media</option>
                   </select>
                 </div>
               </div>
@@ -799,10 +799,10 @@ export default function AdminCouponsPage() {
                         : 'bg-gray-50 border-gray-200 text-gray-900'
                     } outline-none focus:border-blue-500`}
                   >
-                    <option value="student">Student</option>
-                    <option value="faculty">Faculty</option>
-                    <option value="college">College</option>
-                    <option value="media">Media</option>
+                    <option value="STUDENT">Student</option>
+                    <option value="FACULTY">Faculty</option>
+                    <option value="COLLEGE">College</option>
+                    <option value="MEDIA">Media</option>
                   </select>
                 </div>
               </div>

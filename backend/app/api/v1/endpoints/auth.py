@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from datetime import datetime, timedelta
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional
 import secrets
 import uuid
@@ -166,6 +166,23 @@ async def register(
     except Exception as e:
         # Don't fail registration if email fails
         logger.warning(f"[Auth] Failed to send verification email: {e}")
+
+    # Send admin notification for new user signup (async, don't block)
+    # Uses database-configured notification settings (admin panel)
+    try:
+        asyncio.create_task(
+            email_service.notify_new_user_registration_v2(
+                user_email=user.email,
+                user_name=user.full_name,
+                user_role=user_role.value,
+                college_name=user.college_name,
+                phone=user.phone
+            )
+        )
+        logger.info(f"[Auth] Admin notification queued for new user: {user.email}")
+    except Exception as e:
+        # Don't fail registration if notification fails
+        logger.warning(f"[Auth] Failed to queue admin notification: {e}")
 
     return user
 
@@ -1009,6 +1026,13 @@ class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
 
+    @field_validator('new_password')
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        """Validate password meets security requirements"""
+        from app.schemas.auth import validate_password_strength
+        return validate_password_strength(v)
+
 
 class PasswordResetResponse(BaseModel):
     message: str
@@ -1137,12 +1161,7 @@ async def reset_password(
                 detail="Reset token has expired"
             )
 
-        # Validate new password
-        if len(request.new_password) < 8:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Password must be at least 8 characters"
-            )
+        # Password validation is handled by Pydantic schema (validate_password_strength)
 
         # Update password
         user.hashed_password = get_password_hash(request.new_password)

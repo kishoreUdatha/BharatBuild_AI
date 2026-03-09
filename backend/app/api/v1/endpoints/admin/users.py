@@ -136,6 +136,7 @@ async def list_users(
             email=user.email,
             full_name=user.full_name,
             username=user.username,
+            phone=user.phone,
             role=user.role.value if user.role else "student",
             organization=user.organization,
             is_active=user.is_active,
@@ -147,7 +148,19 @@ async def list_users(
             last_login=user.last_login,
             projects_count=projects_count or 0,
             tokens_used=0,  # TODO: Calculate from TokenBalance
-            subscription_plan=subscription_plan_name
+            subscription_plan=subscription_plan_name,
+            # Student Academic Details
+            roll_number=user.roll_number,
+            college_name=user.college_name,
+            university_name=user.university_name,
+            department=user.department,
+            course=user.course,
+            year_semester=user.year_semester,
+            batch=user.batch,
+            # Guide/Mentor Details
+            guide_name=user.guide_name,
+            guide_designation=user.guide_designation,
+            hod_name=user.hod_name,
         ))
 
     return AdminUsersResponse(
@@ -159,26 +172,102 @@ async def list_users(
     )
 
 
+# ========== SUBSCRIPTION REMINDER ENDPOINTS ==========
+# NOTE: These must come BEFORE /{user_id} to avoid route conflicts
+
+@router.get("/unsubscribed")
+async def get_unsubscribed_users(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    hours_since_registration: int = Query(2, ge=1, description="Users registered more than X hours ago"),
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    """Get users who registered but haven't subscribed"""
+    from datetime import timedelta
+
+    cutoff_time = datetime.utcnow() - timedelta(hours=hours_since_registration)
+
+    # Get users without subscriptions
+    query = select(User).where(
+        and_(
+            User.created_at < cutoff_time,
+            User.is_active == True,
+            ~User.id.in_(
+                select(Subscription.user_id).where(Subscription.user_id.isnot(None))
+            )
+        )
+    ).order_by(User.created_at.desc())
+
+    # Count
+    count_query = select(func.count()).select_from(query.subquery())
+    total_result = await db.execute(count_query)
+    total = total_result.scalar()
+
+    # Paginate
+    offset = (page - 1) * page_size
+    result = await db.execute(query.offset(offset).limit(page_size))
+    users = result.scalars().all()
+
+    return {
+        "users": [
+            {
+                "id": str(u.id),
+                "email": u.email,
+                "full_name": u.full_name,
+                "phone": u.phone,
+                "college_name": u.college_name,
+                "created_at": u.created_at.isoformat(),
+                "reminder_2_hour_sent": u.reminder_2_hour_sent,
+                "reminder_3_day_sent": u.reminder_3_day_sent,
+                "reminder_7_day_sent": u.reminder_7_day_sent,
+            }
+            for u in users
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": math.ceil(total / page_size)
+    }
+
+
 @router.get("/{user_id}", response_model=AdminUserResponse)
 async def get_user(
     user_id: str,
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    """Get a specific user by ID"""
+    """Get a specific user by ID with full details"""
     user = await db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Get projects count
     projects_count = await db.scalar(
         select(func.count(Project.id)).where(Project.user_id == user.id)
     )
+
+    # Get subscription plan name
+    subscription_plan_name = None
+    subscription_result = await db.execute(
+        select(Subscription, Plan)
+        .join(Plan, Subscription.plan_id == Plan.id, isouter=True)
+        .where(and_(
+            Subscription.user_id == user.id,
+            Subscription.status == SubscriptionStatus.ACTIVE
+        ))
+    )
+    subscription_row = subscription_result.first()
+    if subscription_row:
+        subscription, plan = subscription_row
+        subscription_plan_name = plan.name if plan else "Free"
 
     return AdminUserResponse(
         id=str(user.id),
         email=user.email,
         full_name=user.full_name,
         username=user.username,
+        phone=user.phone,
         role=user.role.value if user.role else "student",
         organization=user.organization,
         is_active=user.is_active,
@@ -190,7 +279,19 @@ async def get_user(
         last_login=user.last_login,
         projects_count=projects_count or 0,
         tokens_used=0,
-        subscription_plan=None
+        subscription_plan=subscription_plan_name,
+        # Student Academic Details
+        roll_number=user.roll_number,
+        college_name=user.college_name,
+        university_name=user.university_name,
+        department=user.department,
+        course=user.course,
+        year_semester=user.year_semester,
+        batch=user.batch,
+        # Guide/Mentor Details
+        guide_name=user.guide_name,
+        guide_designation=user.guide_designation,
+        hod_name=user.hod_name,
     )
 
 
@@ -488,3 +589,132 @@ async def export_users_csv(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=users_export.csv"}
     )
+
+
+@router.post("/{user_id}/send-reminder")
+async def send_subscription_reminder(
+    user_id: str,
+    reminder_type: str = Query("first", enum=["first", "second", "final"]),
+    channel: str = Query("both", enum=["email", "whatsapp", "both"]),
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    """Manually send a subscription reminder to a user"""
+    from app.services.subscription_reminder_service import subscription_reminder_service
+
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check if user has subscription
+    sub_result = await db.execute(
+        select(Subscription).where(Subscription.user_id == user_id)
+    )
+    if sub_result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="User already has a subscription")
+
+    # Send reminder
+    schedule = {"name": reminder_type, "label": reminder_type}
+
+    try:
+        await subscription_reminder_service._send_reminder(user, schedule)
+
+        await log_admin_action(
+            db=db,
+            admin_id=str(current_admin.id),
+            action="subscription_reminder_sent",
+            target_type="user",
+            target_id=user_id,
+            details={"email": user.email, "reminder_type": reminder_type, "channel": channel},
+            request=request
+        )
+
+        return {
+            "success": True,
+            "message": f"Reminder sent to {user.email}",
+            "reminder_type": reminder_type,
+            "channel": channel
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send reminder: {str(e)}")
+
+
+@router.post("/bulk-send-reminders")
+async def bulk_send_reminders(
+    reminder_type: str = Query("first", enum=["first", "second", "final"]),
+    hours_since_registration: int = Query(2, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    """Send subscription reminders to all unsubscribed users in bulk"""
+    from datetime import timedelta
+    from app.services.subscription_reminder_service import subscription_reminder_service
+
+    cutoff_time = datetime.utcnow() - timedelta(hours=hours_since_registration)
+
+    # Determine which reminder field to check
+    reminder_field = {
+        "first": "reminder_2_hour_sent",
+        "second": "reminder_3_day_sent",
+        "final": "reminder_7_day_sent"
+    }.get(reminder_type, "reminder_2_hour_sent")
+
+    # Get users who haven't received this reminder
+    query = select(User).where(
+        and_(
+            User.created_at < cutoff_time,
+            User.is_active == True,
+            getattr(User, reminder_field) == False,
+            ~User.id.in_(
+                select(Subscription.user_id).where(Subscription.user_id.isnot(None))
+            )
+        )
+    ).limit(limit)
+
+    result = await db.execute(query)
+    users = result.scalars().all()
+
+    sent_count = 0
+    failed_count = 0
+
+    schedule = {"name": reminder_type, "label": reminder_type}
+
+    for user in users:
+        try:
+            await subscription_reminder_service._send_reminder(user, schedule)
+
+            # Mark as sent
+            setattr(user, reminder_field, True)
+            setattr(user, f"{reminder_field}_at", datetime.utcnow())
+            sent_count += 1
+
+        except Exception as e:
+            failed_count += 1
+
+    await db.commit()
+
+    await log_admin_action(
+        db=db,
+        admin_id=str(current_admin.id),
+        action="bulk_subscription_reminders_sent",
+        target_type="users",
+        details={
+            "reminder_type": reminder_type,
+            "sent_count": sent_count,
+            "failed_count": failed_count,
+            "total_users": len(users)
+        },
+        request=request
+    )
+
+    return {
+        "success": True,
+        "message": f"Sent {sent_count} reminders, {failed_count} failed",
+        "sent_count": sent_count,
+        "failed_count": failed_count,
+        "total_processed": len(users)
+    }

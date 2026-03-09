@@ -17,35 +17,35 @@ from app.core.types import GUID, generate_uuid
 
 class CouponCategory(str, enum.Enum):
     """Category of coupon owner"""
-    STUDENT = "student"
-    FACULTY = "faculty"
-    COLLEGE = "college"
-    MEDIA = "media"
+    STUDENT = "STUDENT"
+    FACULTY = "FACULTY"
+    COLLEGE = "COLLEGE"
+    MEDIA = "MEDIA"
 
 
 class CouponStatus(str, enum.Enum):
     """Coupon status"""
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    EXPIRED = "expired"
+    ACTIVE = "ACTIVE"
+    INACTIVE = "INACTIVE"
+    EXPIRED = "EXPIRED"
 
 
 class WalletTransactionType(str, enum.Enum):
     """Type of wallet transaction"""
-    CREDIT = "credit"           # Money added (reward)
-    DEBIT = "debit"             # Money used (purchase)
-    WITHDRAWAL = "withdrawal"   # Withdrawn to bank
-    REFUND = "refund"           # Refunded amount
+    CREDIT = "CREDIT"           # Money added (reward)
+    DEBIT = "DEBIT"             # Money used (purchase)
+    WITHDRAWAL = "WITHDRAWAL"   # Withdrawn to bank
+    REFUND = "REFUND"           # Refunded amount
 
 
 class WalletTransactionSource(str, enum.Enum):
     """Source of wallet transaction"""
-    COUPON_REWARD = "coupon_reward"     # Earned from coupon usage
-    PURCHASE = "purchase"               # Used for purchase
-    WITHDRAWAL = "withdrawal"           # Withdrawn to bank
-    ADMIN_CREDIT = "admin_credit"       # Admin manually added
-    ADMIN_DEBIT = "admin_debit"         # Admin manually deducted
-    REFUND = "refund"                   # Refund from failed transaction
+    COUPON_REWARD = "COUPON_REWARD"     # Earned from coupon usage
+    PURCHASE = "PURCHASE"               # Used for purchase
+    WITHDRAWAL = "WITHDRAWAL"           # Withdrawn to bank
+    ADMIN_CREDIT = "ADMIN_CREDIT"       # Admin manually added
+    ADMIN_DEBIT = "ADMIN_DEBIT"         # Admin manually deducted
+    REFUND = "REFUND"                   # Refund from failed transaction
 
 
 class Coupon(Base):

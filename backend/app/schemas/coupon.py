@@ -11,23 +11,23 @@ from enum import Enum
 # ============== Enums ==============
 
 class CouponCategoryEnum(str, Enum):
-    STUDENT = "student"
-    FACULTY = "faculty"
-    COLLEGE = "college"
-    MEDIA = "media"
+    STUDENT = "STUDENT"
+    FACULTY = "FACULTY"
+    COLLEGE = "COLLEGE"
+    MEDIA = "MEDIA"
 
 
 class CouponStatusEnum(str, Enum):
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    EXPIRED = "expired"
+    ACTIVE = "ACTIVE"
+    INACTIVE = "INACTIVE"
+    EXPIRED = "EXPIRED"
 
 
 class WalletTransactionTypeEnum(str, Enum):
-    CREDIT = "credit"
-    DEBIT = "debit"
-    WITHDRAWAL = "withdrawal"
-    REFUND = "refund"
+    CREDIT = "CREDIT"
+    DEBIT = "DEBIT"
+    WITHDRAWAL = "WITHDRAWAL"
+    REFUND = "REFUND"
 
 
 # ============== Coupon Schemas ==============

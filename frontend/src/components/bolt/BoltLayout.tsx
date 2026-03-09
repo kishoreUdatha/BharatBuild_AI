@@ -10,6 +10,7 @@ import { CodeEditor } from './CodeEditor'
 import { PlanView } from './PlanView'
 import { ProjectSelector } from './ProjectSelector'
 import { ProjectRunControls } from './ProjectRunControls'
+import { UnifiedRunButton } from './UnifiedRunButton'
 import { BuildDocumentsPanel } from './BuildDocumentsPanel'
 import { ProjectStagesPanel } from './ProjectStagesPanel'
 // WelcomeScreen and QuickActions removed - now showing clean empty state
@@ -861,10 +862,12 @@ export function BoltLayout({
             </button>
           </div>
 
-          {/* Project Run Controls (Docker) */}
-          <ProjectRunControls
+          {/* Unified Run Button - Auto-detects WebContainer vs Docker */}
+          <UnifiedRunButton
             onOpenTerminal={() => {
               openTerminal()
+              startSession()
+              setActiveTab('code')
             }}
             onPreviewUrlChange={(url) => {
               if (url && onServerStart) {
@@ -875,26 +878,10 @@ export function BoltLayout({
               }
             }}
             onOutput={(line) => {
-              // Add output to terminal buffer (terminal is already opened by onStartSession)
               addLog({
                 type: 'output',
                 content: line
               })
-            }}
-            onStartSession={() => {
-              // Start session - keeps terminal open during and after execution
-              startSession()
-              // Stay on Code tab to see terminal logs - will switch to Preview when server starts
-              setActiveTab('code')
-              openTerminal()
-            }}
-            onEndSession={() => {
-              // End session but keep terminal open for user to review output
-              endSession()
-            }}
-            onClearLogs={() => {
-              // Clear terminal logs for fresh run - new terminal for each run
-              clearLogs()
             }}
           />
 

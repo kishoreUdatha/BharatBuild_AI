@@ -1,12 +1,66 @@
-from pydantic import BaseModel, EmailStr, Field, field_serializer, model_validator
+from pydantic import BaseModel, EmailStr, Field, field_serializer, model_validator, field_validator
 from typing import Optional
 from datetime import datetime
 from uuid import UUID
+import re
+
+
+# Password policy configuration
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_LENGTH = 128
+PASSWORD_REQUIRE_UPPERCASE = True
+PASSWORD_REQUIRE_LOWERCASE = True
+PASSWORD_REQUIRE_DIGIT = True
+PASSWORD_REQUIRE_SPECIAL = True
+PASSWORD_SPECIAL_CHARS = r'!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?`~'
+
+
+def validate_password_strength(password: str) -> str:
+    """
+    Validate password against security policies.
+
+    Requirements:
+    - Minimum 8 characters
+    - Maximum 128 characters
+    - At least 1 uppercase letter
+    - At least 1 lowercase letter
+    - At least 1 digit
+    - At least 1 special character
+    """
+    errors = []
+
+    # Length checks
+    if len(password) < PASSWORD_MIN_LENGTH:
+        errors.append(f"at least {PASSWORD_MIN_LENGTH} characters")
+
+    if len(password) > PASSWORD_MAX_LENGTH:
+        errors.append(f"maximum {PASSWORD_MAX_LENGTH} characters")
+
+    # Uppercase check
+    if PASSWORD_REQUIRE_UPPERCASE and not re.search(r'[A-Z]', password):
+        errors.append("at least 1 uppercase letter")
+
+    # Lowercase check
+    if PASSWORD_REQUIRE_LOWERCASE and not re.search(r'[a-z]', password):
+        errors.append("at least 1 lowercase letter")
+
+    # Digit check
+    if PASSWORD_REQUIRE_DIGIT and not re.search(r'\d', password):
+        errors.append("at least 1 number")
+
+    # Special character check
+    if PASSWORD_REQUIRE_SPECIAL and not re.search(f'[{re.escape(PASSWORD_SPECIAL_CHARS)}]', password):
+        errors.append("at least 1 special character (!@#$%^&*)")
+
+    if errors:
+        raise ValueError(f"Password must contain: {', '.join(errors)}")
+
+    return password
 
 
 class UserRegister(BaseModel):
     email: EmailStr
-    password: str = Field(..., min_length=8)
+    password: str = Field(..., min_length=8, max_length=128)
     full_name: Optional[str] = None
     phone: Optional[str] = Field(None, pattern=r'^[6-9]\d{9}$', description="10-digit Indian mobile number")
     role: str = "student"
@@ -24,6 +78,12 @@ class UserRegister(BaseModel):
     guide_name: Optional[str] = None
     guide_designation: Optional[str] = None
     hod_name: Optional[str] = None
+
+    @field_validator('password')
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        """Validate password meets security requirements"""
+        return validate_password_strength(v)
 
     @model_validator(mode='after')
     def validate_student_fields(self):

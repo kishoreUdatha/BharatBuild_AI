@@ -20,14 +20,185 @@ import {
   ChevronUp,
   ChevronDown,
   CheckSquare,
-  Square
+  Square,
+  Eye,
+  X,
+  Mail,
+  Phone,
+  Building,
+  Calendar,
+  GraduationCap,
+  User,
+  CreditCard
 } from 'lucide-react'
+
+// User Details Panel Component
+function UserDetailsModal({
+  user,
+  isDark,
+  onClose
+}: {
+  user: AdminUser
+  isDark: boolean
+  onClose: () => void
+}) {
+  useEffect(() => {
+    document.body.style.overflow = 'hidden'
+    // Debug: Log user data to see what's coming from API
+    console.log('User Details Modal - Full user object:', JSON.stringify(user, null, 2))
+    console.log('Academic fields:', {
+      university_name: user.university_name,
+      college_name: user.college_name,
+      department: user.department,
+      roll_number: user.roll_number,
+      guide_name: user.guide_name
+    })
+    return () => { document.body.style.overflow = '' }
+  }, [user])
+
+  const formatDate = (dateString: string | null) => {
+    if (!dateString) return '-'
+    return new Date(dateString).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  }
+
+  const modalContent = (
+    <div className="fixed inset-0 z-[9999]">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className={`absolute right-0 top-0 h-full w-[360px] overflow-y-auto ${isDark ? 'bg-[#0a0a0a]' : 'bg-white'}`} style={{ animation: 'slideIn 0.15s ease' }}>
+        <style jsx>{`@keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }`}</style>
+
+        {/* Compact Header */}
+        <div className={`sticky top-0 z-10 flex items-center gap-3 px-4 py-3 ${isDark ? 'bg-[#0a0a0a] border-b border-zinc-800' : 'bg-white border-b border-gray-200'}`}>
+          {user.avatar_url ? (
+            <img src={user.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
+          ) : (
+            <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-semibold">
+              {user.full_name?.charAt(0) || user.email.charAt(0).toUpperCase()}
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <div className={`text-sm font-semibold truncate ${isDark ? 'text-white' : 'text-gray-900'}`}>{user.full_name || 'Unnamed'}</div>
+            <div className={`text-xs truncate ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>{user.email}</div>
+          </div>
+          <button onClick={onClose} className={`p-1.5 rounded-md ${isDark ? 'hover:bg-zinc-800 text-zinc-500' : 'hover:bg-gray-100 text-gray-400'}`}>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Tags & Stats Row */}
+        <div className={`px-4 py-3 ${isDark ? 'border-b border-zinc-800' : 'border-b border-gray-100'}`}>
+          <div className="flex items-center gap-1.5 mb-3">
+            <span className={`px-2 py-0.5 text-[10px] font-semibold rounded ${isDark ? 'bg-zinc-800 text-zinc-300' : 'bg-gray-100 text-gray-700'}`}>{user.role}</span>
+            <span className={`px-2 py-0.5 text-[10px] font-semibold rounded flex items-center gap-1 ${user.is_active ? (isDark ? 'bg-green-900/30 text-green-400' : 'bg-green-100 text-green-700') : (isDark ? 'bg-zinc-800 text-zinc-500' : 'bg-gray-100 text-gray-500')}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${user.is_active ? 'bg-green-500' : 'bg-gray-400'}`}></span>
+              {user.is_active ? 'Active' : 'Inactive'}
+            </span>
+            {user.is_verified && <span className={`px-2 py-0.5 text-[10px] font-semibold rounded ${isDark ? 'bg-blue-900/30 text-blue-400' : 'bg-blue-100 text-blue-700'}`}>Verified</span>}
+            {user.oauth_provider && <span className={`px-2 py-0.5 text-[10px] font-semibold rounded ${isDark ? 'bg-orange-900/30 text-orange-400' : 'bg-orange-100 text-orange-700'}`}>{user.oauth_provider}</span>}
+          </div>
+          <div className="flex gap-4">
+            <div><span className={`text-lg font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>{user.projects_count || 0}</span><span className={`text-[10px] ml-1 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>projects</span></div>
+            <div><span className={`text-lg font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>{user.tokens_used || 0}</span><span className={`text-[10px] ml-1 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>tokens</span></div>
+            <div><span className={`text-lg font-bold text-blue-500`}>{user.subscription_plan || 'Free'}</span><span className={`text-[10px] ml-1 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>plan</span></div>
+          </div>
+        </div>
+
+        {/* All Details in Simple Table */}
+        <div className="px-4 py-2">
+          <table className="w-full">
+            <tbody className={`text-xs ${isDark ? 'text-zinc-300' : 'text-gray-700'}`}>
+              <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Username</td>
+                <td className="py-2 text-right font-medium">{user.username || '-'}</td>
+              </tr>
+              <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Phone</td>
+                <td className="py-2 text-right font-medium">{user.phone || '-'}</td>
+              </tr>
+              <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Organization</td>
+                <td className="py-2 text-right font-medium">{user.organization || '-'}</td>
+              </tr>
+              <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Joined</td>
+                <td className="py-2 text-right font-medium">{formatDate(user.created_at)}</td>
+              </tr>
+              <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Last Login</td>
+                <td className="py-2 text-right font-medium">{formatDate(user.last_login)}</td>
+              </tr>
+              <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Sign Up</td>
+                <td className="py-2 text-right font-medium">{user.oauth_provider || 'Email'}</td>
+              </tr>
+
+              {user.role === 'student' && (
+                <>
+                  <tr><td colSpan={2} className={`pt-4 pb-1 text-[10px] font-semibold uppercase ${isDark ? 'text-zinc-600' : 'text-gray-400'}`}>Academic</td></tr>
+                  <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                    <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>University</td>
+                    <td className="py-2 text-right font-medium">{user.university_name || '-'}</td>
+                  </tr>
+                  <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                    <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>College</td>
+                    <td className="py-2 text-right font-medium">{user.college_name || '-'}</td>
+                  </tr>
+                  <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                    <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Department</td>
+                    <td className="py-2 text-right font-medium">{user.department || '-'}</td>
+                  </tr>
+                  <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                    <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Course</td>
+                    <td className="py-2 text-right font-medium">{user.course || '-'}</td>
+                  </tr>
+                  <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                    <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Roll No.</td>
+                    <td className="py-2 text-right font-medium">{user.roll_number || '-'}</td>
+                  </tr>
+                  <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                    <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Year/Sem</td>
+                    <td className="py-2 text-right font-medium">{user.year_semester || '-'}</td>
+                  </tr>
+                  <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                    <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Batch</td>
+                    <td className="py-2 text-right font-medium">{user.batch || '-'}</td>
+                  </tr>
+
+                  <tr><td colSpan={2} className={`pt-4 pb-1 text-[10px] font-semibold uppercase ${isDark ? 'text-zinc-600' : 'text-gray-400'}`}>Guide</td></tr>
+                  <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                    <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Name</td>
+                    <td className="py-2 text-right font-medium">{user.guide_name || '-'}</td>
+                  </tr>
+                  <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                    <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Designation</td>
+                    <td className="py-2 text-right font-medium">{user.guide_designation || '-'}</td>
+                  </tr>
+                  <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                    <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>HOD</td>
+                    <td className="py-2 text-right font-medium">{user.hod_name || '-'}</td>
+                  </tr>
+                </>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+      </div>
+    </div>
+  )
+
+  if (typeof window !== 'undefined') {
+    return createPortal(modalContent, document.body)
+  }
+  return null
+}
 
 // Action Menu Component with Portal
 function ActionMenu({
   user,
   isDark,
   onClose,
+  onView,
   onSuspend,
   onActivate,
   onDelete,
@@ -37,6 +208,7 @@ function ActionMenu({
   user: AdminUser
   isDark: boolean
   onClose: () => void
+  onView: () => void
   onSuspend: () => void
   onActivate: () => void
   onDelete: () => void
@@ -92,6 +264,17 @@ function ActionMenu({
           : 'bg-white border-gray-200'
       }`}
     >
+      <button
+        onClick={onView}
+        className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
+          isDark
+            ? 'text-gray-200 hover:bg-[#333]'
+            : 'text-gray-700 hover:bg-gray-100'
+        }`}
+      >
+        <Eye className="w-4 h-4 text-blue-400" />
+        View Details
+      </button>
       <button
         onClick={user.is_active ? onSuspend : onActivate}
         className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
@@ -180,6 +363,7 @@ export default function AdminUsersPage() {
     handleRoleFilter,
     handleActiveFilter,
     handleSort,
+    getUserDetails,
     suspendUser,
     activateUser,
     deleteUser,
@@ -192,6 +376,8 @@ export default function AdminUsersPage() {
   const [selectedStatus, setSelectedStatus] = useState('')
   const [actionMenuUser, setActionMenuUser] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [viewingUser, setViewingUser] = useState<AdminUser | null>(null)
+  const [loadingUserDetails, setLoadingUserDetails] = useState(false)
 
   const isDark = theme === 'dark'
   const debouncedSearch = useDebounce(searchInput, 300)
@@ -578,6 +764,18 @@ export default function AdminUsersPage() {
                               isDark={isDark}
                               buttonId={`action-btn-${user.id}`}
                               onClose={() => setActionMenuUser(null)}
+                              onView={async () => {
+                                setActionMenuUser(null)
+                                setLoadingUserDetails(true)
+                                const userDetails = await getUserDetails(user.id)
+                                setLoadingUserDetails(false)
+                                if (userDetails) {
+                                  setViewingUser(userDetails)
+                                } else {
+                                  // Fallback to cached user if API fails
+                                  setViewingUser(user)
+                                }
+                              }}
                               onSuspend={() => {
                                 setActionMenuUser(null)
                                 suspendUser(user.id)
@@ -617,6 +815,15 @@ export default function AdminUsersPage() {
           )}
         </div>
       </div>
+
+      {/* User Details Modal */}
+      {viewingUser && (
+        <UserDetailsModal
+          user={viewingUser}
+          isDark={isDark}
+          onClose={() => setViewingUser(null)}
+        />
+      )}
     </div>
   )
 }

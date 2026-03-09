@@ -33,6 +33,7 @@ flower==2.0.1
 # ============================================
 anthropic>=0.39.0  # Updated for Agent SDK support with tools
 openai==1.12.0
+google-generativeai>=0.8.0  # Google Gemini API for chatbot
 langchain==0.1.9
 langchain-community==0.0.24
 langchain-openai==0.0.6

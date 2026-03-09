@@ -105,9 +105,15 @@ class Settings(BaseSettings):
     # Claude AI
     # ==========================================
     ANTHROPIC_API_KEY: str
+
+    # ==========================================
+    # Google Gemini (for Chatbot - Free tier)
+    # ==========================================
+    GEMINI_API_KEY: str = ""  # Get free key from https://aistudio.google.com/apikey
+    GEMINI_MODEL: str = "gemini-2.0-flash"  # Fast and free
     ANTHROPIC_BASE_URL: str = ""  # Empty means use default Anthropic URL
     USE_MOCK_CLAUDE: bool = False
-    CLAUDE_HAIKU_MODEL: str = "claude-3-5-haiku-20241022"
+    CLAUDE_HAIKU_MODEL: str = "claude-3-haiku-20240307"
     CLAUDE_SONNET_MODEL: str = "claude-sonnet-4-20250514"
     CLAUDE_MAX_TOKENS: int = 4096
     CLAUDE_TEMPERATURE: float = 0.7
@@ -177,16 +183,46 @@ class Settings(BaseSettings):
     # ==========================================
     # Email
     # ==========================================
+    # Email Provider: "resend", "sendgrid", or "smtp"
+    EMAIL_PROVIDER: str = "resend"
+
+    # Resend Configuration (recommended - Free tier: 3000 emails/month)
+    RESEND_API_KEY: str = ""
+
+    # SendGrid Configuration (alternative for bulk emails)
+    SENDGRID_API_KEY: str = ""
+    USE_SENDGRID: bool = False
+
+    # SMTP Configuration (fallback)
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
+
+    # Common Email Settings
     EMAIL_FROM: str = "noreply@bharatbuild.ai"
     EMAIL_FROM_NAME: str = "BharatBuild AI"
 
-    # SendGrid Configuration (preferred for bulk emails)
-    SENDGRID_API_KEY: str = ""
-    USE_SENDGRID: bool = True  # Use SendGrid when API key is available
+    # Admin Notifications
+    ADMIN_ALERT_EMAIL: str = ""  # Email to receive new user signup alerts (defaults to EMAIL_FROM if empty)
+    NEW_USER_WEBHOOK_URL: str = ""  # Slack/Discord webhook URL for new user notifications
+    ADMIN_WHATSAPP_NUMBER: str = ""  # WhatsApp number to receive alerts (with country code, e.g., +919876543210)
+
+    # WhatsApp Configuration (choose one provider)
+    # Option 1: Exotel (recommended for India)
+    EXOTEL_SID: str = ""  # Exotel Account SID
+    EXOTEL_TOKEN: str = ""  # Exotel API Token
+    EXOTEL_SUBDOMAIN: str = "api.exotel.com"  # Exotel API subdomain
+    EXOTEL_WHATSAPP_NUMBER: str = ""  # Your Exotel WhatsApp Business number
+
+    # Option 2: Twilio WhatsApp
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_WHATSAPP_NUMBER: str = ""  # Your Twilio WhatsApp number (e.g., +14155238886)
+
+    # Option 3: Meta WhatsApp Cloud API
+    WHATSAPP_ACCESS_TOKEN: str = ""  # Meta Graph API access token
+    WHATSAPP_PHONE_NUMBER_ID: str = ""  # Your WhatsApp Business phone number ID
 
     # ==========================================
     # Frontend
@@ -407,7 +443,7 @@ class Settings(BaseSettings):
     LOG_RETENTION_MINUTES: int = 30  # Log bus retention
 
     # SimpleFixer Model & Cost Settings
-    SIMPLEFIXER_HAIKU_MODEL: str = "claude-3-5-haiku-20241022"
+    SIMPLEFIXER_HAIKU_MODEL: str = "claude-3-haiku-20240307"
     SIMPLEFIXER_SONNET_MODEL: str = "claude-sonnet-4-20250514"
     SIMPLEFIXER_HAIKU_INPUT_COST: float = 0.25  # $ per 1M tokens
     SIMPLEFIXER_HAIKU_OUTPUT_COST: float = 1.25  # $ per 1M tokens
@@ -628,10 +664,15 @@ class Settings(BaseSettings):
     def get_token_packages(self) -> Dict[str, Dict[str, Any]]:
         """Get token packages as a dictionary"""
         return {
+            # Legacy packages
             "starter": parse_token_package(self.TOKEN_PACKAGE_STARTER),
             "pro": parse_token_package(self.TOKEN_PACKAGE_PRO),
             "unlimited": parse_token_package(self.TOKEN_PACKAGE_UNLIMITED),
-            "complete": parse_token_package(self.TOKEN_PACKAGE_COMPLETE)
+            "complete": parse_token_package(self.TOKEN_PACKAGE_COMPLETE),
+            # New pricing plans (matching frontend)
+            "standard": {"tokens": 300000, "price": 199900, "name": "Standard Plan"},  # ₹1,999
+            "plus": {"tokens": 500000, "price": 299900, "name": "Plus Plan"},  # ₹2,999
+            "premium": {"tokens": 1000000, "price": 449900, "name": "Premium Plan"},  # ₹4,499
         }
 
     def get_monthly_plans(self) -> Dict[str, Dict[str, Any]]:

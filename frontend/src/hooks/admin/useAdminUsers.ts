@@ -8,6 +8,7 @@ export interface AdminUser {
   email: string
   full_name: string | null
   username: string | null
+  phone: string | null
   role: string
   organization: string | null
   is_active: boolean
@@ -20,6 +21,18 @@ export interface AdminUser {
   projects_count: number
   tokens_used: number
   subscription_plan: string | null
+  // Student Academic Details
+  roll_number: string | null
+  college_name: string | null
+  university_name: string | null
+  department: string | null
+  course: string | null
+  year_semester: string | null
+  batch: string | null
+  // Guide/Mentor Details
+  guide_name: string | null
+  guide_designation: string | null
+  hod_name: string | null
 }
 
 export interface AdminUsersResponse {
@@ -134,6 +147,16 @@ export function useAdminUsers({
     }
   }, [sortBy, sortOrder])
 
+  const getUserDetails = useCallback(async (userId: string): Promise<AdminUser | null> => {
+    try {
+      const data = await apiClient.get<AdminUser>(`/admin/users/${userId}`)
+      return data
+    } catch (err: any) {
+      console.error('Failed to get user details:', err)
+      return null
+    }
+  }, [])
+
   const updateUser = useCallback(async (userId: string, data: Partial<AdminUser>) => {
     try {
       await apiClient.patch(`/admin/users/${userId}`, data)
@@ -241,6 +264,7 @@ export function useAdminUsers({
     handleActiveFilter,
     handleVerifiedFilter,
     handleSort,
+    getUserDetails,
     updateUser,
     suspendUser,
     activateUser,

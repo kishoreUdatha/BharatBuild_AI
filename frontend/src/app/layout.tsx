@@ -5,6 +5,7 @@ import './globals.css'
 import { UpgradeProvider } from '@/contexts/UpgradeContext'
 import { ToastProvider } from '@/components/ui/toast'
 import { OrganizationJsonLd, SoftwareApplicationJsonLd, FAQJsonLd, WebsiteJsonLd } from '@/components/seo/JsonLd'
+import ChatWidget from '@/components/ChatWidget'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -124,6 +125,7 @@ export default function RootLayout({
         <ToastProvider>
           <UpgradeProvider>
             {children}
+            <ChatWidget />
           </UpgradeProvider>
         </ToastProvider>
       </body>

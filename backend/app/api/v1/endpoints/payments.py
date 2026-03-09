@@ -35,14 +35,31 @@ from app.services.coupon_service import coupon_service
 # Razorpay client initialization
 try:
     import razorpay
-    razorpay_client = razorpay.Client(
-        auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET)
-    )
-    RAZORPAY_AVAILABLE = bool(settings.RAZORPAY_KEY_ID and settings.RAZORPAY_KEY_SECRET)
+    RAZORPAY_SDK_AVAILABLE = True
 except ImportError:
-    razorpay_client = None
-    RAZORPAY_AVAILABLE = False
+    razorpay = None
+    RAZORPAY_SDK_AVAILABLE = False
     logger.warning("Razorpay SDK not installed. Payment features disabled.")
+
+
+def get_razorpay_client():
+    """Get Razorpay client - checks credentials at runtime, not import time"""
+    if not RAZORPAY_SDK_AVAILABLE:
+        return None, False
+
+    key_id = settings.RAZORPAY_KEY_ID
+    key_secret = settings.RAZORPAY_KEY_SECRET
+
+    if not key_id or not key_secret:
+        logger.warning(f"[Payment] Razorpay credentials not configured. KEY_ID empty: {not key_id}, SECRET empty: {not key_secret}")
+        return None, False
+
+    try:
+        client = razorpay.Client(auth=(key_id, key_secret))
+        return client, True
+    except Exception as e:
+        logger.error(f"[Payment] Failed to create Razorpay client: {e}")
+        return None, False
 
 
 router = APIRouter()
@@ -89,6 +106,16 @@ class PaymentStatusResponse(BaseModel):
 
 # ========== Payment Endpoints ==========
 
+@router.get("/packages")
+async def get_available_packages():
+    """Debug endpoint: Get available packages"""
+    packages = settings.get_token_packages()
+    return {
+        "available_packages": list(packages.keys()),
+        "packages": {k: {"tokens": v.get("tokens"), "price": v.get("price"), "name": v.get("name")} for k, v in packages.items() if v}
+    }
+
+
 @router.post("/create-order", response_model=CreateOrderResponse)
 async def create_payment_order(
     request: CreateOrderRequest,
@@ -103,7 +130,8 @@ async def create_payment_order(
     2. Stores pending transaction in DB
     3. Returns order_id for frontend checkout
     """
-    if not RAZORPAY_AVAILABLE:
+    razorpay_client, razorpay_available = get_razorpay_client()
+    if not razorpay_available:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Payment service not configured. Please contact support."
@@ -252,7 +280,8 @@ async def verify_payment(
     2. Update transaction status
     3. Credit tokens to user account
     """
-    if not RAZORPAY_AVAILABLE:
+    razorpay_client, razorpay_available = get_razorpay_client()
+    if not razorpay_available:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Payment service not configured"

@@ -86,41 +86,203 @@ class BillingOverviewResponse(BaseModel):
 
 
 # ========== Default Plans Configuration ==========
-# Single project package for BharatBuild AI - ₹4,499 one-time
+# BharatBuild AI Pricing Plans
 
 DEFAULT_PLANS = [
-    # ========== COMPLETE PROJECT PACKAGE ==========
-    # 1 complete project with all documentation for ₹4,499
+    # ========== FREE PLAN ==========
     {
-        "name": "Complete Project Package",
-        "slug": "complete",
-        "plan_type": PlanType.ENTERPRISE,
-        "description": "1 complete project with full code and all documentation",
-        "price": 449900,  # ₹4,499 one-time
+        "name": "Free",
+        "slug": "free",
+        "plan_type": PlanType.FREE,
+        "description": "Preview your project before purchasing",
+        "price": 0,
+        "currency": "INR",
+        "billing_period": "forever",
+        "token_limit": 10000,
+        "project_limit": 1,
+        "api_calls_limit": 100,
+        "code_generations_per_day": 3,
+        "max_files_per_project": 3,
+        "max_lines_per_generation": 100,
+        "auto_fixes_per_day": 0,
+        "auto_fixes_per_month": 0,
+        "documents_per_month": 0,
+        "document_types_allowed": [],
+        "concurrent_executions": 1,
+        "execution_timeout_minutes": 5,
+        "sandbox_hours_per_day": 1,
+        "allowed_models": ["haiku"],
+        "priority_queue": False,
+        "feature_flags": {
+            "code_generation": True,
+            "preview": True,
+            "export_zip": False,
+            "github_export": False,
+            "bug_fixing": False,
+            "document_generation": False,
+            "project_report": False,
+            "srs_document": False,
+            "sds_document": False,
+            "ppt_presentation": False,
+            "viva_questions": False,
+        },
+        "features": [
+            "Generate 3 preview files",
+            "View project structure",
+            "AI chat assistance",
+            "No download",
+            "No bug fixing",
+            "No documentation",
+        ]
+    },
+
+    # ========== STANDARD PLAN - ₹1,999 ==========
+    {
+        "name": "Standard",
+        "slug": "standard",
+        "plan_type": PlanType.STANDARD,
+        "description": "Full working code with database and authentication",
+        "price": 199900,  # ₹1,999
         "currency": "INR",
         "billing_period": "one_time",
-        # Core Limits - 1 Project
-        "token_limit": 500000,  # Internal limit per project (hidden from user)
-        "project_limit": 1,  # 1 project per purchase
-        "api_calls_limit": None,  # Unlimited within the project
-        # Code Generation - All Unlimited
+        "token_limit": 300000,
+        "project_limit": 1,
+        "api_calls_limit": None,
+        "code_generations_per_day": None,
+        "max_files_per_project": 50,
+        "max_lines_per_generation": None,
+        "auto_fixes_per_day": 15,
+        "auto_fixes_per_month": 15,
+        "documents_per_month": 0,
+        "document_types_allowed": [],
+        "concurrent_executions": 3,
+        "execution_timeout_minutes": 30,
+        "sandbox_hours_per_day": None,
+        "allowed_models": ["haiku", "sonnet"],
+        "priority_queue": False,
+        "feature_flags": {
+            "code_generation": True,
+            "all_templates": True,
+            "preview": True,
+            "export_zip": True,
+            "github_export": True,
+            "bug_fixing": True,
+            "document_generation": False,
+            "project_report": False,
+            "srs_document": False,
+            "sds_document": False,
+            "ppt_presentation": False,
+            "viva_questions": False,
+            "code_comments": True,
+            "readme_file": True,
+            "setup_guide": True,
+        },
+        "features": [
+            "1 Complete Project (40-50 files)",
+            "All Technologies (React, Flutter, Django, FastAPI, Node.js, Spring Boot)",
+            "Database Integration (PostgreSQL/MongoDB)",
+            "Authentication (Login/Signup)",
+            "Admin Panel (Basic)",
+            "Run Code in Browser",
+            "Download Code (ZIP)",
+            "15 Bug Fixes",
+            "Code Comments",
+            "README File",
+            "Setup Guide",
+            ".env Template",
+            "GitHub Export",
+            "Email Support (24hr response)",
+            "6 Months Validity",
+        ]
+    },
+
+    # ========== PLUS PLAN - ₹2,999 ==========
+    {
+        "name": "Plus",
+        "slug": "plus",
+        "plan_type": PlanType.PLUS,
+        "description": "Code + Project Report + PPT + Viva Q&A",
+        "price": 299900,  # ₹2,999
+        "currency": "INR",
+        "billing_period": "one_time",
+        "token_limit": 400000,
+        "project_limit": 1,
+        "api_calls_limit": None,
+        "code_generations_per_day": None,
+        "max_files_per_project": 60,
+        "max_lines_per_generation": None,
+        "auto_fixes_per_day": 25,
+        "auto_fixes_per_month": 25,
+        "documents_per_month": None,
+        "document_types_allowed": ["report", "ppt", "viva"],
+        "concurrent_executions": 4,
+        "execution_timeout_minutes": 45,
+        "sandbox_hours_per_day": None,
+        "allowed_models": ["haiku", "sonnet"],
+        "priority_queue": False,
+        "feature_flags": {
+            "code_generation": True,
+            "all_templates": True,
+            "preview": True,
+            "export_zip": True,
+            "github_export": True,
+            "bug_fixing": True,
+            "document_generation": True,
+            "project_report": True,
+            "srs_document": False,
+            "sds_document": False,
+            "ppt_presentation": True,
+            "viva_questions": True,
+            "code_comments": True,
+            "readme_file": True,
+            "setup_guide": True,
+        },
+        "features": [
+            "1 Complete Project (50-60 files)",
+            "All Technologies (React, Flutter, Django, FastAPI, Node.js, Spring Boot)",
+            "Database Integration (PostgreSQL/MongoDB/MySQL)",
+            "Authentication (Login/Signup/OAuth)",
+            "Admin Panel (Full)",
+            "Run Code in Browser",
+            "Download Code (ZIP)",
+            "25 Bug Fixes",
+            "Code Comments (Detailed)",
+            "README File",
+            "Setup Guide",
+            ".env Template",
+            "GitHub Export",
+            "Project Report (50-60 pages)",
+            "PPT Presentation (15 slides)",
+            "Viva Q&A (50 questions)",
+            "Email Support (12hr response)",
+            "6 Months Validity",
+        ]
+    },
+
+    # ========== PREMIUM PLAN - ₹4,499 ==========
+    {
+        "name": "Premium",
+        "slug": "premium",
+        "plan_type": PlanType.PREMIUM,
+        "description": "Everything included - Complete final year project package",
+        "price": 449900,  # ₹4,499
+        "currency": "INR",
+        "billing_period": "one_time",
+        "token_limit": 500000,
+        "project_limit": 1,
+        "api_calls_limit": None,
         "code_generations_per_day": None,
         "max_files_per_project": None,
         "max_lines_per_generation": None,
-        # Bug Fixing - All Unlimited
         "auto_fixes_per_day": None,
         "auto_fixes_per_month": None,
-        # Document Generation - All Unlimited
         "documents_per_month": None,
         "document_types_allowed": ["report", "srs", "sds", "ppt", "viva"],
-        # Execution - Maximum
         "concurrent_executions": 5,
         "execution_timeout_minutes": 60,
-        "sandbox_hours_per_day": None,  # Unlimited
-        # Models - All including Opus
+        "sandbox_hours_per_day": None,
         "allowed_models": ["haiku", "sonnet", "opus"],
         "priority_queue": True,
-        # Feature Flags - Everything enabled
         "feature_flags": {
             "code_generation": True,
             "all_templates": True,
@@ -134,115 +296,113 @@ DEFAULT_PLANS = [
             "sds_document": True,
             "ppt_presentation": True,
             "viva_questions": True,
-            "agentic_mode": True,
-            "custom_workflows": True,
-            "api_access": True,
-            "team_collaboration": True,
+            "uml_diagrams": True,
+            "apk_build": True,
+            "ipa_build": True,
+            "code_comments": True,
+            "readme_file": True,
+            "setup_guide": True,
+            "docker_setup": True,
+            "deployment_guide": True,
+            "code_explanation": True,
+            "certificate": True,
             "priority_support": True,
-            "dedicated_support": True,
         },
         "features": [
-            # 1 Complete Project
-            "1 Complete project",
-            "Full working code",
-            "Lifetime access to code",
-            # Code Generation
-            "Full code generation for any project",
-            "Web Apps (React, Next.js, Vue)",
-            "Mobile Apps (React Native, Flutter)",
-            "Backend APIs (Node.js, Python, FastAPI)",
-            "Full-Stack Applications",
-            "Real-time code preview",
-            "Live code editing",
-            "Multiple file generation",
-            "Folder structure creation",
-            "Package.json & dependencies setup",
-            "Database schema generation",
-            "API endpoint generation",
-            # Bug Fixing
-            "Unlimited automatic bug fixing",
-            "AI-powered error detection",
-            "Instant code fixes",
-            "Syntax error correction",
-            "Logic error detection",
-            "Runtime error fixing",
-            "Code optimization suggestions",
-            "Security vulnerability detection",
-            # Project Report
-            "Project Report (60-80 pages)",
-            "Complete IEEE format documentation",
-            "Title page with project details",
-            "Certificate page",
-            "Abstract (project summary)",
-            "Table of contents",
-            "Chapter 1: Introduction",
-            "Chapter 2: Literature Review",
-            "Chapter 3: System Requirements",
-            "Chapter 4: System Design",
-            "Chapter 5: Implementation",
-            "Chapter 6: Testing & Results",
-            "Chapter 7: Conclusion & Future Scope",
-            "References (IEEE format)",
-            "Appendix with code snippets",
-            # SRS Document
-            "SRS Document (IEEE 830 standard)",
-            "Functional requirements",
-            "Non-functional requirements",
-            "Use case diagrams",
-            "Use case descriptions",
-            # SDS Document
-            "SDS Document (full design)",
-            "System architecture",
-            "High-level design (HLD)",
-            "Low-level design (LLD)",
-            "Class diagrams",
-            "Sequence diagrams",
-            "Activity diagrams",
-            "ER diagrams",
-            "Data flow diagrams (DFD)",
-            "Component diagrams",
-            "Database schema design",
-            # PPT Presentation
-            "PPT Presentation (20-25 slides)",
-            "Professional slide design",
-            "Problem statement",
-            "Objectives of the project",
-            "System architecture slide",
-            "Technology stack used",
-            "Screenshots & demos",
-            "Conclusion slide",
-            "Future enhancements",
-            # Viva Q&A
-            "Viva Q&A Preparation",
-            "50+ potential viva questions",
-            "Detailed answers for each question",
-            "Project-specific questions",
-            "Technology-related questions",
-            "Tips for viva presentation",
-            # Export
-            "Download complete project as ZIP",
-            "Export directly to GitHub",
-            "GitHub repository creation",
-            "README.md generation",
-            "Export documentation as PDF",
-            "Export documentation as DOCX",
-            "Export PPT as PPTX",
-            # AI Models
-            "Access to Claude Haiku (fast)",
-            "Access to Claude Sonnet (balanced)",
-            "Access to Claude Opus (powerful)",
-            "Priority processing queue",
-            "Faster response times",
+            # Project
+            "1 Complete Project (70+ files)",
+            "All Technologies + AI/ML + Microservices",
+            "Database (PostgreSQL, MongoDB, MySQL)",
+            "Authentication (Login, Signup, OAuth, JWT)",
+            "Admin Dashboard (Full-featured)",
+            "API Development (REST + GraphQL)",
+            "Run Code in Browser",
+            "Download Code (ZIP)",
+            "Unlimited Bug Fixes",
+            "3 Project Revisions",
+            "Code Comments (Detailed)",
+            "README File (Professional)",
+            "GitHub Export",
+            "Docker Setup",
+            # Documentation
+            "Project Report (80-100 pages)",
+            "SRS Document (15-20 pages)",
+            "SDS Document (15-20 pages)",
+            "PPT Presentation (20 slides)",
+            "Viva Q&A (100+ questions)",
+            # UML Diagrams
+            "Use Case Diagram",
+            "Class Diagram",
+            "Sequence Diagram",
+            "Activity Diagram",
+            "ER Diagram",
+            "Data Flow Diagram",
+            # Deployment
+            "Deployment Guide",
+            "Docker Setup",
+            "APK Build (Android)",
+            "IPA Build (iOS)",
+            # Bonus
+            "Code Explanation (PDF)",
+            "Certificate of Completion",
             # Support
-            "Priority email support",
-            "Chat support",
-            "Help documentation",
-            "Video tutorials",
-            "Sample projects",
-            "Template library",
-            "Cancel anytime"
+            "WhatsApp Priority Support (4hr response)",
+            "Email Support",
+            "6 Months Validity",
         ]
-    }
+    },
+
+    # ========== COLLEGE BULK - ₹2,499/student ==========
+    {
+        "name": "College Bulk",
+        "slug": "college-bulk",
+        "plan_type": PlanType.COLLEGE_BULK,
+        "description": "Premium features for groups of 10+ students",
+        "price": 249900,  # ₹2,499 per student
+        "currency": "INR",
+        "billing_period": "one_time",
+        "token_limit": 500000,
+        "project_limit": 1,
+        "api_calls_limit": None,
+        "code_generations_per_day": None,
+        "max_files_per_project": None,
+        "max_lines_per_generation": None,
+        "auto_fixes_per_day": None,
+        "auto_fixes_per_month": None,
+        "documents_per_month": None,
+        "document_types_allowed": ["report", "srs", "sds", "ppt", "viva"],
+        "concurrent_executions": 5,
+        "execution_timeout_minutes": 60,
+        "sandbox_hours_per_day": None,
+        "allowed_models": ["haiku", "sonnet", "opus"],
+        "priority_queue": True,
+        "feature_flags": {
+            "code_generation": True,
+            "all_templates": True,
+            "preview": True,
+            "export_zip": True,
+            "github_export": True,
+            "bug_fixing": True,
+            "document_generation": True,
+            "project_report": True,
+            "srs_document": True,
+            "sds_document": True,
+            "ppt_presentation": True,
+            "viva_questions": True,
+            "uml_diagrams": True,
+            "priority_support": True,
+            "college_invoice": True,
+            "faculty_dashboard": True,
+        },
+        "features": [
+            "Everything in Premium",
+            "Minimum 10 Students",
+            "College Invoice (GST)",
+            "Faculty Dashboard",
+            "Dedicated WhatsApp Group",
+            "6 Months Validity",
+        ]
+    },
 ]
 
 
@@ -928,7 +1088,7 @@ async def verify_subscription_payment(
 
         logger.info(f"[Billing] Subscription created for user {current_user.id}, plan: {plan.name}")
 
-        # Send purchase confirmation email (async, don't block response)
+        # Send purchase confirmation email with invoice (async, don't block response)
         try:
             import asyncio
             asyncio.create_task(
@@ -937,10 +1097,12 @@ async def verify_subscription_payment(
                     user_name=current_user.full_name,
                     plan_name=plan.name,
                     amount=transaction.amount,
-                    payment_id=request.razorpay_payment_id
+                    payment_id=request.razorpay_payment_id,
+                    customer_phone=getattr(current_user, 'phone', None),
+                    college_name=getattr(current_user, 'college_name', None)
                 )
             )
-            logger.info(f"[Billing] Purchase confirmation email queued for {current_user.email}")
+            logger.info(f"[Billing] Purchase confirmation email with invoice queued for {current_user.email}")
         except Exception as email_error:
             # Don't fail subscription if email fails
             logger.warning(f"[Billing] Failed to send confirmation email: {email_error}")

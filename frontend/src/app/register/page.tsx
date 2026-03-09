@@ -244,8 +244,13 @@ export default function RegisterPage() {
                   <Lock className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
                   <Input id="password" type="password" placeholder="Min 8 characters" value={formData.password}
                     onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() }}
+                    autoComplete="new-password"
                     className="pl-10 h-10 bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-blue-500/50" required />
                 </div>
+                {formData.password && formData.password.length < 8 && (
+                  <p className="text-[10px] text-amber-400">Min 8 characters required</p>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-gray-400">Confirm Password <span className="text-red-400">*</span></Label>
@@ -253,8 +258,13 @@ export default function RegisterPage() {
                   <Lock className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
                   <Input id="confirmPassword" type="password" placeholder="Confirm password" value={formData.confirmPassword}
                     onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                    onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() }}
+                    autoComplete="new-password"
                     className="pl-10 h-10 bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-blue-500/50" required />
                 </div>
+                {formData.confirmPassword && formData.password !== formData.confirmPassword && (
+                  <p className="text-[10px] text-red-400">Passwords don't match</p>
+                )}
               </div>
             </div>
           </div>

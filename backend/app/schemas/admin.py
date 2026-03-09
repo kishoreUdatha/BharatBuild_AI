@@ -61,6 +61,7 @@ class AdminUserResponse(BaseModel):
     email: str
     full_name: Optional[str]
     username: Optional[str]
+    phone: Optional[str] = None
     role: str
     organization: Optional[str]
     is_active: bool
@@ -75,6 +76,20 @@ class AdminUserResponse(BaseModel):
     projects_count: int = 0
     tokens_used: int = 0
     subscription_plan: Optional[str] = None
+
+    # Student Academic Details
+    roll_number: Optional[str] = None
+    college_name: Optional[str] = None
+    university_name: Optional[str] = None
+    department: Optional[str] = None
+    course: Optional[str] = None
+    year_semester: Optional[str] = None
+    batch: Optional[str] = None
+
+    # Guide/Mentor Details
+    guide_name: Optional[str] = None
+    guide_designation: Optional[str] = None
+    hod_name: Optional[str] = None
 
 
 class AdminUserUpdate(BaseModel):

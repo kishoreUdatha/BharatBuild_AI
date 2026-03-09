@@ -32,38 +32,140 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # ==================== Sample Data Constants ====================
 
 SAMPLE_USERS = [
-    # Students
-    {"email": "student1@college.edu", "full_name": "Rahul Sharma", "role": UserRole.STUDENT, "organization": "IIT Delhi"},
-    {"email": "student2@college.edu", "full_name": "Priya Patel", "role": UserRole.STUDENT, "organization": "NIT Trichy"},
-    {"email": "student3@college.edu", "full_name": "Amit Kumar", "role": UserRole.STUDENT, "organization": "BITS Pilani"},
-    {"email": "student4@college.edu", "full_name": "Sneha Reddy", "role": UserRole.STUDENT, "organization": "VIT Vellore"},
-    {"email": "student5@college.edu", "full_name": "Vikram Singh", "role": UserRole.STUDENT, "organization": "DTU Delhi"},
-    {"email": "student6@college.edu", "full_name": "Ananya Gupta", "role": UserRole.STUDENT, "organization": "IIIT Hyderabad"},
-    {"email": "student7@college.edu", "full_name": "Rohan Mehta", "role": UserRole.STUDENT, "organization": "SRM Chennai"},
-    {"email": "student8@college.edu", "full_name": "Kavya Nair", "role": UserRole.STUDENT, "organization": "Manipal University"},
+    # Students with complete academic details
+    {
+        "email": "student1@college.edu", "full_name": "Rahul Sharma", "role": UserRole.STUDENT,
+        "organization": "IIT Delhi", "phone": "9876543210", "username": "rahul_sharma",
+        "university_name": "Indian Institute of Technology", "college_name": "IIT Delhi",
+        "department": "Computer Science", "course": "B.Tech", "roll_number": "2021CS101",
+        "year_semester": "4th Year", "batch": "2021-2025",
+        "guide_name": "Dr. Rajesh Kumar", "guide_designation": "Associate Professor", "hod_name": "Prof. Amit Sharma"
+    },
+    {
+        "email": "student2@college.edu", "full_name": "Priya Patel", "role": UserRole.STUDENT,
+        "organization": "NIT Trichy", "phone": "9876543211", "username": "priya_patel",
+        "university_name": "National Institute of Technology", "college_name": "NIT Trichy",
+        "department": "Electronics & Communication", "course": "B.Tech", "roll_number": "2022EC045",
+        "year_semester": "3rd Year", "batch": "2022-2026",
+        "guide_name": "Dr. Lakshmi Narayanan", "guide_designation": "Professor", "hod_name": "Dr. S. Venkatesh"
+    },
+    {
+        "email": "student3@college.edu", "full_name": "Amit Kumar", "role": UserRole.STUDENT,
+        "organization": "BITS Pilani", "phone": "9876543212", "username": "amit_kumar",
+        "university_name": "Birla Institute of Technology", "college_name": "BITS Pilani",
+        "department": "Information Technology", "course": "B.E.", "roll_number": "2021IT089",
+        "year_semester": "4th Year", "batch": "2021-2025",
+        "guide_name": "Prof. Meena Gupta", "guide_designation": "Assistant Professor", "hod_name": "Dr. R.K. Sharma"
+    },
+    {
+        "email": "student4@college.edu", "full_name": "Sneha Reddy", "role": UserRole.STUDENT,
+        "organization": "VIT Vellore", "phone": "9876543213", "username": "sneha_reddy",
+        "university_name": "Vellore Institute of Technology", "college_name": "VIT Vellore",
+        "department": "Computer Science", "course": "B.Tech", "roll_number": "20BCE1234",
+        "year_semester": "3rd Year", "batch": "2022-2026",
+        "guide_name": "Dr. Karthik Raja", "guide_designation": "Senior Professor", "hod_name": "Dr. N. Ramesh"
+    },
+    {
+        "email": "student5@college.edu", "full_name": "Vikram Singh", "role": UserRole.STUDENT,
+        "organization": "DTU Delhi", "phone": "9876543214", "username": "vikram_singh",
+        "university_name": "Delhi Technological University", "college_name": "DTU Delhi",
+        "department": "Software Engineering", "course": "B.Tech", "roll_number": "2K21SE056",
+        "year_semester": "4th Year", "batch": "2021-2025",
+        "guide_name": "Dr. Anjali Verma", "guide_designation": "Associate Professor", "hod_name": "Prof. Manoj Tiwari"
+    },
+    {
+        "email": "student6@college.edu", "full_name": "Ananya Gupta", "role": UserRole.STUDENT,
+        "organization": "IIIT Hyderabad", "phone": "9876543215", "username": "ananya_gupta",
+        "avatar_url": "https://ui-avatars.com/api/?name=Ananya+Gupta&background=6366f1&color=fff",
+        "university_name": "IIIT Hyderabad", "college_name": "IIIT Hyderabad",
+        "department": "Data Science", "course": "B.Tech", "roll_number": "2023DS078",
+        "year_semester": "2nd Year", "batch": "2023-2027",
+        "guide_name": "Dr. Prasad Rao", "guide_designation": "Professor", "hod_name": "Dr. Srinivasa Rao"
+    },
+    {
+        "email": "student7@college.edu", "full_name": "Rohan Mehta", "role": UserRole.STUDENT,
+        "organization": "SRM Chennai", "phone": "9876543216", "username": "rohan_mehta",
+        "university_name": "SRM Institute of Science and Technology", "college_name": "SRM Chennai",
+        "department": "Artificial Intelligence", "course": "B.Tech", "roll_number": "RA2111003010123",
+        "year_semester": "3rd Year", "batch": "2022-2026",
+        "guide_name": "Dr. Senthil Kumar", "guide_designation": "Assistant Professor", "hod_name": "Dr. P. Muthu"
+    },
+    {
+        "email": "student8@college.edu", "full_name": "Kavya Nair", "role": UserRole.STUDENT,
+        "organization": "Manipal University", "phone": "9876543217", "username": "kavya_nair",
+        "oauth_provider": "google",
+        "university_name": "Manipal Academy of Higher Education", "college_name": "MIT Manipal",
+        "department": "Computer Science", "course": "B.Tech", "roll_number": "210905123",
+        "year_semester": "4th Year", "batch": "2021-2025",
+        "guide_name": "Dr. Divya Sharma", "guide_designation": "Associate Professor", "hod_name": "Dr. Rajesh Hegde"
+    },
 
-    # Developers
-    {"email": "dev1@company.com", "full_name": "Arjun Verma", "role": UserRole.DEVELOPER, "organization": "TechCorp India"},
-    {"email": "dev2@company.com", "full_name": "Meera Shah", "role": UserRole.DEVELOPER, "organization": "Infosys"},
-    {"email": "dev3@company.com", "full_name": "Karthik Rajan", "role": UserRole.DEVELOPER, "organization": "Wipro"},
-    {"email": "dev4@company.com", "full_name": "Divya Krishnan", "role": UserRole.DEVELOPER, "organization": "TCS"},
-    {"email": "dev5@company.com", "full_name": "Suresh Babu", "role": UserRole.DEVELOPER, "organization": "HCL Tech"},
+    # Developers with contact info
+    {
+        "email": "dev1@company.com", "full_name": "Arjun Verma", "role": UserRole.DEVELOPER,
+        "organization": "TechCorp India", "phone": "9988776601", "username": "arjun_verma",
+        "avatar_url": "https://ui-avatars.com/api/?name=Arjun+Verma&background=22c55e&color=fff"
+    },
+    {
+        "email": "dev2@company.com", "full_name": "Meera Shah", "role": UserRole.DEVELOPER,
+        "organization": "Infosys", "phone": "9988776602", "username": "meera_shah",
+        "oauth_provider": "google"
+    },
+    {
+        "email": "dev3@company.com", "full_name": "Karthik Rajan", "role": UserRole.DEVELOPER,
+        "organization": "Wipro", "phone": "9988776603", "username": "karthik_rajan"
+    },
+    {
+        "email": "dev4@company.com", "full_name": "Divya Krishnan", "role": UserRole.DEVELOPER,
+        "organization": "TCS", "phone": "9988776604", "username": "divya_k"
+    },
+    {
+        "email": "dev5@company.com", "full_name": "Suresh Babu", "role": UserRole.DEVELOPER,
+        "organization": "HCL Tech", "phone": "9988776605", "username": "suresh_babu"
+    },
 
-    # Founders
-    {"email": "founder1@startup.io", "full_name": "Aditya Rao", "role": UserRole.FOUNDER, "organization": "InnovateTech"},
-    {"email": "founder2@startup.io", "full_name": "Neha Agarwal", "role": UserRole.FOUNDER, "organization": "HealthAI"},
-    {"email": "founder3@startup.io", "full_name": "Rajesh Menon", "role": UserRole.FOUNDER, "organization": "EduSmart"},
-    {"email": "founder4@startup.io", "full_name": "Pooja Iyer", "role": UserRole.FOUNDER, "organization": "FinFlow"},
+    # Founders with contact info
+    {
+        "email": "founder1@startup.io", "full_name": "Aditya Rao", "role": UserRole.FOUNDER,
+        "organization": "InnovateTech", "phone": "9900112201", "username": "aditya_rao",
+        "avatar_url": "https://ui-avatars.com/api/?name=Aditya+Rao&background=f59e0b&color=fff"
+    },
+    {
+        "email": "founder2@startup.io", "full_name": "Neha Agarwal", "role": UserRole.FOUNDER,
+        "organization": "HealthAI", "phone": "9900112202", "username": "neha_agarwal",
+        "oauth_provider": "google"
+    },
+    {
+        "email": "founder3@startup.io", "full_name": "Rajesh Menon", "role": UserRole.FOUNDER,
+        "organization": "EduSmart", "phone": "9900112203", "username": "rajesh_menon"
+    },
+    {
+        "email": "founder4@startup.io", "full_name": "Pooja Iyer", "role": UserRole.FOUNDER,
+        "organization": "FinFlow", "phone": "9900112204", "username": "pooja_iyer"
+    },
 
     # Faculty
-    {"email": "faculty1@college.edu", "full_name": "Dr. Srinivas Kumar", "role": UserRole.FACULTY, "organization": "IIT Bombay"},
-    {"email": "faculty2@college.edu", "full_name": "Prof. Lakshmi Devi", "role": UserRole.FACULTY, "organization": "NIT Warangal"},
+    {
+        "email": "faculty1@college.edu", "full_name": "Dr. Srinivas Kumar", "role": UserRole.FACULTY,
+        "organization": "IIT Bombay", "phone": "9800001101", "username": "dr_srinivas"
+    },
+    {
+        "email": "faculty2@college.edu", "full_name": "Prof. Lakshmi Devi", "role": UserRole.FACULTY,
+        "organization": "NIT Warangal", "phone": "9800001102", "username": "prof_lakshmi"
+    },
 
     # Admin
-    {"email": "admin@bharatbuild.ai", "full_name": "System Admin", "role": UserRole.ADMIN, "organization": "BharatBuild"},
+    {
+        "email": "admin@bharatbuild.ai", "full_name": "System Admin", "role": UserRole.ADMIN,
+        "organization": "BharatBuild", "phone": "9000000001", "username": "admin",
+        "avatar_url": "https://ui-avatars.com/api/?name=Admin&background=ef4444&color=fff"
+    },
 
     # API Partners
-    {"email": "api.partner@external.com", "full_name": "API Partner Corp", "role": UserRole.API_PARTNER, "organization": "ExternalCorp"},
+    {
+        "email": "api.partner@external.com", "full_name": "API Partner Corp", "role": UserRole.API_PARTNER,
+        "organization": "ExternalCorp", "phone": "9000000002", "username": "api_partner"
+    },
 ]
 
 SAMPLE_PROJECTS_STUDENT = [
@@ -123,7 +225,7 @@ TOKEN_PACKAGES = [
 # ==================== Seed Functions ====================
 
 async def seed_users(db: AsyncSession) -> List[User]:
-    """Create sample users"""
+    """Create sample users with all fields"""
     users = []
     default_password = pwd_context.hash("Password123!")
 
@@ -131,14 +233,29 @@ async def seed_users(db: AsyncSession) -> List[User]:
         user = User(
             email=user_data["email"],
             full_name=user_data["full_name"],
-            username=user_data["email"].split("@")[0],
+            username=user_data.get("username", user_data["email"].split("@")[0]),
             hashed_password=default_password,
             role=user_data["role"],
-            organization=user_data["organization"],
+            organization=user_data.get("organization"),
+            phone=user_data.get("phone"),
+            avatar_url=user_data.get("avatar_url"),
+            oauth_provider=user_data.get("oauth_provider"),
             is_active=True,
             is_verified=True,
             created_at=datetime.utcnow() - timedelta(days=random.randint(1, 365)),
-            last_login=datetime.utcnow() - timedelta(hours=random.randint(1, 168))
+            last_login=datetime.utcnow() - timedelta(hours=random.randint(1, 168)),
+            # Student academic fields
+            university_name=user_data.get("university_name"),
+            college_name=user_data.get("college_name"),
+            department=user_data.get("department"),
+            course=user_data.get("course"),
+            roll_number=user_data.get("roll_number"),
+            year_semester=user_data.get("year_semester"),
+            batch=user_data.get("batch"),
+            # Guide/Mentor fields
+            guide_name=user_data.get("guide_name"),
+            guide_designation=user_data.get("guide_designation"),
+            hod_name=user_data.get("hod_name"),
         )
         db.add(user)
         users.append(user)
@@ -605,25 +722,22 @@ async def seed_all():
 
 async def clear_all():
     """Clear all data from database"""
+    from sqlalchemy import text
     print("Clearing all data...")
+
+    tables = [
+        "usage_logs", "token_transactions", "token_balances", "token_purchases",
+        "subscriptions", "api_keys", "agent_tasks", "documents", "project_files",
+        "projects", "workspaces", "students", "batches", "faculty", "colleges", "users"
+    ]
+
     async with AsyncSessionLocal() as db:
-        # Delete in reverse order of dependencies
-        await db.execute("DELETE FROM usage_logs")
-        await db.execute("DELETE FROM token_transactions")
-        await db.execute("DELETE FROM token_balances")
-        await db.execute("DELETE FROM token_purchases")
-        await db.execute("DELETE FROM subscriptions")
-        await db.execute("DELETE FROM api_keys")
-        await db.execute("DELETE FROM agent_tasks")
-        await db.execute("DELETE FROM documents")
-        await db.execute("DELETE FROM project_files")
-        await db.execute("DELETE FROM projects")
-        await db.execute("DELETE FROM workspaces")
-        await db.execute("DELETE FROM students")
-        await db.execute("DELETE FROM batches")
-        await db.execute("DELETE FROM faculty")
-        await db.execute("DELETE FROM colleges")
-        await db.execute("DELETE FROM users")
+        for table in tables:
+            try:
+                await db.execute(text(f"DELETE FROM {table}"))
+                print(f"  Cleared {table}")
+            except Exception as e:
+                print(f"  Skipped {table} (may not exist)")
         await db.commit()
         print("All data cleared!")
 

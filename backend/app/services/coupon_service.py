@@ -139,9 +139,11 @@ class CouponService:
         # Apply filters
         conditions = []
         if category:
-            conditions.append(Coupon.category == CouponCategory(category))
+            # Handle both uppercase and lowercase input
+            conditions.append(Coupon.category == CouponCategory(category.upper()))
         if status:
-            conditions.append(Coupon.status == CouponStatus(status))
+            # Handle both uppercase and lowercase input
+            conditions.append(Coupon.status == CouponStatus(status.upper()))
         if search:
             search_term = f"%{search}%"
             conditions.append(
@@ -185,9 +187,11 @@ class CouponService:
             if value is None:
                 continue
             if field == 'status':
-                value = CouponStatus(value)
+                # Handle both uppercase and lowercase input
+                value = CouponStatus(value.upper() if isinstance(value, str) else value)
             elif field == 'category':
-                value = CouponCategory(value)
+                # Handle both uppercase and lowercase input
+                value = CouponCategory(value.upper() if isinstance(value, str) else value)
             setattr(coupon, field, value)
 
         coupon.updated_at = datetime.utcnow()
