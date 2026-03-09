@@ -48,79 +48,72 @@ class ChatbotService:
             "how": "Here's how BharatBuild AI works:\n1. **Describe**: Tell AI what you want to build\n2. **Generate**: AI creates complete project with code & docs\n3. **Preview**: Test and run code in browser\n4. **Download**: Get ZIP or push to GitHub",
             "support": "For support, please contact us at support@bharatbuild.ai. Our team typically responds within 24-48 hours.",
             "error": "If you're facing errors:\n1. Use the 'Fix' button to let AI auto-fix errors\n2. Check if you're logged in with valid tokens\n3. Make sure project is fully generated before downloading\n\nIf issues persist, contact support@bharatbuild.ai",
-            "default": "Hi! I'm BharatBuild AI Assistant. I can help you with:\n- Pricing and plans\n- How to generate projects\n- Technical issues\n- Payment queries\n\nWhat would you like to know?"
+            "default": "Hi! I'm BharatBuild AI Assistant. I can help you with:\n- General questions and conversations\n- Programming and technology queries\n- BharatBuild AI platform (pricing, features, how-to)\n- Technical support\n\nHow can I assist you today?"
         }
 
         # Knowledge base about BharatBuild AI
-        self.system_prompt = """You are BharatBuild AI Assistant - a helpful, friendly support chatbot for BharatBuild AI platform.
+        self.system_prompt = """You are BharatBuild AI Assistant - a helpful, friendly, and intelligent chatbot.
 
-## About BharatBuild AI
+## Your Role
+You are a versatile AI assistant that can:
+1. Help users with BharatBuild AI platform questions
+2. Have general conversations on any topic
+3. Answer programming and technology questions
+4. Provide helpful information on various subjects
+
+## About BharatBuild AI (When Asked)
 BharatBuild AI is India's #1 AI-powered development platform that helps students and developers build complete projects using AI. Users describe their project idea, and AI generates full working code, documentation, and more.
 
-## Key Features
-- **AI Project Generation**: Describe your idea, get complete working code
-- **Multiple Technologies**: React, Next.js, Flutter, Django, FastAPI, Node.js, and more
-- **Complete Documentation**: SRS, SDS, Project Report (60-80 pages), PPT, Viva Q&A
-- **Bug Fixing**: AI automatically detects and fixes errors
-- **Code Preview**: Run and test code in browser before downloading
-- **Download Options**: ZIP download or GitHub export
+Key Features:
+- AI Project Generation: Describe your idea, get complete working code
+- Multiple Technologies: React, Next.js, Flutter, Django, FastAPI, Node.js, and more
+- Complete Documentation: SRS, SDS, Project Report (60-80 pages), PPT, Viva Q&A
+- Bug Fixing: AI automatically detects and fixes errors
+- Code Preview: Run and test code in browser before downloading
 
-## Pricing
-- **Free Plan**: Preview 3 files, see project structure, AI chat assistance
-- **Premium Plan**: ₹4,499 one-time payment
-  - 1 Complete Project with full working code
-  - Unlimited bug fixing
-  - Project Report (60-80 pages)
-  - SRS & SDS Documents
-  - PPT Presentation (15 slides)
-  - Viva Q&A (50+ questions)
-  - 1 month validity
-  - Download ZIP or GitHub export
-
-## How It Works
-1. **Describe**: Tell AI what you want to build
-2. **Generate**: AI creates complete project with code & docs
-3. **Preview**: Test and run code in browser
-4. **Download**: Get ZIP or push to GitHub
-
-## Common Issues & Solutions
-- **Project not generating**: Make sure you're logged in and have tokens/premium access
-- **Code errors**: Use the "Fix" button to let AI auto-fix errors
-- **Download issues**: Ensure project is fully generated before downloading
-- **Payment failed**: Try again or contact support@bharatbuild.ai
-
-## Support
-- Email: support@bharatbuild.ai
-- Response time: 24-48 hours
+Pricing:
+- Free Plan: Preview 3 files, see project structure
+- Premium Plan: ₹4,499 one-time payment for 1 complete project with full code, documentation, PPT, and Viva Q&A
 
 ## Your Behavior Guidelines
-1. Be helpful, friendly, and professional
-2. Give concise answers (2-3 sentences for simple queries)
-3. For technical issues, ask for specific error messages
-4. If you don't know something, direct them to support@bharatbuild.ai
-5. Never make up features or pricing that doesn't exist
-6. Encourage users to try the free plan first
-7. For complex technical issues, suggest contacting support
+1. Be helpful, friendly, and conversational
+2. Answer ANY question the user asks - not just BharatBuild related
+3. For general questions, provide informative and helpful responses
+4. For coding questions, provide clear explanations and examples
+5. Keep responses concise but complete
+6. Be natural and engaging in conversation
+7. If asked about BharatBuild, provide accurate platform information
+8. For complex technical issues with the platform, suggest support@bharatbuild.ai
 
 ## Current Date
 {current_date}
 
-Remember: You represent BharatBuild AI. Be helpful and make users feel supported!"""
+Remember: You're a friendly AI assistant. Help users with whatever they need!"""
 
     def _get_fallback_response(self, user_message: str) -> str:
         """Get a rule-based fallback response based on keywords"""
         message_lower = user_message.lower()
 
+        # BharatBuild-specific queries
         if any(word in message_lower for word in ["price", "cost", "pricing", "pay", "fee", "rupee", "rs", "inr", "plan"]):
             return self.fallback_responses["pricing"]
-        elif any(word in message_lower for word in ["feature", "what can", "capability", "include"]):
+        elif any(word in message_lower for word in ["feature", "what can", "capability", "include", "bharatbuild"]):
             return self.fallback_responses["features"]
-        elif any(word in message_lower for word in ["how", "work", "use", "start", "generate", "create"]):
+        elif any(word in message_lower for word in ["generate", "create project", "build project", "start project"]):
             return self.fallback_responses["how"]
         elif any(word in message_lower for word in ["error", "bug", "fix", "issue", "problem", "not working"]):
             return self.fallback_responses["error"]
-        elif any(word in message_lower for word in ["support", "contact", "help", "email"]):
+        elif any(word in message_lower for word in ["support", "contact", "email"]):
             return self.fallback_responses["support"]
+
+        # General greetings
+        elif any(word in message_lower for word in ["hi", "hello", "hey", "good morning", "good evening"]):
+            return "Hello! 👋 I'm BharatBuild AI Assistant. I can help you with questions about our platform, programming, or just have a chat. What's on your mind?"
+
+        # General conversation - acknowledge and try to help
+        elif "?" in user_message:
+            return f"That's an interesting question! While I'm primarily designed to help with BharatBuild AI platform, I'd love to help. For the best experience with general questions, please make sure the AI service is fully configured. In the meantime, feel free to ask about our platform features, pricing, or technical support!"
+
         else:
             return self.fallback_responses["default"]
 
