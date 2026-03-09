@@ -17,6 +17,7 @@ import {
 import { getAgentLabel } from './agentLabelMapping'
 import { sdkService } from '@/services/sdkService'
 import { detectPastedError, extractErrorDetails, sendChatMessage } from '@/services/chatService'
+import { soundManager } from '@/lib/sounds'
 
 // SDK Fixer configuration
 const USE_SDK_FIXER = true // Enable SDK-based fixing for better reliability
@@ -172,9 +173,18 @@ export const useChat = () => {
 
     // 2. PROMPT CLASSIFIER LAYER - Classify the user's intent using AI
     const projectStore = useProjectStore.getState()
+    const hasExistingProject = (projectStore.currentProject?.files?.length ?? 0) > 0
+    const currentFiles = projectStore.currentProject?.files?.map(f => f.path) || []
+
+    console.log('[useChat] Classification context:', {
+      hasExistingProject,
+      fileCount: currentFiles.length,
+      projectName: projectStore.currentProject?.name
+    })
+
     const classification = await classifyPromptAsync(content, {
-      hasExistingProject: (projectStore.currentProject?.files?.length ?? 0) > 0,
-      currentFiles: projectStore.currentProject?.files?.map(f => f.path) || []
+      hasExistingProject,
+      currentFiles
     })
 
     console.log('[useChat] Prompt Classification (AI-powered):', {
@@ -183,7 +193,8 @@ export const useChat = () => {
       reasoning: classification.reasoning,
       requiresGeneration: classification.requiresGeneration,
       suggestedWorkflow: classification.suggestedWorkflow,
-      entities: classification.entities
+      entities: classification.entities,
+      hasExistingProject  // Log this too for debugging
     })
 
     // 3. Create AI message placeholder
@@ -594,6 +605,65 @@ I'll keep trying to help!`)
         }
       }
 
+      // MODIFY intent: Send existing project file PATHS so backend can fetch content and modify
+      if (classification.intent === 'MODIFY' || classification.intent === 'REFACTOR') {
+        const projectStoreState = useProjectStore.getState()
+        const existingFiles = projectStoreState.currentProject?.files || []
+        const projectId = projectStoreState.currentProject?.id
+
+        // Recursively collect ALL file paths from the tree (files are lazy-loaded, so we only have paths)
+        const collectFilePaths = (files: ProjectFile[]): string[] => {
+          const paths: string[] = []
+          for (const file of files) {
+            if (file.type === 'file') {
+              paths.push(file.path)
+            }
+            if (file.children) {
+              paths.push(...collectFilePaths(file.children))
+            }
+          }
+          return paths
+        }
+
+        const filePaths = collectFilePaths(existingFiles)
+
+        // Also collect files that have content already loaded (from open tabs, etc.)
+        const collectLoadedFiles = (files: ProjectFile[]): { path: string; content: string }[] => {
+          const loaded: { path: string; content: string }[] = []
+          for (const file of files) {
+            if (file.type === 'file' && file.content) {
+              loaded.push({ path: file.path, content: file.content })
+            }
+            if (file.children) {
+              loaded.push(...collectLoadedFiles(file.children))
+            }
+          }
+          return loaded
+        }
+
+        const loadedFiles = collectLoadedFiles(existingFiles)
+
+        console.log('[useChat] MODIFY: Sending project context:', {
+          projectId,
+          totalFilePaths: filePaths.length,
+          loadedFilesCount: loadedFiles.length,
+          filePaths: filePaths.slice(0, 10) // First 10 for logging
+        })
+
+        // ALWAYS add intent to metadata so backend skips project limit check
+        workflowMetadata = {
+          ...workflowMetadata,
+          intent: classification.intent,
+          modify_context: {
+            user_request: content,  // User's modification request
+            project_id: projectId,  // Project ID for backend to fetch files
+            file_paths: filePaths,  // All file paths in project
+            loaded_files: loadedFiles,  // Files with content already loaded
+            project_name: projectStoreState.currentProject?.name
+          }
+        }
+      }
+
       // Get the CURRENT project ID (may have been reset in GENERATE case above)
       // Note: freshProjectStore was already declared above for metadata
       const projectId = freshProjectStore.currentProject?.id || 'default-project'
@@ -747,6 +817,9 @@ I'll keep trying to help!`)
                   status: 'complete',
                   details: event.data.details || undefined
                 })
+
+                // Play stage complete sound
+                soundManager.playStageComplete()
               }
               break
 
@@ -754,6 +827,9 @@ I'll keep trying to help!`)
               // Plan created event from backend - add tasks to UI immediately
               console.log('[plan_created] Event received at:', new Date().toISOString())
               console.log('[plan_created] Event data:', event.data)
+
+              // Play plan complete sound
+              soundManager.playStageComplete()
 
               // Update project name if Claude suggested one
               if (event.data?.project_name) {
@@ -1096,6 +1172,9 @@ I'll keep trying to help!`)
               // Backend may send content as full_content, file_content, or content
               const completeContent = completeData.full_content || completeData.file_content || completeData.content || event.full_content || event.file_content || event.content
               console.log('[file_complete] Received:', { completePath, hasContent: !!completeContent, contentLength: completeContent?.length || 0 })
+
+              // Play file complete sound
+              soundManager.playFileComplete()
               if (completePath && completeContent) {
                 updateFileOperation(aiMessageId, completePath, {
                   status: 'complete',
@@ -1307,6 +1386,9 @@ I'll keep trying to help!`)
 
               updateMessageStatus(aiMessageId, 'complete')
 
+              // Play success sound - project completed!
+              soundManager.playSuccess()
+
               // Store session_id for ZIP download (ephemeral storage)
               if (event.data?.session_id) {
                 useProjectStore.getState().setSessionId(event.data.session_id)
@@ -1444,6 +1526,10 @@ I'll keep trying to help!`)
 
             case 'error':
               updateMessageStatus(aiMessageId, 'complete')
+
+              // Play error sound
+              soundManager.playError()
+
               const errorMsg = event.data?.error || event.data?.message || 'Unknown error'
               const errorCode = event.data?.code || 'ERROR'
 

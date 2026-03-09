@@ -21,8 +21,8 @@ _classification_cache: Dict[str, Dict[str, Any]] = {}
 CACHE_TTL_SECONDS = 300  # 5 minutes
 
 
-# Clean, focused system prompt for classification
-CLASSIFIER_SYSTEM_PROMPT = """You are the PromptClassifier Agent for an AI Project Generator.
+# Clean, focused system prompt for classification (no existing project)
+CLASSIFIER_SYSTEM_PROMPT_NEW = """You are the PromptClassifier Agent for an AI Project Generator.
 
 Your job is ONLY to classify the user's message.
 You MUST NOT provide explanations, code, plans, or suggestions.
@@ -55,6 +55,50 @@ Rules:
 - No comments.
 - No reasoning.
 - No Markdown."""
+
+# System prompt when user HAS an existing project (prioritize modification)
+CLASSIFIER_SYSTEM_PROMPT_EXISTING = """You are the PromptClassifier Agent for an AI Project Generator.
+
+CRITICAL: The user already has an existing project open with code files.
+ALL code-related requests should modify the EXISTING project, NOT create a new one.
+
+Your job is ONLY to classify the user's message.
+You MUST NOT provide explanations, code, plans, or suggestions.
+
+Read the user's latest message and classify it into ONE of the following labels:
+
+1. "small_task" (DEFAULT when user has existing project)
+   - ANY request to add, change, modify, update, fix, enhance, or work on code
+   - ANY feature request like "add login", "create a navbar", "make it responsive"
+   - ANY styling request like "change colors", "make it modern", "add animations"
+   - ANY functionality like "add payment", "integrate API", "add database"
+   - Basically ANY request that involves code changes to the existing project
+   - This is the DEFAULT choice when user has existing project
+
+2. "project_request" (VERY RARE - only when user explicitly wants NEW project)
+   - ONLY when user explicitly says: "start over", "new project", "create a different app", "build something else"
+   - ONLY when user clearly wants to ABANDON current project and start fresh
+   - Do NOT use this if user wants to add features - that's "small_task"
+
+3. "general_question"
+   - User is asking conceptual questions (not requesting code changes)
+   - "What is React?", "How does authentication work?"
+
+4. "greeting"
+   - User says hi/hello/thanks or sends emojis only
+
+5. "unclear"
+   - Very short messages like "ok", "hmm" without clear intent
+
+DEFAULT RULE: When in doubt and user has existing project, choose "small_task".
+The user wants to MODIFY their existing project, not start over.
+
+Respond ONLY in this JSON format:
+{"type": "<label>"}
+No additional text. No comments. No reasoning. No Markdown."""
+
+# Keep the old one for backwards compatibility (will use the context-aware ones)
+CLASSIFIER_SYSTEM_PROMPT = CLASSIFIER_SYSTEM_PROMPT_NEW
 
 
 # Mapping from simple labels to internal intent format
@@ -163,10 +207,15 @@ class PromptClassifierAgent:
 
         try:
             # Use Haiku for fast classification (< 500ms typically)
-            # Simple prompt - just the user message
+            # Choose system prompt based on whether user has existing project
+            # This is CRITICAL: when user has existing project, we should prefer MODIFY over GENERATE
+            system_prompt = CLASSIFIER_SYSTEM_PROMPT_EXISTING if has_existing_project else CLASSIFIER_SYSTEM_PROMPT_NEW
+
+            logger.info(f"[Classifier] Using {'EXISTING project' if has_existing_project else 'NEW project'} prompt")
+
             response = await self.client.generate(
                 prompt=prompt,
-                system_prompt=CLASSIFIER_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 model="haiku",
                 max_tokens=50,  # Only need {"type": "label"}
                 temperature=0.0  # Zero temperature for consistent classification
@@ -272,54 +321,76 @@ class PromptClassifierAgent:
         """
         Fallback classification using simple rules when AI fails.
         Uses the same label system as the AI classifier.
+
+        CRITICAL: When user has existing project, DEFAULT to modification (small_task)
+        Only create new project if user explicitly asks for it.
         """
         prompt_lower = prompt.lower().strip().rstrip("!?.,")
         words = prompt_lower.split()
 
-        # Greeting patterns
-        greeting_patterns = [
-            "hi", "hello", "hey", "thanks", "thank you", "bye", "goodbye",
-            "ok", "okay", "yes", "no", "sure", "good morning", "good afternoon"
-        ]
+        # Greeting patterns (exact match or very short)
+        greeting_exact = ["hi", "hello", "hey", "thanks", "thank you", "bye", "goodbye",
+                          "ok", "okay", "yes", "no", "sure", "good morning", "good afternoon"]
 
-        for pattern in greeting_patterns:
-            if prompt_lower == pattern or pattern in prompt_lower:
-                return self._create_response("greeting", prompt, has_existing_project)
+        if prompt_lower in greeting_exact or len(words) == 1 and words[0] in greeting_exact:
+            return self._create_response("greeting", prompt, has_existing_project)
 
-        # Project request keywords
-        project_keywords = [
-            "create", "build", "make", "develop", "generate", "implement",
-            "scaffold", "bootstrap", "new project", "full stack", "application",
-            "website", "web app", "api", "backend", "frontend"
-        ]
-
-        for keyword in project_keywords:
-            if keyword in prompt_lower:
-                return self._create_response("project_request", prompt, has_existing_project)
-
-        # Small task keywords
-        small_task_keywords = [
-            "add", "update", "change", "modify", "edit", "fix", "debug",
-            "remove", "delete", "convert", "refactor", "test"
-        ]
-
-        for keyword in small_task_keywords:
-            if keyword in prompt_lower:
-                return self._create_response("small_task", prompt, has_existing_project)
-
-        # Question patterns
+        # Question patterns - asking for info, not code changes
         question_patterns = [
-            "what is", "what are", "how does", "how do", "why", "explain",
-            "describe", "tell me", "can you explain"
+            "what is", "what are", "how does", "how do", "why is", "explain",
+            "describe", "tell me about", "can you explain", "what's the difference"
         ]
 
         for pattern in question_patterns:
-            if pattern in prompt_lower:
+            if prompt_lower.startswith(pattern) or f" {pattern}" in prompt_lower:
                 return self._create_response("general_question", prompt, has_existing_project)
 
-        # Default: if long enough, treat as project_request
-        if len(words) >= 5:
-            return self._create_response("project_request", prompt, has_existing_project)
+        # CRITICAL: When user has existing project
+        if has_existing_project:
+            # Only create new project if EXPLICITLY asking for one
+            new_project_explicit = [
+                "new project", "start fresh", "start over", "create a new",
+                "build a new", "make a new", "different project", "another project",
+                "start from scratch", "begin new", "fresh start"
+            ]
+
+            for keyword in new_project_explicit:
+                if keyword in prompt_lower:
+                    logger.info(f"[Classifier Fallback] Existing project but user wants NEW: '{keyword}'")
+                    return self._create_response("project_request", prompt, has_existing_project)
+
+            # DEFAULT: Any other request with existing project = MODIFY
+            # This includes: "add X", "create Y", "build Z", "make it...", etc.
+            # All of these modify the EXISTING project
+            if len(words) >= 2:
+                logger.info(f"[Classifier Fallback] Existing project -> DEFAULT to small_task (MODIFY)")
+                return self._create_response("small_task", prompt, has_existing_project)
+
+        else:
+            # No existing project - check for project creation keywords
+            project_keywords = [
+                "create", "build", "make", "develop", "generate", "implement",
+                "scaffold", "bootstrap", "new project", "full stack", "application",
+                "website", "web app", "api", "backend", "frontend"
+            ]
+
+            for keyword in project_keywords:
+                if keyword in prompt_lower:
+                    return self._create_response("project_request", prompt, has_existing_project)
+
+            # Small task without existing project
+            small_task_keywords = [
+                "add", "update", "change", "modify", "edit", "fix", "debug",
+                "remove", "delete", "convert", "refactor", "test"
+            ]
+
+            for keyword in small_task_keywords:
+                if keyword in prompt_lower:
+                    return self._create_response("small_task", prompt, has_existing_project)
+
+            # Default: if long enough and no existing project, treat as project_request
+            if len(words) >= 5:
+                return self._create_response("project_request", prompt, has_existing_project)
 
         # Short and unclear
         return self._create_response("unclear", prompt, has_existing_project)

@@ -72,8 +72,11 @@ export default function BuildPage() {
 
     const extractFileContents = (files: NonNullable<typeof currentProject>['files'] | undefined) => {
       files?.forEach(file => {
-        if (file.type === 'file' && file.content) {
-          contents[file.path] = file.content
+        if (file.type === 'file') {
+          // Include file if content exists (even empty string)
+          if (file.content !== undefined && file.content !== null) {
+            contents[file.path] = file.content
+          }
         }
         if (file.children) {
           extractFileContents(file.children)
@@ -83,6 +86,11 @@ export default function BuildPage() {
 
     if (hasProject && currentProject?.files && currentProject.files.length > 0) {
       extractFileContents(currentProject.files)
+      console.log('[BuildPage] Extracted file contents for LivePreview:', {
+        totalFiles: Object.keys(contents).length,
+        hasPackageJson: !!contents['package.json'],
+        paths: Object.keys(contents).slice(0, 10)
+      })
     }
 
     return contents
@@ -236,6 +244,38 @@ export default function BuildPage() {
     }
   }
 
+  // Load all file contents for WebContainer (handles lazy-loaded files)
+  const loadAllFiles = useCallback(async (): Promise<Record<string, string>> => {
+    if (!currentProject?.id) {
+      console.log('[BuildPage] loadAllFiles: No current project')
+      return {}
+    }
+
+    console.log('[BuildPage] loadAllFiles: Loading all files for project', currentProject.id)
+
+    try {
+      const response = await apiClient.loadProjectWithFiles(currentProject.id)
+      const contents: Record<string, string> = {}
+
+      // Backend returns FLAT array with is_folder field
+      // Structure: { path: 'src/App.tsx', is_folder: false, content: '...' }
+      if (response.files && Array.isArray(response.files)) {
+        response.files.forEach((file: any) => {
+          // Only include files (not folders) that have content
+          if (!file.is_folder && file.content !== undefined) {
+            contents[file.path] = file.content
+          }
+        })
+      }
+
+      console.log('[BuildPage] loadAllFiles: Loaded', Object.keys(contents).length, 'files')
+      return contents
+    } catch (error) {
+      console.error('[BuildPage] loadAllFiles: Failed to load files:', error)
+      return {}
+    }
+  }, [currentProject?.id])
+
   // Prevent hydration mismatch by not rendering until mounted and auth checked
   if (!isMounted || !authChecked) {
     return (
@@ -260,6 +300,7 @@ export default function BuildPage() {
             isServerRunning={isServerRunning}
             serverUrl={serverUrl}
             projectId={currentProject?.id}
+            onLoadAllFiles={loadAllFiles}
           />
         }
         onGenerateProject={() => setIsGenerationModalOpen(true)}

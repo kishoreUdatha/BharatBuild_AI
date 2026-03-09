@@ -1,10 +1,12 @@
 'use client'
 
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
-import { AlertCircle, RefreshCw, ExternalLink, Play, AlertTriangle } from 'lucide-react'
+import { AlertCircle, RefreshCw, ExternalLink, Play, AlertTriangle, Loader2, Terminal, Package } from 'lucide-react'
 import { useErrorStore } from '@/store/errorStore'
 import { useFileChangeEvents } from '@/hooks/useFileChangeEvents'
 import { useErrorCollector } from '@/hooks/useErrorCollector'
+import { useWebContainer } from '@/hooks/useWebContainer'
+import { isWebContainerSupported } from '@/lib/webcontainer'
 
 interface LivePreviewProps {
   files: Record<string, string>
@@ -13,8 +15,10 @@ interface LivePreviewProps {
   isServerRunning?: boolean
   projectId?: string  // Project ID for file change events
   autoReloadOnFix?: boolean  // Auto-reload when files are fixed (default: true)
+  useWebContainerPreview?: boolean  // Enable WebContainer for React/Vite projects (default: true)
   onError?: (error: { message: string; file?: string; line?: number; column?: number; stack?: string }) => void
   onReload?: () => void  // Callback when preview is reloaded
+  onLoadAllFiles?: () => Promise<Record<string, string>>  // Callback to load all file contents for WebContainer
 }
 
 export function LivePreview({
@@ -24,17 +28,26 @@ export function LivePreview({
   isServerRunning = false,
   projectId,
   autoReloadOnFix = true,
+  useWebContainerPreview = true,
+  onLoadAllFiles,
   onError,
   onReload
 }: LivePreviewProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [previewMode, setPreviewMode] = useState<'static' | 'server'>('static')
+  const [previewMode, setPreviewMode] = useState<'static' | 'server' | 'webcontainer'>('static')
   const [refreshKey, setRefreshKey] = useState(0)
   const [autoReloadIndicator, setAutoReloadIndicator] = useState(false)
   const [autoFixStatus, setAutoFixStatus] = useState<'idle' | 'fixing' | 'completed' | 'failed'>('idle')
   const [autoFixMessage, setAutoFixMessage] = useState<string | null>(null)
+  const [webContainerStarted, setWebContainerStarted] = useState(false)
+  const [webContainerOutput, setWebContainerOutput] = useState<string[]>([])
+  const [showTerminal, setShowTerminal] = useState(false)
+
+  // WebContainer hook for running React/Vite projects in browser
+  const webContainer = useWebContainer()
+  const webContainerSupported = isWebContainerSupported()
 
   // Retry state for dev server startup
   const [retryCount, setRetryCount] = useState(0)
@@ -119,22 +132,185 @@ export function LivePreview({
     })
   }, [setReloadCallback, onReload])
 
+  // Detect project type and backend language
+  const projectType = useMemo(() => {
+    const filePaths = Object.keys(files)
+    const fileContents = Object.values(files).join('\n')
+
+    // Check for frontend frameworks
+    const hasReact = filePaths.some(p => p.endsWith('.tsx') || p.endsWith('.jsx')) ||
+                     fileContents.includes('from \'react\'') || fileContents.includes('from "react"')
+    const hasVue = filePaths.some(p => p.endsWith('.vue')) ||
+                   fileContents.includes('from \'vue\'') || fileContents.includes('from "vue"')
+    const hasVite = filePaths.includes('vite.config.ts') || filePaths.includes('vite.config.js')
+    const hasNextjs = filePaths.includes('next.config.js') || filePaths.includes('next.config.mjs')
+
+    // Check for backend languages
+    const hasPython = filePaths.some(p => p.endsWith('.py')) ||
+                      filePaths.includes('requirements.txt') ||
+                      filePaths.includes('Pipfile')
+    const hasJava = filePaths.some(p => p.endsWith('.java')) ||
+                    filePaths.includes('pom.xml') ||
+                    filePaths.includes('build.gradle')
+    const hasGo = filePaths.some(p => p.endsWith('.go')) ||
+                  filePaths.includes('go.mod')
+    const hasRust = filePaths.some(p => p.endsWith('.rs')) ||
+                    filePaths.includes('Cargo.toml')
+    const hasDotNet = filePaths.some(p => p.endsWith('.cs') || p.endsWith('.csproj'))
+    const hasRuby = filePaths.some(p => p.endsWith('.rb')) ||
+                    filePaths.includes('Gemfile')
+    const hasPhp = filePaths.some(p => p.endsWith('.php')) ||
+                   filePaths.includes('composer.json')
+
+    // Check for Node.js backend (Express, Fastify, NestJS)
+    const hasNodeBackend = fileContents.includes('express') ||
+                           fileContents.includes('fastify') ||
+                           fileContents.includes('@nestjs') ||
+                           fileContents.includes('koa')
+
+    // Determine backend type
+    let backendType: 'none' | 'nodejs' | 'python' | 'java' | 'go' | 'rust' | 'dotnet' | 'ruby' | 'php' = 'none'
+    if (hasPython) backendType = 'python'
+    else if (hasJava) backendType = 'java'
+    else if (hasGo) backendType = 'go'
+    else if (hasRust) backendType = 'rust'
+    else if (hasDotNet) backendType = 'dotnet'
+    else if (hasRuby) backendType = 'ruby'
+    else if (hasPhp) backendType = 'php'
+    else if (hasNodeBackend) backendType = 'nodejs'
+
+    // Determine frontend type
+    const hasFrontend = hasReact || hasVue || hasVite || hasNextjs
+    const needsBundling = hasFrontend
+
+    // Is this a full-stack app?
+    const isFullStack = hasFrontend && backendType !== 'none'
+    const needsDockerBackend = backendType !== 'none' && backendType !== 'nodejs'
+
+    return {
+      hasFrontend,
+      needsBundling,
+      backendType,
+      isFullStack,
+      needsDockerBackend,
+      // WebContainer can only handle frontend or Node.js full-stack
+      canUseWebContainer: needsBundling && (!isFullStack || backendType === 'nodejs'),
+      frontendFramework: hasReact ? 'React' : hasVue ? 'Vue' : hasNextjs ? 'Next.js' : hasVite ? 'Vite' : null
+    }
+  }, [files])
+
+  // For backward compatibility
+  const needsBundling = projectType.needsBundling
+
+  // Start WebContainer for React/Vite projects (frontend-only or Node.js full-stack)
+  useEffect(() => {
+    const startWebContainer = async () => {
+      // Only use WebContainer if:
+      // 1. Project can use WebContainer (frontend-only OR Node.js full-stack)
+      // 2. WebContainer is supported in browser
+      // 3. useWebContainerPreview is enabled
+      // 4. No external server is running
+      // 5. WebContainer hasn't already started
+      // 6. We have files with package.json
+      if (
+        projectType.canUseWebContainer &&
+        webContainerSupported &&
+        useWebContainerPreview &&
+        !isServerRunning &&
+        !webContainerStarted &&
+        files['package.json'] &&
+        Object.keys(files).length > 0
+      ) {
+        const projectDesc = projectType.isFullStack
+          ? `${projectType.frontendFramework} + Node.js full-stack`
+          : `${projectType.frontendFramework} frontend`
+        console.log(`[LivePreview] Starting WebContainer for ${projectDesc} project...`)
+        setPreviewMode('webcontainer')
+        setWebContainerStarted(true)
+        setIsLoading(true)
+        setWebContainerOutput([])
+        setError(null)
+
+        try {
+          // Run the project using WebContainer
+          const url = await webContainer.runProject(files)
+
+          if (url) {
+            console.log('[LivePreview] WebContainer server ready at:', url)
+            setIsLoading(false)
+          } else {
+            console.log('[LivePreview] WebContainer failed to start server')
+            setError('Failed to start dev server in WebContainer')
+            setIsLoading(false)
+          }
+        } catch (err: any) {
+          console.error('[LivePreview] WebContainer error:', err)
+          setError(`WebContainer error: ${err.message}`)
+          setIsLoading(false)
+        }
+      }
+    }
+
+    startWebContainer()
+  }, [projectType.canUseWebContainer, projectType.isFullStack, projectType.frontendFramework, webContainerSupported, useWebContainerPreview, isServerRunning, webContainerStarted, files, webContainer])
+
+  // Update output from WebContainer
+  useEffect(() => {
+    if (webContainer.output.length > 0) {
+      setWebContainerOutput(webContainer.output)
+    }
+  }, [webContainer.output])
+
+  // Track previous files for hot reload
+  const prevFilesRef = useRef<Record<string, string>>({})
+
+  // Update files in WebContainer when they change (hot reload)
+  useEffect(() => {
+    const updateFiles = async () => {
+      if (previewMode !== 'webcontainer' || !webContainer.isReady) return
+
+      const prevFiles = prevFilesRef.current
+      const changedFiles: { path: string; content: string }[] = []
+
+      // Find changed files
+      for (const [path, content] of Object.entries(files)) {
+        if (prevFiles[path] !== content && path !== 'package.json') {
+          changedFiles.push({ path, content })
+        }
+      }
+
+      // Update changed files in WebContainer
+      if (changedFiles.length > 0) {
+        console.log('[LivePreview] Hot reload: updating', changedFiles.length, 'files in WebContainer')
+        for (const { path, content } of changedFiles) {
+          await webContainer.writeFile(path, content)
+        }
+      }
+
+      // Save current files for next comparison
+      prevFilesRef.current = { ...files }
+    }
+
+    updateFiles()
+  }, [files, previewMode, webContainer])
+
   // Switch to server mode when server is running
   useEffect(() => {
     console.log('[LivePreview] State update:', { isServerRunning, serverUrl, previewMode })
     if (isServerRunning && serverUrl) {
       console.log('[LivePreview] Switching to server mode with URL:', serverUrl)
       setPreviewMode('server')
+      setWebContainerStarted(false) // Stop WebContainer if external server starts
       setIsLoading(true) // Reset loading state when switching to server mode
       setRetryCount(0) // Reset retry count
       setRetryStatus('waiting') // Start in waiting mode for dev server
       setError(null)
-    } else {
+    } else if (!needsBundling || !webContainerSupported || !useWebContainerPreview) {
       console.log('[LivePreview] Switching to static mode')
       setPreviewMode('static')
       setRetryStatus('idle')
     }
-  }, [isServerRunning, serverUrl])
+  }, [isServerRunning, serverUrl, needsBundling, webContainerSupported, useWebContainerPreview])
 
   // Cleanup retry timeout on unmount
   useEffect(() => {
@@ -443,7 +619,7 @@ export function LivePreview({
     }
   }, [previewMode, isLoading, serverUrl, retryStatus, retryCount, maxRetries, retryPreview])
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setIsLoading(true)
     setError(null)
     setRetryCount(0)
@@ -453,7 +629,12 @@ export function LivePreview({
       clearTimeout(retryTimeoutRef.current)
       retryTimeoutRef.current = null
     }
-    if (previewMode === 'server' && serverUrl && iframeRef.current) {
+
+    if (previewMode === 'webcontainer' && webContainer.serverUrl && iframeRef.current) {
+      // Force reload WebContainer iframe
+      iframeRef.current.src = webContainer.serverUrl + '?t=' + Date.now()
+      setIsLoading(false)
+    } else if (previewMode === 'server' && serverUrl && iframeRef.current) {
       // Force reload server iframe
       iframeRef.current.src = serverUrl + '?t=' + Date.now()
     } else {
@@ -462,7 +643,25 @@ export function LivePreview({
     }
   }
 
+  // Handle file changes for WebContainer hot reload
+  const handleWebContainerFileChange = useCallback(async (path: string, content: string) => {
+    if (previewMode === 'webcontainer' && webContainer.isReady) {
+      console.log('[LivePreview] Updating file in WebContainer:', path)
+      await webContainer.writeFile(path, content)
+    }
+  }, [previewMode, webContainer])
+
   const handleOpenExternal = () => {
+    if (previewMode === 'webcontainer' && webContainer.serverUrl) {
+      // Open WebContainer preview in a full-page preview route
+      // Store the URL in sessionStorage for the preview page to access
+      const projectId = 'webcontainer-' + Date.now()
+      sessionStorage.setItem(`preview_url_${projectId}`, webContainer.serverUrl)
+      // Open the preview page with the URL as a query param
+      const encodedUrl = encodeURIComponent(webContainer.serverUrl)
+      window.open(`/preview/${projectId}?url=${encodedUrl}`, '_blank')
+      return
+    }
     if (previewMode === 'server' && serverUrl) {
       window.open(serverUrl, '_blank')
     } else {
@@ -473,20 +672,48 @@ export function LivePreview({
     }
   }
 
+  // Check if open in new tab is available
+  const canOpenExternal = previewMode === 'webcontainer' ? !!webContainer.serverUrl : true
+
   return (
     <div className="h-full flex flex-col bg-[hsl(var(--bolt-bg-primary))]">
       {/* Preview Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-[hsl(var(--bolt-border))] bg-[hsl(var(--bolt-bg-secondary))]">
         <div className="flex items-center gap-2">
           {/* Status indicator */}
-          <div className={`w-2 h-2 rounded-full ${isServerRunning ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+          <div className={`w-2 h-2 rounded-full ${
+            previewMode === 'webcontainer' && webContainer.isRunning ? 'bg-purple-500 animate-pulse' :
+            isServerRunning ? 'bg-green-500 animate-pulse' : 'bg-gray-400'
+          }`} />
           <span className="text-xs text-[hsl(var(--bolt-text-secondary))]">
-            {isServerRunning ? 'Server Running' : 'Static Preview'}
+            {previewMode === 'webcontainer' ? (
+              webContainer.isRunning ? 'WebContainer Running' :
+              webContainer.status === 'installing' ? 'Installing...' :
+              webContainer.status === 'booting' ? 'Starting...' :
+              'WebContainer'
+            ) : isServerRunning ? 'Server Running' : 'Static Preview'}
           </span>
-          {serverUrl && isServerRunning && (
+          {previewMode === 'webcontainer' && webContainer.serverUrl && (
+            <span className="text-xs text-purple-400 font-mono">
+              {webContainer.serverUrl}
+            </span>
+          )}
+          {serverUrl && isServerRunning && previewMode === 'server' && (
             <span className="text-xs text-[hsl(var(--bolt-text-tertiary))] font-mono">
               {serverUrl}
             </span>
+          )}
+          {/* WebContainer terminal toggle */}
+          {previewMode === 'webcontainer' && (
+            <button
+              onClick={() => setShowTerminal(!showTerminal)}
+              className={`p-1 rounded text-xs ${
+                showTerminal ? 'bg-purple-500/20 text-purple-400' : 'text-[hsl(var(--bolt-text-tertiary))] hover:text-[hsl(var(--bolt-text-secondary))]'
+              }`}
+              title="Toggle terminal output"
+            >
+              <Terminal className="w-3.5 h-3.5" />
+            </button>
           )}
           {/* Auto-reload indicator */}
           {autoReloadIndicator && (
@@ -528,6 +755,69 @@ export function LivePreview({
         </div>
 
         <div className="flex items-center gap-1">
+          {/* Run in Browser button - shows when WebContainer supported and we have a project */}
+          {webContainerSupported &&
+           !webContainer.isRunning &&
+           !isServerRunning &&
+           projectId && (
+            <button
+              onClick={async () => {
+                console.log('[LivePreview] Manual WebContainer start triggered')
+                setPreviewMode('webcontainer')
+                setWebContainerStarted(true)
+                setIsLoading(true)
+                setWebContainerOutput([])
+                setError(null)
+                try {
+                  // If files are empty, try to load them first
+                  let filesToUse = files
+                  if (Object.keys(files).length === 0 && onLoadAllFiles) {
+                    console.log('[LivePreview] Loading all file contents...')
+                    filesToUse = await onLoadAllFiles()
+                    console.log('[LivePreview] Loaded files:', Object.keys(filesToUse).length)
+                  }
+
+                  if (!filesToUse['package.json']) {
+                    setError('No package.json found - this may not be a Node.js project')
+                    setIsLoading(false)
+                    return
+                  }
+
+                  const url = await webContainer.runProject(filesToUse)
+                  if (url) {
+                    console.log('[LivePreview] WebContainer server ready at:', url)
+                    setIsLoading(false)
+                  } else {
+                    setError('Failed to start dev server')
+                    setIsLoading(false)
+                  }
+                } catch (err: any) {
+                  setError(`WebContainer error: ${err.message}`)
+                  setIsLoading(false)
+                }
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-purple-500/20 text-purple-400 text-xs font-medium hover:bg-purple-500/30 transition-colors"
+              title="Run project in browser using WebContainer"
+            >
+              <Play className="w-3 h-3" />
+              <span>Run in Browser</span>
+            </button>
+          )}
+          {/* Stop WebContainer button */}
+          {webContainer.isRunning && (
+            <button
+              onClick={async () => {
+                await webContainer.stopServer()
+                setWebContainerStarted(false)
+                setPreviewMode('static')
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-red-500/20 text-red-400 text-xs font-medium hover:bg-red-500/30 transition-colors"
+              title="Stop WebContainer server"
+            >
+              <span className="w-2 h-2 bg-red-400 rounded-sm" />
+              <span>Stop</span>
+            </button>
+          )}
           {/* Error count badge */}
           {errorCount.total > 0 && (
             <div
@@ -547,8 +837,13 @@ export function LivePreview({
           </button>
           <button
             onClick={handleOpenExternal}
-            className="p-1.5 rounded hover:bg-[hsl(var(--bolt-bg-tertiary))] text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))] transition-colors"
-            title="Open in new tab"
+            disabled={!canOpenExternal}
+            className={`p-1.5 rounded transition-colors ${
+              canOpenExternal
+                ? 'hover:bg-[hsl(var(--bolt-bg-tertiary))] text-[hsl(var(--bolt-text-secondary))] hover:text-[hsl(var(--bolt-text-primary))]'
+                : 'text-[hsl(var(--bolt-text-tertiary))] opacity-50 cursor-not-allowed'
+            }`}
+            title={canOpenExternal ? "Open in new tab" : "Not available for browser preview"}
           >
             <ExternalLink className="w-3.5 h-3.5" />
           </button>
@@ -557,6 +852,33 @@ export function LivePreview({
 
       {/* Preview Content */}
       <div className="flex-1 relative bg-white">
+        {/* WebContainer Terminal Output (collapsible) */}
+        {previewMode === 'webcontainer' && showTerminal && (
+          <div className="absolute top-0 left-0 right-0 z-20 max-h-48 bg-gray-900 text-green-400 font-mono text-xs overflow-auto border-b border-gray-700">
+            <div className="sticky top-0 flex items-center justify-between px-3 py-1.5 bg-gray-800 border-b border-gray-700">
+              <div className="flex items-center gap-2">
+                <Terminal className="w-3 h-3" />
+                <span>Terminal Output</span>
+              </div>
+              <button
+                onClick={() => webContainer.clearOutput()}
+                className="text-gray-400 hover:text-white text-xs"
+              >
+                Clear
+              </button>
+            </div>
+            <div className="p-3">
+              {webContainerOutput.length === 0 ? (
+                <span className="text-gray-500">No output yet...</span>
+              ) : (
+                webContainerOutput.map((line, i) => (
+                  <div key={i} className="whitespace-pre-wrap">{line}</div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
         {error ? (
           <div className="h-full flex items-center justify-center">
             <div className="text-center p-6">
@@ -565,6 +887,132 @@ export function LivePreview({
               <p className="text-xs text-gray-500">{error}</p>
             </div>
           </div>
+        ) : projectType.needsDockerBackend && !isServerRunning ? (
+          // Full-stack with non-Node.js backend - needs Docker for backend
+          <div className="h-full flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800">
+            <div className="text-center max-w-lg px-6">
+              <div className="flex items-center justify-center gap-4 mb-6">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
+                  <span className="text-3xl">{projectType.frontendFramework === 'React' ? '⚛️' : '🖥️'}</span>
+                </div>
+                <span className="text-white text-2xl">+</span>
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
+                  <span className="text-3xl">
+                    {projectType.backendType === 'python' && '🐍'}
+                    {projectType.backendType === 'java' && '☕'}
+                    {projectType.backendType === 'go' && '🔷'}
+                    {projectType.backendType === 'rust' && '🦀'}
+                    {projectType.backendType === 'dotnet' && '🔮'}
+                    {projectType.backendType === 'ruby' && '💎'}
+                    {projectType.backendType === 'php' && '🐘'}
+                  </span>
+                </div>
+              </div>
+
+              <h2 className="text-white text-xl font-semibold mb-3">
+                Full-Stack Application
+              </h2>
+              <p className="text-slate-300 text-sm mb-6">
+                {projectType.frontendFramework} + {projectType.backendType?.charAt(0).toUpperCase()}{projectType.backendType?.slice(1)} detected
+              </p>
+
+              <div className="bg-slate-800/50 rounded-xl p-4 text-left mb-6">
+                <div className="flex items-start gap-3 mb-3">
+                  <div className="w-6 h-6 rounded-full bg-green-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <span className="text-green-400 text-xs">✓</span>
+                  </div>
+                  <div>
+                    <p className="text-white text-sm font-medium">Frontend Ready</p>
+                    <p className="text-slate-400 text-xs">Can run in WebContainer (browser)</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-amber-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <Loader2 className="w-3 h-3 text-amber-400" />
+                  </div>
+                  <div>
+                    <p className="text-white text-sm font-medium">Backend Requires Server</p>
+                    <p className="text-slate-400 text-xs">{projectType.backendType?.charAt(0).toUpperCase()}{projectType.backendType?.slice(1)} needs Docker container</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-slate-400 text-xs">
+                  Waiting for backend server to start...
+                </p>
+                <div className="flex items-center justify-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                  <span className="text-amber-400 text-xs">Docker container initializing</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : previewMode === 'webcontainer' ? (
+          // WebContainer mode - runs Vite/React in browser
+          <>
+            {(isLoading || !webContainer.isRunning) && (
+              <div className="absolute inset-0 bg-gradient-to-br from-purple-900/90 to-indigo-900/90 flex items-center justify-center z-10">
+                <div className="text-center max-w-md px-6">
+                  <div className="w-16 h-16 mx-auto mb-6 relative">
+                    <div className="absolute inset-0 rounded-2xl bg-purple-500/30 animate-ping" />
+                    <div className="relative w-16 h-16 rounded-2xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center">
+                      <Package className="w-8 h-8 text-white" />
+                    </div>
+                  </div>
+                  <h3 className="text-white text-lg font-semibold mb-2">
+                    {webContainer.status === 'booting' && 'Starting WebContainer...'}
+                    {webContainer.status === 'installing' && 'Installing Dependencies...'}
+                    {webContainer.status === 'starting' && 'Starting Dev Server...'}
+                    {webContainer.status === 'idle' && 'Initializing...'}
+                    {webContainer.status === 'ready' && 'Almost Ready...'}
+                    {webContainer.status === 'error' && 'Error'}
+                  </h3>
+                  <p className="text-purple-200 text-sm mb-4">
+                    {webContainer.message || 'Running Node.js in your browser - no server needed!'}
+                  </p>
+
+                  {/* Progress indicator */}
+                  <div className="w-full h-1.5 bg-purple-800/50 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full bg-gradient-to-r from-purple-400 to-indigo-400 rounded-full transition-all duration-500 ${
+                        webContainer.status === 'booting' ? 'w-1/4' :
+                        webContainer.status === 'installing' ? 'w-2/4 animate-pulse' :
+                        webContainer.status === 'starting' ? 'w-3/4' :
+                        webContainer.status === 'running' ? 'w-full' : 'w-0'
+                      }`}
+                    />
+                  </div>
+
+                  {/* Terminal output preview */}
+                  {webContainerOutput.length > 0 && (
+                    <div className="mt-4 text-left bg-gray-900/50 rounded-lg p-3 max-h-32 overflow-auto">
+                      <div className="font-mono text-xs text-green-400">
+                        {webContainerOutput.slice(-5).map((line, i) => (
+                          <div key={i} className="truncate">{line}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <p className="text-purple-300/60 text-xs mt-4">
+                    Powered by StackBlitz WebContainer API
+                  </p>
+                </div>
+              </div>
+            )}
+            {webContainer.serverUrl && (
+              <iframe
+                ref={iframeRef}
+                src={webContainer.serverUrl}
+                className="w-full h-full border-0"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
+                title="WebContainer Preview"
+                onLoad={() => setIsLoading(false)}
+                onError={handleIframeError}
+              />
+            )}
+          </>
         ) : previewMode === 'server' && serverUrl ? (
           // Server mode - point to running server
           // Note: Cross-origin issues may occur. User can click "Open in new tab" to view
@@ -1332,15 +1780,16 @@ function generatePreviewHTML(files: Record<string, string>, entryPoint: string, 
   })
 
   // If project needs bundling, show helpful message
+  // This is only shown when WebContainer is NOT available/supported
   if (needsBundling) {
-    console.log('[LivePreview] Detected React/TS project that needs bundling')
+    console.log('[LivePreview] Detected React/TS project that needs bundling (WebContainer not available)')
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   ${PROJECT_ID_SCRIPT}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Preview - Bundling Required</title>
+  <title>Preview - Export Required</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -1356,6 +1805,18 @@ function generatePreviewHTML(files: Record<string, string>, entryPoint: string, 
       text-align: center;
       padding: 40px;
       max-width: 500px;
+    }
+    .warning-box {
+      background: rgba(234, 179, 8, 0.1);
+      border: 1px solid rgba(234, 179, 8, 0.3);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 24px;
+    }
+    .warning-box p {
+      color: #fbbf24;
+      font-size: 13px;
+      margin: 0;
     }
     .icon {
       width: 80px;
@@ -1443,9 +1904,12 @@ function generatePreviewHTML(files: Record<string, string>, entryPoint: string, 
 </head>
 <body>
   <div class="container">
+    <div class="warning-box">
+      <p>In-browser preview not available. Your browser may not support WebContainer (requires Chrome/Edge).</p>
+    </div>
     <div class="icon">⚛️</div>
     <h2>React/TypeScript Project</h2>
-    <p>This project uses modern frameworks that need compilation before running in the browser.</p>
+    <p>This project uses modern frameworks. Export and run locally for full preview.</p>
 
     <div>
       <span class="tech-badge">React</span>

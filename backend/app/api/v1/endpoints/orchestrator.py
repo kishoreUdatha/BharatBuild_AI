@@ -733,21 +733,32 @@ async def execute_workflow(
                 )
             logger.info(f"[Execute Workflow] Feature access granted: project_generation")
 
+            # Check if this is a MODIFY/REFACTOR request (editing existing project, not creating new)
+            # MODIFY and REFACTOR should NOT count against project limit since they're not creating new projects
+            intent = request.metadata.get("intent") if request.metadata else None
+            logger.info(f"[Execute Workflow] Metadata received: {request.metadata}")
+            logger.info(f"[Execute Workflow] Intent from metadata: {intent}")
+            is_modification = intent in ["MODIFY", "REFACTOR", "FIX"]
+
             # Check if user's plan allows project generation (project limit)
-            project_check = await check_project_limit(current_user, db)
-            if not project_check.allowed:
-                logger.warning(f"[Execute Workflow] Project limit reached for user {current_user.email}")
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": "project_limit_reached",
-                        "message": project_check.reason or "You have reached your project limit. Please upgrade your plan.",
-                        "current_usage": project_check.current_usage,
-                        "limit": project_check.limit,
-                        "upgrade_url": "/billing/plans"
-                    }
-                )
-            logger.info(f"[Execute Workflow] Project limit check passed: {project_check.current_usage}/{project_check.limit} projects")
+            # Skip this check for MODIFY/REFACTOR - they don't create new projects
+            if is_modification:
+                logger.info(f"[Execute Workflow] Skipping project limit check for {intent} intent (modifying existing project)")
+            else:
+                project_check = await check_project_limit(current_user, db)
+                if not project_check.allowed:
+                    logger.warning(f"[Execute Workflow] Project limit reached for user {current_user.email}")
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "project_limit_reached",
+                            "message": project_check.reason or "You have reached your project limit. Please upgrade your plan.",
+                            "current_usage": project_check.current_usage,
+                            "limit": project_check.limit,
+                            "upgrade_url": "/billing/plans"
+                        }
+                    )
+                logger.info(f"[Execute Workflow] Project limit check passed: {project_check.current_usage}/{project_check.limit} projects")
 
             # Get file limit for FREE users (3 files only)
             max_files_limit = user_limits.max_files_per_project

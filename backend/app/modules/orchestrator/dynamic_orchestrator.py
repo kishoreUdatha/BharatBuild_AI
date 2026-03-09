@@ -2621,6 +2621,134 @@ class DynamicOrchestrator:
             )
             return  # Exit early - no need to run normal workflow
 
+        # ============================================================
+        # MODIFY FLOW: Handle MODIFY/REFACTOR intent with existing files
+        # This modifies existing project files instead of regenerating
+        # ============================================================
+        if metadata and metadata.get("intent") in ["MODIFY", "REFACTOR"]:
+            modify_context = metadata.get("modify_context", {})
+            user_request_text = modify_context.get("user_request", user_request)
+            project_name = modify_context.get("project_name", "Project")
+
+            # Get files from context - may be loaded files or just paths
+            loaded_files = modify_context.get("loaded_files", [])  # Files with content from frontend
+            file_paths = modify_context.get("file_paths", [])  # All file paths in project
+            modify_project_id = modify_context.get("project_id", project_id)
+
+            logger.info(f"[MODIFY] Intent detected - loaded_files: {len(loaded_files)}, file_paths: {len(file_paths)}")
+
+            # Build existing_files list - first from loaded files, then fetch missing from storage
+            existing_files = []
+            loaded_paths = set()
+
+            # Add files that already have content
+            for f in loaded_files:
+                if f.get("content"):
+                    existing_files.append({"path": f["path"], "content": f["content"]})
+                    loaded_paths.add(f["path"])
+
+            # For files without content, try to load from storage
+            if file_paths and len(existing_files) < len(file_paths):
+                logger.info(f"[MODIFY] Loading {len(file_paths) - len(existing_files)} files from storage...")
+                user_id = metadata.get("user_id") if metadata else None
+
+                # Try to load from sandbox first (Layer 1), then database (Layer 3)
+                for file_path in file_paths:
+                    if file_path in loaded_paths:
+                        continue  # Already have content
+
+                    # Skip non-code files
+                    if any(file_path.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.woff', '.woff2', '.ttf', '.eot']):
+                        continue
+
+                    # Limit files to avoid memory issues
+                    if len(existing_files) >= 25:
+                        logger.warning(f"[MODIFY] Reached max file limit (25), skipping remaining files")
+                        break
+
+                    try:
+                        # Try sandbox first (faster, local files)
+                        content = await self._unified_storage.read_from_sandbox(
+                            project_id=str(modify_project_id),
+                            file_path=file_path,
+                            user_id=str(user_id) if user_id else None
+                        )
+
+                        # If sandbox doesn't have it, try database
+                        if not content:
+                            content = await self._unified_storage.get_file_from_database(
+                                project_id=str(modify_project_id),
+                                file_path=file_path
+                            )
+
+                        if content:
+                            existing_files.append({"path": file_path, "content": content})
+                            logger.debug(f"[MODIFY] Loaded file: {file_path} ({len(content)} bytes)")
+                    except Exception as file_err:
+                        logger.warning(f"[MODIFY] Failed to load {file_path}: {file_err}")
+
+            logger.info(f"[MODIFY] Total files available for modification: {len(existing_files)}")
+
+            if existing_files:
+                logger.info(f"[MODIFY] MODIFY intent detected with {len(existing_files)} existing files!")
+                logger.info(f"[MODIFY] User request: {user_request_text}")
+
+                # Store existing files in context
+                context.files_created = [
+                    {"path": f["path"], "content": f["content"]}
+                    for f in existing_files if f.get("content")
+                ]
+                context.metadata["modify_mode"] = True
+                context.metadata["original_request"] = user_request_text
+
+                yield OrchestratorEvent(
+                    type=EventType.STATUS,
+                    data={
+                        "message": f"Modifying project: {user_request_text}",
+                        "files_count": len(existing_files),
+                        "mode": "modify"
+                    }
+                )
+
+                # Send thinking step for UI
+                yield OrchestratorEvent(
+                    type=EventType.THINKING_STEP,
+                    data={
+                        "step": "analyzing",
+                        "status": "active",
+                        "user_visible": True,
+                        "detail": "Analyzing existing code...",
+                        "icon": "search"
+                    }
+                )
+
+                # Execute modification directly using bolt_instant with modify prompt
+                async for event in self._execute_modify_flow(context, user_request_text, existing_files):
+                    yield event
+
+                # Complete the workflow
+                yield OrchestratorEvent(
+                    type=EventType.COMPLETE,
+                    data={
+                        "message": "Modification completed!",
+                        "session_id": session_id,
+                        "files_modified": len(context.files_modified or [])
+                    }
+                )
+                return  # Exit early - no need to run normal workflow
+            else:
+                # No files could be loaded - log warning but continue with normal workflow
+                # This happens if project files are not in storage yet (e.g., new project)
+                logger.warning(f"[MODIFY] No existing files found for project {modify_project_id}, falling back to full generation")
+                yield OrchestratorEvent(
+                    type=EventType.STATUS,
+                    data={
+                        "message": "No existing files found. Generating new project...",
+                        "mode": "generate"
+                    }
+                )
+                # Fall through to normal workflow
+
         # Get workflow steps
         workflow = self.workflow_engine.get_workflow(workflow_name)
         context.total_steps = len(workflow)
@@ -2938,7 +3066,7 @@ class DynamicOrchestrator:
             yield OrchestratorEvent(
                 type=EventType.STATUS,
                 data={"message": "Saving project to cloud storage...", "phase": "s3_upload"},
-                step=len(workflow.steps)
+                step=len(workflow)
             )
 
             s3_zip_key = None
@@ -2954,7 +3082,7 @@ class DynamicOrchestrator:
                         yield OrchestratorEvent(
                             type=EventType.STATUS,
                             data={"message": "Project saved to cloud", "phase": "s3_upload_complete", "s3_key": s3_zip_key},
-                            step=len(workflow.steps)
+                            step=len(workflow)
                         )
                 except Exception as s3_err:
                     logger.warning(f"[Layer2-S3] Failed to upload to S3: {s3_err}")
@@ -2964,7 +3092,7 @@ class DynamicOrchestrator:
             yield OrchestratorEvent(
                 type=EventType.STATUS,
                 data={"message": "Updating project metadata...", "phase": "db_update"},
-                step=len(workflow.steps)
+                step=len(workflow)
             )
 
             try:
@@ -3046,7 +3174,7 @@ class DynamicOrchestrator:
             yield OrchestratorEvent(
                 type=EventType.STATUS,
                 data={"message": "Finalizing project...", "phase": "finalizing"},
-                step=len(workflow.steps)
+                step=len(workflow)
             )
 
             # Save token usage to database
@@ -6650,6 +6778,169 @@ Stream code in chunks for real-time display.
                 data={
                     "error": f"Failed to auto-fix: {str(e)}",
                     "user_problem": user_problem
+                }
+            )
+
+    async def _execute_modify_flow(
+        self,
+        context: ExecutionContext,
+        user_request: str,
+        existing_files: list
+    ) -> AsyncGenerator[OrchestratorEvent, None]:
+        """
+        Execute MODIFY flow - modifies existing project files instead of regenerating.
+
+        This is triggered when:
+        - User has existing project files
+        - User asks to modify/add/change something (e.g., "add a button", "change the color")
+
+        The AI receives the existing files and only modifies what's needed.
+        """
+        from app.utils.response_parser import PlainTextParser
+
+        logger.info(f"[MODIFY] Starting modification flow for: {user_request}")
+        logger.info(f"[MODIFY] Existing files: {len(existing_files)}")
+
+        yield OrchestratorEvent(
+            type=EventType.THINKING_STEP,
+            data={
+                "step": "modifying",
+                "status": "active",
+                "user_visible": True,
+                "detail": "Applying changes to your project...",
+                "icon": "edit"
+            }
+        )
+
+        # Build the existing files context for the AI
+        files_context = []
+        for f in existing_files[:20]:  # Limit to 20 files to avoid token limits
+            file_path = f.get("path", "")
+            file_content = f.get("content", "")
+            if file_content and len(file_content) < 50000:  # Skip very large files
+                files_context.append(f"=== FILE: {file_path} ===\n{file_content}\n")
+
+        existing_files_text = "\n".join(files_context)
+
+        # Create a modification-specific prompt
+        modify_prompt = f"""You are modifying an EXISTING project. The user wants to make changes.
+
+USER REQUEST: {user_request}
+
+EXISTING PROJECT FILES:
+{existing_files_text}
+
+INSTRUCTIONS:
+1. Analyze the user's request carefully
+2. Only output files that need to be CHANGED or ADDED
+3. DO NOT regenerate files that don't need changes
+4. Keep the existing project structure and patterns
+5. If adding a new feature, integrate it with existing code
+
+Output ONLY the files that need changes using this format:
+<boltArtifact id="modified-files" title="Modified Files">
+<boltAction type="file" filePath="path/to/file.tsx">
+// Full file content here
+</boltAction>
+</boltArtifact>
+"""
+
+        file_manager = FileManager()
+
+        try:
+            # Call Claude to generate modifications
+            response = await self.claude_client.generate(
+                prompt=modify_prompt,
+                system_prompt="You are a code modification expert. Only output files that need changes. Keep existing patterns.",
+                model=settings.DEFAULT_LLM_MODEL,
+                max_tokens=8000,
+                temperature=0.2
+            )
+
+            response_text = response.get("content", "")
+            logger.info(f"[MODIFY] AI response length: {len(response_text)}")
+
+            # Parse the response for file changes
+            parsed = PlainTextParser.parse_bolt_response(response_text)
+
+            # Apply modifications
+            modified_count = 0
+            if "files" in parsed:
+                for file_info in parsed["files"]:
+                    file_path = file_info.get("path")
+                    file_content = file_info.get("content")
+
+                    if file_path and file_content:
+                        # Emit file operation event
+                        yield OrchestratorEvent(
+                            type=EventType.FILE_OPERATION,
+                            data={
+                                "operation": "modify",
+                                "path": file_path,
+                                "operation_status": "in_progress"
+                            }
+                        )
+
+                        # Save the modified file
+                        await file_manager.save_file(
+                            project_id=context.project_id,
+                            path=file_path,
+                            content=file_content
+                        )
+
+                        # Emit file complete event
+                        yield OrchestratorEvent(
+                            type=EventType.FILE_OPERATION,
+                            data={
+                                "operation": "modify",
+                                "path": file_path,
+                                "operation_status": "complete",
+                                "file_content": file_content
+                            }
+                        )
+
+                        modified_count += 1
+                        context.files_modified = context.files_modified or []
+                        context.files_modified.append({"path": file_path, "content": file_content})
+                        logger.info(f"[MODIFY] Modified file: {file_path}")
+
+            yield OrchestratorEvent(
+                type=EventType.THINKING_STEP,
+                data={
+                    "step": "complete",
+                    "status": "complete",
+                    "user_visible": True,
+                    "detail": f"Modified {modified_count} file(s)",
+                    "icon": "check"
+                }
+            )
+
+            yield OrchestratorEvent(
+                type=EventType.STATUS,
+                data={
+                    "message": f"Modification complete! Updated {modified_count} file(s).",
+                    "files_modified": [f["path"] for f in (context.files_modified or [])]
+                }
+            )
+
+            # Track token usage
+            if response.get("usage"):
+                usage = response["usage"]
+                context.track_tokens(
+                    usage.get("input_tokens", 0),
+                    usage.get("output_tokens", 0),
+                    settings.DEFAULT_LLM_MODEL,
+                    agent_type="modifier",
+                    operation="modify"
+                )
+
+        except Exception as e:
+            logger.error(f"[MODIFY] Error during modification: {e}")
+            yield OrchestratorEvent(
+                type=EventType.ERROR,
+                data={
+                    "error": f"Failed to modify project: {str(e)}",
+                    "user_request": user_request
                 }
             )
 
