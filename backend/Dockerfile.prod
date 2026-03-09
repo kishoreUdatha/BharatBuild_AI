@@ -71,8 +71,12 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2
 # Copy lightweight API requirements (fast build ~2-3 min instead of 15-20 min)
 COPY requirements-api.txt .
 
+# Cache buster - change this value or pass --build-arg CACHEBUST=$(date +%s) to force pip reinstall
+ARG CACHEBUST=1
+
 # Install Python dependencies
-RUN pip install --upgrade pip setuptools wheel && \
+RUN echo "Cache bust: ${CACHEBUST}" && \
+    pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements-api.txt
 
 # Copy application code

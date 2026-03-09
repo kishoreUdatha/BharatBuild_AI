@@ -680,6 +680,7 @@ jobs:
             GIT_SHA=${{ github.sha }}
             VERSION=${{ steps.vars.outputs.version_tag }}
             BUILD_NUMBER=${{ github.run_number }}
+            CACHEBUST=${{ steps.vars.outputs.timestamp }}
 
       - name: Build and push frontend image
         id: build-frontend
