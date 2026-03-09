@@ -14,9 +14,17 @@ security = HTTPBearer()
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify password"""
-    # Bcrypt has a 72 byte limit - truncate password if necessary
-    password_bytes = plain_password.encode('utf-8')[:72]
-    return bcrypt.checkpw(password_bytes, hashed_password.encode('utf-8'))
+    # Handle None or empty password hash (OAuth users)
+    if not hashed_password:
+        return False
+
+    try:
+        # Bcrypt has a 72 byte limit - truncate password if necessary
+        password_bytes = plain_password.encode('utf-8')[:72]
+        return bcrypt.checkpw(password_bytes, hashed_password.encode('utf-8'))
+    except (ValueError, TypeError):
+        # Invalid salt or hash format - return False instead of crashing
+        return False
 
 
 def get_password_hash(password: str) -> str:
