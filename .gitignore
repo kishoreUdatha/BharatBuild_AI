@@ -80,7 +80,7 @@ temp/
 generated/
 
 # Docker
-.dockerignore
+# .dockerignore files should be tracked (needed for builds)
 
 # Misc
 *.bak

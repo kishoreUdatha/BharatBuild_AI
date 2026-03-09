@@ -1,0 +1,109 @@
+# ============================================
+# BharatBuild AI Backend - Docker Ignore
+# Excludes unnecessary files from Docker build
+# ============================================
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.Python
+
+# Environment files (secrets - never include in image)
+.env
+.env.*
+!.env.example
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+tests/
+pytest.ini
+
+# Logs
+logs/
+*.log
+
+# Temp files
+temp/
+tmp/
+*.tmp
+
+# Uploads (runtime data)
+uploads/
+generated/
+user_projects/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+wheels/
+*.egg
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Local development
+docker-compose*.yml
+Dockerfile
+Dockerfile.*
+!Dockerfile.prod
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Model files (should be loaded from S3/external storage)
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+*.pkl
+*.h5
+*.pb
+checkpoints/
+models/
+
+# Database files
+*.db
+*.sqlite3
+
+# RAG database (runtime data)
+rag_db/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Misc
+*.bak
+*.backup
