@@ -13,7 +13,7 @@ describe('ChatInput Component', () => {
   it('should render with default placeholder', () => {
     render(<ChatInput onSend={mockOnSend} />)
 
-    const textarea = screen.getByPlaceholderText(/describe what you want to build/i)
+    const textarea = screen.getByPlaceholderText(/describe your project idea/i)
     expect(textarea).toBeInTheDocument()
   })
 
@@ -27,7 +27,7 @@ describe('ChatInput Component', () => {
   it('should update input value on change', async () => {
     render(<ChatInput onSend={mockOnSend} />)
 
-    const textarea = screen.getByPlaceholderText(/describe what you want to build/i)
+    const textarea = screen.getByPlaceholderText(/describe your project idea/i)
     await userEvent.type(textarea, 'Build a todo app')
 
     expect(textarea).toHaveValue('Build a todo app')
@@ -36,17 +36,18 @@ describe('ChatInput Component', () => {
   it('should call onSend when Enter key is pressed', async () => {
     render(<ChatInput onSend={mockOnSend} />)
 
-    const textarea = screen.getByPlaceholderText(/describe what you want to build/i)
+    const textarea = screen.getByPlaceholderText(/describe your project idea/i)
     await userEvent.type(textarea, 'Build a todo app')
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
 
-    expect(mockOnSend).toHaveBeenCalledWith('Build a todo app')
+    // onSend is called with (message, attachedFileContent) - undefined when no file attached
+    expect(mockOnSend).toHaveBeenCalledWith('Build a todo app', undefined)
   })
 
   it('should clear input after submission', async () => {
     render(<ChatInput onSend={mockOnSend} />)
 
-    const textarea = screen.getByPlaceholderText(/describe what you want to build/i)
+    const textarea = screen.getByPlaceholderText(/describe your project idea/i)
     await userEvent.type(textarea, 'Build a todo app')
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
 
@@ -56,7 +57,7 @@ describe('ChatInput Component', () => {
   it('should not submit empty message', async () => {
     render(<ChatInput onSend={mockOnSend} />)
 
-    const textarea = screen.getByPlaceholderText(/describe what you want to build/i)
+    const textarea = screen.getByPlaceholderText(/describe your project idea/i)
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
 
     expect(mockOnSend).not.toHaveBeenCalled()
@@ -65,7 +66,7 @@ describe('ChatInput Component', () => {
   it('should not submit whitespace-only message', async () => {
     render(<ChatInput onSend={mockOnSend} />)
 
-    const textarea = screen.getByPlaceholderText(/describe what you want to build/i)
+    const textarea = screen.getByPlaceholderText(/describe your project idea/i)
     await userEvent.type(textarea, '   ')
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
 
@@ -75,14 +76,14 @@ describe('ChatInput Component', () => {
   it('should disable input when loading', () => {
     render(<ChatInput onSend={mockOnSend} isLoading={true} />)
 
-    const textarea = screen.getByPlaceholderText(/describe what you want to build/i)
+    const textarea = screen.getByPlaceholderText(/describe your project idea/i)
     expect(textarea).toBeDisabled()
   })
 
   it('should not submit when loading', async () => {
     render(<ChatInput onSend={mockOnSend} isLoading={true} />)
 
-    const textarea = screen.getByPlaceholderText(/describe what you want to build/i)
+    const textarea = screen.getByPlaceholderText(/describe your project idea/i)
     fireEvent.change(textarea, { target: { value: 'Build a todo app' } })
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
 
@@ -92,10 +93,11 @@ describe('ChatInput Component', () => {
   it('should show helper text for keyboard shortcuts', () => {
     render(<ChatInput onSend={mockOnSend} />)
 
-    // Text is split across elements with <kbd> tags, so check for partial matches
-    expect(screen.getByText(/Press/)).toBeInTheDocument()
+    // Text is split across elements with <kbd> tags
     expect(screen.getByText('Enter')).toBeInTheDocument()
     expect(screen.getByText(/to send/)).toBeInTheDocument()
+    expect(screen.getByText('Shift + Enter')).toBeInTheDocument()
+    expect(screen.getByText(/for new line/)).toBeInTheDocument()
   })
 
   it('should show loading indicator when generating', () => {
@@ -107,7 +109,7 @@ describe('ChatInput Component', () => {
   it('should allow new line with Shift+Enter', async () => {
     render(<ChatInput onSend={mockOnSend} />)
 
-    const textarea = screen.getByPlaceholderText(/describe what you want to build/i)
+    const textarea = screen.getByPlaceholderText(/describe your project idea/i)
     await userEvent.type(textarea, 'Line 1')
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter', shiftKey: true })
 
