@@ -66,7 +66,7 @@ class TestFreeLimits:
 
     def test_free_limits_project_limit(self):
         """Test free tier has project limit"""
-        assert FREE_LIMITS.project_limit == 1
+        assert FREE_LIMITS.project_limit == 5  # Updated: free tier allows 5 projects for testing
 
     def test_free_limits_max_files(self):
         """Test free tier has max files limit"""

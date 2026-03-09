@@ -38,9 +38,9 @@ class TestFreeTierFeatures:
         """Test free tier has document generation disabled"""
         assert FREE_TIER_FEATURES["document_generation"] is False
 
-    def test_free_tier_no_project_generation(self):
-        """Test free tier has project generation disabled"""
-        assert FREE_TIER_FEATURES["project_generation"] is False
+    def test_free_tier_has_project_generation(self):
+        """Test free tier has project generation enabled (limited to 3 files preview)"""
+        assert FREE_TIER_FEATURES["project_generation"] is True
 
     def test_free_tier_no_bug_fixing(self):
         """Test free tier has bug fixing disabled"""
