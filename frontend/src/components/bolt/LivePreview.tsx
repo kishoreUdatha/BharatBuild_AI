@@ -40,6 +40,7 @@ export function LivePreview({
   const [refreshKey, setRefreshKey] = useState(0)
   const [autoReloadIndicator, setAutoReloadIndicator] = useState(false)
   const [autoFixStatus, setAutoFixStatus] = useState<'idle' | 'fixing' | 'completed' | 'failed'>('idle')
+  const autoFixTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const [autoFixMessage, setAutoFixMessage] = useState<string | null>(null)
   const [webContainerStarted, setWebContainerStarted] = useState(false)
   const [webContainerOutput, setWebContainerOutput] = useState<string[]>([])
@@ -81,9 +82,24 @@ export function LivePreview({
       console.log('[LivePreview] Auto-fix started:', reason)
       setAutoFixStatus('fixing')
       setAutoFixMessage(reason || 'Fixing errors...')
+      // Clear any existing timeout
+      if (autoFixTimeoutRef.current) {
+        clearTimeout(autoFixTimeoutRef.current)
+      }
+      // Set timeout to reset status if no response after 60 seconds
+      autoFixTimeoutRef.current = setTimeout(() => {
+        console.log('[LivePreview] Auto-fix timeout - resetting status')
+        setAutoFixStatus('idle')
+        setAutoFixMessage(null)
+      }, 60000)
     },
     onFixCompleted: (patchesApplied, filesModified) => {
       console.log('[LivePreview] Auto-fix completed!', patchesApplied, 'patches')
+      // Clear timeout
+      if (autoFixTimeoutRef.current) {
+        clearTimeout(autoFixTimeoutRef.current)
+        autoFixTimeoutRef.current = null
+      }
       setAutoFixStatus('completed')
       setAutoFixMessage(`Fixed! ${patchesApplied || 0} patches applied`)
       clearErrors()
@@ -100,6 +116,11 @@ export function LivePreview({
     },
     onFixFailed: (error) => {
       console.log('[LivePreview] Auto-fix failed:', error)
+      // Clear timeout
+      if (autoFixTimeoutRef.current) {
+        clearTimeout(autoFixTimeoutRef.current)
+        autoFixTimeoutRef.current = null
+      }
       setAutoFixStatus('failed')
       setAutoFixMessage(error || 'Fix failed')
       setTimeout(() => {
