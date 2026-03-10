@@ -702,9 +702,30 @@ export function LivePreview({
       retryTimeoutRef.current = null
     }
 
-    if (previewMode === 'webcontainer' && webContainer.serverUrl && iframeRef.current) {
-      // Force reload WebContainer iframe
-      iframeRef.current.src = webContainer.serverUrl + '?t=' + Date.now()
+    if (previewMode === 'webcontainer' && webContainer.isReady) {
+      // CRITICAL: Re-fetch files from S3 and sync to WebContainer
+      // This ensures WebContainer has the latest files after manual edits in S3
+      console.log('[LivePreview] Refresh: Syncing files from S3 to WebContainer...')
+
+      try {
+        if (onLoadAllFiles) {
+          const freshFiles = await onLoadAllFiles()
+          console.log('[LivePreview] Refresh: Loaded', Object.keys(freshFiles).length, 'files from S3')
+
+          // Write each file to WebContainer
+          for (const [path, content] of Object.entries(freshFiles)) {
+            await webContainer.writeFile(path, content)
+          }
+          console.log('[LivePreview] Refresh: Files synced to WebContainer')
+        }
+      } catch (err) {
+        console.error('[LivePreview] Refresh: Failed to sync files:', err)
+      }
+
+      // Reload the iframe
+      if (webContainer.serverUrl && iframeRef.current) {
+        iframeRef.current.src = webContainer.serverUrl + '?t=' + Date.now()
+      }
       setIsLoading(false)
     } else if (previewMode === 'server' && serverUrl && iframeRef.current) {
       // Force reload server iframe
