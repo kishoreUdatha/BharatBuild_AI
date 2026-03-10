@@ -33,13 +33,20 @@ from dateutil.relativedelta import relativedelta
 from app.services.coupon_service import coupon_service
 
 # Razorpay client initialization
+RAZORPAY_IMPORT_ERROR = None
 try:
     import razorpay
     RAZORPAY_SDK_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     razorpay = None
     RAZORPAY_SDK_AVAILABLE = False
-    logger.warning("Razorpay SDK not installed. Payment features disabled.")
+    RAZORPAY_IMPORT_ERROR = f"ImportError: {str(e)}"
+    logger.warning(f"Razorpay SDK not installed: {e}")
+except Exception as e:
+    razorpay = None
+    RAZORPAY_SDK_AVAILABLE = False
+    RAZORPAY_IMPORT_ERROR = f"{type(e).__name__}: {str(e)}"
+    logger.error(f"Razorpay import failed with unexpected error: {e}")
 
 
 def get_razorpay_client():
@@ -73,9 +80,19 @@ async def debug_payment_config():
     key_id = settings.RAZORPAY_KEY_ID
     key_secret = settings.RAZORPAY_KEY_SECRET
 
+    # Also try a fresh import to get current error
+    fresh_import_error = None
+    try:
+        import razorpay as rp_test
+        fresh_import_error = None
+    except Exception as e:
+        fresh_import_error = f"{type(e).__name__}: {str(e)}"
+
     return {
         "razorpay_sdk_available": RAZORPAY_SDK_AVAILABLE,
         "razorpay_sdk_version": razorpay.__version__ if RAZORPAY_SDK_AVAILABLE and razorpay else None,
+        "razorpay_import_error": RAZORPAY_IMPORT_ERROR,
+        "fresh_import_error": fresh_import_error,
         "key_id_configured": bool(key_id),
         "key_id_prefix": key_id[:10] + "..." if key_id and len(key_id) > 10 else "EMPTY",
         "key_secret_configured": bool(key_secret),
