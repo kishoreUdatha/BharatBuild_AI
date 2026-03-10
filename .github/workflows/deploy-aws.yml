@@ -661,8 +661,7 @@ jobs:
             ${{ env.ECR_REGISTRY }}/bharatbuild/backend:${{ steps.vars.outputs.env_tag }}
             ${{ env.ECR_REGISTRY }}/bharatbuild/backend:${{ steps.vars.outputs.env_tag }}-${{ steps.vars.outputs.short_sha }}
             ${{ env.ECR_REGISTRY }}/bharatbuild/backend:latest
-          cache-from: ${{ github.event.inputs.force_rebuild != 'true' && 'type=gha' || '' }}
-          cache-to: type=gha,mode=max
+          no-cache: true
           labels: |
             org.opencontainers.image.title=BharatBuild Backend
             org.opencontainers.image.description=BharatBuild AI Backend Service
