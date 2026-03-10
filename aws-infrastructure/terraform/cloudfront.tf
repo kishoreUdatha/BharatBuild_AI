@@ -3,6 +3,44 @@
 # Only created when domain_name is configured
 # =============================================================================
 
+# Response Headers Policy for WebContainer (COOP/COEP headers)
+# Required for SharedArrayBuffer which WebContainer uses
+resource "aws_cloudfront_response_headers_policy" "webcontainer" {
+  count = var.domain_name != "" ? 1 : 0
+  name  = "${var.app_name}-webcontainer-headers"
+
+  custom_headers_config {
+    items {
+      header   = "Cross-Origin-Embedder-Policy"
+      value    = "require-corp"
+      override = true
+    }
+    items {
+      header   = "Cross-Origin-Opener-Policy"
+      value    = "same-origin"
+      override = true
+    }
+  }
+
+  security_headers_config {
+    # Prevent clickjacking
+    frame_options {
+      frame_option = "SAMEORIGIN"
+      override     = true
+    }
+    # XSS Protection
+    xss_protection {
+      mode_block = true
+      protection = true
+      override   = true
+    }
+    # Prevent MIME type sniffing
+    content_type_options {
+      override = true
+    }
+  }
+}
+
 # CloudFront Distribution (only when domain is configured)
 resource "aws_cloudfront_distribution" "main" {
   count               = var.domain_name != "" ? 1 : 0
@@ -74,6 +112,58 @@ resource "aws_cloudfront_distribution" "main" {
     default_ttl            = 0
     max_ttl                = 0
     compress               = true
+  }
+
+  # Build page behavior with WebContainer headers (COOP/COEP for SharedArrayBuffer)
+  ordered_cache_behavior {
+    path_pattern     = "/build*"
+    allowed_methods  = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    cached_methods   = ["GET", "HEAD", "OPTIONS"]
+    target_origin_id = "ALB"
+
+    forwarded_values {
+      query_string = true
+      headers      = ["Host", "Origin", "Authorization", "Accept", "Accept-Language"]
+
+      cookies {
+        forward = "all"
+      }
+    }
+
+    viewer_protocol_policy = "redirect-to-https"
+    min_ttl                = 0
+    default_ttl            = 0
+    max_ttl                = 0
+    compress               = true
+
+    # Add COOP/COEP headers for WebContainer
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.webcontainer[0].id
+  }
+
+  # Preview page behavior with WebContainer headers
+  ordered_cache_behavior {
+    path_pattern     = "/preview*"
+    allowed_methods  = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    cached_methods   = ["GET", "HEAD", "OPTIONS"]
+    target_origin_id = "ALB"
+
+    forwarded_values {
+      query_string = true
+      headers      = ["Host", "Origin", "Authorization", "Accept", "Accept-Language"]
+
+      cookies {
+        forward = "all"
+      }
+    }
+
+    viewer_protocol_policy = "redirect-to-https"
+    min_ttl                = 0
+    default_ttl            = 0
+    max_ttl                = 0
+    compress               = true
+
+    # Add COOP/COEP headers for WebContainer
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.webcontainer[0].id
   }
 
   # API cache behavior (no caching, no compression for SSE streaming)
