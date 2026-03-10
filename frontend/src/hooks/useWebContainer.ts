@@ -11,8 +11,27 @@ import {
   isWebContainerSupported
 } from '@/lib/webcontainer'
 
+// Error patterns to detect in terminal output
+const TERMINAL_ERROR_PATTERNS = [
+  /error\s+TS\d+:/i,
+  /SyntaxError:/i,
+  /TypeError:/i,
+  /ReferenceError:/i,
+  /Failed to compile/i,
+  /Build failed/i,
+  /Module not found/i,
+  /Cannot find module/i,
+  /Cannot resolve/i,
+  /Failed to resolve/i,
+  /\[ERROR\]/i,
+  /npm ERR!/i,
+  /error:/i,
+  /Error:/i,
+]
+
 export interface UseWebContainerOptions {
   autoInit?: boolean
+  onTerminalError?: (error: string) => void  // Callback when error detected in terminal output
 }
 
 export interface UseWebContainerReturn {
@@ -38,7 +57,7 @@ export interface UseWebContainerReturn {
 }
 
 export function useWebContainer(options: UseWebContainerOptions = {}): UseWebContainerReturn {
-  const { autoInit = false } = options
+  const { autoInit = false, onTerminalError } = options
 
   const [status, setStatus] = useState<WebContainerStatus>('idle')
   const [message, setMessage] = useState('')
@@ -47,6 +66,12 @@ export function useWebContainer(options: UseWebContainerOptions = {}): UseWebCon
   const [isSupported] = useState(() => isWebContainerSupported())
 
   const managerRef = useRef<WebContainerManager | null>(null)
+  const onTerminalErrorRef = useRef(onTerminalError)
+
+  // Keep ref updated
+  useEffect(() => {
+    onTerminalErrorRef.current = onTerminalError
+  }, [onTerminalError])
 
   // Initialize manager with event handlers
   useEffect(() => {
@@ -57,9 +82,23 @@ export function useWebContainer(options: UseWebContainerOptions = {}): UseWebCon
       },
       onOutput: (data) => {
         setOutput((prev) => [...prev, data])
+        // Check for errors in terminal output and report to parent
+        if (onTerminalErrorRef.current) {
+          for (const pattern of TERMINAL_ERROR_PATTERNS) {
+            if (pattern.test(data)) {
+              console.log('[useWebContainer] Error detected in terminal:', data.substring(0, 100))
+              onTerminalErrorRef.current(data)
+              break
+            }
+          }
+        }
       },
       onError: (error) => {
         setOutput((prev) => [...prev, `ERROR: ${error}\n`])
+        // Also report errors
+        if (onTerminalErrorRef.current) {
+          onTerminalErrorRef.current(error)
+        }
       },
       onServerReady: (url) => {
         setServerUrl(url)

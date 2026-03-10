@@ -245,7 +245,7 @@ export function Terminal({
 
   // Copy all content to clipboard
   const copyToClipboard = useCallback(async () => {
-    const text = lines.map(l => l.content).join('\n')
+    const text = lines.map(l => l.content || '').join('\n')
     try {
       await navigator.clipboard.writeText(text)
       setCopied(true)
@@ -294,7 +294,7 @@ export function Terminal({
       // Build error message from terminal output and error store
       const errorLines = lines
         .filter(l => l.type === 'error')
-        .map(l => l.content)
+        .map(l => l.content || '')
         .join('\n')
 
       const errorStoreErrors = unresolvedErrors
@@ -640,8 +640,8 @@ export function Terminal({
                   {/* Content */}
                   <span className={`${style.color} break-all whitespace-pre-wrap`}>
                     {line.type === 'command'
-                      ? line.content.slice(2) // Remove "$ " prefix
-                      : parseAnsiToReact(line.content)
+                      ? (line.content || '').slice(2) // Remove "$ " prefix
+                      : parseAnsiToReact(line.content || '')
                     }
                   </span>
 

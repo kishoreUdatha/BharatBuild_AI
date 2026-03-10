@@ -303,6 +303,7 @@ function XTerminalComponent({ logs = [], onCommand }: XTerminalProps) {
 
         case 'output':
           // Show output with subtle styling
+          if (!log.content) break
           const lines = log.content.split('\n')
           lines.forEach(line => {
             if (line.trim()) {

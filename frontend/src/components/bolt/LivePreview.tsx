@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { AlertCircle, RefreshCw, ExternalLink, Play, AlertTriangle, Loader2, Terminal, Package } from 'lucide-react'
 import { useErrorStore } from '@/store/errorStore'
 import { useFileChangeEvents } from '@/hooks/useFileChangeEvents'
-import { useErrorCollector } from '@/hooks/useErrorCollector'
+import { useErrorCollector, ErrorSource } from '@/hooks/useErrorCollector'
 import { useWebContainer } from '@/hooks/useWebContainer'
 import { isWebContainerSupported } from '@/lib/webcontainer'
 
@@ -45,8 +45,19 @@ export function LivePreview({
   const [webContainerOutput, setWebContainerOutput] = useState<string[]>([])
   const [showTerminal, setShowTerminal] = useState(false)
 
+  // Ref for reporting errors (used by WebContainer callback)
+  const reportErrorRef = useRef<((source: ErrorSource, message: string) => void) | null>(null)
+
   // WebContainer hook for running React/Vite projects in browser
-  const webContainer = useWebContainer()
+  // Connect terminal errors to auto-fix system
+  const webContainer = useWebContainer({
+    onTerminalError: useCallback((error: string) => {
+      console.log('[LivePreview] WebContainer terminal error detected, forwarding for auto-fix')
+      if (reportErrorRef.current) {
+        reportErrorRef.current('build', error)
+      }
+    }, [])
+  })
   const webContainerSupported = isWebContainerSupported()
 
   // Retry state for dev server startup
@@ -97,6 +108,11 @@ export function LivePreview({
       }, 5000)
     }
   })
+
+  // Connect reportError to ref for WebContainer callback
+  useEffect(() => {
+    reportErrorRef.current = reportError
+  }, [reportError])
 
   // Wrapper functions for backward compatibility with iframe message handling
   const forwardBrowserError = useCallback((message: string, file?: string, line?: number, column?: number, stack?: string) => {

@@ -289,6 +289,15 @@ export class WebContainerManager {
     // Add missing config files for Vite/TypeScript projects
     const filesToMount = { ...files }
 
+    // Inject error capture script into HTML files for auto-fix support
+    const htmlFiles = ['index.html', 'public/index.html', 'src/index.html']
+    for (const htmlPath of htmlFiles) {
+      if (filesToMount[htmlPath]) {
+        console.log('[WebContainer] Injecting error capture script into', htmlPath)
+        filesToMount[htmlPath] = injectErrorCaptureScript(filesToMount[htmlPath])
+      }
+    }
+
     // Check if this is a Vite project
     const isViteProject = files['vite.config.ts'] || files['vite.config.js'] ||
       (files['package.json'] && files['package.json'].includes('vite'))
@@ -423,6 +432,165 @@ export class WebContainerManager {
     bootPromise = null
     this.emitStatus('idle')
   }
+}
+
+/**
+ * Error capture script to inject into WebContainer projects
+ * This enables auto-fix by capturing runtime errors and sending them to parent
+ */
+const WEBCONTAINER_ERROR_CAPTURE_SCRIPT = `
+<script>
+(function() {
+  // BharatBuild WebContainer Error Capture
+  // Captures runtime errors and sends to parent for auto-fix
+
+  const capturedErrors = new Set();
+
+  // Send error to parent window
+  function sendError(type, payload) {
+    try {
+      window.parent.postMessage({
+        type: 'bharatbuild-' + type,
+        ...payload,
+        source: 'webcontainer'
+      }, '*');
+    } catch (e) {
+      // Parent may not be accessible
+    }
+  }
+
+  // 1. Global JS errors
+  window.onerror = function(message, filename, lineno, colno, error) {
+    const msgStr = String(message);
+    const errorKey = msgStr.substring(0, 100);
+    if (capturedErrors.has(errorKey)) return false;
+    capturedErrors.add(errorKey);
+
+    sendError('error', {
+      message: msgStr,
+      filename: filename,
+      lineno: lineno,
+      colno: colno,
+      stack: error ? error.stack : null
+    });
+    return false;
+  };
+
+  // 2. Unhandled promise rejections
+  window.addEventListener('unhandledrejection', function(event) {
+    const message = event.reason?.message || String(event.reason);
+    sendError('promise-rejection', {
+      message: message,
+      stack: event.reason?.stack || null
+    });
+  });
+
+  // 3. Console.error interceptor
+  const originalConsoleError = console.error;
+  console.error = function(...args) {
+    const message = args.map(arg => {
+      try { return typeof arg === 'object' ? JSON.stringify(arg) : String(arg); }
+      catch { return String(arg); }
+    }).join(' ');
+
+    sendError('console', {
+      level: 'error',
+      args: args.map(a => String(a))
+    });
+    originalConsoleError.apply(console, args);
+  };
+
+  // 4. React Error Boundary detection (looks for error overlays)
+  const observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(mutation) {
+      mutation.addedNodes.forEach(function(node) {
+        if (node.nodeType === 1) {
+          // Vite error overlay
+          if (node.tagName && node.tagName.toLowerCase() === 'vite-error-overlay') {
+            setTimeout(function() {
+              const text = node.shadowRoot?.textContent || node.textContent || '';
+              if (text) {
+                sendError('hmr-error', {
+                  message: text.substring(0, 2000),
+                  file: null,
+                  source: 'vite-overlay'
+                });
+              }
+            }, 100);
+          }
+          // React error overlay
+          if (node.id === 'webpack-dev-server-client-overlay' ||
+              node.id === 'react-error-overlay' ||
+              node.className?.includes('error-overlay')) {
+            const text = node.textContent || node.innerText || '';
+            if (text) {
+              sendError('react-error', {
+                message: text.substring(0, 2000),
+                componentStack: null
+              });
+            }
+          }
+        }
+      });
+    });
+  });
+
+  // Start observing when DOM is ready
+  if (document.body) {
+    observer.observe(document.body, { childList: true, subtree: true });
+  } else {
+    document.addEventListener('DOMContentLoaded', function() {
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
+  }
+
+  // 5. Network error capture (fetch)
+  const originalFetch = window.fetch;
+  window.fetch = async function(input, init) {
+    const url = typeof input === 'string' ? input : input.url;
+    const method = (init && init.method) || 'GET';
+
+    try {
+      const response = await originalFetch.apply(this, arguments);
+      if (!response.ok && response.status >= 400) {
+        sendError('network', {
+          url: url,
+          method: method,
+          status: response.status,
+          message: 'HTTP ' + response.status + ' ' + response.statusText
+        });
+      }
+      return response;
+    } catch (error) {
+      sendError('network', {
+        url: url,
+        method: method,
+        status: 0,
+        message: error.message || 'Network request failed'
+      });
+      throw error;
+    }
+  };
+
+  console.log('[BharatBuild] WebContainer error capture active');
+})();
+</script>
+`;
+
+/**
+ * Inject error capture script into HTML content
+ */
+function injectErrorCaptureScript(html: string): string {
+  // Try to inject after <head> tag
+  if (html.includes('<head>')) {
+    return html.replace('<head>', '<head>' + WEBCONTAINER_ERROR_CAPTURE_SCRIPT)
+  }
+  // Try to inject after <html> tag
+  if (html.includes('<html>')) {
+    return html.replace('<html>', '<html><head>' + WEBCONTAINER_ERROR_CAPTURE_SCRIPT + '</head>')
+  }
+  // Prepend if no head/html found
+  return WEBCONTAINER_ERROR_CAPTURE_SCRIPT + html
 }
 
 // Export singleton manager for easy use

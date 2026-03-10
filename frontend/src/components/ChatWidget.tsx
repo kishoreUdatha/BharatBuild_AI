@@ -61,6 +61,7 @@ export default function ChatWidget() {
   }
 
   const formatContent = (text: string) => {
+    if (!text) return null
     return text.split('\n').map((line, i) => {
       if (!line.trim()) return <br key={i} />
 
