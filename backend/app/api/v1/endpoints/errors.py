@@ -310,20 +310,13 @@ async def report_errors(
             logger.info(f"[ErrorHandler:{project_id}] Command: {request.command}")
 
             # =================================================================
-            # SKIP SimpleFixer for BUILD errors - BoltFixer handles them
-            # This prevents duplicate fixes and wasted API tokens
+            # BUILD errors from BROWSER/WebContainer should be fixed here
+            # BUILD errors from DOCKER are handled by BoltFixer during build
+            # Check if this is from WebContainer (browser-side) vs Docker
             # =================================================================
-            if primary_error.source == ErrorSource.BUILD:
-                logger.info(f"[ErrorHandler:{project_id}] Skipping SimpleFixer for BUILD error - BoltFixer will handle during build")
-                return ErrorResponse(
-                    success=True,
-                    project_id=project_id,
-                    errors_count=len(request.errors),
-                    has_fixable_error=True,
-                    fix_triggered=False,
-                    fix_status="build_error_deferred",
-                    message="Build errors will be fixed automatically during next build"
-                )
+            # NOTE: We now process ALL build errors since WebContainer runs in browser
+            # and doesn't have BoltFixer. Docker mode has its own handling.
+            # Previously this skipped BUILD errors but that broke WebContainer auto-fix.
 
             # Notify WebSocket clients that fix is starting
             await notify_fix_started(project_id, primary_error.message[:100])
