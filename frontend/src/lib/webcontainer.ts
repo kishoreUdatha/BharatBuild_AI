@@ -478,55 +478,255 @@ const WEBCONTAINER_ERROR_CAPTURE_SCRIPT = `
 
   // 2. Unhandled promise rejections
   window.addEventListener('unhandledrejection', function(event) {
-    const message = event.reason?.message || String(event.reason);
-    sendError('promise-rejection', {
+    var message = event.reason ? (event.reason.message || String(event.reason)) : 'Unknown rejection';
+    console.log('[BharatBuild] Captured unhandled rejection:', message.substring(0, 100));
+    sendError('error', {
       message: message,
-      stack: event.reason?.stack || null
+      filename: null,
+      lineno: null,
+      colno: null,
+      stack: event.reason ? event.reason.stack : null
     });
   });
 
-  // 3. Console.error interceptor
-  const originalConsoleError = console.error;
-  console.error = function(...args) {
-    const message = args.map(arg => {
-      try { return typeof arg === 'object' ? JSON.stringify(arg) : String(arg); }
-      catch { return String(arg); }
+  // 2b. Error event listener (catches more errors than onerror)
+  window.addEventListener('error', function(event) {
+    var message = event.message || (event.error ? event.error.message : 'Unknown error');
+    var errorKey = String(message).substring(0, 100);
+    if (capturedErrors.has(errorKey)) return;
+    capturedErrors.add(errorKey);
+
+    console.log('[BharatBuild] Captured error event:', message.substring(0, 100));
+    sendError('error', {
+      message: message,
+      filename: event.filename,
+      lineno: event.lineno,
+      colno: event.colno,
+      stack: event.error ? event.error.stack : null
+    });
+  }, true); // Use capture phase to catch before other handlers
+
+  // 3. Console.error interceptor - CRITICAL for React errors
+  // React logs errors to console before showing overlay
+  var originalConsoleError = console.error;
+  console.error = function() {
+    var args = Array.prototype.slice.call(arguments);
+    var message = args.map(function(arg) {
+      if (arg instanceof Error) {
+        return arg.message + (arg.stack ? '\\n' + arg.stack : '');
+      }
+      try {
+        return typeof arg === 'object' ? JSON.stringify(arg) : String(arg);
+      } catch(e) {
+        return String(arg);
+      }
     }).join(' ');
 
-    sendError('console', {
-      level: 'error',
-      args: args.map(a => String(a))
-    });
+    // Check for React/Router specific errors
+    var isReactError = message.includes('React') ||
+                       message.includes('Router') ||
+                       message.includes('render') ||
+                       message.includes('component') ||
+                       message.includes('Cannot') ||
+                       message.includes('Uncaught') ||
+                       message.includes('Error:');
+
+    if (isReactError && message.length > 20) {
+      console.log('[BharatBuild] Captured console.error (React):', message.substring(0, 100));
+      sendError('error', {
+        message: message.substring(0, 3000),
+        filename: null,
+        lineno: null,
+        colno: null,
+        stack: message,
+        source: 'console.error'
+      });
+    }
+
     originalConsoleError.apply(console, args);
   };
 
-  // 4. React Error Boundary detection (looks for error overlays)
-  const observer = new MutationObserver(function(mutations) {
+  // Also intercept console.warn for warnings that might be errors
+  var originalConsoleWarn = console.warn;
+  console.warn = function() {
+    var args = Array.prototype.slice.call(arguments);
+    var message = args.join(' ');
+
+    // Check for React warnings that indicate errors
+    if (message.includes('Warning:') &&
+        (message.includes('Router') || message.includes('cannot') || message.includes('Invalid'))) {
+      console.log('[BharatBuild] Captured React warning:', message.substring(0, 100));
+      sendError('error', {
+        message: message.substring(0, 3000),
+        filename: null,
+        lineno: null,
+        colno: null,
+        stack: null,
+        source: 'console.warn'
+      });
+    }
+
+    originalConsoleWarn.apply(console, args);
+  };
+
+  // 4. React/Vite Error Overlay detection - CRITICAL for catching React errors
+  // React catches errors internally, so window.onerror doesn't fire
+  // We need to watch for error overlay elements
+
+  var overlayChecked = false;
+
+  function checkForErrorOverlay() {
+    if (overlayChecked) return;
+
+    // 1. Check for Vite error overlay (custom element with shadow DOM)
+    var viteOverlay = document.querySelector('vite-error-overlay');
+    if (viteOverlay) {
+      var text = '';
+      var shadowRoot = viteOverlay.shadowRoot;
+      if (shadowRoot) {
+        // Vite 5 structure - try multiple selectors
+        var selectors = [
+          '.message-body',
+          '.message',
+          '.error-message',
+          'pre',
+          '[class*="message"]',
+          '[class*="error"]'
+        ];
+        for (var i = 0; i < selectors.length; i++) {
+          var el = shadowRoot.querySelector(selectors[i]);
+          if (el && el.textContent && el.textContent.length > 20) {
+            text = el.textContent;
+            break;
+          }
+        }
+        if (!text) {
+          text = shadowRoot.textContent || '';
+        }
+      } else {
+        text = viteOverlay.textContent || '';
+      }
+
+      if (text && text.length > 20) {
+        overlayChecked = true;
+        console.log('[BharatBuild] Captured Vite error overlay:', text.substring(0, 100));
+        sendError('error', {
+          message: text.substring(0, 3000),
+          filename: null,
+          lineno: null,
+          colno: null,
+          stack: text,
+          source: 'vite-overlay'
+        });
+        return;
+      }
+    }
+
+    // 2. Check for React error boundary / overlay
+    var reactOverlays = document.querySelectorAll(
+      '#react-error-overlay, ' +
+      '[class*="error-overlay"], ' +
+      '[class*="ErrorBoundary"], ' +
+      '[class*="react-error"], ' +
+      '[data-reactroot] [class*="error"]'
+    );
+    for (var j = 0; j < reactOverlays.length; j++) {
+      var overlay = reactOverlays[j];
+      var text = overlay.textContent || '';
+      if (text.length > 50 && (text.includes('Error') || text.includes('Cannot'))) {
+        overlayChecked = true;
+        console.log('[BharatBuild] Captured React error overlay:', text.substring(0, 100));
+        sendError('error', {
+          message: text.substring(0, 3000),
+          filename: null,
+          lineno: null,
+          colno: null,
+          stack: text,
+          source: 'react-overlay'
+        });
+        return;
+      }
+    }
+
+    // 3. Check full document body for error patterns (last resort)
+    var bodyText = document.body ? document.body.innerText : '';
+    var errorPatterns = [
+      /Error:.*Router.*inside.*Router/i,
+      /Cannot.*render.*Router/i,
+      /Uncaught Error:/i,
+      /Invariant Violation:/i,
+      /React error/i
+    ];
+    for (var k = 0; k < errorPatterns.length; k++) {
+      var match = bodyText.match(errorPatterns[k]);
+      if (match) {
+        // Extract context around the match
+        var idx = bodyText.indexOf(match[0]);
+        var context = bodyText.substring(Math.max(0, idx - 50), Math.min(bodyText.length, idx + 500));
+        if (context.length > 30) {
+          overlayChecked = true;
+          console.log('[BharatBuild] Captured error from body text:', context.substring(0, 100));
+          sendError('error', {
+            message: context.substring(0, 3000),
+            filename: null,
+            lineno: null,
+            colno: null,
+            stack: context,
+            source: 'body-scan'
+          });
+          return;
+        }
+      }
+    }
+  }
+
+  // Poll for error overlays (they may appear after a delay)
+  setInterval(checkForErrorOverlay, 500);
+
+  var observer = new MutationObserver(function(mutations) {
     mutations.forEach(function(mutation) {
       mutation.addedNodes.forEach(function(node) {
         if (node.nodeType === 1) {
           // Vite error overlay
           if (node.tagName && node.tagName.toLowerCase() === 'vite-error-overlay') {
             setTimeout(function() {
-              const text = node.shadowRoot?.textContent || node.textContent || '';
-              if (text) {
-                sendError('hmr-error', {
+              var shadowRoot = node.shadowRoot;
+              var text = '';
+              if (shadowRoot) {
+                var messageEl = shadowRoot.querySelector('.message-body') || shadowRoot.querySelector('.message');
+                text = messageEl ? messageEl.textContent : (shadowRoot.textContent || '');
+              } else {
+                text = node.textContent || '';
+              }
+              if (text && !overlayChecked) {
+                overlayChecked = true;
+                console.log('[BharatBuild] Captured Vite error overlay (mutation):', text.substring(0, 100));
+                sendError('error', {
                   message: text.substring(0, 2000),
-                  file: null,
+                  filename: null,
+                  lineno: null,
+                  colno: null,
+                  stack: text,
                   source: 'vite-overlay'
                 });
               }
-            }, 100);
+            }, 200);
           }
           // React error overlay
           if (node.id === 'webpack-dev-server-client-overlay' ||
               node.id === 'react-error-overlay' ||
-              node.className?.includes('error-overlay')) {
-            const text = node.textContent || node.innerText || '';
-            if (text) {
-              sendError('react-error', {
+              (node.className && node.className.includes && node.className.includes('error-overlay'))) {
+            var text = node.textContent || node.innerText || '';
+            if (text && !overlayChecked) {
+              overlayChecked = true;
+              console.log('[BharatBuild] Captured React error overlay:', text.substring(0, 100));
+              sendError('error', {
                 message: text.substring(0, 2000),
-                componentStack: null
+                filename: null,
+                lineno: null,
+                colno: null,
+                stack: text,
+                source: 'react-overlay'
               });
             }
           }
