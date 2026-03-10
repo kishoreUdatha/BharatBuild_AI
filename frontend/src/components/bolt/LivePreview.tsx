@@ -93,8 +93,8 @@ export function LivePreview({
         setAutoFixMessage(null)
       }, 60000)
     },
-    onFixCompleted: (patchesApplied, filesModified) => {
-      console.log('[LivePreview] Auto-fix completed!', patchesApplied, 'patches')
+    onFixCompleted: async (patchesApplied, filesModified) => {
+      console.log('[LivePreview] Auto-fix completed!', patchesApplied, 'patches, files:', filesModified)
       // Clear timeout
       if (autoFixTimeoutRef.current) {
         clearTimeout(autoFixTimeoutRef.current)
@@ -103,6 +103,28 @@ export function LivePreview({
       setAutoFixStatus('completed')
       setAutoFixMessage(`Fixed! ${patchesApplied || 0} patches applied`)
       clearErrors()
+
+      // CRITICAL: Sync fixed files to WebContainer
+      if (previewMode === 'webcontainer' && webContainer.isReady && filesModified && filesModified.length > 0) {
+        console.log('[LivePreview] Syncing fixed files to WebContainer:', filesModified)
+        try {
+          // Fetch updated file contents from parent component
+          if (onLoadAllFiles) {
+            const updatedFiles = await onLoadAllFiles()
+            // Update only the modified files in WebContainer
+            for (const filePath of filesModified) {
+              if (updatedFiles[filePath]) {
+                console.log('[LivePreview] Updating WebContainer file:', filePath)
+                await webContainer.writeFile(filePath, updatedFiles[filePath])
+              }
+            }
+            console.log('[LivePreview] WebContainer files synced successfully')
+          }
+        } catch (err) {
+          console.error('[LivePreview] Failed to sync files to WebContainer:', err)
+        }
+      }
+
       // Auto-reload preview after fix
       setTimeout(() => {
         setIsLoading(true)
