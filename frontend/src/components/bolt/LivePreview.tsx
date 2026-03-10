@@ -447,6 +447,19 @@ export function LivePreview({
     } else if (event.data && event.data.type === 'bharatbuild-network') {
       // Network errors (fetch/XHR failures, CORS, timeouts, HTTP errors)
       const { url, method, status, message } = event.data
+
+      // SKIP: Don't process errors to error-reporting endpoints (noise from generated code)
+      const isErrorEndpoint = url && (
+        url.includes('/api/v1/errors') ||
+        url.includes('/errors/browser') ||
+        url.includes('/errors/report')
+      )
+
+      if (isErrorEndpoint) {
+        console.log('[LivePreview] 🔇 Skipping network error to error endpoint:', url)
+        return
+      }
+
       console.log('[LivePreview] 🌐 CAPTURED NETWORK ERROR from iframe:', {
         message,
         url,

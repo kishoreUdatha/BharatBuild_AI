@@ -522,16 +522,23 @@ const WEBCONTAINER_ERROR_CAPTURE_SCRIPT = `
       }
     }).join(' ');
 
-    // Check for React/Router specific errors
+    // SKIP: Don't capture errors about our error reporting (404 to /api/v1/errors)
+    var isErrorReportingNoise = message.includes('/api/v1/errors') ||
+                                 message.includes('errors/browser') ||
+                                 message.includes('Failed to fetch') && message.includes('error');
+
+    // Check for React/Router specific errors - these are the REAL errors we want
     var isReactError = message.includes('React') ||
                        message.includes('Router') ||
                        message.includes('render') ||
                        message.includes('component') ||
                        message.includes('Cannot') ||
                        message.includes('Uncaught') ||
-                       message.includes('Error:');
+                       message.includes('Error:') ||
+                       message.includes('invariant') ||
+                       message.includes('Minified React error');
 
-    if (isReactError && message.length > 20) {
+    if (isReactError && !isErrorReportingNoise && message.length > 20 && !isDuplicate(message)) {
       console.log('[BharatBuild] Captured console.error (React):', message.substring(0, 100));
       sendError('error', {
         message: message.substring(0, 3000),
@@ -744,15 +751,20 @@ const WEBCONTAINER_ERROR_CAPTURE_SCRIPT = `
     });
   }
 
-  // 5. Network error capture (fetch)
-  const originalFetch = window.fetch;
+  // 5. Network error capture (fetch) - but SKIP our own error reporting endpoints
+  var originalFetch = window.fetch;
   window.fetch = async function(input, init) {
-    const url = typeof input === 'string' ? input : input.url;
-    const method = (init && init.method) || 'GET';
+    var url = typeof input === 'string' ? input : (input.url || '');
+    var method = (init && init.method) || 'GET';
+
+    // SKIP: Don't report errors for error-reporting endpoints (prevents infinite loop)
+    var isErrorEndpoint = url.includes('/api/v1/errors') ||
+                          url.includes('/errors/browser') ||
+                          url.includes('/errors/report');
 
     try {
-      const response = await originalFetch.apply(this, arguments);
-      if (!response.ok && response.status >= 400) {
+      var response = await originalFetch.apply(this, arguments);
+      if (!response.ok && response.status >= 400 && !isErrorEndpoint) {
         sendError('network', {
           url: url,
           method: method,
@@ -762,12 +774,14 @@ const WEBCONTAINER_ERROR_CAPTURE_SCRIPT = `
       }
       return response;
     } catch (error) {
-      sendError('network', {
-        url: url,
-        method: method,
-        status: 0,
-        message: error.message || 'Network request failed'
-      });
+      if (!isErrorEndpoint) {
+        sendError('network', {
+          url: url,
+          method: method,
+          status: 0,
+          message: error.message || 'Network request failed'
+        });
+      }
       throw error;
     }
   };
