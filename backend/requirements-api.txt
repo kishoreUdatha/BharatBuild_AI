@@ -4,7 +4,7 @@
 # ============================================
 
 # Core dependencies
-setuptools>=69.0.0,<70.0.0  # Pin to v69.x - v70+ removed pkg_resources (needed by razorpay)
+setuptools==69.5.1  # PINNED - v70+ removed pkg_resources (needed by razorpay)
 
 # FastAPI and dependencies
 fastapi==0.109.0

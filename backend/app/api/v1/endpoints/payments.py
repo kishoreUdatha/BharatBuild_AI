@@ -77,27 +77,31 @@ router = APIRouter()
 @router.get("/debug-config")
 async def debug_payment_config():
     """Debug endpoint to check payment configuration (remove in production)"""
-    key_id = settings.RAZORPAY_KEY_ID
-    key_secret = settings.RAZORPAY_KEY_SECRET
-
-    # Also try a fresh import to get current error
-    fresh_import_error = None
     try:
-        import razorpay as rp_test
-        fresh_import_error = None
-    except Exception as e:
-        fresh_import_error = f"{type(e).__name__}: {str(e)}"
+        key_id = settings.RAZORPAY_KEY_ID
+        key_secret = settings.RAZORPAY_KEY_SECRET
 
-    return {
-        "razorpay_sdk_available": RAZORPAY_SDK_AVAILABLE,
-        "razorpay_sdk_version": razorpay.__version__ if RAZORPAY_SDK_AVAILABLE and razorpay else None,
-        "razorpay_import_error": RAZORPAY_IMPORT_ERROR,
-        "fresh_import_error": fresh_import_error,
-        "key_id_configured": bool(key_id),
-        "key_id_prefix": key_id[:10] + "..." if key_id and len(key_id) > 10 else "EMPTY",
-        "key_secret_configured": bool(key_secret),
-        "key_secret_length": len(key_secret) if key_secret else 0,
-    }
+        # Try fresh import
+        fresh_import_error = None
+        razorpay_version = None
+        try:
+            import razorpay as rp_test
+            razorpay_version = getattr(rp_test, '__version__', 'unknown')
+        except Exception as e:
+            fresh_import_error = f"{type(e).__name__}: {str(e)}"
+
+        return {
+            "razorpay_sdk_available": RAZORPAY_SDK_AVAILABLE,
+            "razorpay_sdk_version": razorpay_version,
+            "razorpay_import_error": RAZORPAY_IMPORT_ERROR,
+            "fresh_import_error": fresh_import_error,
+            "key_id_configured": bool(key_id),
+            "key_id_prefix": key_id[:10] + "..." if key_id and len(key_id) > 10 else "EMPTY",
+            "key_secret_configured": bool(key_secret),
+            "key_secret_length": len(key_secret) if key_secret else 0,
+        }
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)}"}
 
 
 # ========== Request/Response Models ==========
