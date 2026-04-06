@@ -14,7 +14,7 @@ import asyncio
 from typing import Optional, Callable, List, Dict, Any
 from pathlib import Path
 from dataclasses import dataclass
-from anthropic import AsyncAnthropic
+from app.utils.openai_compat import AsyncAnthropic
 from app.modules.sdk_agents.sdk_tools import SDK_FIXER_SYSTEM_PROMPT
 
 logger = logging.getLogger("bharatbuild")

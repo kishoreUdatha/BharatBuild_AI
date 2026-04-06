@@ -162,12 +162,12 @@ async def check_claude_api() -> Dict[str, Any]:
     """Check Claude API connectivity by making a test request"""
     start = time.time()
     try:
-        if not settings.ANTHROPIC_API_KEY:
+        if not settings.OPENAI_API_BASE:
             return {
                 "status": "unhealthy",
                 "latency_ms": 0,
-                "error": "ANTHROPIC_API_KEY not configured",
-                "message": "Claude API key missing - AI generation will not work"
+                "error": "OPENAI_API_BASE not configured",
+                "message": "LLM API base URL missing - AI generation will not work"
             }
 
         from app.utils.claude_client import ClaudeClient
@@ -243,7 +243,7 @@ def check_critical_env_vars() -> Dict[str, Any]:
     # Important vars that should be set for production
     important_vars = {
         "REDIS_URL": settings.REDIS_URL,
-        "ANTHROPIC_API_KEY": settings.ANTHROPIC_API_KEY,
+        "OPENAI_API_BASE": settings.OPENAI_API_BASE,
     }
 
     for name, value in critical_vars.items():

@@ -28,9 +28,8 @@ hiredis==2.3.2
 celery==5.3.6
 celery[redis]==5.3.6
 
-# AI/LLM - Claude API (main AI engine)
-anthropic>=0.39.0
-openai==1.12.0
+# AI/LLM - OpenAI-compatible API (LM Studio / Qwen)
+openai>=1.12.0
 langchain==0.1.9
 langchain-community==0.0.24
 langchain-anthropic==0.1.1

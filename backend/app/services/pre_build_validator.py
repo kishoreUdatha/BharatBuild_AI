@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from enum import Enum
 
-from anthropic import AsyncAnthropic
+from app.utils.openai_compat import AsyncAnthropic
 
 from app.core.logging_config import logger
 from app.core.config import settings

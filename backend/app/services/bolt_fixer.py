@@ -320,7 +320,7 @@ async def get_ai_image_replacement(bad_image: str, error_message: str = "") -> O
     Returns:
         Replacement image string or None if AI couldn't suggest
     """
-    import anthropic
+    from app.utils.openai_compat import Anthropic as _Anthropic
     from app.core.config import settings
 
     # First check exact match (fast, no AI cost)
@@ -328,7 +328,7 @@ async def get_ai_image_replacement(bad_image: str, error_message: str = "") -> O
         return DOCKERFILE_BASE_IMAGE_FIXES[bad_image]
 
     try:
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _Anthropic()
 
         # Focused prompt - minimal tokens, fast response
         prompt = f"""Docker image "{bad_image}" is unavailable (manifest not found).
@@ -1840,11 +1840,10 @@ BUILD LOG:
         max_tokens: int = 4096
     ) -> str:
         """Call Claude API with strict prompts."""
-        import anthropic
+        from app.utils.openai_compat import Anthropic as _Anthropic
 
         if self._claude_client is None:
-            from app.core.config import settings
-            self._claude_client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+            self._claude_client = _Anthropic()
 
         response = self._claude_client.messages.create(
             model="claude-sonnet-4-20250514",

@@ -177,11 +177,8 @@ class HaikuStrategy:
         if not self.client:
             # Try to get client
             try:
-                from anthropic import AsyncAnthropic
-                import os
-                self.client = AsyncAnthropic(
-                    api_key=os.environ.get("ANTHROPIC_API_KEY")
-                )
+                from app.utils.openai_compat import AsyncAnthropic
+                self.client = AsyncAnthropic()
             except Exception as e:
                 logger.error(f"[HaikuStrategy] Could not create Anthropic client: {e}")
                 return None

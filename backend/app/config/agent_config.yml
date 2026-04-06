@@ -121,9 +121,9 @@ complexity:
 agents:
   planner:
     name: "Planner Agent"
-    model: "sonnet"  # haiku, sonnet, opus
+    model: "haiku"  # Using haiku (maps to Qwen) for fast planning
     temperature: 0.7
-    max_tokens: 16384  # Increased from 8192 for complex plans with many files
+    max_tokens: 4096  # Planner only outputs file list XML, not code
     system_prompt_file: "prompts/planner.txt"
     capabilities:
       - planning
@@ -134,9 +134,9 @@ agents:
 
   writer:
     name: "Writer Agent"
-    model: "sonnet"
+    model: "haiku"  # Using haiku (maps to Qwen) for fast generation
     temperature: 0.3
-    max_tokens: 16384  # Increased to prevent file truncation
+    max_tokens: 8192  # Per-file generation, 8K is sufficient
     system_prompt_file: "prompts/writer.txt"
     capabilities:
       - code_generation
@@ -159,7 +159,7 @@ agents:
 
   fixer:
     name: "Fixer Agent"
-    model: "sonnet"
+    model: "haiku"
     temperature: 0.5
     max_tokens: 4096
     system_prompt_file: "prompts/fixer.txt"
@@ -199,7 +199,7 @@ agents:
 
   enhancer:
     name: "Enhancer Agent"
-    model: "sonnet"
+    model: "haiku"
     temperature: 0.6
     max_tokens: 4096
     system_prompt_file: "prompts/enhancer.txt"
@@ -211,7 +211,7 @@ agents:
 
   analyzer:
     name: "Analyzer Agent"
-    model: "sonnet"
+    model: "haiku"
     temperature: 0.7
     max_tokens: 4096
     system_prompt_file: "prompts/analyzer.txt"
@@ -224,7 +224,7 @@ agents:
   # Import Analyzer Agent - Token-optimized for analyzing imported projects
   import_analyzer:
     name: "Import Analyzer Agent"
-    model: "sonnet"  # Auto-switches to haiku for simple tasks
+    model: "haiku"  # Using haiku (Qwen) for all tasks
     temperature: 0.3  # Lower for focused output
     max_tokens: 4096  # Dynamic based on task
     system_prompt_file: "prompts/import_analyzer.txt"
@@ -245,9 +245,9 @@ agents:
   # FAST INSTANT GENERATOR - Like Bolt.new (single API call)
   bolt_instant:
     name: "Bolt Instant Generator"
-    model: "sonnet"
+    model: "haiku"
     temperature: 0.5
-    max_tokens: 32000  # Very large for complete project generation (Claude max ~64k)
+    max_tokens: 8192  # Qwen 4B context-appropriate
     system_prompt_file: "prompts/bolt_instant.txt"
     capabilities:
       - instant_generation
