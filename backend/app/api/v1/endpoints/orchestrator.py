@@ -710,14 +710,19 @@ async def execute_workflow(
         # Get user if authenticated
         current_user = await get_optional_user(credentials, db)
 
-        # Check usage limits for authenticated users
+        # Check usage limits for authenticated users (parallelized for speed)
         max_files_limit = None  # Default: unlimited
         if current_user:
-            user_limits = await get_user_limits(current_user, db)
+            # Run all auth checks in parallel instead of sequentially
+            import asyncio as _asyncio
+            user_limits, feature_access, project_check = await _asyncio.gather(
+                get_user_limits(current_user, db),
+                check_feature_access(db, current_user, "project_generation"),
+                check_project_limit(current_user, db)
+            )
             logger.info(f"[Execute Workflow] User {current_user.email} on {user_limits.plan_name} plan")
 
-            # Check if user has project_generation feature access (Premium required)
-            feature_access = await check_feature_access(db, current_user, "project_generation")
+            # Check feature access result
             if not feature_access["allowed"]:
                 logger.warning(f"[Execute Workflow] Feature blocked for user {current_user.email}: {feature_access['reason']}")
                 raise HTTPException(
@@ -733,8 +738,7 @@ async def execute_workflow(
                 )
             logger.info(f"[Execute Workflow] Feature access granted: project_generation")
 
-            # Check if user's plan allows project generation (project limit)
-            project_check = await check_project_limit(current_user, db)
+            # Check project limit result
             if not project_check.allowed:
                 logger.warning(f"[Execute Workflow] Project limit reached for user {current_user.email}")
                 raise HTTPException(

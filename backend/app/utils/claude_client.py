@@ -1,4 +1,16 @@
-from anthropic import AsyncAnthropic, Anthropic, APIStatusError, APIError, APIConnectionError, APITimeoutError
+"""
+LLM Client - OpenAI-compatible API client (works with LM Studio, Ollama, etc.)
+
+Replaces the previous Anthropic Claude client with an OpenAI-compatible client
+that points to a local LM Studio server running Qwen model.
+
+Usage:
+    Set in .env:
+        OPENAI_API_BASE=http://localhost:1234/v1
+        OPENAI_API_KEY=lm-studio
+        LLM_MODEL=qwen
+"""
+from openai import AsyncOpenAI, OpenAI
 from typing import Optional, Dict, List, Any, AsyncGenerator
 import asyncio
 import json
@@ -6,6 +18,7 @@ import random
 import httpx
 from app.core.config import settings
 from app.core.logging_config import logger
+from app.utils.openai_compat import AsyncAnthropic as _AsyncAnthropicCompat
 
 # Retry configuration - loaded from settings
 MAX_RETRIES = settings.CLAUDE_MAX_RETRIES
@@ -13,63 +26,50 @@ BASE_DELAY = settings.CLAUDE_RETRY_BASE_DELAY
 MAX_DELAY = settings.CLAUDE_RETRY_MAX_DELAY
 REQUEST_TIMEOUT = float(settings.CLAUDE_REQUEST_TIMEOUT)
 CONNECT_TIMEOUT = float(settings.CLAUDE_CONNECT_TIMEOUT)
-RETRYABLE_ERRORS = ['overloaded_error', 'rate_limit_error', 'server_error']
 
 
 class ClaudeClient:
-    """Claude API client wrapper for both streaming and non-streaming requests"""
+    """OpenAI-compatible LLM client (drop-in replacement for Anthropic Claude client)"""
 
     def __init__(self):
-        # Configure client - use mock server if base URL is provided
-        client_kwargs = {"api_key": settings.ANTHROPIC_API_KEY}
+        base_url = settings.OPENAI_API_BASE
+        api_key = settings.OPENAI_API_KEY
 
-        # Only set base_url if it's a non-empty string with actual content
-        if settings.ANTHROPIC_BASE_URL and settings.ANTHROPIC_BASE_URL.strip():
-            client_kwargs["base_url"] = settings.ANTHROPIC_BASE_URL.strip()
-            logger.info(f"Using custom Claude API base URL: {settings.ANTHROPIC_BASE_URL}")
-
-        # Configure timeouts for production reliability
-        client_kwargs["timeout"] = httpx.Timeout(
-            connect=CONNECT_TIMEOUT,
-            read=REQUEST_TIMEOUT,
-            write=REQUEST_TIMEOUT,
-            pool=REQUEST_TIMEOUT
+        self._raw_async_client = AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            timeout=httpx.Timeout(
+                connect=CONNECT_TIMEOUT,
+                read=REQUEST_TIMEOUT,
+                write=REQUEST_TIMEOUT,
+                pool=REQUEST_TIMEOUT
+            )
+        )
+        self._raw_sync_client = OpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            timeout=httpx.Timeout(
+                connect=CONNECT_TIMEOUT,
+                read=REQUEST_TIMEOUT,
+                write=REQUEST_TIMEOUT,
+                pool=REQUEST_TIMEOUT
+            )
         )
 
-        if settings.USE_MOCK_CLAUDE:
-            logger.info("Mock Claude API mode enabled")
+        # Provide Anthropic-compatible .async_client.messages interface
+        # for code that accesses claude_client.async_client.messages.create()
+        self.async_client = _AsyncAnthropicCompat()
 
-        self.async_client = AsyncAnthropic(**client_kwargs)
-        self.sync_client = Anthropic(**client_kwargs)
         self.haiku_model = settings.CLAUDE_HAIKU_MODEL
         self.sonnet_model = settings.CLAUDE_SONNET_MODEL
 
-        logger.info(f"Claude client initialized: timeout={REQUEST_TIMEOUT}s, models=[{self.haiku_model}, {self.sonnet_model}]")
+        logger.info(f"LLM client initialized: base_url={base_url}, models=[{self.haiku_model}, {self.sonnet_model}]")
 
     def _is_retryable_error(self, error: Exception) -> bool:
-        """Check if an error is retryable (overload, rate limit, network issues, etc.)"""
+        """Check if an error is retryable"""
         error_str = str(error).lower()
-
-        # Network/connection errors are always retryable
-        if isinstance(error, (APIConnectionError, APITimeoutError)):
-            logger.warning(f"Network error detected (retryable): {type(error).__name__}")
-            return True
-
-        # httpx network errors
         if isinstance(error, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):
-            logger.warning(f"HTTPX network error detected (retryable): {type(error).__name__}")
             return True
-
-        if isinstance(error, (APIStatusError, APIError)):
-            # Check error type from API response
-            if hasattr(error, 'body') and isinstance(error.body, dict):
-                error_type = error.body.get('error', {}).get('type', '')
-                return error_type in RETRYABLE_ERRORS
-            # Check status code for server errors
-            if hasattr(error, 'status_code'):
-                return error.status_code in [429, 500, 502, 503, 529]
-
-        # Fallback: check error message for network-related issues
         network_errors = ['overload', 'rate_limit', '529', '503', 'capacity',
                          'connection', 'timeout', 'network', 'dns', 'socket']
         return any(err in error_str for err in network_errors)
@@ -77,7 +77,6 @@ class ClaudeClient:
     def _calculate_retry_delay(self, attempt: int) -> float:
         """Calculate delay with exponential backoff and jitter"""
         delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
-        # Add jitter (0-25% of delay)
         jitter = delay * random.uniform(0, 0.25)
         return delay + jitter
 
@@ -90,77 +89,58 @@ class ClaudeClient:
         temperature: float = None,
         messages: Optional[List[Dict[str, str]]] = None
     ) -> Dict[str, Any]:
-        """
-        Generate response from Claude (non-streaming)
-
-        Args:
-            prompt: User prompt
-            system_prompt: System prompt
-            model: "haiku" or "sonnet"
-            max_tokens: Maximum tokens to generate
-            temperature: Temperature for generation
-            messages: Optional list of previous messages for conversation
-
-        Returns:
-            Dict with response and metadata
-        """
-        # Select model
+        """Generate response (non-streaming) - OpenAI chat completions format"""
         model_name = self.sonnet_model if model == "sonnet" else self.haiku_model
 
-        # Build messages
-        if messages is None:
-            messages = []
+        # Build messages in OpenAI format
+        oai_messages = []
+        if system_prompt:
+            oai_messages.append({"role": "system", "content": system_prompt})
 
-        messages.append({
-            "role": "user",
-            "content": prompt
-        })
+        if messages:
+            for msg in messages:
+                oai_messages.append({"role": msg["role"], "content": msg["content"]})
 
-        # Set defaults
+        oai_messages.append({"role": "user", "content": prompt})
+
         if max_tokens is None:
             max_tokens = settings.CLAUDE_MAX_TOKENS
         if temperature is None:
             temperature = settings.CLAUDE_TEMPERATURE
 
-        # Log request summary (detailed logging only in DEBUG mode)
         prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
-        logger.info(f"Claude API: model={model_name}, max_tokens={max_tokens}, prompt_len={len(prompt)}")
-        logger.debug(f"Claude request prompt: {prompt_preview}")
+        logger.info(f"LLM API: model={model_name}, max_tokens={max_tokens}, prompt_len={len(prompt)}")
+        logger.debug(f"LLM request prompt: {prompt_preview}")
 
         last_error = None
         for attempt in range(MAX_RETRIES + 1):
             try:
-                # Make API call
-                response = await self.async_client.messages.create(
+                response = await self._raw_async_client.chat.completions.create(
                     model=model_name,
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    system=system_prompt if system_prompt else "",
-                    messages=messages
+                    messages=oai_messages
                 )
 
-                # Extract response
-                content = response.content[0].text if response.content else ""
+                content = response.choices[0].message.content if response.choices else ""
+                usage = response.usage
 
                 result = {
-                    "content": content,
+                    "content": content or "",
                     "model": model_name,
-                    "input_tokens": response.usage.input_tokens,
-                    "output_tokens": response.usage.output_tokens,
-                    "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
-                    "stop_reason": response.stop_reason,
-                    "id": response.id
+                    "input_tokens": usage.prompt_tokens if usage else 0,
+                    "output_tokens": usage.completion_tokens if usage else 0,
+                    "total_tokens": usage.total_tokens if usage else 0,
+                    "stop_reason": response.choices[0].finish_reason if response.choices else "unknown",
+                    "id": response.id or f"lm-{id(response)}"
                 }
 
-                # Log response summary (saves 10-20ms per call)
-                logger.info(f"Claude API response: id={response.id}, tokens={result['total_tokens']}, stop={response.stop_reason}")
-                logger.debug(f"Claude response preview: {content[:200]}..." if len(content) > 200 else content)
+                logger.info(f"LLM API response: id={result['id']}, tokens={result['total_tokens']}, stop={result['stop_reason']}")
 
-                # CRITICAL: Warn if response was truncated due to token limit
-                if response.stop_reason == "max_tokens":
+                if result['stop_reason'] == "length":
                     logger.warning(
-                        f"⚠️ RESPONSE TRUNCATED: Claude hit max_tokens limit ({max_tokens}). "
-                        f"Output may be incomplete! Consider increasing max_tokens."
+                        f"RESPONSE TRUNCATED: LLM hit max_tokens limit ({max_tokens}). "
+                        f"Output may be incomplete!"
                     )
                     result["truncated"] = True
 
@@ -171,30 +151,12 @@ class ClaudeClient:
                 error_type = type(e).__name__
                 if self._is_retryable_error(e) and attempt < MAX_RETRIES:
                     delay = self._calculate_retry_delay(attempt)
-                    logger.warning(
-                        f"Claude API error [{error_type}] (attempt {attempt + 1}/{MAX_RETRIES + 1}), retrying in {delay:.1f}s...",
-                        extra={
-                            "event_type": "claude_api_retry",
-                            "error_type": error_type,
-                            "attempt": attempt + 1,
-                            "max_retries": MAX_RETRIES + 1,
-                            "retry_delay": delay
-                        }
-                    )
+                    logger.warning(f"LLM API error [{error_type}] (attempt {attempt + 1}/{MAX_RETRIES + 1}), retrying in {delay:.1f}s...")
                     await asyncio.sleep(delay)
                 else:
-                    logger.error(
-                        f"Claude API error (non-retryable or max retries exceeded): {error_type}: {e}",
-                        extra={
-                            "event_type": "claude_api_error",
-                            "error_type": error_type,
-                            "error_message": str(e),
-                            "attempt": attempt + 1
-                        }
-                    )
+                    logger.error(f"LLM API error (non-retryable): {error_type}: {e}")
                     raise
 
-        # Should not reach here, but just in case
         raise last_error
 
     async def generate_stream(
@@ -206,110 +168,68 @@ class ClaudeClient:
         temperature: float = None,
         messages: Optional[List[Dict[str, str]]] = None
     ) -> AsyncGenerator[str, None]:
-        """
-        Generate streaming response from Claude
-
-        Args:
-            prompt: User prompt
-            system_prompt: System prompt
-            model: "haiku" or "sonnet"
-            max_tokens: Maximum tokens to generate
-            temperature: Temperature for generation
-            messages: Optional list of previous messages for conversation
-
-        Yields:
-            Chunks of text as they arrive
-        """
-        # Select model
+        """Generate streaming response - OpenAI chat completions format"""
         model_name = self.sonnet_model if model == "sonnet" else self.haiku_model
 
-        # Build messages
-        if messages is None:
-            messages = []
+        oai_messages = []
+        if system_prompt:
+            oai_messages.append({"role": "system", "content": system_prompt})
 
-        messages.append({
-            "role": "user",
-            "content": prompt
-        })
+        if messages:
+            for msg in messages:
+                oai_messages.append({"role": msg["role"], "content": msg["content"]})
 
-        # Set defaults
+        oai_messages.append({"role": "user", "content": prompt})
+
         if max_tokens is None:
             max_tokens = settings.CLAUDE_MAX_TOKENS
         if temperature is None:
             temperature = settings.CLAUDE_TEMPERATURE
 
-        # Log streaming request summary
-        prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
-        logger.info(f"Claude Streaming: model={model_name}, max_tokens={max_tokens}, prompt_len={len(prompt)}")
-        logger.debug(f"Claude streaming prompt: {prompt_preview}")
+        logger.info(f"LLM Streaming: model={model_name}, max_tokens={max_tokens}, prompt_len={len(prompt)}")
 
         last_error = None
         for attempt in range(MAX_RETRIES + 1):
             try:
-                # Make streaming API call
                 collected_text = []
                 has_yielded = False
-                async with self.async_client.messages.stream(
+
+                stream = await self._raw_async_client.chat.completions.create(
                     model=model_name,
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    system=system_prompt if system_prompt else "",
-                    messages=messages
-                ) as stream:
-                    async for text in stream.text_stream:
+                    messages=oai_messages,
+                    stream=True
+                )
+
+                async for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        text = chunk.choices[0].delta.content
                         has_yielded = True
                         collected_text.append(text)
                         yield text
 
-                # Get final message with usage stats
-                final_message = await stream.get_final_message()
+                # Estimate tokens (LM Studio may not return usage in streaming)
+                full_text = "".join(collected_text)
+                est_output_tokens = len(full_text) // 4  # rough estimate
+                est_input_tokens = len(prompt) // 4
 
-                # Log streaming response summary
-                total_tokens = final_message.usage.input_tokens + final_message.usage.output_tokens
-                logger.info(f"Claude Streaming response: id={final_message.id}, tokens={total_tokens}, stop={final_message.stop_reason}")
+                logger.info(f"LLM Streaming response: ~{est_input_tokens + est_output_tokens} tokens")
 
-                # CRITICAL: Warn if response was truncated due to token limit
-                if final_message.stop_reason == "max_tokens":
-                    logger.warning(
-                        f"⚠️ STREAMING RESPONSE TRUNCATED: Claude hit max_tokens limit ({max_tokens}). "
-                        f"Output may be incomplete! Consider increasing max_tokens."
-                    )
-
-                # Yield special token usage marker at end of stream
-                # Format: __TOKEN_USAGE__:input:output:model
-                yield f"__TOKEN_USAGE__:{final_message.usage.input_tokens}:{final_message.usage.output_tokens}:{model_name}"
-                return  # Success, exit the retry loop
+                yield f"__TOKEN_USAGE__:{est_input_tokens}:{est_output_tokens}:{model_name}"
+                return
 
             except Exception as e:
                 last_error = e
                 error_type = type(e).__name__
-                # Only retry if we haven't started yielding yet (can't recover mid-stream)
                 if not has_yielded and self._is_retryable_error(e) and attempt < MAX_RETRIES:
                     delay = self._calculate_retry_delay(attempt)
-                    logger.warning(
-                        f"Claude Streaming API error [{error_type}] (attempt {attempt + 1}/{MAX_RETRIES + 1}), retrying in {delay:.1f}s...",
-                        extra={
-                            "event_type": "claude_stream_retry",
-                            "error_type": error_type,
-                            "attempt": attempt + 1,
-                            "retry_delay": delay
-                        }
-                    )
+                    logger.warning(f"LLM Streaming error [{error_type}] (attempt {attempt + 1}/{MAX_RETRIES + 1}), retrying in {delay:.1f}s...")
                     await asyncio.sleep(delay)
                 else:
-                    logger.error(
-                        f"Claude Streaming API error (non-retryable): {error_type}: {e}",
-                        extra={
-                            "event_type": "claude_stream_error",
-                            "error_type": error_type,
-                            "error_message": str(e),
-                            "has_yielded": has_yielded,
-                            "attempt": attempt + 1
-                        }
-                    )
+                    logger.error(f"LLM Streaming error: {error_type}: {e}")
                     raise
 
-        # Should not reach here, but just in case
         if last_error:
             raise last_error
 
@@ -321,19 +241,7 @@ class ClaudeClient:
         max_tokens: int = None,
         temperature: float = None
     ) -> List[Dict[str, Any]]:
-        """
-        Generate responses for multiple prompts concurrently
-
-        Args:
-            prompts: List of prompts
-            system_prompt: System prompt
-            model: "haiku" or "sonnet"
-            max_tokens: Maximum tokens to generate
-            temperature: Temperature for generation
-
-        Returns:
-            List of response dictionaries
-        """
+        """Generate responses for multiple prompts concurrently"""
         tasks = [
             self.generate(
                 prompt=prompt,
@@ -347,72 +255,23 @@ class ClaudeClient:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Handle exceptions
         processed_results = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.error(f"Batch generate error for prompt {i}: {result}")
-                processed_results.append({
-                    "content": "",
-                    "error": str(result)
-                })
+                processed_results.append({"content": "", "error": str(result)})
             else:
                 processed_results.append(result)
 
         return processed_results
 
-    def calculate_cost(
-        self,
-        input_tokens: int,
-        output_tokens: int,
-        model: str = "haiku"
-    ) -> float:
-        """
-        Calculate cost in USD based on token usage
+    def calculate_cost(self, input_tokens: int, output_tokens: int, model: str = "haiku") -> float:
+        """Local model = FREE"""
+        return 0.0
 
-        Args:
-            input_tokens: Number of input tokens
-            output_tokens: Number of output tokens
-            model: "haiku" or "sonnet"
-
-        Returns:
-            Cost in USD
-        """
-        # Claude 3.5 Haiku pricing (as of Jan 2025)
-        # Input: $0.80 / MTok, Output: $4.00 / MTok
-
-        # Claude 3.5 Sonnet pricing (as of Jan 2025)
-        # Input: $3.00 / MTok, Output: $15.00 / MTok
-
-        if model == "sonnet":
-            input_cost = (input_tokens / 1_000_000) * 3.00
-            output_cost = (output_tokens / 1_000_000) * 15.00
-        else:  # haiku
-            input_cost = (input_tokens / 1_000_000) * 0.80
-            output_cost = (output_tokens / 1_000_000) * 4.00
-
-        return input_cost + output_cost
-
-    def calculate_cost_in_paise(
-        self,
-        input_tokens: int,
-        output_tokens: int,
-        model: str = "haiku"
-    ) -> int:
-        """
-        Calculate cost in Indian Paise (for database storage)
-
-        Args:
-            input_tokens: Number of input tokens
-            output_tokens: Number of output tokens
-            model: "haiku" or "sonnet"
-
-        Returns:
-            Cost in paise (1 USD ≈ 83 INR = 8300 paise as of Jan 2025)
-        """
-        usd_cost = self.calculate_cost(input_tokens, output_tokens, model)
-        # Convert to INR, then to paise
-        return int(usd_cost * 83 * 100)
+    def calculate_cost_in_paise(self, input_tokens: int, output_tokens: int, model: str = "haiku") -> int:
+        """Local model = FREE"""
+        return 0
 
 
 # Create singleton instance

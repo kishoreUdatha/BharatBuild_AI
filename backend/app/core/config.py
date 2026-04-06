@@ -118,21 +118,23 @@ class Settings(BaseSettings):
     CELERY_RESULT_EXPIRES: int = 86400  # 24 hours
 
     # ==========================================
-    # Claude AI
+    # LLM API (OpenAI-compatible: LM Studio, Ollama, etc.)
     # ==========================================
-    ANTHROPIC_API_KEY: str
-    ANTHROPIC_BASE_URL: str = ""  # Empty means use default Anthropic URL
+    OPENAI_API_BASE: str = "http://localhost:1234/v1"
+    OPENAI_API_KEY: str = "lm-studio"
+    ANTHROPIC_API_KEY: str = ""  # Kept for backward compat, not used
+    ANTHROPIC_BASE_URL: str = ""
     USE_MOCK_CLAUDE: bool = False
-    CLAUDE_HAIKU_MODEL: str = "claude-3-5-haiku-20241022"
-    CLAUDE_SONNET_MODEL: str = "claude-sonnet-4-20250514"
-    CLAUDE_MAX_TOKENS: int = 4096
+    CLAUDE_HAIKU_MODEL: str = "qwen3-4b-instruct-2507"
+    CLAUDE_SONNET_MODEL: str = "qwen3-4b-instruct-2507"
+    CLAUDE_MAX_TOKENS: int = 8192
     CLAUDE_TEMPERATURE: float = 0.7
     USE_PLAIN_TEXT_RESPONSES: bool = True
-    CLAUDE_REQUEST_TIMEOUT: int = 300  # 5 minutes for large document generations
-    CLAUDE_CONNECT_TIMEOUT: int = 60  # seconds
-    CLAUDE_MAX_RETRIES: int = 5
-    CLAUDE_RETRY_BASE_DELAY: float = 2.0  # seconds
-    CLAUDE_RETRY_MAX_DELAY: float = 30.0  # seconds
+    CLAUDE_REQUEST_TIMEOUT: int = 120
+    CLAUDE_CONNECT_TIMEOUT: int = 15
+    CLAUDE_MAX_RETRIES: int = 2
+    CLAUDE_RETRY_BASE_DELAY: float = 1.0
+    CLAUDE_RETRY_MAX_DELAY: float = 5.0
 
     # ==========================================
     # Qwen Local Model (Fine-tuned for BharatBuild)

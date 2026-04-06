@@ -43,9 +43,9 @@ async def validate_critical_config():
     if not settings.JWT_SECRET_KEY or settings.JWT_SECRET_KEY == "CHANGE_ME":
         errors.append("JWT_SECRET_KEY is not set or using default value")
 
-    # Critical for AI generation
-    if not settings.ANTHROPIC_API_KEY:
-        errors.append("ANTHROPIC_API_KEY is not set - AI generation will NOT work!")
+    # Critical for AI generation (now uses OpenAI-compatible API)
+    if not settings.OPENAI_API_BASE:
+        errors.append("OPENAI_API_BASE is not set - AI generation will NOT work!")
 
     # Warnings: App can function but some features may not work
     if not settings.REDIS_URL:

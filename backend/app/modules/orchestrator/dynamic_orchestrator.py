@@ -1033,23 +1033,23 @@ class AgentRegistry:
             AgentConfig(
                 name="Planner Agent",
                 agent_type=AgentType.PLANNER,
-                model="sonnet",
+                model="haiku",
                 temperature=0.7,
-                max_tokens=16384,  # Increased from 4096 for complex plans
+                max_tokens=4096,  # Planner only outputs file list XML, not code
                 capabilities=["planning", "architecture_design", "task_breakdown"]
             ),
             AgentConfig(
                 name="Writer Agent",
                 agent_type=AgentType.WRITER,
-                model="sonnet",
+                model="haiku",
                 temperature=0.3,
-                max_tokens=16384,  # Increased from 8192 to prevent file truncation
+                max_tokens=8192,  # Writer generates code per file
                 capabilities=["code_generation", "file_creation"]
             ),
             AgentConfig(
                 name="Fixer Agent",
                 agent_type=AgentType.FIXER,
-                model="sonnet",
+                model="haiku",
                 temperature=0.5,
                 max_tokens=4096,
                 capabilities=["debugging", "error_fixing", "code_modification"]
@@ -1090,9 +1090,9 @@ class AgentRegistry:
             AgentConfig(
                 name="Bolt Instant Generator",
                 agent_type=AgentType.BOLT_INSTANT,
-                model="sonnet",
+                model="haiku",
                 temperature=0.5,
-                max_tokens=32000,  # Very large for complete project generation
+                max_tokens=8192,  # Qwen 4B context-appropriate
                 capabilities=["instant_generation", "planning", "code_generation", "file_creation"]
             ),
             # MEMORY AGENT - Context and file awareness (like Claude Code)
@@ -1155,8 +1155,8 @@ class WorkflowEngine:
                 agent_type=AgentType.PLANNER,
                 name="Planning Project",
                 description="Analyzing your request and designing the project structure",
-                timeout=120,
-                retry_count=2
+                timeout=60,
+                retry_count=1
             ),
             WorkflowStep(
                 agent_type=AgentType.WRITER,
@@ -2496,10 +2496,16 @@ class DynamicOrchestrator:
         logger.info(f"[MemoryAgent Debug] sandbox_project_path={sandbox_project_path}, project_path={project_path}")
         memory_agent = get_memory_agent(project_id, project_path)
 
-        # Initialize memory agent (scan project files)
+        # Initialize memory agent (scan project files) - skip for new projects for speed
+        memory_info = {"total_files": 0, "project_type": "unknown"}
         try:
-            memory_info = await memory_agent.initialize()
-            logger.info(f"[MemoryAgent] Initialized: {memory_info.get('total_files')} files, type: {memory_info.get('project_type')}")
+            # Only scan files if project likely exists already (resume case)
+            is_resume = metadata.get("is_resume", False) if metadata else False
+            if is_resume:
+                memory_info = await memory_agent.initialize()
+                logger.info(f"[MemoryAgent] Initialized (resume): {memory_info.get('total_files')} files, type: {memory_info.get('project_type')}")
+            else:
+                logger.info(f"[MemoryAgent] Skipped full init for new project (fast path)")
         except Exception as e:
             logger.warning(f"[MemoryAgent] Initialization warning: {e}")
 
@@ -2939,7 +2945,7 @@ class DynamicOrchestrator:
             yield OrchestratorEvent(
                 type=EventType.STATUS,
                 data={"message": "Saving project to cloud storage...", "phase": "s3_upload"},
-                step=len(workflow.steps)
+                step=len(workflow)
             )
 
             s3_zip_key = None
@@ -2955,7 +2961,7 @@ class DynamicOrchestrator:
                         yield OrchestratorEvent(
                             type=EventType.STATUS,
                             data={"message": "Project saved to cloud", "phase": "s3_upload_complete", "s3_key": s3_zip_key},
-                            step=len(workflow.steps)
+                            step=len(workflow)
                         )
                 except Exception as s3_err:
                     logger.warning(f"[Layer2-S3] Failed to upload to S3: {s3_err}")
@@ -2965,7 +2971,7 @@ class DynamicOrchestrator:
             yield OrchestratorEvent(
                 type=EventType.STATUS,
                 data={"message": "Updating project metadata...", "phase": "db_update"},
-                step=len(workflow.steps)
+                step=len(workflow)
             )
 
             try:
@@ -3047,7 +3053,7 @@ class DynamicOrchestrator:
             yield OrchestratorEvent(
                 type=EventType.STATUS,
                 data={"message": "Finalizing project...", "phase": "finalizing"},
-                step=len(workflow.steps)
+                step=len(workflow)
             )
 
             # Save token usage to database
@@ -3464,7 +3470,7 @@ class DynamicOrchestrator:
 
             # Generate file using Claude
             try:
-                from anthropic import AsyncAnthropic
+                from app.utils.openai_compat import AsyncAnthropic
                 client = AsyncAnthropic()
 
                 # Build prompt for single file generation
@@ -3638,8 +3644,9 @@ Generate ONLY the file content, no explanations. Output the complete, working co
         Claude Stream → SAX Parser → DOM Builder (on tag close) → Schema Validator → AST
         """
 
-        # Build dynamic prompt
-        system_prompt = config.system_prompt or self._get_default_planner_prompt()
+        # ALWAYS use dynamic prompt (~1-2K tokens) for fast Qwen inference
+        # The config.system_prompt from planner.txt is 22KB (~5700 tokens) - too slow for 4B model
+        system_prompt = PlannerAgent._build_dynamic_prompt(context.user_request)
 
         # Detect project complexity to control file generation
         complexity_info = self._detect_project_complexity(context.user_request)

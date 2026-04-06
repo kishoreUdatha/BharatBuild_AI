@@ -62,7 +62,7 @@ services:
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile.cpu
+      dockerfile: Dockerfile.light
     container_name: bharatbuild_backend_dev
     env_file:
       - .env
@@ -100,7 +100,7 @@ services:
 
   # Frontend (Development with hot reload)
   frontend:
-    image: node:18-alpine
+    image: node:20-alpine
     container_name: bharatbuild_frontend_dev
     working_dir: /app
     environment:
@@ -117,7 +117,7 @@ services:
       - /app/.next
     depends_on:
       - backend
-    command: sh -c "npm install && npm run dev"
+    command: sh -c "npm install && npx next dev -H 0.0.0.0"
     networks:
       - bharatbuild_dev_network
 
