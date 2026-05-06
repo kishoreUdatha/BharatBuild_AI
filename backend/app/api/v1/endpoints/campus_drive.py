@@ -12,6 +12,7 @@ import random
 
 from app.core.database import get_db
 from app.core.logging_config import logger
+from app.core.config import settings
 from app.models.campus_drive import (
     CampusDrive,
     CampusDriveRegistration,
@@ -282,7 +283,11 @@ async def start_quiz(
             if q.category in questions_by_category:
                 questions_by_category[q.category].append(q)
 
-        # Select required number from each category
+        # Select required number from each category using deterministic selection
+        # This ensures the same questions are selected if the user resumes the quiz
+        user_seed = hash(str(registration.id) + str(drive_id))
+        rng = random.Random(user_seed)
+
         questions = []
         category_counts = [
             (QuestionCategory.LOGICAL, drive.logical_questions),
@@ -297,15 +302,16 @@ async def start_quiz(
                 continue
             category_questions = questions_by_category.get(category, [])
             if len(category_questions) >= count:
-                selected = random.sample(category_questions, count)
+                # Use deterministic selection with per-category seed
+                rng_cat = random.Random(user_seed + hash(category.value))
+                indices = list(range(len(category_questions)))
+                rng_cat.shuffle(indices)
+                selected = [category_questions[i] for i in indices[:count]]
             else:
                 selected = category_questions
             questions.extend(selected)
 
         # Shuffle all questions using registration-specific seed
-        # This ensures same user gets same order if they refresh, but different users get different orders
-        user_seed = hash(str(registration.id) + str(drive_id))
-        rng = random.Random(user_seed)
         rng.shuffle(questions)
 
         # Update registration status
@@ -600,6 +606,8 @@ async def get_result(
             ai_ml_total=drive.ai_ml_questions,
             english_score=registration.english_score,
             english_total=drive.english_questions,
+            coding_score=registration.coding_score,
+            coding_total=getattr(drive, 'coding_questions', 0) or 0,
         )
 
     except HTTPException:
@@ -900,9 +908,9 @@ async def seed_campus_drive_data(
 ):
     """
     Seed campus drive and questions data.
-    Requires secret key: 'bharatbuild2026'
+    Requires secret key from CAMPUS_DRIVE_SEED_SECRET environment variable.
     """
-    if secret != "bharatbuild2026":
+    if secret != settings.CAMPUS_DRIVE_SEED_SECRET:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid secret key"
@@ -959,12 +967,12 @@ async def seed_campus_drive_data(
             name="Campus Placement Drive 2026",
             company_name="BharatBuild",
             description="Annual campus placement drive for engineering students. Test your skills in logical reasoning, technical knowledge, AI/ML concepts, and English proficiency.",
-            quiz_duration_minutes=60,
+            quiz_duration_minutes=75,
             passing_percentage=60.0,
-            total_questions=35,
+            total_questions=45,
             logical_questions=5,
             technical_questions=10,
-            ai_ml_questions=10,
+            ai_ml_questions=20,
             english_questions=5,
             coding_questions=5,
             is_active=True
@@ -1009,6 +1017,16 @@ async def seed_campus_drive_data(
             ("Which of the following is a clustering algorithm?", QuestionCategory.AI_ML, ["Linear Regression", "Decision Tree", "K-Means", "Naive Bayes"], 2),
             ("What does NLP stand for?", QuestionCategory.AI_ML, ["Neural Learning Process", "Natural Language Processing", "Network Layer Protocol", "Non-Linear Programming"], 1),
             ("Which optimizer is an improvement over standard gradient descent?", QuestionCategory.AI_ML, ["SGD", "Adam", "RMSprop", "All of the above"], 3),
+            ("What is the purpose of backpropagation in neural networks?", QuestionCategory.AI_ML, ["Forward pass computation", "Calculating gradients for weight updates", "Data preprocessing", "Model deployment"], 1),
+            ("Which technique is used to handle imbalanced datasets?", QuestionCategory.AI_ML, ["Normalization", "SMOTE (Synthetic Minority Oversampling)", "PCA", "Gradient Descent"], 1),
+            ("What is the vanishing gradient problem?", QuestionCategory.AI_ML, ["Gradients become too large", "Gradients become very small making learning slow", "Model overfits", "Loss function diverges"], 1),
+            ("Which of the following is a generative AI model?", QuestionCategory.AI_ML, ["Random Forest", "SVM", "GPT (Generative Pre-trained Transformer)", "Logistic Regression"], 2),
+            ("What is transfer learning?", QuestionCategory.AI_ML, ["Training from scratch", "Using pre-trained model weights for new tasks", "Transferring data between models", "Model compression"], 1),
+            ("What does LSTM stand for?", QuestionCategory.AI_ML, ["Long Short-Term Memory", "Linear State Transfer Model", "Layered Sequential Training Method", "Low Signal Transmission Module"], 0),
+            ("Which loss function is commonly used for binary classification?", QuestionCategory.AI_ML, ["Mean Squared Error", "Binary Cross-Entropy", "Hinge Loss", "Categorical Cross-Entropy"], 1),
+            ("What is the purpose of batch normalization?", QuestionCategory.AI_ML, ["Reduce overfitting", "Normalize inputs to each layer for faster training", "Increase model size", "Data augmentation"], 1),
+            ("What is a confusion matrix used for?", QuestionCategory.AI_ML, ["Feature selection", "Evaluating classification model performance", "Hyperparameter tuning", "Data visualization"], 1),
+            ("Which technique helps prevent overfitting in decision trees?", QuestionCategory.AI_ML, ["Increasing tree depth", "Pruning", "Adding more features", "Removing validation set"], 1),
 
             # English Questions
             ("Choose the correct sentence:", QuestionCategory.ENGLISH, ["He don't know nothing", "He doesn't know anything", "He don't know anything", "He doesn't know nothing"], 1),

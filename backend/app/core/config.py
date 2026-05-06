@@ -463,6 +463,11 @@ class Settings(BaseSettings):
     PROJECT_CLEANUP_DAYS: int = 7
 
     # ==========================================
+    # Campus Drive Settings
+    # ==========================================
+    CAMPUS_DRIVE_SEED_SECRET: str = "bharatbuild2026"  # Secret for seeding campus drive data
+
+    # ==========================================
     # Project Complexity File Limits
     # ==========================================
     FILE_LIMIT_MINIMAL: int = 8

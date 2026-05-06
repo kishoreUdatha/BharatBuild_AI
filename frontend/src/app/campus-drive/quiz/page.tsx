@@ -243,9 +243,14 @@ function QuizPageContent() {
           }))
 
         if (answersArray.length > 0) {
+          // Use Blob with correct Content-Type for sendBeacon
+          const blob = new Blob(
+            [JSON.stringify({ answers: answersArray })],
+            { type: 'application/json' }
+          )
           navigator.sendBeacon(
             `${API_URL}/campus-drive/drives/${driveId}/quiz/save-progress?email=${encodeURIComponent(email!)}`,
-            JSON.stringify({ answers: answersArray })
+            blob
           )
         }
 
