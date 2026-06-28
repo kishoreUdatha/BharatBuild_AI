@@ -16,8 +16,9 @@ terraform {
   }
 
   # Store state in S3 (create bucket manually first)
+  # Account 637560253183 (ap-south-1) - bucket name is account-scoped for global uniqueness
   backend "s3" {
-    bucket         = "bharatbuild-terraform-state"
+    bucket         = "bharatbuild-tfstate-637560253183"
     key            = "prod/terraform.tfstate"
     region         = "ap-south-1"
     encrypt        = true
@@ -43,7 +44,7 @@ provider "aws" {
 
 variable "aws_region" {
   description = "AWS region"
-  default     = "ap-south-1"  # Mumbai
+  default     = "ap-south-2"  # Hyderabad (moved from Mumbai ap-south-1 due to EIP quota cap)
 }
 
 variable "environment" {
@@ -396,10 +397,9 @@ resource "aws_db_instance" "main" {
   # Performance Insights
   performance_insights_enabled = true
 
-  # Don't delete on terraform destroy (safety)
-  deletion_protection = true
-  skip_final_snapshot = false
-  final_snapshot_identifier = "${var.app_name}-final-snapshot"
+  # Region move (Mumbai -> Hyderabad): allow teardown of the Mumbai stack.
+  deletion_protection = false
+  skip_final_snapshot = true
 
   tags = {
     Name = "${var.app_name}-primary-db"

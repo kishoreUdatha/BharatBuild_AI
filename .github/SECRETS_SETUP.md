@@ -154,7 +154,7 @@ Before pushing, you can test the deployment locally:
 # Set AWS credentials
 export AWS_ACCESS_KEY_ID=your-key
 export AWS_SECRET_ACCESS_KEY=your-secret
-export AWS_REGION=ap-south-1
+export AWS_REGION=ap-south-2
 
 # Run deployment script
 ./scripts/deploy-aws.sh status

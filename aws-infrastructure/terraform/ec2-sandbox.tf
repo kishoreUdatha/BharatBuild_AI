@@ -34,7 +34,9 @@ variable "sandbox_enable_autoscaling" {
 
 variable "sandbox_custom_ami_id" {
   description = "Custom AMI ID with pre-baked Docker images (leave empty to use Amazon Linux 2023)"
-  default     = "ami-0b4eaf40674cec484"  # Pre-baked AMI with Docker + all images (created 2025-01-04)
+  # Old account's pre-baked AMI (ami-0b4eaf40674cec484) is not accessible in account 637560253183.
+  # Empty => launch template falls back to Amazon Linux 2023 + user_data installs Docker fresh.
+  default     = ""
 }
 
 variable "sandbox_use_dynamic_ip" {
@@ -1004,7 +1006,7 @@ resource "aws_autoscaling_group" "sandbox" {
         instance_type = "t3.xlarge"
       }
       override {
-        instance_type = "t3a.xlarge"
+        instance_type = "m6a.xlarge"  # t3a.xlarge not offered in ap-south-2 (Hyderabad)
       }
       override {
         instance_type = "m5.xlarge"

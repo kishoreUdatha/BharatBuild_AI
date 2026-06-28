@@ -36,7 +36,7 @@ on:
 
 env:
   TF_WORKING_DIR: aws-infrastructure/terraform
-  AWS_REGION: ap-south-1
+  AWS_REGION: ap-south-2
 
 jobs:
   terraform:

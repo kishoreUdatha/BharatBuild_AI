@@ -35,8 +35,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  AWS_REGION: ap-south-1
-  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com
+  AWS_REGION: ap-south-2
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-2.amazonaws.com
   ECS_CLUSTER: bharatbuild-cluster
   BACKEND_SERVICE: bharatbuild-backend
   FRONTEND_SERVICE: bharatbuild-frontend
@@ -952,7 +952,7 @@ jobs:
 
           # Check backend health
           BACKEND_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" \
-            "http://bharatbuild-alb-223139118.ap-south-1.elb.amazonaws.com/api/v1/health" || echo "000")
+            "http://bharatbuild-alb-1832897022.ap-south-2.elb.amazonaws.com/api/v1/health" || echo "000")
 
           if [ "$BACKEND_HEALTH" == "200" ]; then
             echo "Backend health check passed"
