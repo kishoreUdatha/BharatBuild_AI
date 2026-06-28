@@ -1,7 +1,7 @@
 """Add subscription reminder tracking fields
 
 Revision ID: add_subscription_reminder
-Revises:
+Revises: add_owner_name_coupons
 Create Date: 2026-03-08
 
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = 'add_subscription_reminder'
-down_revision = None
+down_revision = 'add_owner_name_coupons'
 branch_labels = None
 depends_on = None
 
