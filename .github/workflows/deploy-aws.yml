@@ -836,7 +836,9 @@ jobs:
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: [build, migrate]
+    # Migrations are applied in-VPC by the container entrypoint on startup
+    # (init_tables + alembic upgrade head), so no separate migrate job is needed.
+    needs: build
     if: |
       always() &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/production') &&
@@ -1000,72 +1002,10 @@ jobs:
           fi
 
   # =============================================================================
-  # Database Migration (Runs automatically before deployment)
+  # Database migrations are handled in-VPC by the backend container entrypoint
+  # (scripts/entrypoint.sh: wait_for_db -> init_tables -> alembic upgrade head)
+  # on every task start, so a separate CI migrate job is intentionally omitted.
   # =============================================================================
-  migrate:
-    name: Run Database Migrations
-    runs-on: ubuntu-latest
-    needs: build
-    # always() so the "skip tests" path (which skips upstream test jobs) does not
-    # also skip migrations. Still gated on branch + successful image build.
-    if: |
-      always() &&
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/production') &&
-      needs.build.result == 'success'
-    continue-on-error: true
-
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      # RDS is in private subnets and its security group only allows the ECS SG,
-      # so migrations CANNOT run from the GitHub runner. Instead run alembic as a
-      # one-off Fargate task inside the VPC (private subnets + ECS SG), reusing the
-      # freshly-built backend image/task definition.
-      - name: Run Alembic migrations as a one-off ECS task (inside VPC)
-        run: |
-          set -euo pipefail
-          CLUSTER="${{ env.ECS_CLUSTER }}"
-
-          SUBNETS=$(aws ec2 describe-subnets \
-            --filters "Name=tag:Name,Values=bharatbuild-private-*" \
-            --query 'Subnets[].SubnetId' --output text | tr '\t' ',')
-          ECS_SG=$(aws ec2 describe-security-groups \
-            --filters "Name=group-name,Values=bharatbuild-ecs-sg" \
-            --query 'SecurityGroups[0].GroupId' --output text)
-          echo "Subnets=$SUBNETS  ECS_SG=$ECS_SG"
-
-          # Override the container command to run migrations only (entrypoint.sh
-          # also runs init_tables + alembic, then exec's this command). uvicorn is
-          # never started, so the Anthropic-key startup gate is not triggered here.
-          TASK_ARN=$(aws ecs run-task \
-            --cluster "$CLUSTER" \
-            --task-definition bharatbuild-backend \
-            --launch-type FARGATE \
-            --count 1 \
-            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$ECS_SG],assignPublicIp=DISABLED}" \
-            --overrides '{"containerOverrides":[{"name":"backend","command":["alembic","upgrade","head"]}]}' \
-            --query 'tasks[0].taskArn' --output text)
-          echo "Migration task: $TASK_ARN"
-
-          echo "Waiting for migration task to stop..."
-          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN"
-
-          EXIT=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
-            --query 'tasks[0].containers[0].exitCode' --output text)
-          REASON=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
-            --query 'tasks[0].stoppedReason' --output text)
-          echo "Migration task exit code: $EXIT  reason: $REASON"
-
-          echo "--- recent backend log output ---"
-          aws logs tail /ecs/bharatbuild/backend --since 5m --format short 2>/dev/null || true
-
-          # Fail the job if the migration task did not exit cleanly.
-          test "$EXIT" = "0"
 
   # =============================================================================
   # Rollback (Manual)
