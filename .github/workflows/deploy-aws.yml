@@ -1006,16 +1006,15 @@ jobs:
     name: Run Database Migrations
     runs-on: ubuntu-latest
     needs: build
+    # always() so the "skip tests" path (which skips upstream test jobs) does not
+    # also skip migrations. Still gated on branch + successful image build.
     if: |
+      always() &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/production') &&
       needs.build.result == 'success'
-    # Removed environment protection to allow migration without approval
     continue-on-error: true
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -1023,85 +1022,50 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install migration dependencies
-        working-directory: ./backend
+      # RDS is in private subnets and its security group only allows the ECS SG,
+      # so migrations CANNOT run from the GitHub runner. Instead run alembic as a
+      # one-off Fargate task inside the VPC (private subnets + ECS SG), reusing the
+      # freshly-built backend image/task definition.
+      - name: Run Alembic migrations as a one-off ECS task (inside VPC)
         run: |
-          pip install --upgrade pip
-          pip install alembic psycopg2-binary sqlalchemy pydantic-settings python-dotenv
+          set -euo pipefail
+          CLUSTER="${{ env.ECS_CLUSTER }}"
 
-      - name: Run migrations directly
-        working-directory: ./backend
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          SECRET_KEY: ${{ secrets.SECRET_KEY }}
-          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          REDIS_URL: ${{ secrets.REDIS_URL }}
-          CELERY_BROKER_URL: ${{ secrets.CELERY_BROKER_URL }}
-          CELERY_RESULT_BACKEND: ${{ secrets.CELERY_RESULT_BACKEND }}
-          USER_PROJECTS_PATH: /tmp/projects
-        run: |
-          echo "============================================"
-          echo "  Running Database Migrations"
-          echo "============================================"
+          SUBNETS=$(aws ec2 describe-subnets \
+            --filters "Name=tag:Name,Values=bharatbuild-private-*" \
+            --query 'Subnets[].SubnetId' --output text | tr '\t' ',')
+          ECS_SG=$(aws ec2 describe-security-groups \
+            --filters "Name=group-name,Values=bharatbuild-ecs-sg" \
+            --query 'SecurityGroups[0].GroupId' --output text)
+          echo "Subnets=$SUBNETS  ECS_SG=$ECS_SG"
 
-          # Show current migration status
-          echo "Current migration status:"
-          alembic current || echo "No current revision (fresh database)"
+          # Override the container command to run migrations only (entrypoint.sh
+          # also runs init_tables + alembic, then exec's this command). uvicorn is
+          # never started, so the Anthropic-key startup gate is not triggered here.
+          TASK_ARN=$(aws ecs run-task \
+            --cluster "$CLUSTER" \
+            --task-definition bharatbuild-backend \
+            --launch-type FARGATE \
+            --count 1 \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$ECS_SG],assignPublicIp=DISABLED}" \
+            --overrides '{"containerOverrides":[{"name":"backend","command":["alembic","upgrade","head"]}]}' \
+            --query 'tasks[0].taskArn' --output text)
+          echo "Migration task: $TASK_ARN"
 
-          # Run migrations
-          echo ""
-          echo "Applying migrations..."
-          alembic upgrade head
+          echo "Waiting for migration task to stop..."
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN"
 
-          # Show new status
-          echo ""
-          echo "New migration status:"
-          alembic current
+          EXIT=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          REASON=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+            --query 'tasks[0].stoppedReason' --output text)
+          echo "Migration task exit code: $EXIT  reason: $REASON"
 
-          echo ""
-          echo "============================================"
-          echo "  Migrations Completed Successfully!"
-          echo "============================================"
+          echo "--- recent backend log output ---"
+          aws logs tail /ecs/bharatbuild/backend --since 5m --format short 2>/dev/null || true
 
-      - name: Verify database schema
-        working-directory: ./backend
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          SECRET_KEY: ${{ secrets.SECRET_KEY }}
-          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          REDIS_URL: ${{ secrets.REDIS_URL }}
-          CELERY_BROKER_URL: ${{ secrets.CELERY_BROKER_URL }}
-          CELERY_RESULT_BACKEND: ${{ secrets.CELERY_RESULT_BACKEND }}
-          USER_PROJECTS_PATH: /tmp/projects
-        run: |
-          python -c "
-          from sqlalchemy import create_engine, inspect
-          import os
-
-          db_url = os.environ['DATABASE_URL']
-          if '+asyncpg' in db_url:
-              db_url = db_url.replace('+asyncpg', '')
-
-          # Add SSL mode for AWS RDS
-          if 'sslmode' not in db_url:
-              db_url += '?sslmode=prefer' if '?' not in db_url else '&sslmode=prefer'
-
-          engine = create_engine(db_url)
-          inspector = inspect(engine)
-          tables = inspector.get_table_names()
-
-          print('Database Tables:')
-          for table in sorted(tables):
-              print(f'  - {table}')
-          print(f'\\nTotal: {len(tables)} tables')
-          "
+          # Fail the job if the migration task did not exit cleanly.
+          test "$EXIT" = "0"
 
   # =============================================================================
   # Rollback (Manual)
