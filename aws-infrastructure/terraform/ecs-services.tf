@@ -119,8 +119,10 @@ resource "aws_lb_target_group" "frontend" {
   health_check {
     enabled             = true
     healthy_threshold   = 2
-    unhealthy_threshold = 3
-    timeout             = 10
+    # More tolerant: Next.js homepage SSR can be slow to warm up; don't kill tasks
+    # on a couple of slow responses.
+    unhealthy_threshold = 5
+    timeout             = 20
     interval            = 30
     path                = "/"
     protocol            = "HTTP"
@@ -389,8 +391,12 @@ resource "aws_ecs_task_definition" "frontend" {
     environment = [
       { name = "NODE_ENV", value = "production" },
       # Use api subdomain to bypass CloudFront and eliminate SSE buffering issues
-      { name = "NEXT_PUBLIC_API_URL", value = var.domain_name != "" ? "https://api.${var.domain_name}/api/v1" : "http://${aws_lb.main.dns_name}/api/v1" },
-      { name = "NEXT_PUBLIC_WS_URL", value = var.domain_name != "" ? "wss://api.${var.domain_name}/ws" : "ws://${aws_lb.main.dns_name}/ws" },
+      # Use the apex domain (routes /api/* and /ws/* to backend via the ALB rules).
+      # The api.<domain> subdomain only existed to bypass CloudFront for SSE; we serve
+      # via the ALB directly (no CloudFront), and pointing the frontend's homepage SSR
+      # at the apex avoids the api-subdomain dependency that broke health checks.
+      { name = "NEXT_PUBLIC_API_URL", value = var.domain_name != "" ? "https://${var.domain_name}/api/v1" : "http://${aws_lb.main.dns_name}/api/v1" },
+      { name = "NEXT_PUBLIC_WS_URL", value = var.domain_name != "" ? "wss://${var.domain_name}/ws" : "ws://${aws_lb.main.dns_name}/ws" },
       { name = "NEXT_PUBLIC_APP_DOMAIN", value = var.domain_name != "" ? var.domain_name : aws_lb.main.dns_name },
       { name = "NEXT_PUBLIC_APP_URL", value = var.domain_name != "" ? "https://${var.domain_name}" : "http://${aws_lb.main.dns_name}" },
       { name = "NEXT_PUBLIC_GOOGLE_CLIENT_ID", value = "248732150405-onocm8nddrfi6khku4pc867b0g163o11.apps.googleusercontent.com" },
@@ -523,6 +529,9 @@ resource "aws_ecs_service" "frontend" {
     container_name   = "frontend"
     container_port   = 3000
   }
+
+  # Give Next.js time to warm up before ALB health checks can mark it unhealthy.
+  health_check_grace_period_seconds = 180
 
   deployment_circuit_breaker {
     enable   = true
