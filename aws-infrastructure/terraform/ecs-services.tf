@@ -414,27 +414,28 @@ resource "aws_ecs_task_definition" "frontend" {
       }
     }
 
-    # Use wget, NOT curl: the frontend image is node:18-alpine, which has no curl. A
-    # curl-based probe exits 127 "not found" on every run, so the container was reported
-    # permanently UNHEALTHY no matter how well it served traffic. ECS replaced it in a
-    # loop until the deployment circuit breaker latched FAILED, after which it stopped
-    # replacing tasks at all -- leaving 0 tasks and the ALB serving 503.
+    # DELIBERATELY no container-level healthCheck. Task health here is governed by the
+    # ALB target group health check (see aws_lb_target_group.frontend), which probes the
+    # container over HTTP from outside and has kept targets healthy for weeks.
     #
-    # Alpine's wget is BUSYBOX wget, which only understands short flags like -q/-O.
-    # GNU-style long options (--no-verbose, --tries) make it exit non-zero on usage
-    # error, which fails the probe exactly like the missing curl did. Note that
-    # frontend/Dockerfile.prod's own HEALTHCHECK still carries that GNU-flag bug; it is
-    # harmless only because this ECS healthCheck overrides it.
+    # A container healthCheck was the direct cause of a multi-day production 503: the
+    # probe shelled out to `curl`, but this image is node:18-alpine and has no curl, so
+    # the probe exited 127 on every run. The container was therefore reported UNHEALTHY
+    # no matter how correctly it served traffic; ECS replaced the task in a loop until
+    # the deployment circuit breaker latched FAILED, after which ECS stopped replacing
+    # tasks at all -- leaving the service at 0 tasks and the ALB serving 503.
     #
-    # Probe /robots.txt (a statically generated route with no data fetching) rather
-    # than /, the full homepage, so a slow cold start on 0.5 vCPU cannot fail the probe.
-    healthCheck = {
-      command     = ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/robots.txt || exit 1"]
-      interval    = 30
-      timeout     = 15
-      retries     = 5
-      startPeriod = 180
-    }
+    # Do not "fix" this by swapping in wget without verifying it INSIDE the image first.
+    # Alpine's wget is busybox wget: GNU long options (--no-verbose, --tries) are usage
+    # errors, and even `wget -q -O /dev/null http://localhost:3000/robots.txt` was still
+    # observed failing the probe here. Until someone confirms a working command by
+    # running it in the actual image, the ALB check is the single source of truth.
+    #
+    # frontend/Dockerfile.prod's own HEALTHCHECK carries the same GNU-wget-flag bug, but
+    # it is harmless: ECS only monitors health checks declared in the task definition and
+    # ignores image-embedded HEALTHCHECK instructions, and a Docker health check never
+    # kills a container on its own. Worth fixing anyway so it is not mistaken for a
+    # working probe.
   }])
 }
 
