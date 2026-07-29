@@ -391,12 +391,14 @@ resource "aws_ecs_task_definition" "frontend" {
     environment = [
       { name = "NODE_ENV", value = "production" },
       # Use api subdomain to bypass CloudFront and eliminate SSE buffering issues
-      # Use the apex domain (routes /api/* and /ws/* to backend via the ALB rules).
-      # The api.<domain> subdomain only existed to bypass CloudFront for SSE; we serve
-      # via the ALB directly (no CloudFront), and pointing the frontend's homepage SSR
-      # at the apex avoids the api-subdomain dependency that broke health checks.
-      { name = "NEXT_PUBLIC_API_URL", value = var.domain_name != "" ? "https://${var.domain_name}/api/v1" : "http://${aws_lb.main.dns_name}/api/v1" },
-      { name = "NEXT_PUBLIC_WS_URL", value = var.domain_name != "" ? "wss://${var.domain_name}/ws" : "ws://${aws_lb.main.dns_name}/ws" },
+      # RUNTIME value used by the frontend's server-side rendering (SSR). The browser
+      # bundle already bakes the public https://<domain> URLs at build time (build args),
+      # so this runtime value is only used for in-container SSR fetches. Point it at the
+      # ALB's internal DNS over HTTP: hitting the public HTTPS domain forces a slow NAT
+      # hairpin that makes the homepage SSR (and thus the container health check) time
+      # out and crash-loop. Using the ALB DNS directly is the proven-healthy config.
+      { name = "NEXT_PUBLIC_API_URL", value = "http://${aws_lb.main.dns_name}/api/v1" },
+      { name = "NEXT_PUBLIC_WS_URL", value = "ws://${aws_lb.main.dns_name}/ws" },
       { name = "NEXT_PUBLIC_APP_DOMAIN", value = var.domain_name != "" ? var.domain_name : aws_lb.main.dns_name },
       { name = "NEXT_PUBLIC_APP_URL", value = var.domain_name != "" ? "https://${var.domain_name}" : "http://${aws_lb.main.dns_name}" },
       { name = "NEXT_PUBLIC_GOOGLE_CLIENT_ID", value = "248732150405-onocm8nddrfi6khku4pc867b0g163o11.apps.googleusercontent.com" },
@@ -412,12 +414,26 @@ resource "aws_ecs_task_definition" "frontend" {
       }
     }
 
+    # Use wget, NOT curl: the frontend image is node:18-alpine, which has no curl. A
+    # curl-based probe exits 127 "not found" on every run, so the container was reported
+    # permanently UNHEALTHY no matter how well it served traffic. ECS replaced it in a
+    # loop until the deployment circuit breaker latched FAILED, after which it stopped
+    # replacing tasks at all -- leaving 0 tasks and the ALB serving 503.
+    #
+    # Alpine's wget is BUSYBOX wget, which only understands short flags like -q/-O.
+    # GNU-style long options (--no-verbose, --tries) make it exit non-zero on usage
+    # error, which fails the probe exactly like the missing curl did. Note that
+    # frontend/Dockerfile.prod's own HEALTHCHECK still carries that GNU-flag bug; it is
+    # harmless only because this ECS healthCheck overrides it.
+    #
+    # Probe /robots.txt (a statically generated route with no data fetching) rather
+    # than /, the full homepage, so a slow cold start on 0.5 vCPU cannot fail the probe.
     healthCheck = {
-      command     = ["CMD-SHELL", "curl -f http://localhost:3000/ || exit 1"]
+      command     = ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/robots.txt || exit 1"]
       interval    = 30
-      timeout     = 10
-      retries     = 3
-      startPeriod = 30
+      timeout     = 15
+      retries     = 5
+      startPeriod = 180
     }
   }])
 }
@@ -430,6 +446,12 @@ resource "aws_ecs_task_definition" "celery" {
   family                   = "${var.app_name}-celery"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
+  # NOTE: this service is capacity-bound by the Fargate On-Demand vCPU quota in
+  # ap-south-2 (account default: 4). Fargate rounds each task UP to a whole vCPU for
+  # quota accounting, so backend (2 x 1) + frontend (0.5 -> 1) already consumes 3 of 4
+  # and leaves no headroom for celery plus rolling-deployment overlap. Shrinking celery
+  # below 1024 does NOT help (0.5 still bills 1 vCPU against the quota) -- the fix is
+  # the pending quota increase to 16 vCPU.
   cpu                      = 1024  # 1 vCPU
   memory                   = 2048  # 2 GB
   execution_role_arn       = aws_iam_role.ecs_execution.arn
