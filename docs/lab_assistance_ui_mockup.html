@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lab Assistance Agent - UI/UX Design</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .code-font { font-family: 'JetBrains Mono', monospace; }
+        .gradient-bg { background: linear-gradient(135deg, #1e1e2e 0%, #0f0f1a 100%); }
+        .card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 40px rgba(59, 130, 246, 0.15); }
+        .progress-bar { background: linear-gradient(90deg, #3b82f6, #8b5cf6); }
+        .glow { box-shadow: 0 0 20px rgba(59, 130, 246, 0.3); }
+        .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .animate-pulse-slow { animation: pulse 2s infinite; }
+        @keyframes typing { from { width: 0; } to { width: 100%; } }
+        .typing-animation { overflow: hidden; white-space: nowrap; animation: typing 3s steps(40) infinite; }
+    </style>
+</head>
+<body class="gradient-bg min-h-screen text-white">
+
+    <!-- Navigation Tabs -->
+    <div class="fixed top-0 left-0 right-0 bg-gray-900/95 backdrop-blur-sm z-50 border-b border-gray-700">
+        <div class="max-w-7xl mx-auto px-4">
+            <div class="flex items-center justify-between py-3">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+                        <span class="text-lg">🧪</span>
+                    </div>
+                    <span class="font-bold text-lg">Lab Assistance Agent</span>
+                    <span class="text-xs px-2 py-0.5 rounded-full bg-gradient-to-r from-orange-500 to-green-500 text-white font-medium">UI/UX Design</span>
+                </div>
+                <div class="flex gap-2">
+                    <button onclick="showView('student')" id="btn-student" class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium">Student View</button>
+                    <button onclick="showView('faculty')" id="btn-faculty" class="px-4 py-2 rounded-lg bg-gray-700 text-gray-300 text-sm font-medium hover:bg-gray-600">Faculty View</button>
+                    <button onclick="showView('hod')" id="btn-hod" class="px-4 py-2 rounded-lg bg-gray-700 text-gray-300 text-sm font-medium hover:bg-gray-600">HOD View</button>
+                    <button onclick="showView('code')" id="btn-code" class="px-4 py-2 rounded-lg bg-gray-700 text-gray-300 text-sm font-medium hover:bg-gray-600">Code Editor</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="pt-20 pb-10">
+
+        <!-- STUDENT VIEW -->
+        <div id="view-student" class="view-content">
+            <div class="max-w-7xl mx-auto px-4">
+
+                <!-- Header -->
+                <div class="flex items-center justify-between mb-8">
+                    <div>
+                        <h1 class="text-2xl font-bold">Welcome back, Rahul! 👋</h1>
+                        <p class="text-gray-400">Branch: CSE | Semester: 5</p>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <div class="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-800 border border-gray-700">
+                            <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-sm font-bold">R</div>
+                            <span class="text-sm">Rahul Kumar</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stats Cards -->
+                <div class="grid grid-cols-4 gap-4 mb-8">
+                    <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-5 card-hover transition-all">
+                        <div class="text-3xl font-bold text-blue-400">75%</div>
+                        <div class="text-gray-400 text-sm mt-1">Course Complete</div>
+                        <div class="mt-3 h-2 bg-gray-700 rounded-full overflow-hidden">
+                            <div class="h-full progress-bar rounded-full" style="width: 75%"></div>
+                        </div>
+                    </div>
+                    <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-5 card-hover transition-all">
+                        <div class="text-3xl font-bold text-green-400">120</div>
+                        <div class="text-gray-400 text-sm mt-1">MCQs Solved</div>
+                        <div class="text-xs text-green-400 mt-2">+15 this week</div>
+                    </div>
+                    <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-5 card-hover transition-all">
+                        <div class="text-3xl font-bold text-purple-400">45</div>
+                        <div class="text-gray-400 text-sm mt-1">Programs Executed</div>
+                        <div class="text-xs text-purple-400 mt-2">+8 this week</div>
+                    </div>
+                    <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-5 card-hover transition-all">
+                        <div class="text-3xl font-bold text-orange-400">#12</div>
+                        <div class="text-gray-400 text-sm mt-1">Class Rank</div>
+                        <div class="text-xs text-orange-400 mt-2">Top 10%</div>
+                    </div>
+                </div>
+
+                <!-- Semester Selector & Labs -->
+                <div class="mb-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-semibold">Select Your Lab</h2>
+                        <select class="bg-gray-800 border border-gray-600 rounded-lg px-4 py-2 text-sm">
+                            <option>Semester 5</option>
+                            <option>Semester 4</option>
+                            <option>Semester 3</option>
+                        </select>
+                    </div>
+
+                    <div class="grid grid-cols-3 gap-4">
+                        <!-- Lab Card 1 -->
+                        <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-5 card-hover transition-all cursor-pointer group" onclick="showView('topics')">
+                            <div class="flex items-start justify-between mb-4">
+                                <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-2xl">🌐</div>
+                                <span class="px-2 py-1 rounded-full bg-blue-500/20 text-blue-400 text-xs">In Progress</span>
+                            </div>
+                            <h3 class="text-lg font-semibold mb-1">Computer Networks Lab</h3>
+                            <p class="text-gray-400 text-sm mb-4">Socket Programming, TCP/UDP, Wireshark</p>
+                            <div class="mb-2">
+                                <div class="flex justify-between text-sm mb-1">
+                                    <span class="text-gray-400">Progress</span>
+                                    <span class="text-blue-400">60%</span>
+                                </div>
+                                <div class="h-2 bg-gray-700 rounded-full overflow-hidden">
+                                    <div class="h-full bg-blue-500 rounded-full" style="width: 60%"></div>
+                                </div>
+                            </div>
+                            <button class="w-full mt-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium transition-colors group-hover:glow">
+                                Continue →
+                            </button>
+                        </div>
+
+                        <!-- Lab Card 2 -->
+                        <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-5 card-hover transition-all cursor-pointer group">
+                            <div class="flex items-start justify-between mb-4">
+                                <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center text-2xl">💻</div>
+                                <span class="px-2 py-1 rounded-full bg-green-500/20 text-green-400 text-xs">In Progress</span>
+                            </div>
+                            <h3 class="text-lg font-semibold mb-1">Web Technologies Lab</h3>
+                            <p class="text-gray-400 text-sm mb-4">HTML, CSS, JavaScript, React, Node.js</p>
+                            <div class="mb-2">
+                                <div class="flex justify-between text-sm mb-1">
+                                    <span class="text-gray-400">Progress</span>
+                                    <span class="text-green-400">45%</span>
+                                </div>
+                                <div class="h-2 bg-gray-700 rounded-full overflow-hidden">
+                                    <div class="h-full bg-green-500 rounded-full" style="width: 45%"></div>
+                                </div>
+                            </div>
+                            <button class="w-full mt-3 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-sm font-medium transition-colors">
+                                Continue →
+                            </button>
+                        </div>
+
+                        <!-- Lab Card 3 -->
+                        <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-5 card-hover transition-all cursor-pointer group">
+                            <div class="flex items-start justify-between mb-4">
+                                <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-2xl">🔧</div>
+                                <span class="px-2 py-1 rounded-full bg-gray-500/20 text-gray-400 text-xs">Not Started</span>
+                            </div>
+                            <h3 class="text-lg font-semibold mb-1">Theory of Computation</h3>
+                            <p class="text-gray-400 text-sm mb-4">Automata, Turing Machine, Regex</p>
+                            <div class="mb-2">
+                                <div class="flex justify-between text-sm mb-1">
+                                    <span class="text-gray-400">Progress</span>
+                                    <span class="text-gray-400">0%</span>
+                                </div>
+                                <div class="h-2 bg-gray-700 rounded-full overflow-hidden">
+                                    <div class="h-full bg-purple-500 rounded-full" style="width: 0%"></div>
+                                </div>
+                            </div>
+                            <button class="w-full mt-3 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-sm font-medium transition-colors">
+                                Start →
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Activity -->
+                <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-5">
+                    <h3 class="text-lg font-semibold mb-4">Recent Activity</h3>
+                    <div class="space-y-3">
+                        <div class="flex items-center gap-3 p-3 bg-gray-700/30 rounded-lg">
+                            <div class="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center">✅</div>
+                            <div class="flex-1">
+                                <p class="text-sm">Completed: <span class="text-green-400">Socket Programming - TCP Server</span></p>
+                                <p class="text-xs text-gray-500">15 mins ago</p>
+                            </div>
+                            <span class="text-green-400 text-sm font-medium">+100 pts</span>
+                        </div>
+                        <div class="flex items-center gap-3 p-3 bg-gray-700/30 rounded-lg">
+                            <div class="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center">📝</div>
+                            <div class="flex-1">
+                                <p class="text-sm">MCQ Score: <span class="text-blue-400">Computer Networks Quiz 3 - 8/10</span></p>
+                                <p class="text-xs text-gray-500">1 hour ago</p>
+                            </div>
+                            <span class="text-blue-400 text-sm font-medium">80%</span>
+                        </div>
+                        <div class="flex items-center gap-3 p-3 bg-gray-700/30 rounded-lg">
+                            <div class="w-8 h-8 rounded-full bg-yellow-500/20 flex items-center justify-center animate-pulse-slow">⏳</div>
+                            <div class="flex-1">
+                                <p class="text-sm">In Progress: <span class="text-yellow-400">HTTP Protocol Implementation</span></p>
+                                <p class="text-xs text-gray-500">Started 2 hours ago</p>
+                            </div>
+                            <span class="text-yellow-400 text-sm font-medium">50%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TOPICS VIEW -->
+        <div id="view-topics" class="view-content hidden">
+            <div class="max-w-7xl mx-auto px-4">
+                <!-- Back Button & Header -->
+                <div class="flex items-center gap-4 mb-6">
+                    <button onclick="showView('student')" class="w-10 h-10 rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center hover:bg-gray-700">←</button>
+                    <div>
+                        <h1 class="text-2xl font-bold">🌐 Computer Networks Lab</h1>
+                        <p class="text-gray-400">Semester 5 | CSE</p>
+                    </div>
+                </div>
+
+                <!-- Lab Overview -->
+                <div class="bg-gradient-to-r from-blue-900/50 to-purple-900/50 border border-blue-500/30 rounded-xl p-5 mb-6">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-300 mb-2">Technologies: <span class="text-blue-400">C, Python, Socket Programming, Wireshark</span></p>
+                            <p class="text-gray-300">Total Topics: <span class="text-white font-medium">12</span> | MCQs: <span class="text-white font-medium">60</span> | Coding Problems: <span class="text-white font-medium">15</span></p>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-sm text-gray-400 mb-1">Your Progress</p>
+                            <div class="flex items-center gap-3">
+                                <div class="w-32 h-3 bg-gray-700 rounded-full overflow-hidden">
+                                    <div class="h-full progress-bar rounded-full" style="width: 60%"></div>
+                                </div>
+                                <span class="text-xl font-bold text-blue-400">60%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Topics List -->
+                <div class="space-y-4">
+                    <h3 class="text-lg font-semibold text-gray-300">Week 1: Introduction to Networking</h3>
+
+                    <!-- Topic 1 - Completed -->
+                    <div class="bg-gray-800/50 border border-green-500/30 rounded-xl p-4 flex items-center gap-4">
+                        <div class="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-lg">✓</div>
+                        <div class="flex-1">
+                            <h4 class="font-semibold">1. OSI Model & TCP/IP Stack</h4>
+                            <div class="flex items-center gap-4 mt-2 text-sm text-gray-400">
+                                <span class="flex items-center gap-1">📖 Concepts</span>
+                                <span class="flex items-center gap-1">📝 MCQ (5/5)</span>
+                                <span class="flex items-center gap-1">💻 Code (1/1)</span>
+                            </div>
+                        </div>
+                        <span class="px-3 py-1 rounded-full bg-green-500/20 text-green-400 text-sm">Completed</span>
+                    </div>
+
+                    <!-- Topic 2 - Completed -->
+                    <div class="bg-gray-800/50 border border-green-500/30 rounded-xl p-4 flex items-center gap-4">
+                        <div class="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-lg">✓</div>
+                        <div class="flex-1">
+                            <h4 class="font-semibold">2. IP Addressing & Subnetting</h4>
+                            <div class="flex items-center gap-4 mt-2 text-sm text-gray-400">
+                                <span class="flex items-center gap-1">📖 Concepts</span>
+                                <span class="flex items-center gap-1">📝 MCQ (5/5)</span>
+                                <span class="flex items-center gap-1">💻 Code (1/1)</span>
+                            </div>
+                        </div>
+                        <span class="px-3 py-1 rounded-full bg-green-500/20 text-green-400 text-sm">Completed</span>
+                    </div>
+
+                    <!-- Topic 3 - In Progress -->
+                    <div class="bg-gray-800/50 border border-blue-500/50 rounded-xl p-4 flex items-center gap-4 glow cursor-pointer" onclick="showView('learning')">
+                        <div class="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center text-lg animate-pulse-slow">◉</div>
+                        <div class="flex-1">
+                            <h4 class="font-semibold">3. Socket Programming Basics</h4>
+                            <div class="flex items-center gap-4 mt-2 text-sm text-gray-400">
+                                <span class="flex items-center gap-1 text-green-400">📖 Concepts ✓</span>
+                                <span class="flex items-center gap-1 text-green-400">📝 MCQ (4/5)</span>
+                                <span class="flex items-center gap-1 text-yellow-400">💻 Code (1/2)</span>
+                            </div>
+                        </div>
+                        <span class="px-3 py-1 rounded-full bg-blue-500/20 text-blue-400 text-sm">In Progress</span>
+                    </div>
+
+                    <!-- Topic 4 - Locked -->
+                    <div class="bg-gray-800/30 border border-gray-700 rounded-xl p-4 flex items-center gap-4 opacity-60">
+                        <div class="w-10 h-10 rounded-full bg-gray-700 flex items-center justify-center text-lg">🔒</div>
+                        <div class="flex-1">
+                            <h4 class="font-semibold text-gray-400">4. TCP Client-Server</h4>
+                            <div class="flex items-center gap-4 mt-2 text-sm text-gray-500">
+                                <span>📖 Concepts</span>
+                                <span>📝 MCQ (5)</span>
+                                <span>💻 Code (2)</span>
+                            </div>
+                        </div>
+                        <span class="px-3 py-1 rounded-full bg-gray-700 text-gray-400 text-sm">Locked 🔒</span>
+                    </div>
+
+                    <h3 class="text-lg font-semibold text-gray-300 mt-8">Week 2: Transport Layer</h3>
+
+                    <!-- More locked topics -->
+                    <div class="bg-gray-800/30 border border-gray-700 rounded-xl p-4 flex items-center gap-4 opacity-60">
+                        <div class="w-10 h-10 rounded-full bg-gray-700 flex items-center justify-center text-lg">🔒</div>
+                        <div class="flex-1">
+                            <h4 class="font-semibold text-gray-400">5. UDP Programming</h4>
+                            <div class="flex items-center gap-4 mt-2 text-sm text-gray-500">
+                                <span>📖 Concepts</span>
+                                <span>📝 MCQ (5)</span>
+                                <span>💻 Code (2)</span>
+                            </div>
+                        </div>
+                        <span class="px-3 py-1 rounded-full bg-gray-700 text-gray-400 text-sm">Locked 🔒</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- LEARNING VIEW (Concepts + MCQ + Coding Tabs) -->
+        <div id="view-learning" class="view-content hidden">
+            <div class="max-w-7xl mx-auto px-4">
+                <!-- Back Button & Header -->
+                <div class="flex items-center justify-between mb-6">
+                    <div class="flex items-center gap-4">
+                        <button onclick="showView('topics')" class="w-10 h-10 rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center hover:bg-gray-700">←</button>
+                        <div>
+                            <h1 class="text-xl font-bold">Topic 3: Socket Programming Basics</h1>
+                            <p class="text-gray-400">Computer Networks Lab</p>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-sm text-gray-400">Progress</p>
+                        <p class="text-lg font-bold text-blue-400">2/3 Complete</p>
+                    </div>
+                </div>
+
+                <!-- Tabs -->
+                <div class="flex gap-1 mb-6 bg-gray-800/50 rounded-xl p-1">
+                    <button onclick="showTab('concepts')" id="tab-concepts" class="flex-1 py-3 px-4 rounded-lg bg-blue-600 text-white font-medium text-sm">📖 Concepts</button>
+                    <button onclick="showTab('mcq')" id="tab-mcq" class="flex-1 py-3 px-4 rounded-lg text-gray-400 hover:text-white font-medium text-sm">📝 MCQ Quiz</button>
+                    <button onclick="showTab('coding')" id="tab-coding" class="flex-1 py-3 px-4 rounded-lg text-gray-400 hover:text-white font-medium text-sm">💻 Coding</button>
+                </div>
+
+                <!-- Concepts Content -->
+                <div id="content-concepts" class="tab-content">
+                    <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-6">
+                        <h2 class="text-2xl font-bold mb-4">What is a Socket?</h2>
+                        <p class="text-gray-300 mb-6 leading-relaxed">
+                            A socket is an endpoint for communication between two machines. It is a combination of IP address and port number.
+                            Sockets allow applications to communicate over a network using standard protocols like TCP and UDP.
+                        </p>
+
+                        <div class="bg-blue-900/30 border border-blue-500/30 rounded-xl p-5 mb-6">
+                            <h3 class="text-lg font-semibold text-blue-400 mb-3">🔑 Key Concepts</h3>
+                            <ul class="space-y-2 text-gray-300">
+                                <li class="flex items-start gap-2">
+                                    <span class="text-blue-400">•</span>
+                                    <span><strong>Socket = IP Address + Port Number</strong></span>
+                                </li>
+                                <li class="flex items-start gap-2">
+                                    <span class="text-blue-400">•</span>
+                                    <span><strong>Server:</strong> Creates socket → binds → listens → accepts</span>
+                                </li>
+                                <li class="flex items-start gap-2">
+                                    <span class="text-blue-400">•</span>
+                                    <span><strong>Client:</strong> Creates socket → connects</span>
+                                </li>
+                                <li class="flex items-start gap-2">
+                                    <span class="text-blue-400">•</span>
+                                    <span><strong>Types:</strong> SOCK_STREAM (TCP), SOCK_DGRAM (UDP)</span>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <h3 class="text-lg font-semibold mb-3">Socket Creation in Python:</h3>
+                        <div class="bg-gray-900 rounded-xl p-4 code-font text-sm overflow-x-auto mb-6">
+                            <pre class="text-gray-300"><span class="text-purple-400">import</span> <span class="text-blue-400">socket</span>
+
+<span class="text-gray-500"># Create a TCP socket</span>
+server_socket = socket.<span class="text-yellow-400">socket</span>(
+    socket.<span class="text-cyan-400">AF_INET</span>,
+    socket.<span class="text-cyan-400">SOCK_STREAM</span>
+)
+
+<span class="text-gray-500"># Bind to address</span>
+server_socket.<span class="text-yellow-400">bind</span>((<span class="text-green-400">'localhost'</span>, <span class="text-orange-400">8080</span>))
+
+<span class="text-gray-500"># Listen for connections</span>
+server_socket.<span class="text-yellow-400">listen</span>(<span class="text-orange-400">5</span>)</pre>
+                        </div>
+
+                        <div class="bg-purple-900/30 border border-purple-500/30 rounded-xl p-5 mb-6">
+                            <h3 class="text-lg font-semibold text-purple-400 mb-3">🎬 Video Tutorial</h3>
+                            <div class="flex items-center gap-4">
+                                <div class="w-24 h-16 bg-gray-700 rounded-lg flex items-center justify-center text-2xl">▶️</div>
+                                <div>
+                                    <p class="font-medium">Socket Programming in Python</p>
+                                    <p class="text-sm text-gray-400">Duration: 15:30</p>
+                                </div>
+                                <button class="ml-auto px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-sm font-medium">Watch Now</button>
+                            </div>
+                        </div>
+
+                        <div class="flex justify-end gap-3">
+                            <button class="px-6 py-2 rounded-lg bg-green-600 hover:bg-green-500 font-medium">✅ Mark as Read</button>
+                            <button onclick="showTab('mcq')" class="px-6 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 font-medium">Next: MCQ Quiz →</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MCQ Content -->
+                <div id="content-mcq" class="tab-content hidden">
+                    <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-6">
+                        <div class="flex items-center justify-between mb-6">
+                            <h2 class="text-xl font-bold">MCQ Quiz: Socket Programming</h2>
+                            <div class="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/20 border border-red-500/30">
+                                <span class="text-red-400">⏱️</span>
+                                <span class="text-red-400 font-mono font-bold">08:45</span>
+                            </div>
+                        </div>
+
+                        <div class="flex gap-2 mb-6">
+                            <span class="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-sm font-medium">1</span>
+                            <span class="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-sm font-medium">2</span>
+                            <span class="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-sm font-medium ring-2 ring-blue-300">3</span>
+                            <span class="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-sm font-medium">4</span>
+                            <span class="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-sm font-medium">5</span>
+                        </div>
+
+                        <div class="bg-gray-900/50 rounded-xl p-6 mb-6">
+                            <p class="text-sm text-gray-400 mb-2">Question 3 of 5</p>
+                            <h3 class="text-lg font-semibold mb-6">Which function is used to accept incoming connections on a server socket in Python?</h3>
+
+                            <div class="space-y-3">
+                                <label class="flex items-center gap-3 p-4 rounded-xl bg-gray-800 border border-gray-700 cursor-pointer hover:border-gray-500 transition-colors">
+                                    <input type="radio" name="answer" class="w-5 h-5 text-blue-500">
+                                    <span class="text-gray-300">A) socket.connect()</span>
+                                </label>
+                                <label class="flex items-center gap-3 p-4 rounded-xl bg-blue-900/30 border border-blue-500 cursor-pointer">
+                                    <input type="radio" name="answer" class="w-5 h-5 text-blue-500" checked>
+                                    <span class="text-white">B) socket.accept()</span>
+                                    <span class="ml-auto text-blue-400 text-sm">✓ Selected</span>
+                                </label>
+                                <label class="flex items-center gap-3 p-4 rounded-xl bg-gray-800 border border-gray-700 cursor-pointer hover:border-gray-500 transition-colors">
+                                    <input type="radio" name="answer" class="w-5 h-5 text-blue-500">
+                                    <span class="text-gray-300">C) socket.receive()</span>
+                                </label>
+                                <label class="flex items-center gap-3 p-4 rounded-xl bg-gray-800 border border-gray-700 cursor-pointer hover:border-gray-500 transition-colors">
+                                    <input type="radio" name="answer" class="w-5 h-5 text-blue-500">
+                                    <span class="text-gray-300">D) socket.listen()</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="flex justify-between">
+                            <button class="px-6 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 font-medium">← Previous</button>
+                            <button class="px-6 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 font-medium">Next →</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Coding Content -->
+                <div id="content-coding" class="tab-content hidden">
+                    <div class="text-center py-8">
+                        <p class="text-gray-400">Click below to open the full code editor</p>
+                        <button onclick="showView('code')" class="mt-4 px-6 py-3 rounded-lg bg-purple-600 hover:bg-purple-500 font-medium">Open Code Editor →</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CODE EDITOR VIEW -->
+        <div id="view-code" class="view-content hidden">
+            <div class="max-w-7xl mx-auto px-4">
+                <!-- Header -->
+                <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center gap-4">
+                        <button onclick="showView('student')" class="w-10 h-10 rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center hover:bg-gray-700">←</button>
+                        <div>
+                            <h1 class="text-xl font-bold">💻 TCP Echo Server</h1>
+                            <p class="text-gray-400">Computer Networks Lab | Socket Programming</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="px-3 py-1 rounded-full bg-yellow-500/20 text-yellow-400 text-sm">🟡 Medium</span>
+                        <span class="px-3 py-1 rounded-full bg-blue-500/20 text-blue-400 text-sm">100 Points</span>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <!-- Problem Description -->
+                    <div class="bg-gray-800/50 border border-gray-700 rounded-xl overflow-hidden">
+                        <div class="px-4 py-3 bg-gray-900/50 border-b border-gray-700">
+                            <span class="font-medium">Problem Description</span>
+                        </div>
+                        <div class="p-4 h-[500px] overflow-y-auto">
+                            <h3 class="text-lg font-semibold mb-3">TCP Echo Server</h3>
+                            <p class="text-gray-300 mb-4">Write a TCP server that echoes back any message received from the client.</p>
+
+                            <h4 class="font-semibold text-blue-400 mb-2">Requirements:</h4>
+                            <ol class="list-decimal list-inside space-y-1 text-gray-300 mb-4">
+                                <li>Listen on port 9999</li>
+                                <li>Accept client connections</li>
+                                <li>Receive message from client</li>
+                                <li>Send back the same message</li>
+                                <li>Close connection</li>
+                            </ol>
+
+                            <h4 class="font-semibold text-green-400 mb-2">Example:</h4>
+                            <div class="bg-gray-900 rounded-lg p-3 code-font text-sm mb-4">
+                                <p class="text-gray-400">Input: "Hello"</p>
+                                <p class="text-gray-400">Output: "Hello"</p>
+                            </div>
+
+                            <h4 class="font-semibold text-purple-400 mb-2">Constraints:</h4>
+                            <ul class="list-disc list-inside space-y-1 text-gray-300 mb-4">
+                                <li>Port: 9999</li>
+                                <li>Single client at a time</li>
+                                <li>Max message: 1024 bytes</li>
+                            </ul>
+
+                            <div class="bg-yellow-900/30 border border-yellow-500/30 rounded-lg p-3">
+                                <h4 class="font-semibold text-yellow-400 mb-2">💡 Hints:</h4>
+                                <ul class="list-disc list-inside space-y-1 text-gray-300 text-sm">
+                                    <li>Use socket.bind() to bind address</li>
+                                    <li>Use socket.accept() for connections</li>
+                                    <li>Use conn.recv() to receive data</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Code Editor -->
+                    <div class="bg-gray-800/50 border border-gray-700 rounded-xl overflow-hidden">
+                        <div class="flex items-center justify-between px-4 py-3 bg-gray-900/50 border-b border-gray-700">
+                            <div class="flex items-center gap-2">
+                                <div class="flex gap-1.5">
+                                    <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                                    <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+                                    <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                                </div>
+                                <span class="text-sm text-gray-400 ml-2">echo_server.py</span>
+                            </div>
+                            <select class="bg-gray-800 border border-gray-600 rounded px-3 py-1 text-sm">
+                                <option>Python</option>
+                                <option>C</option>
+                                <option>Java</option>
+                                <option>C++</option>
+                            </select>
+                        </div>
+                        <div class="p-4 h-[350px] code-font text-sm bg-gray-900">
+                            <pre class="text-gray-300"><span class="text-gray-600"> 1</span>  <span class="text-purple-400">import</span> <span class="text-blue-400">socket</span>
+<span class="text-gray-600"> 2</span>
+<span class="text-gray-600"> 3</span>  <span class="text-purple-400">def</span> <span class="text-yellow-400">echo_server</span>():
+<span class="text-gray-600"> 4</span>      <span class="text-gray-500"># Create TCP socket</span>
+<span class="text-gray-600"> 5</span>      server = socket.<span class="text-yellow-400">socket</span>(
+<span class="text-gray-600"> 6</span>          socket.<span class="text-cyan-400">AF_INET</span>,
+<span class="text-gray-600"> 7</span>          socket.<span class="text-cyan-400">SOCK_STREAM</span>
+<span class="text-gray-600"> 8</span>      )
+<span class="text-gray-600"> 9</span>
+<span class="text-gray-600">10</span>      <span class="text-gray-500"># Bind and listen</span>
+<span class="text-gray-600">11</span>      server.<span class="text-yellow-400">bind</span>((<span class="text-green-400">'localhost'</span>, <span class="text-orange-400">9999</span>))
+<span class="text-gray-600">12</span>      server.<span class="text-yellow-400">listen</span>(<span class="text-orange-400">1</span>)
+<span class="text-gray-600">13</span>
+<span class="text-gray-600">14</span>      <span class="text-gray-500"># Accept connection</span>
+<span class="text-gray-600">15</span>      conn, addr = server.<span class="text-yellow-400">accept</span>()
+<span class="text-gray-600">16</span>
+<span class="text-gray-600">17</span>      <span class="text-gray-500"># Receive and echo</span>
+<span class="text-gray-600">18</span>      data = conn.<span class="text-yellow-400">recv</span>(<span class="text-orange-400">1024</span>)
+<span class="text-gray-600">19</span>      conn.<span class="text-yellow-400">send</span>(data)
+<span class="text-gray-600">20</span>
+<span class="text-gray-600">21</span>      conn.<span class="text-yellow-400">close</span>()
+<span class="text-gray-600">22</span>      server.<span class="text-yellow-400">close</span>()<span class="inline-block w-2 h-4 bg-blue-500 animate-pulse ml-1"></span></pre>
+                        </div>
+                        <div class="flex gap-2 px-4 py-3 bg-gray-900/50 border-t border-gray-700">
+                            <button class="flex-1 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 font-medium text-sm">▶️ Run Code</button>
+                            <button class="flex-1 py-2 rounded-lg bg-green-600 hover:bg-green-500 font-medium text-sm">✓ Submit</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Test Results -->
+                <div class="mt-4 bg-gray-800/50 border border-gray-700 rounded-xl overflow-hidden">
+                    <div class="px-4 py-3 bg-gray-900/50 border-b border-gray-700 flex items-center justify-between">
+                        <span class="font-medium">Test Results</span>
+                        <span class="text-green-400 text-sm">4/5 Passed</span>
+                    </div>
+                    <div class="p-4 grid grid-cols-5 gap-3">
+                        <div class="p-3 bg-green-500/10 border border-green-500/30 rounded-lg text-center">
+                            <div class="text-green-400 text-lg mb-1">✓</div>
+                            <div class="text-xs text-gray-400">Test 1</div>
+                            <div class="text-xs text-green-400">0.02s</div>
+                        </div>
+                        <div class="p-3 bg-green-500/10 border border-green-500/30 rounded-lg text-center">
+                            <div class="text-green-400 text-lg mb-1">✓</div>
+                            <div class="text-xs text-gray-400">Test 2</div>
+                            <div class="text-xs text-green-400">0.01s</div>
+                        </div>
+                        <div class="p-3 bg-green-500/10 border border-green-500/30 rounded-lg text-center">
+                            <div class="text-green-400 text-lg mb-1">✓</div>
+                            <div class="text-xs text-gray-400">Test 3</div>
+                            <div class="text-xs text-green-400">0.03s</div>
+                        </div>
+                        <div class="p-3 bg-green-500/10 border border-green-500/30 rounded-lg text-center">
+                            <div class="text-green-400 text-lg mb-1">✓</div>
+                            <div class="text-xs text-gray-400">Test 4</div>
+                            <div class="text-xs text-green-400">0.02s</div>
+                        </div>
+                        <div class="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-center">
+                            <div class="text-red-400 text-lg mb-1">✗</div>
+                            <div class="text-xs text-gray-400">Test 5</div>
+                            <div class="text-xs text-red-400">Failed</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- FACULTY VIEW -->
+        <div id="view-faculty" class="view-content hidden">
+            <div class="max-w-7xl mx-auto px-4">
+                <!-- Header -->
+                <div class="flex items-center justify-between mb-8">
+                    <div>
+                        <h1 class="text-2xl font-bold">👨‍🏫 Faculty Dashboard</h1>
+                        <p class="text-gray-400">Computer Networks Lab | Dr. Sharma</p>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium">+ Add Question</button>
+                        <button class="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-sm font-medium">📤 Export</button>
+                    </div>
+                </div>
+
+                <!-- Stats -->
+                <div class="grid grid-cols-4 gap-4 mb-8">
+                    <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-5">
+                        <div class="text-3xl font-bold text-blue-400">156</div>
+                        <div class="text-gray-400 text-sm mt-1">Students Enrolled</div>
+                    </div>
+                    <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-5">
+                        <div class="text-3xl font-bold text-green-400">78%</div>
+                        <div class="text-gray-400 text-sm mt-1">Avg Score This Week</div>
+                    </div>
+                    <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-5">
+                        <div class="text-3xl font-bold text-purple-400">42</div>
+                        <div class="text-gray-400 text-sm mt-1">Submissions Today</div>
+                    </div>
+                    <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-5">
+                        <div class="text-3xl font-bold text-orange-400">12</div>
+                        <div class="text-gray-400 text-sm mt-1">Pending Review</div>
+                    </div>
+                </div>
+
+                <!-- Class Progress -->
+                <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-5 mb-6">
+                    <h3 class="text-lg font-semibold mb-4">Class Progress Overview</h3>
+
+                    <div class="mb-6">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-gray-300">Section A (CSE-A, 60 students)</span>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex items-center gap-3">
+                                <span class="text-sm text-gray-400 w-40">Topic 1: OSI Model</span>
+                                <div class="flex-1 h-3 bg-gray-700 rounded-full overflow-hidden">
+                                    <div class="h-full bg-green-500 rounded-full" style="width: 85%"></div>
+                                </div>
+                                <span class="text-sm text-green-400 w-12">85%</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-sm text-gray-400 w-40">Topic 2: IP Addressing</span>
+                                <div class="flex-1 h-3 bg-gray-700 rounded-full overflow-hidden">
+                                    <div class="h-full bg-blue-500 rounded-full" style="width: 65%"></div>
+                                </div>
+                                <span class="text-sm text-blue-400 w-12">65%</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-sm text-gray-400 w-40">Topic 3: Socket Prog.</span>
+                                <div class="flex-1 h-3 bg-gray-700 rounded-full overflow-hidden">
+                                    <div class="h-full bg-yellow-500 rounded-full" style="width: 40%"></div>
+                                </div>
+                                <span class="text-sm text-yellow-400 w-12">40%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Student Table -->
+                <div class="bg-gray-800/50 border border-gray-700 rounded-xl overflow-hidden">
+                    <div class="px-5 py-4 border-b border-gray-700 flex items-center justify-between">
+                        <h3 class="text-lg font-semibold">Student Performance</h3>
+                        <input type="text" placeholder="Search student..." class="bg-gray-900 border border-gray-600 rounded-lg px-4 py-2 text-sm w-64">
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full">
+                            <thead class="bg-gray-900/50">
+                                <tr class="text-left text-sm text-gray-400">
+                                    <th class="px-5 py-3">#</th>
+                                    <th class="px-5 py-3">Name</th>
+                                    <th class="px-5 py-3">Roll No</th>
+                                    <th class="px-5 py-3">MCQ</th>
+                                    <th class="px-5 py-3">Coding</th>
+                                    <th class="px-5 py-3">Overall</th>
+                                    <th class="px-5 py-3">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-700">
+                                <tr class="hover:bg-gray-700/30">
+                                    <td class="px-5 py-4">1</td>
+                                    <td class="px-5 py-4 font-medium">Rahul Kumar</td>
+                                    <td class="px-5 py-4 text-gray-400">21CS101</td>
+                                    <td class="px-5 py-4 text-green-400">92%</td>
+                                    <td class="px-5 py-4 text-green-400">85%</td>
+                                    <td class="px-5 py-4 text-green-400 font-semibold">88%</td>
+                                    <td class="px-5 py-4"><span class="px-2 py-1 rounded-full bg-green-500/20 text-green-400 text-xs">Excellent</span></td>
+                                </tr>
+                                <tr class="hover:bg-gray-700/30">
+                                    <td class="px-5 py-4">2</td>
+                                    <td class="px-5 py-4 font-medium">Priya Singh</td>
+                                    <td class="px-5 py-4 text-gray-400">21CS102</td>
+                                    <td class="px-5 py-4 text-green-400">88%</td>
+                                    <td class="px-5 py-4 text-green-400">90%</td>
+                                    <td class="px-5 py-4 text-green-400 font-semibold">89%</td>
+                                    <td class="px-5 py-4"><span class="px-2 py-1 rounded-full bg-green-500/20 text-green-400 text-xs">Excellent</span></td>
+                                </tr>
+                                <tr class="hover:bg-gray-700/30">
+                                    <td class="px-5 py-4">3</td>
+                                    <td class="px-5 py-4 font-medium">Amit Sharma</td>
+                                    <td class="px-5 py-4 text-gray-400">21CS103</td>
+                                    <td class="px-5 py-4 text-yellow-400">75%</td>
+                                    <td class="px-5 py-4 text-yellow-400">70%</td>
+                                    <td class="px-5 py-4 text-yellow-400 font-semibold">72%</td>
+                                    <td class="px-5 py-4"><span class="px-2 py-1 rounded-full bg-yellow-500/20 text-yellow-400 text-xs">Good</span></td>
+                                </tr>
+                                <tr class="hover:bg-gray-700/30">
+                                    <td class="px-5 py-4">4</td>
+                                    <td class="px-5 py-4 font-medium">Vikram Rao</td>
+                                    <td class="px-5 py-4 text-gray-400">21CS105</td>
+                                    <td class="px-5 py-4 text-red-400">45%</td>
+                                    <td class="px-5 py-4 text-red-400">40%</td>
+                                    <td class="px-5 py-4 text-red-400 font-semibold">42%</td>
+                                    <td class="px-5 py-4"><span class="px-2 py-1 rounded-full bg-red-500/20 text-red-400 text-xs">Needs Help</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- HOD VIEW -->
+        <div id="view-hod" class="view-content hidden">
+            <div class="max-w-7xl mx-auto px-4">
+                <!-- Header -->
+                <div class="flex items-center justify-between mb-8">
+                    <div>
+                        <h1 class="text-2xl font-bold">🎓 HOD Dashboard</h1>
+                        <p class="text-gray-400">Computer Science Department | Dr. Reddy</p>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium">📊 Generate Report</button>
+                        <button class="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-sm font-medium">⚙️ Settings</button>
+                    </div>
+                </div>
+
+                <!-- Department Stats -->
+                <div class="grid grid-cols-4 gap-4 mb-8">
+                    <div class="bg-gradient-to-br from-blue-900/50 to-blue-800/30 border border-blue-500/30 rounded-xl p-5">
+                        <div class="text-4xl font-bold text-blue-400">450</div>
+                        <div class="text-gray-300 text-sm mt-1">Total Students</div>
+                    </div>
+                    <div class="bg-gradient-to-br from-green-900/50 to-green-800/30 border border-green-500/30 rounded-xl p-5">
+                        <div class="text-4xl font-bold text-green-400">6</div>
+                        <div class="text-gray-300 text-sm mt-1">Active Labs</div>
+                    </div>
+                    <div class="bg-gradient-to-br from-purple-900/50 to-purple-800/30 border border-purple-500/30 rounded-xl p-5">
+                        <div class="text-4xl font-bold text-purple-400">12</div>
+                        <div class="text-gray-300 text-sm mt-1">Faculty Assigned</div>
+                    </div>
+                    <div class="bg-gradient-to-br from-orange-900/50 to-orange-800/30 border border-orange-500/30 rounded-xl p-5">
+                        <div class="text-4xl font-bold text-orange-400">78%</div>
+                        <div class="text-gray-300 text-sm mt-1">Avg Performance</div>
+                    </div>
+                </div>
+
+                <!-- Lab-wise Performance -->
+                <div class="bg-gray-800/50 border border-gray-700 rounded-xl overflow-hidden mb-6">
+                    <div class="px-5 py-4 border-b border-gray-700">
+                        <h3 class="text-lg font-semibold">Lab-wise Performance</h3>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full">
+                            <thead class="bg-gray-900/50">
+                                <tr class="text-left text-sm text-gray-400">
+                                    <th class="px-5 py-3">Lab</th>
+                                    <th class="px-5 py-3">Faculty</th>
+                                    <th class="px-5 py-3">Students</th>
+                                    <th class="px-5 py-3">Avg Score</th>
+                                    <th class="px-5 py-3">Completion</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-700">
+                                <tr class="hover:bg-gray-700/30">
+                                    <td class="px-5 py-4 font-medium">🌐 Computer Networks</td>
+                                    <td class="px-5 py-4 text-gray-400">Dr. Sharma</td>
+                                    <td class="px-5 py-4">156</td>
+                                    <td class="px-5 py-4"><span class="text-green-400 font-semibold">78%</span></td>
+                                    <td class="px-5 py-4">
+                                        <div class="flex items-center gap-2">
+                                            <div class="w-24 h-2 bg-gray-700 rounded-full overflow-hidden">
+                                                <div class="h-full bg-green-500 rounded-full" style="width: 65%"></div>
+                                            </div>
+                                            <span class="text-sm text-gray-400">65%</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr class="hover:bg-gray-700/30">
+                                    <td class="px-5 py-4 font-medium">💻 Web Technologies</td>
+                                    <td class="px-5 py-4 text-gray-400">Prof. Kumar</td>
+                                    <td class="px-5 py-4">148</td>
+                                    <td class="px-5 py-4"><span class="text-green-400 font-semibold">82%</span></td>
+                                    <td class="px-5 py-4">
+                                        <div class="flex items-center gap-2">
+                                            <div class="w-24 h-2 bg-gray-700 rounded-full overflow-hidden">
+                                                <div class="h-full bg-green-500 rounded-full" style="width: 72%"></div>
+                                            </div>
+                                            <span class="text-sm text-gray-400">72%</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr class="hover:bg-gray-700/30">
+                                    <td class="px-5 py-4 font-medium">🗄️ Database Systems</td>
+                                    <td class="px-5 py-4 text-gray-400">Dr. Patel</td>
+                                    <td class="px-5 py-4">152</td>
+                                    <td class="px-5 py-4"><span class="text-yellow-400 font-semibold">71%</span></td>
+                                    <td class="px-5 py-4">
+                                        <div class="flex items-center gap-2">
+                                            <div class="w-24 h-2 bg-gray-700 rounded-full overflow-hidden">
+                                                <div class="h-full bg-yellow-500 rounded-full" style="width: 55%"></div>
+                                            </div>
+                                            <span class="text-sm text-gray-400">55%</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr class="hover:bg-gray-700/30">
+                                    <td class="px-5 py-4 font-medium">🤖 Machine Learning</td>
+                                    <td class="px-5 py-4 text-gray-400">Dr. Rao</td>
+                                    <td class="px-5 py-4">89</td>
+                                    <td class="px-5 py-4"><span class="text-green-400 font-semibold">85%</span></td>
+                                    <td class="px-5 py-4">
+                                        <div class="flex items-center gap-2">
+                                            <div class="w-24 h-2 bg-gray-700 rounded-full overflow-hidden">
+                                                <div class="h-full bg-green-500 rounded-full" style="width: 80%"></div>
+                                            </div>
+                                            <span class="text-sm text-gray-400">80%</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Semester Comparison Chart -->
+                <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-5">
+                    <h3 class="text-lg font-semibold mb-4">Semester-wise Performance</h3>
+                    <div class="space-y-3">
+                        <div class="flex items-center gap-4">
+                            <span class="w-20 text-gray-400">Sem 3</span>
+                            <div class="flex-1 h-8 bg-gray-700 rounded-lg overflow-hidden">
+                                <div class="h-full bg-gradient-to-r from-green-500 to-emerald-400 rounded-lg flex items-center justify-end pr-3" style="width: 82%">
+                                    <span class="text-sm font-semibold">82%</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <span class="w-20 text-gray-400">Sem 4</span>
+                            <div class="flex-1 h-8 bg-gray-700 rounded-lg overflow-hidden">
+                                <div class="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-lg flex items-center justify-end pr-3" style="width: 78%">
+                                    <span class="text-sm font-semibold">78%</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <span class="w-20 text-gray-400">Sem 5</span>
+                            <div class="flex-1 h-8 bg-gray-700 rounded-lg overflow-hidden">
+                                <div class="h-full bg-gradient-to-r from-purple-500 to-pink-400 rounded-lg flex items-center justify-end pr-3" style="width: 75%">
+                                    <span class="text-sm font-semibold">75%</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <span class="w-20 text-gray-400">Sem 6</span>
+                            <div class="flex-1 h-8 bg-gray-700 rounded-lg overflow-hidden">
+                                <div class="h-full bg-gradient-to-r from-yellow-500 to-orange-400 rounded-lg flex items-center justify-end pr-3" style="width: 72%">
+                                    <span class="text-sm font-semibold">72%</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <span class="w-20 text-gray-400">Sem 7</span>
+                            <div class="flex-1 h-8 bg-gray-700 rounded-lg overflow-hidden">
+                                <div class="h-full bg-gradient-to-r from-green-500 to-teal-400 rounded-lg flex items-center justify-end pr-3" style="width: 85%">
+                                    <span class="text-sm font-semibold">85%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        function showView(viewName) {
+            // Hide all views
+            document.querySelectorAll('.view-content').forEach(v => v.classList.add('hidden'));
+
+            // Show selected view
+            const view = document.getElementById('view-' + viewName);
+            if (view) {
+                view.classList.remove('hidden');
+            }
+
+            // Update button styles
+            document.querySelectorAll('[id^="btn-"]').forEach(btn => {
+                btn.classList.remove('bg-blue-600', 'text-white');
+                btn.classList.add('bg-gray-700', 'text-gray-300');
+            });
+            const activeBtn = document.getElementById('btn-' + viewName);
+            if (activeBtn) {
+                activeBtn.classList.remove('bg-gray-700', 'text-gray-300');
+                activeBtn.classList.add('bg-blue-600', 'text-white');
+            }
+        }
+
+        function showTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+
+            // Show selected tab content
+            document.getElementById('content-' + tabName).classList.remove('hidden');
+
+            // Update tab button styles
+            document.querySelectorAll('[id^="tab-"]').forEach(tab => {
+                tab.classList.remove('bg-blue-600', 'text-white');
+                tab.classList.add('text-gray-400');
+            });
+            document.getElementById('tab-' + tabName).classList.remove('text-gray-400');
+            document.getElementById('tab-' + tabName).classList.add('bg-blue-600', 'text-white');
+        }
+
+        // Initialize with student view
+        showView('student');
+    </script>
+</body>
+</html>

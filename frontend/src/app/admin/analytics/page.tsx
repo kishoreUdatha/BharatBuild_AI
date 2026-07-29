@@ -150,7 +150,7 @@ export default function AdminAnalyticsPage() {
 
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/admin/analytics/project-costs/export?${params.toString()}`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('bharatbuild-auth') ? JSON.parse(localStorage.getItem('bharatbuild-auth')!).state?.token : ''}`
+          'Authorization': `Bearer ${localStorage.getItem('access_token') || ''}`
         }
       })
 

@@ -1,0 +1,211 @@
+# Judge0 Code Execution Engine for BharatBuild AI
+# Self-hosted HackerRank-style code execution supporting 60+ languages
+#
+# Usage:
+#   docker-compose -f docker-compose.judge0.yml up -d
+#
+# Health Check:
+#   curl http://localhost:2358/about
+#   curl http://localhost:2358/languages
+#
+# API Documentation:
+#   https://api.judge0.com/
+#
+# Note: On Windows, ensure Docker Desktop has WSL 2 backend enabled
+# and sufficient memory allocated (minimum 4GB recommended)
+
+version: "3.8"
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # =============================================
+  # Judge0 API Server
+  # =============================================
+  judge0-server:
+    image: judge0/judge0:1.13.1
+    container_name: judge0-server
+    ports:
+      - "2358:2358"
+    privileged: true
+    mem_limit: 4g
+    memswap_limit: 4g
+    shm_size: 1g
+    environment:
+      # Redis connection (no password for local dev)
+      - REDIS_HOST=judge0-redis
+      - REDIS_PORT=6379
+
+      # PostgreSQL connection
+      - POSTGRES_HOST=judge0-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=judge0
+      - POSTGRES_USER=judge0
+      - POSTGRES_PASSWORD=judge0_password
+
+      # Server configuration
+      - RAILS_ENV=production
+      - RAILS_MAX_THREADS=10
+      - SECRET_KEY_BASE=your-secret-key-base-change-in-production
+
+      # Submission configuration
+      - ENABLE_WAIT_RESULT=true
+      - ENABLE_COMPILER_OPTIONS=true
+      - ALLOWED_LANGUAGES_FOR_COMPILE_OPTIONS=43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,75,76,77,78
+
+      # Resource limits (increased for Java/compiled languages)
+      - CPU_TIME_LIMIT=15
+      - CPU_EXTRA_TIME=5
+      - WALL_TIME_LIMIT=60
+      - MEMORY_LIMIT=2048000
+      - STACK_LIMIT=128000
+      - MAX_PROCESSES_AND_OR_THREADS=120
+      - ENABLE_PER_PROCESS_AND_THREAD_TIME_LIMIT=false
+      - ENABLE_PER_PROCESS_AND_THREAD_MEMORY_LIMIT=false
+      - MAX_FILE_SIZE=4096
+      # Disable network for sandbox
+      - ENABLE_NETWORK=false
+
+      # Execution limits
+      - NUMBER_OF_RUNS=1
+      - SUBMISSION_CACHE_DURATION=1
+      - USE_DOCS_AS_HOMEPAGE=true
+
+      # Authentication (optional - set for production)
+      - AUTHN_HEADER=X-Auth-Token
+      - AUTHN_TOKEN=
+      - AUTHZ_HEADER=X-Auth-User
+
+      # Callbacks
+      - CALLBACKS_MAX_TRIES=3
+      - CALLBACKS_TIMEOUT=5
+
+    depends_on:
+      judge0-db:
+        condition: service_healthy
+      judge0-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - judge0-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2358/about"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # =============================================
+  # Judge0 Workers (Code Execution)
+  # =============================================
+  judge0-workers:
+    image: judge0/judge0:1.13.1
+    container_name: judge0-workers
+    command: ["./scripts/workers"]
+    privileged: true
+    mem_limit: 4g
+    memswap_limit: 4g
+    shm_size: 1g
+    environment:
+      # Java compiler memory settings
+      - JAVA_TOOL_OPTIONS=-Xmx128m -Xms64m
+      # Same configuration as server (no password for local dev)
+      - REDIS_HOST=judge0-redis
+      - REDIS_PORT=6379
+
+      - POSTGRES_HOST=judge0-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=judge0
+      - POSTGRES_USER=judge0
+      - POSTGRES_PASSWORD=judge0_password
+
+      - RAILS_ENV=production
+
+      # Worker-specific settings
+      - COUNT=2
+      - INTERVAL=0.1
+
+      # Execution limits (same as server - increased for Java/compiled languages)
+      - CPU_TIME_LIMIT=15
+      - CPU_EXTRA_TIME=5
+      - WALL_TIME_LIMIT=60
+      - MEMORY_LIMIT=2048000
+      - STACK_LIMIT=128000
+      - MAX_PROCESSES_AND_OR_THREADS=120
+      - ENABLE_PER_PROCESS_AND_THREAD_TIME_LIMIT=false
+      - ENABLE_PER_PROCESS_AND_THREAD_MEMORY_LIMIT=false
+      - MAX_FILE_SIZE=4096
+      - NUMBER_OF_RUNS=1
+      # Disable network for sandbox
+      - ENABLE_NETWORK=false
+      # Disable cgroup memory swap for better Java compatibility
+      - DISABLE_SWAP=true
+
+    depends_on:
+      judge0-db:
+        condition: service_healthy
+      judge0-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - judge0-network
+
+  # =============================================
+  # PostgreSQL Database for Judge0
+  # =============================================
+  judge0-db:
+    image: postgres:13-alpine
+    container_name: judge0-db
+    environment:
+      - POSTGRES_DB=judge0
+      - POSTGRES_USER=judge0
+      - POSTGRES_PASSWORD=judge0_password
+    volumes:
+      - judge0-postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - judge0-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U judge0 -d judge0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # =============================================
+  # Redis for Judge0 Job Queue
+  # =============================================
+  judge0-redis:
+    image: redis:7-alpine
+    container_name: judge0-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - judge0-redis-data:/data
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - judge0-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  judge0-postgres-data:
+    driver: local
+  judge0-redis-data:
+    driver: local
+
+networks:
+  judge0-network:
+    driver: bridge
+    name: judge0-network

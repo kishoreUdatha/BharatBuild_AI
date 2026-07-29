@@ -5,6 +5,7 @@ This test:
 1. Generates a complete Spring Boot project
 2. Builds it with Maven in Docker container
 3. Reports any compilation errors
+4. Tracks token usage and cost
 
 Run: python test_docker_build.py
 """
@@ -16,6 +17,14 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Dict, List
+
+# Claude Sonnet pricing (per 1M tokens)
+INPUT_PRICE = 3.0   # $3 per 1M input tokens
+OUTPUT_PRICE = 15.0  # $15 per 1M output tokens
+
+# Global token tracker
+total_input_tokens = 0
+total_output_tokens = 0
 
 # Load API key
 api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -156,10 +165,34 @@ Requirements:
             messages=[{"role": "user", "content": user_prompt}]
         )
 
+        # Track tokens
+        global total_input_tokens, total_output_tokens
+        total_input_tokens += response.usage.input_tokens
+        total_output_tokens += response.usage.output_tokens
+
         code = extract_file_content(response.content[0].text)
         generated_files[file_path] = code
 
     return generated_files
+
+
+def print_cost_summary():
+    """Print token usage and cost summary."""
+    print("\n" + "-" * 50)
+    print("TOKEN USAGE & COST (Claude Sonnet)")
+    print("-" * 50)
+    print(f"  Input tokens:  {total_input_tokens:,}")
+    print(f"  Output tokens: {total_output_tokens:,}")
+    print(f"  Total tokens:  {total_input_tokens + total_output_tokens:,}")
+
+    input_cost = (total_input_tokens / 1_000_000) * INPUT_PRICE
+    output_cost = (total_output_tokens / 1_000_000) * OUTPUT_PRICE
+    total_cost = input_cost + output_cost
+
+    print(f"\n  Input cost:  ${input_cost:.4f}")
+    print(f"  Output cost: ${output_cost:.4f}")
+    print(f"  TOTAL COST:  ${total_cost:.4f}")
+    print("-" * 50)
 
 
 def save_project(generated_files: Dict[str, str]):
@@ -357,6 +390,9 @@ async def main():
             for f in target_dir.rglob("*.class"):
                 print(f"  [OK] {f.name}")
 
+        # Print token usage and cost
+        print_cost_summary()
+
         print("\n" + "=" * 70)
         print("[SUCCESS] All Java files compiled without errors!")
         print("=" * 70)
@@ -382,6 +418,9 @@ async def main():
         for line in lines[-40:]:
             print(line)
         print("-" * 50)
+
+        # Print token usage and cost even on failure
+        print_cost_summary()
 
         print("\n" + "=" * 70)
         print(f"[FAILED] Build failed with {len(errors)} errors")

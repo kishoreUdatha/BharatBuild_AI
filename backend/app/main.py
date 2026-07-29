@@ -151,9 +151,13 @@ async def lifespan(app: FastAPI):
         logger.warning("[Startup] Database not ready - some features may fail")
 
     # Step 3: Validate Claude API connection (critical for AI generation)
-    claude_ready = await validate_claude_api()
-    if not claude_ready:
-        logger.warning("[Startup] Claude API not ready - AI generation may fail")
+    try:
+        claude_ready = await validate_claude_api()
+        if not claude_ready:
+            logger.warning("[Startup] Claude API not ready - AI generation may fail")
+    except RuntimeError as e:
+        logger.warning(f"[Startup] Claude API validation failed: {e} - AI generation will not work")
+        claude_ready = False
 
     # Clean up any leftover temp sessions from previous runs
     temp_storage.cleanup_all()
@@ -263,6 +267,9 @@ sandbox_origins = [
 ]
 app.add_middleware(
     CORSMiddleware,
+    # Keep the restricted origin list. The campus-portal branch carried
+    # allow_origins=["*"] as a development convenience; taking that side would
+    # have opened the production API to any origin.
     allow_origins=settings.CORS_ORIGINS + ["https://*.bharatbuild.ai"] + sandbox_origins,
     allow_credentials=True,
     allow_methods=["*"],

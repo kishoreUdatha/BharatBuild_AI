@@ -457,9 +457,13 @@ function classifyPromptLocal(prompt: string, context?: {
   const requiresGeneration = ['GENERATE', 'MODIFY', 'DOCUMENT', 'REFACTOR', 'FIX'].includes(winningIntent)
 
   // Suggest workflow
+  // NOTE: bolt_instant is now the default for GENERATE too (faster like Bolt.new)
+  // Validation is now mandatory in bolt_instant mode to ensure file quality
   let suggestedWorkflow: 'bolt_standard' | 'bolt_instant' | 'chat_only' = 'chat_only'
   if (winningIntent === 'GENERATE') {
-    suggestedWorkflow = 'bolt_standard'
+    // Use bolt_instant for faster generation (single API call like Bolt.new)
+    // bolt_instant now has mandatory validation for missing files
+    suggestedWorkflow = 'bolt_instant'
   } else if (['MODIFY', 'REFACTOR'].includes(winningIntent)) {
     suggestedWorkflow = 'bolt_instant'
   } else if (winningIntent === 'DOCUMENT') {

@@ -36,6 +36,11 @@ class ApiClient {
       async (error) => {
         if (error.response?.status === 401) {
           if (typeof window !== 'undefined') {
+            // Don't redirect if already on login page
+            if (window.location.pathname === '/login') {
+              return Promise.reject(error)
+            }
+
             // Try to refresh token first before logging out
             const refreshToken = localStorage.getItem('refresh_token')
             if (refreshToken && !error.config._retry) {
@@ -54,14 +59,18 @@ class ApiClient {
                   return this.axiosInstance.request(error.config)
                 }
               } catch (refreshError) {
-                // Refresh failed, logout
-                console.log('Token refresh failed, logging out')
+                // Refresh failed, just reject - let pages handle gracefully
+                console.log('Token refresh failed')
               }
             }
-            // No refresh token or refresh failed - logout
-            removeAccessToken()
-            localStorage.removeItem('refresh_token')
-            window.location.href = '/login'
+
+            // Don't auto-redirect to login - let pages handle 401 gracefully
+            // Pages can show mock data or handle auth errors as needed
+            // Only clear tokens if refresh failed
+            if (error.config._retry) {
+              removeAccessToken()
+              localStorage.removeItem('refresh_token')
+            }
           }
         }
 
@@ -320,6 +329,58 @@ class ApiClient {
     return response.data
   }
 
+  // ==================== APK Downloads (Flutter/Mobile) ====================
+
+  /**
+   * Get APK availability info for a project
+   * Returns whether APK is available and download URL
+   */
+  async getApkInfo(projectId: string) {
+    const response = await this.axiosInstance.get(`/projects/${projectId}/download/apk/info`)
+    return response.data
+  }
+
+  /**
+   * Get APK info for a session-based project (ephemeral storage)
+   */
+  async getSessionApkInfo(sessionId: string) {
+    const response = await this.axiosInstance.get(`/download/session/${sessionId}/apk/info`)
+    return response.data
+  }
+
+  /**
+   * Download APK file for a project
+   * Returns blob for download
+   */
+  async downloadApk(projectId: string, buildType: 'release' | 'debug' = 'release') {
+    const response = await this.axiosInstance.get(`/projects/${projectId}/download/apk`, {
+      params: { build_type: buildType },
+      responseType: 'blob'
+    })
+    return response.data
+  }
+
+  /**
+   * Download APK file for a session-based project
+   */
+  async downloadSessionApk(sessionId: string, buildType: 'release' | 'debug' = 'release') {
+    const response = await this.axiosInstance.get(`/download/session/${sessionId}/apk`, {
+      params: { build_type: buildType },
+      responseType: 'blob'
+    })
+    return response.data
+  }
+
+  /**
+   * Trigger APK build for a Flutter project
+   */
+  async triggerApkBuild(sessionId: string, buildType: 'release' | 'debug' = 'debug') {
+    const response = await this.axiosInstance.post(`/download/session/${sessionId}/build-apk`, null, {
+      params: { build_type: buildType }
+    })
+    return response.data
+  }
+
   // ==================== Generic request methods ====================
   async get<T = any>(url: string, config?: any): Promise<T> {
     const response = await this.axiosInstance.get(url, config)
@@ -343,6 +404,133 @@ class ApiClient {
 
   async delete<T = any>(url: string, config?: any): Promise<T> {
     const response = await this.axiosInstance.delete(url, config)
+    return response.data
+  }
+
+  // ==================== Lab Management (Faculty) ====================
+
+  // Get faculty's labs
+  async getFacultyLabs() {
+    const response = await this.axiosInstance.get('/faculty/labs')
+    return response.data
+  }
+
+  // Get lab details
+  async getLab(labId: string) {
+    const response = await this.axiosInstance.get(`/lab/labs/${labId}`)
+    return response.data
+  }
+
+  // Get lab topics (experiments)
+  async getLabTopics(labId: string) {
+    const response = await this.axiosInstance.get(`/lab/labs/${labId}/topics`)
+    return response.data
+  }
+
+  // Create lab topic (experiment)
+  async createLabTopic(labId: string, data: {
+    title: string
+    description?: string
+    week_number?: number
+    concept_content?: string
+    prerequisites?: string[]
+  }) {
+    const response = await this.axiosInstance.post(`/lab/labs/${labId}/topics`, data)
+    return response.data
+  }
+
+  // Update lab topic
+  async updateLabTopic(topicId: string, data: any) {
+    const response = await this.axiosInstance.put(`/lab/topics/${topicId}`, data)
+    return response.data
+  }
+
+  // Get topic MCQs
+  async getTopicMCQs(topicId: string) {
+    const response = await this.axiosInstance.get(`/lab/topics/${topicId}/mcqs`)
+    return response.data
+  }
+
+  // Create MCQ
+  async createMCQ(topicId: string, data: {
+    question_text: string
+    options: string[]
+    correct_option: number
+    explanation?: string
+    difficulty?: string
+    marks?: number
+  }) {
+    const response = await this.axiosInstance.post(`/lab/topics/${topicId}/mcqs`, data)
+    return response.data
+  }
+
+  // Get topic coding problems
+  async getTopicProblems(topicId: string) {
+    const response = await this.axiosInstance.get(`/lab/topics/${topicId}/problems`)
+    return response.data
+  }
+
+  // Create coding problem
+  async createCodingProblem(topicId: string, data: {
+    title: string
+    description: string
+    difficulty?: string
+    max_score?: number
+    supported_languages?: string[]
+    starter_code?: Record<string, string>
+    test_cases?: Array<{ input: string; expected_output: string; is_hidden?: boolean }>
+  }) {
+    const response = await this.axiosInstance.post(`/lab/topics/${topicId}/problems`, data)
+    return response.data
+  }
+
+  // Get lab students with progress
+  async getLabStudents(labId: string) {
+    const response = await this.axiosInstance.get(`/lab/labs/${labId}/students`)
+    return response.data
+  }
+
+  // Get lab analytics
+  async getLabAnalytics(labId: string) {
+    const response = await this.axiosInstance.get(`/lab/labs/${labId}/analytics`)
+    return response.data
+  }
+
+  // Get faculty classes/sections
+  async getFacultyClasses() {
+    const response = await this.axiosInstance.get('/faculty/classes')
+    return response.data
+  }
+
+  // Assign topic to class/batch
+  async assignTopicToClass(data: {
+    topic_id: string
+    lab_id: string
+    class_id?: string
+    batch_id?: string
+    student_ids?: string[]
+    deadline: string
+    deadline_type: 'soft' | 'hard'
+  }) {
+    const response = await this.axiosInstance.post('/faculty/lab-assignments', data)
+    return response.data
+  }
+
+  // Get lab assignments
+  async getLabAssignments(labId: string) {
+    const response = await this.axiosInstance.get(`/faculty/lab-assignments/${labId}`)
+    return response.data
+  }
+
+  // Update lab assignment
+  async updateLabAssignment(assignmentId: string, data: any) {
+    const response = await this.axiosInstance.put(`/faculty/lab-assignments/${assignmentId}`, data)
+    return response.data
+  }
+
+  // Get student progress for a specific topic
+  async getTopicStudentProgress(topicId: string) {
+    const response = await this.axiosInstance.get(`/lab/topics/${topicId}/student-progress`)
     return response.data
   }
 }
