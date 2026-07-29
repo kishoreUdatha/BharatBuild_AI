@@ -88,9 +88,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================
-# Install Node.js 20.x (for JS/TS projects)
+# Install Node.js 22 LTS (for JS/TS projects)
+# Must stay >= 22: npm@latest (12.x) requires ^22.22.2 || ^24.15.0 || >=26, so
+# `npm install -g npm@latest` on Node 20 fails EBADENGINE. Node 20 is EOL.
 # ============================================
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
     npm install -g npm@latest typescript ts-node yarn pnpm && \
     rm -rf /var/lib/apt/lists/*

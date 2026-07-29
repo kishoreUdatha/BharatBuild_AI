@@ -28,8 +28,11 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js (for project generation)
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+# Install Node.js 22 LTS (for project generation)
+# Must stay >= 22: npm@latest (12.x) declares engines ^22.22.2 || ^24.15.0 || >=26,
+# so `npm install -g npm@latest` on Node 20 fails EBADENGINE and breaks the build.
+# Node 20 is also EOL (final release 20.20.2, Apr 2026).
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
     npm install -g npm@latest typescript ts-node yarn pnpm && \
     rm -rf /var/lib/apt/lists/*

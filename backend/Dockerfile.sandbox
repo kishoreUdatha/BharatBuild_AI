@@ -23,8 +23,10 @@ RUN apt-get update && apt-get install -y \
     software-properties-common \
     && rm -rf /var/lib/apt/lists/*
 
-# ==================== NODE.JS 20 LTS ====================
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+# ==================== NODE.JS 22 LTS ====================
+# Must stay >= 22: npm@latest (12.x) requires ^22.22.2 || ^24.15.0 || >=26, so
+# `npm install -g npm@latest` on Node 20 fails EBADENGINE. Node 20 is EOL.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && npm install -g npm@latest \
     && npm install -g yarn pnpm vite create-vite create-react-app @angular/cli vue-cli
