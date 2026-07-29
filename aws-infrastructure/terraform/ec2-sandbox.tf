@@ -294,7 +294,12 @@ resource "aws_iam_role_policy" "sandbox_ssm_params" {
       Effect = "Allow"
       Action = [
         "ssm:PutParameter",
-        "ssm:GetParameter"
+        "ssm:GetParameter",
+        # Needed so an instance that has to mint a new shared CA can drop the
+        # client cert/key issued under the previous one. Without this the stale
+        # client cert survives, is handed to the ECS backend, and fails to verify
+        # against every server cert signed by the new CA.
+        "ssm:DeleteParameter"
       ]
       Resource = [
         "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/${var.app_name}/sandbox/*",
@@ -437,10 +442,68 @@ systemctl enable docker
 mkdir -p /opt/docker-certs
 cd /opt/docker-certs
 
-# Generate CA key and certificate
-openssl genrsa -out ca-key.pem 4096
-openssl req -new -x509 -days 365 -key ca-key.pem -sha256 -out ca.pem \
-  -subj "/C=IN/ST=State/L=City/O=BharatBuild/CN=Docker CA"
+# ----------------------------------------------------------------------------
+# SHARED CA. Every instance must use the SAME CA, because the ECS backend holds
+# exactly one client cert and has to authenticate against whichever ASG instance
+# it is routed to. Previously each instance minted its own CA and overwrote the
+# shared SSM parameters, so the published client cert matched only the last
+# instance to boot and TLS failed against every other one.
+#
+# First instance to boot creates the CA and publishes it WITHOUT --overwrite;
+# concurrent instances lose that race harmlessly and re-read the winner's CA.
+# ----------------------------------------------------------------------------
+CA_CERT_PARAM="/${var.app_name}/docker/ca-cert"
+CA_KEY_PARAM="/${var.app_name}/docker/ca-key"
+
+# Pull the shared CA and accept it only if cert and key are BOTH present and are
+# actually a matching pair. Note the pre-existing deployment had a ca-cert with no
+# ca-key (each instance used to mint its own), so a naive "does ca-cert exist?"
+# check would happily pair someone else's cert with a freshly generated key.
+fetch_shared_ca() {
+  local c k m1 m2
+  c=$(aws ssm get-parameter --name "$CA_CERT_PARAM" --with-decryption \
+        --query 'Parameter.Value' --output text --region ${var.aws_region} 2>/dev/null) || return 1
+  k=$(aws ssm get-parameter --name "$CA_KEY_PARAM" --with-decryption \
+        --query 'Parameter.Value' --output text --region ${var.aws_region} 2>/dev/null) || return 1
+  case "$c" in -----BEGIN*) ;; *) return 1 ;; esac
+  case "$k" in -----BEGIN*) ;; *) return 1 ;; esac
+  printf '%s\n' "$c" > ca.pem
+  printf '%s\n' "$k" > ca-key.pem
+  m1=$(openssl x509 -noout -pubkey -in ca.pem 2>/dev/null | openssl md5 2>/dev/null)
+  m2=$(openssl rsa  -noout -pubout -in ca-key.pem 2>/dev/null | openssl md5 2>/dev/null)
+  [ -n "$m1" ] && [ "$m1" = "$m2" ]
+}
+
+if fetch_shared_ca; then
+  echo "Reusing shared Docker CA from SSM" >> /var/log/sandbox-setup.log
+else
+  echo "No usable shared Docker CA; generating one" >> /var/log/sandbox-setup.log
+  rm -f ca.pem ca-key.pem
+  openssl genrsa -out ca-key.pem 4096
+  openssl req -new -x509 -days 365 -key ca-key.pem -sha256 -out ca.pem \
+    -subj "/C=IN/ST=State/L=City/O=BharatBuild/CN=Docker CA"
+
+  # --overwrite is required here to replace the legacy per-instance ca-cert that
+  # has no matching ca-key. Publish the key FIRST: if two instances race, whoever
+  # writes the key last also writes the cert last, so the pair stays consistent.
+  aws ssm put-parameter --name "$CA_KEY_PARAM" --value "$(cat ca-key.pem)" \
+    --type SecureString --overwrite --region ${var.aws_region} >/dev/null 2>&1 || true
+  aws ssm put-parameter --name "$CA_CERT_PARAM" --value "$(cat ca.pem)" \
+    --type SecureString --overwrite --region ${var.aws_region} >/dev/null 2>&1 || true
+
+  # A new CA invalidates any client cert minted under the old one; drop them so
+  # they are re-issued below from the CA that is now authoritative.
+  aws ssm delete-parameter --name "/${var.app_name}/docker/client-cert" --region ${var.aws_region} >/dev/null 2>&1 || true
+  aws ssm delete-parameter --name "/${var.app_name}/docker/client-key" --region ${var.aws_region} >/dev/null 2>&1 || true
+
+  # Adopt whatever ended up in SSM so a racing instance and this one agree.
+  sleep 5
+  if fetch_shared_ca; then
+    echo "Adopted shared Docker CA from SSM after publish" >> /var/log/sandbox-setup.log
+  else
+    echo "WARNING: could not persist shared CA; using instance-local CA" >> /var/log/sandbox-setup.log
+  fi
+fi
 
 # Generate server key
 openssl genrsa -out server-key.pem 4096
@@ -502,10 +565,22 @@ openssl x509 -req -days 365 -sha256 -in client.csr -CA ca.pem -CAkey ca-key.pem 
 chmod 0400 ca-key.pem server-key.pem client-key.pem
 chmod 0444 ca.pem server-cert.pem client-cert.pem
 
-# Store client certs in SSM for ECS to retrieve
-aws ssm put-parameter --name "/${var.app_name}/docker/ca-cert" --value "$(cat ca.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
-aws ssm put-parameter --name "/${var.app_name}/docker/client-cert" --value "$(cat client-cert.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
-aws ssm put-parameter --name "/${var.app_name}/docker/client-key" --value "$(cat client-key.pem)" --type SecureString --overwrite --region ${var.aws_region} || true
+# Publish the client cert for the ECS backend to retrieve.
+#
+# No --overwrite, deliberately. Any client cert signed by the shared CA is valid
+# against every instance, so the first one published is good for the whole ASG.
+# Overwriting on each boot used to hand out a cert minted by that instance's own
+# CA, which then failed against all the others. The CA itself is published above
+# by whichever instance created it.
+aws ssm put-parameter --name "/${var.app_name}/docker/client-cert" --value "$(cat client-cert.pem)" --type SecureString --region ${var.aws_region} 2>/dev/null || true
+aws ssm put-parameter --name "/${var.app_name}/docker/client-key" --value "$(cat client-key.pem)" --type SecureString --region ${var.aws_region} 2>/dev/null || true
+
+# Make the local client cert match whatever is actually published, so on-box
+# `docker --tlsverify` debugging reflects what the backend experiences.
+aws ssm get-parameter --name "/${var.app_name}/docker/client-cert" --with-decryption \
+  --query 'Parameter.Value' --output text --region ${var.aws_region} > client-cert.pem 2>/dev/null || true
+aws ssm get-parameter --name "/${var.app_name}/docker/client-key" --with-decryption \
+  --query 'Parameter.Value' --output text --region ${var.aws_region} > client-key.pem 2>/dev/null || true
 
 # ==========================================================
 # Update SSM Parameters for Dynamic IP Discovery
@@ -522,7 +597,10 @@ echo "SSM sandbox parameters updated successfully" >> /var/log/sandbox-setup.log
 
 # ==========================================================
 # Configure Docker with TLS
-# Listens on both 2375 (no TLS) and 2376 (TLS)
+# Listens on 2375 and 2376 -- BOTH REQUIRE TLS. "tlsverify" below is a daemon-wide
+# setting, not per-listener, so there is no plaintext port despite 2375 being the
+# conventional non-TLS one. A plaintext client gets back
+# 400 "Client sent an HTTP request to an HTTPS server".
 # ==========================================================
 mkdir -p /etc/docker
 cat > /etc/docker/daemon.json <<'DOCKERCONFIG'

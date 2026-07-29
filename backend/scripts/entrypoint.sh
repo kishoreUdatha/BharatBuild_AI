@@ -12,7 +12,17 @@ echo "============================================"
 echo ""
 
 # =============================================================================
-# Fetch Docker TLS certificates from Secrets Manager (if enabled)
+# Fetch Docker TLS certificates for talking to the sandbox Docker daemon.
+#
+# These are published by the sandbox EC2 user_data (see ec2-sandbox.tf) into SSM
+# PARAMETER STORE at /<app>/docker/{ca-cert,client-cert,client-key}. An earlier
+# version of this script read them from Secrets Manager instead, which is a
+# different service holding different (non-existent) names -- the fetch always
+# failed, and because the failure was silent the container ran with 0-byte cert
+# files and every sandbox exec returned "Docker service is not available".
+#
+# The values are stored as raw PEM. Base64 is still accepted so that either
+# encoding works.
 # =============================================================================
 fetch_docker_tls_certs() {
     if [ "$DOCKER_TLS_ENABLED" != "true" ] && [ "$DOCKER_TLS_ENABLED" != "True" ]; then
@@ -20,77 +30,81 @@ fetch_docker_tls_certs() {
         return 0
     fi
 
-    echo "[Entrypoint] Docker TLS enabled, fetching certificates from Secrets Manager..."
-
-    # Check if aws cli is available
     if ! command -v aws &> /dev/null; then
         echo "[Entrypoint] WARNING: AWS CLI not found, skipping TLS cert fetch"
         return 0
     fi
 
-    # Create certs directory
+    local REGION="${AWS_REGION:-ap-south-2}"
+    local CA_PARAM="${DOCKER_TLS_CA_PARAM:-/bharatbuild/docker/ca-cert}"
+    local CERT_PARAM="${DOCKER_TLS_CERT_PARAM:-/bharatbuild/docker/client-cert}"
+    local KEY_PARAM="${DOCKER_TLS_KEY_PARAM:-/bharatbuild/docker/client-key}"
+
+    echo "[Entrypoint] Docker TLS enabled, fetching certificates from SSM Parameter Store (region: $REGION)"
+
     mkdir -p /certs
     chmod 700 /certs
 
-    local REGION="${AWS_REGION:-ap-south-1}"
-    local SUCCESS_COUNT=0
+    # Fetch one SSM parameter into a PEM file.
+    # Deliberately assigns to a variable first rather than piping straight to the
+    # file: in a pipeline `if` inspects only the LAST command's status, so a
+    # failed aws call followed by `base64 -d` (which happily exits 0 on empty
+    # input) previously looked like success and produced an empty file.
+    _fetch_pem() {
+        local param="$1" dest="$2" label="$3" value=""
 
-    # Fetch CA cert
-    if [ -n "$DOCKER_TLS_CA_SECRET" ]; then
-        echo "[Entrypoint] Fetching CA cert: $DOCKER_TLS_CA_SECRET"
-        if aws secretsmanager get-secret-value \
-            --secret-id "$DOCKER_TLS_CA_SECRET" \
-            --query 'SecretString' \
-            --output text \
-            --region "$REGION" 2>/dev/null | base64 -d > /certs/ca.pem 2>/dev/null; then
-            chmod 600 /certs/ca.pem
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-            echo "[Entrypoint] CA cert saved to /certs/ca.pem"
-        else
-            echo "[Entrypoint] WARNING: Failed to fetch CA cert"
-            rm -f /certs/ca.pem 2>/dev/null
+        if ! value=$(aws ssm get-parameter \
+                        --name "$param" \
+                        --with-decryption \
+                        --query 'Parameter.Value' \
+                        --output text \
+                        --region "$REGION" 2>&1); then
+            echo "[Entrypoint] ERROR: could not read $label from SSM ($param): $value"
+            return 1
         fi
-    fi
 
-    # Fetch client cert
-    if [ -n "$DOCKER_TLS_CERT_SECRET" ]; then
-        echo "[Entrypoint] Fetching client cert: $DOCKER_TLS_CERT_SECRET"
-        if aws secretsmanager get-secret-value \
-            --secret-id "$DOCKER_TLS_CERT_SECRET" \
-            --query 'SecretString' \
-            --output text \
-            --region "$REGION" 2>/dev/null | base64 -d > /certs/client-cert.pem 2>/dev/null; then
-            chmod 600 /certs/client-cert.pem
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-            echo "[Entrypoint] Client cert saved to /certs/client-cert.pem"
-        else
-            echo "[Entrypoint] WARNING: Failed to fetch client cert"
-            rm -f /certs/client-cert.pem 2>/dev/null
+        if [ -z "$value" ] || [ "$value" = "None" ]; then
+            echo "[Entrypoint] ERROR: $label ($param) is empty"
+            return 1
         fi
-    fi
 
-    # Fetch client key
-    if [ -n "$DOCKER_TLS_KEY_SECRET" ]; then
-        echo "[Entrypoint] Fetching client key: $DOCKER_TLS_KEY_SECRET"
-        if aws secretsmanager get-secret-value \
-            --secret-id "$DOCKER_TLS_KEY_SECRET" \
-            --query 'SecretString' \
-            --output text \
-            --region "$REGION" 2>/dev/null | base64 -d > /certs/client-key.pem 2>/dev/null; then
-            chmod 600 /certs/client-key.pem
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-            echo "[Entrypoint] Client key saved to /certs/client-key.pem"
-        else
-            echo "[Entrypoint] WARNING: Failed to fetch client key"
-            rm -f /certs/client-key.pem 2>/dev/null
+        case "$value" in
+            -----BEGIN*)
+                printf '%s\n' "$value" > "$dest"
+                ;;
+            *)
+                if ! printf '%s' "$value" | base64 -d > "$dest" 2>/dev/null; then
+                    echo "[Entrypoint] ERROR: $label ($param) is neither PEM nor valid base64"
+                    rm -f "$dest"
+                    return 1
+                fi
+                ;;
+        esac
+
+        if ! grep -q -- "-----BEGIN" "$dest" 2>/dev/null; then
+            echo "[Entrypoint] ERROR: $label ($param) did not yield a PEM document"
+            rm -f "$dest"
+            return 1
         fi
-    fi
 
-    if [ $SUCCESS_COUNT -eq 3 ]; then
-        echo "[Entrypoint] All Docker TLS certificates loaded successfully"
-        ls -la /certs/
+        chmod 600 "$dest"
+        echo "[Entrypoint] $label OK ($(wc -c < "$dest") bytes)"
+        return 0
+    }
+
+    local OK=0
+    _fetch_pem "$CA_PARAM"   /certs/ca.pem          "CA cert"    && OK=$((OK + 1))
+    _fetch_pem "$CERT_PARAM" /certs/client-cert.pem "client cert" && OK=$((OK + 1))
+    _fetch_pem "$KEY_PARAM"  /certs/client-key.pem  "client key"  && OK=$((OK + 1))
+
+    if [ "$OK" -eq 3 ]; then
+        echo "[Entrypoint] All 3 Docker TLS certificates loaded"
     else
-        echo "[Entrypoint] WARNING: Only $SUCCESS_COUNT/3 TLS certs loaded (will use SSM fallback)"
+        # Not fatal: the app still serves normally, only sandbox code execution
+        # is affected. But say so loudly instead of claiming success.
+        echo "[Entrypoint] WARNING: only $OK/3 Docker TLS certificates loaded."
+        echo "[Entrypoint] WARNING: sandbox code execution will fail until this is fixed."
+        rm -f /certs/ca.pem /certs/client-cert.pem /certs/client-key.pem 2>/dev/null || true
     fi
 }
 
