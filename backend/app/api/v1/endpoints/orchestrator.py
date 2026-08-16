@@ -354,8 +354,8 @@ async def event_generator(
     try:
         logger.info("[SSE Generator] Starting event generator...")
 
-        # Get file limit from metadata (FREE users get 3 files only)
-        max_files_limit = metadata.get("max_files_limit") if metadata else None
+        # CREDIT-BASED: No file limits. Credits are the only gate.
+        # Credits are deducted per AI call in claude_client.py
         files_generated = 0
 
         # Send initial connection event to ensure stream is open
@@ -372,8 +372,6 @@ async def event_generator(
         await asyncio.sleep(0)
 
         logger.info("[SSE Generator] Starting workflow execution...")
-        if max_files_limit:
-            logger.info(f"[SSE Generator] File limit active: {max_files_limit} files max")
 
         # Clear any previous cancellation for this project
         clear_cancellation(project_id)
@@ -732,6 +730,22 @@ async def execute_workflow(
                     }
                 )
             logger.info(f"[Execute Workflow] Feature access granted: project_generation")
+
+            # CREDIT CHECK: Verify user has credits before starting generation
+            from app.modules.auth.usage_limits import check_credits_available
+            credit_check = await check_credits_available(current_user, db, credits_needed=5.0)
+            if not credit_check.allowed:
+                logger.warning(f"[Execute Workflow] Credit check failed for user {current_user.email}: {credit_check.reason}")
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "insufficient_credits",
+                        "message": credit_check.reason,
+                        "remaining_credits": credit_check.current_usage,
+                        "upgrade_url": "/billing/plans"
+                    }
+                )
+            logger.info(f"[Execute Workflow] Credit check passed: {credit_check.message}")
 
             # Check if this is a MODIFY/REFACTOR request (editing existing project, not creating new)
             # MODIFY and REFACTOR should NOT count against project limit since they're not creating new projects

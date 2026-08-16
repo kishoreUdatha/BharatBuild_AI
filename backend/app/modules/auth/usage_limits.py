@@ -570,3 +570,138 @@ async def get_current_token_usage(user: User, db: AsyncSession) -> int:
         )
     )
     return usage_result.scalar() or 0
+
+
+# ============================================================
+# CREDIT-BASED USAGE SYSTEM (Kiro-style)
+# Replaces file/project limits with pure credit checks.
+# Credits are the ONLY limit - if you have credits, you can use the platform.
+# ============================================================
+
+async def check_credits_available(user: User, db: AsyncSession, credits_needed: float = 1.0) -> UsageLimitCheck:
+    """
+    Check if user has enough credits to proceed.
+    This is the PRIMARY gate for all AI operations.
+    
+    Args:
+        user: Current user
+        db: Database session
+        credits_needed: Estimated credits for this operation
+    
+    Returns:
+        UsageLimitCheck with allowed=True/False
+    """
+    from app.models.token_balance import TokenBalance
+    
+    # Get user's credit balance
+    result = await db.execute(
+        select(TokenBalance).where(TokenBalance.user_id == str(user.id))
+    )
+    balance = result.scalar_one_or_none()
+    
+    if not balance:
+        # No balance record - check if user has a plan with credits
+        limits = await get_user_limits(user, db)
+        plan_credits = (limits.feature_flags or {}).get("credits", 0)
+        if plan_credits > 0:
+            return UsageLimitCheck(allowed=True, current_usage=0, limit=plan_credits)
+        return UsageLimitCheck(
+            allowed=False,
+            reason="No credits available. Please upgrade to a paid plan.",
+            current_usage=0,
+            limit=0
+        )
+    
+    remaining = balance.remaining_tokens  # Using remaining_tokens as credits
+    
+    if remaining <= 0:
+        return UsageLimitCheck(
+            allowed=False,
+            reason="No credits remaining. Buy add-on credits ($0.04/credit) or wait for monthly reset.",
+            current_usage=balance.used_tokens,
+            limit=balance.total_tokens
+        )
+    
+    if remaining < credits_needed:
+        return UsageLimitCheck(
+            allowed=False,
+            reason=f"Not enough credits. Need {credits_needed:.1f} but only {remaining:.1f} remaining.",
+            current_usage=balance.used_tokens,
+            limit=balance.total_tokens
+        )
+    
+    return UsageLimitCheck(
+        allowed=True,
+        current_usage=balance.used_tokens,
+        limit=balance.total_tokens,
+        message=f"{remaining:.1f} credits remaining"
+    )
+
+
+async def deduct_credits(user_id: str, credits_used: float, db: AsyncSession, 
+                         model: str = "", project_id: str = "", agent_type: str = "") -> bool:
+    """
+    Deduct credits from user's balance after an AI call.
+    
+    Args:
+        user_id: User ID
+        credits_used: Credits to deduct
+        db: Database session
+        model: Model used (for logging)
+        project_id: Project ID (for logging)
+        agent_type: Agent type (for logging)
+    
+    Returns:
+        True if deduction successful
+    """
+    from app.models.token_balance import TokenBalance
+    from app.core.logging_config import logger
+    
+    try:
+        result = await db.execute(
+            select(TokenBalance).where(TokenBalance.user_id == user_id)
+        )
+        balance = result.scalar_one_or_none()
+        
+        if not balance:
+            logger.warning(f"[Credits] No balance found for user {user_id}")
+            return False
+        
+        # Deduct
+        balance.remaining_tokens = max(0, balance.remaining_tokens - int(credits_used * 100) / 100)
+        balance.used_tokens += int(credits_used * 100) / 100
+        balance.monthly_used += int(credits_used * 100) / 100
+        balance.total_requests += 1
+        balance.last_request_at = datetime.utcnow()
+        
+        await db.commit()
+        
+        logger.info(f"[Credits] Deducted {credits_used:.2f} credits from user {user_id} "
+                   f"(remaining: {balance.remaining_tokens:.1f}, model: {model}, agent: {agent_type})")
+        return True
+        
+    except Exception as e:
+        logger.error(f"[Credits] Failed to deduct credits: {e}")
+        await db.rollback()
+        return False
+
+
+async def get_credit_balance(user_id: str, db: AsyncSession) -> dict:
+    """Get user's current credit balance"""
+    from app.models.token_balance import TokenBalance
+    
+    result = await db.execute(
+        select(TokenBalance).where(TokenBalance.user_id == user_id)
+    )
+    balance = result.scalar_one_or_none()
+    
+    if not balance:
+        return {"remaining": 0, "used": 0, "total": 0, "plan": "none"}
+    
+    return {
+        "remaining": balance.remaining_tokens,
+        "used": balance.used_tokens,
+        "total": balance.total_tokens,
+        "monthly_used": balance.monthly_used,
+        "monthly_allowance": balance.monthly_allowance,
+    }

@@ -179,6 +179,12 @@ class ClaudeClient:
                 logger.info(f"Claude API response: id={response.id}, tokens={result['total_tokens']}, stop={response.stop_reason}")
                 logger.debug(f"Claude response preview: {content[:200]}..." if len(content) > 200 else content)
 
+                # CREDIT TRACKING: Calculate and log credits used
+                from app.llm.usage_tracker import usage_tracker
+                credits_used = usage_tracker._calculate_credits(model_name, result['total_tokens'])
+                result["credits_used"] = credits_used
+                logger.info(f"Claude API credits: {credits_used:.2f} credits (model={model_name}, tokens={result['total_tokens']})")
+
                 # CRITICAL: Warn if response was truncated due to token limit
                 if response.stop_reason == "max_tokens":
                     logger.warning(

@@ -202,6 +202,11 @@ export class ProxyModelClient implements ModelClient {
  * The caller decides what to do when null (fall back to direct provider).
  */
 export function createProxyClientIfLoggedIn(): ProxyModelClient | null {
+  // If user has a direct API key, skip the proxy — use it directly for lower latency
+  if (process.env["ANTHROPIC_API_KEY"] || process.env["OPENAI_API_KEY"]) {
+    return null;
+  }
+
   const creds = loadCredentials();
   if (!creds?.token) return null;
 
