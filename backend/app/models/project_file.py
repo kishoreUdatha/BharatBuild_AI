@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, DateTime, Integer, Text, ForeignKey, Boolean, Index, Enum as SQLEnum
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, validates
 from datetime import datetime
 import uuid
 import enum
@@ -81,6 +81,13 @@ class ProjectFile(Base):
 
     def __repr__(self):
         return f"<ProjectFile {self.path}>"
+
+    @validates('path')
+    def normalize_path(self, key, path):
+        """Always store paths with forward slashes (Unix-style) regardless of OS"""
+        if path:
+            return path.replace('\\', '/')
+        return path
 
     @property
     def is_small_file(self):

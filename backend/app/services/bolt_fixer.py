@@ -350,7 +350,7 @@ Examples:
 Reply with ONLY the replacement image (e.g., "eclipse-temurin:17-jdk-alpine"):"""
 
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=settings.CLAUDE_SONNET_MODEL,
             max_tokens=50,  # Very small - just need image name
             temperature=0,  # Deterministic
             messages=[{"role": "user", "content": prompt}]
@@ -1847,7 +1847,7 @@ BUILD LOG:
             self._claude_client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
         response = self._claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=settings.CLAUDE_SONNET_MODEL,
             max_tokens=max_tokens,
             temperature=0.1,  # Very low for precise fixes
             system=system_prompt,

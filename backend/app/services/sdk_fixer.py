@@ -16,6 +16,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from anthropic import AsyncAnthropic
 from app.modules.sdk_agents.sdk_tools import SDK_FIXER_SYSTEM_PROMPT
+from app.core.config import settings
 
 logger = logging.getLogger("bharatbuild")
 
@@ -165,7 +166,7 @@ Start now. Call list_files, then read_file, then write_file for each broken file
 
                 # Call Claude - force tool use on first iteration
                 api_params = {
-                    "model": "claude-sonnet-4-20250514",
+                    "model": settings.CLAUDE_SONNET_MODEL,
                     "max_tokens": 16384,
                     "system": self.SYSTEM_PROMPT,
                     "tools": self.TOOLS,

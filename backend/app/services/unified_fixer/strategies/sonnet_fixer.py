@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from app.core.logging_config import logger
 from app.services.unified_fixer.classifier import ClassifiedError, ErrorCategory
 from app.services.unified_fixer.strategies.deterministic import FixResult
+from app.core.config import settings
+from app.core.models import price_usd
 
 
 # Sonnet-optimized system prompt (detailed for complex fixes)
@@ -60,7 +62,8 @@ class SonnetStrategy:
     Smart AI - $0.01 - ~5-10s
     """
 
-    COST_PER_FIX = 0.01  # Approximate cost
+    # Cost is measured from token usage per call, not assumed.
+    # See app/core/models.py for the rate table.
 
     def __init__(self, file_manager=None, anthropic_client=None):
         """
@@ -70,6 +73,9 @@ class SonnetStrategy:
         """
         self.file_manager = file_manager
         self.client = anthropic_client
+        # Real USD cost of the most recent API call, from measured token usage.
+        # Reset per fix() so a cached/no-op path reports 0.0 rather than a stale value.
+        self._last_call_cost: float = 0.0
 
     async def fix(
         self,
@@ -94,6 +100,7 @@ class SonnetStrategy:
         Returns:
             FixResult with success status and details
         """
+        self._last_call_cost = 0.0
         start_time = time.time()
 
         try:
@@ -128,7 +135,7 @@ class SonnetStrategy:
                     files_modified=[],
                     error="Sonnet did not return a valid fix",
                     time_ms=int((time.time() - start_time) * 1000),
-                    cost=self.COST_PER_FIX
+                    cost=self._last_call_cost
                 )
 
             # Apply all fixes
@@ -141,7 +148,7 @@ class SonnetStrategy:
             )
 
             result.time_ms = int((time.time() - start_time) * 1000)
-            result.cost = self.COST_PER_FIX
+            result.cost = self._last_call_cost
 
             return result
 
@@ -153,7 +160,7 @@ class SonnetStrategy:
                 files_modified=[],
                 error=str(e),
                 time_ms=int((time.time() - start_time) * 1000),
-                cost=self.COST_PER_FIX
+                cost=self._last_call_cost
             )
 
     async def _gather_context(
@@ -281,12 +288,26 @@ class SonnetStrategy:
 
         try:
             response = await self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model=settings.CLAUDE_SONNET_MODEL,
                 max_tokens=4096,
                 system=SONNET_SYSTEM_PROMPT,
                 messages=[
                     {"role": "user", "content": user_prompt}
                 ]
+            )
+
+            # Measure actual spend from the response rather than assuming a flat rate.
+            _usage = getattr(response, 'usage', None)
+            self._last_call_cost = price_usd(
+                settings.CLAUDE_SONNET_MODEL,
+                getattr(_usage, 'input_tokens', 0) or 0,
+                getattr(_usage, 'output_tokens', 0) or 0,
+            )
+            logger.debug(
+                '[SonnetStrategy] call cost $%.6f (%s in / %s out)',
+                self._last_call_cost,
+                getattr(_usage, 'input_tokens', 0),
+                getattr(_usage, 'output_tokens', 0),
             )
 
             content = response.content[0].text

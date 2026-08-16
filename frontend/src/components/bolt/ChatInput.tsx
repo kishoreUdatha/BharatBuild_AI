@@ -9,13 +9,17 @@ import {
   Plus,
   Sparkles
 } from 'lucide-react'
+import { SlashCommandMenu } from './SlashCommandMenu'
+import { SlashCommand, findCommand } from '@/config/slashCommands'
 
 interface ChatInputProps {
   onSend: (message: string, fileContent?: string) => void
   onStop?: () => void
+  onSlashCommand?: (command: SlashCommand, args: string) => void
   isLoading?: boolean
   placeholder?: string
   disabled?: boolean
+  hasProject?: boolean
 }
 
 interface AttachedFile {
@@ -32,15 +36,19 @@ interface AttachedFile {
 export function ChatInput({
   onSend,
   onStop,
+  onSlashCommand,
   isLoading = false,
   placeholder,
-  disabled = false
+  disabled = false,
+  hasProject = false,
 }: ChatInputProps) {
   const [message, setMessage] = useState('')
   const [isFocused, setIsFocused] = useState(false)
   const [attachedFile, setAttachedFile] = useState<AttachedFile | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const [showAttachMenu, setShowAttachMenu] = useState(false)
+  const [showSlashMenu, setShowSlashMenu] = useState(false)
+  const [slashQuery, setSlashQuery] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const attachMenuRef = useRef<HTMLDivElement>(null)
@@ -120,6 +128,21 @@ export function ChatInput({
     if (hasContent && !isLoading && !disabled) {
       let fullMessage = message.trim()
 
+      // Check if it's a slash command
+      if (fullMessage.startsWith('/') && onSlashCommand) {
+        const cmd = findCommand(fullMessage)
+        if (cmd) {
+          const args = fullMessage.slice(cmd.command.length).trim()
+          onSlashCommand(cmd, args)
+          setMessage('')
+          setShowSlashMenu(false)
+          if (textareaRef.current) {
+            textareaRef.current.style.height = 'auto'
+          }
+          return
+        }
+      }
+
       if (attachedFile) {
         const filePrefix = fullMessage
           ? `${fullMessage}\n\n--- Project Abstract/Requirements ---\n\n`
@@ -130,6 +153,7 @@ export function ChatInput({
       onSend(fullMessage, attachedFile?.content)
       setMessage('')
       setAttachedFile(null)
+      setShowSlashMenu(false)
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto'
       }
@@ -137,9 +161,56 @@ export function ChatInput({
   }
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // If slash menu is open, let it handle navigation keys
+    if (showSlashMenu && ['ArrowUp', 'ArrowDown', 'Tab', 'Escape'].includes(e.key)) {
+      // These are handled by SlashCommandMenu's document-level listener
+      return
+    }
+    if (showSlashMenu && e.key === 'Enter') {
+      // Let the SlashCommandMenu handle Enter
+      return
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSubmit()
+    }
+  }
+
+  // Handle slash command selection from menu
+  const handleSlashSelect = (command: SlashCommand) => {
+    if (onSlashCommand) {
+      // If command needs args, put it in the input for user to complete
+      if (command.args) {
+        setMessage(command.command + ' ')
+        setShowSlashMenu(false)
+        textareaRef.current?.focus()
+      } else {
+        // Execute immediately
+        onSlashCommand(command, '')
+        setMessage('')
+        setShowSlashMenu(false)
+      }
+    } else {
+      // Fallback: put command in input and send
+      setMessage(command.command + ' ')
+      setShowSlashMenu(false)
+      textareaRef.current?.focus()
+    }
+  }
+
+  // Detect slash command typing
+  const handleInputChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value
+    setMessage(value)
+
+    // Show slash menu when user types "/" at the beginning
+    if (value.startsWith('/')) {
+      setShowSlashMenu(true)
+      setSlashQuery(value.slice(1)) // Remove the "/" for filtering
+    } else {
+      setShowSlashMenu(false)
+      setSlashQuery('')
     }
   }
 
@@ -200,6 +271,15 @@ export function ChatInput({
               : 'border-gray-700/50 hover:border-gray-600/50'
           }`}
         >
+          {/* Slash Command Menu */}
+          <SlashCommandMenu
+            query={slashQuery}
+            isVisible={showSlashMenu && !isLoading}
+            hasProject={hasProject}
+            onSelect={handleSlashSelect}
+            onClose={() => setShowSlashMenu(false)}
+            position="above"
+          />
           {/* Input Row */}
           <div className="flex items-end">
             {/* Plus Button - Small */}
@@ -249,11 +329,11 @@ export function ChatInput({
               <textarea
                 ref={textareaRef}
                 value={message}
-                onChange={(e) => setMessage(e.target.value)}
+                onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 onFocus={() => setIsFocused(true)}
                 onBlur={() => setIsFocused(false)}
-                placeholder={placeholder || "Describe your project idea..."}
+                placeholder={placeholder || "Describe your project idea... or type / for commands"}
                 disabled={isLoading || disabled}
                 rows={1}
                 className="w-full bg-transparent text-white text-[15px] placeholder:text-gray-500 resize-none focus:outline-none max-h-[200px] scrollbar-thin disabled:opacity-50 leading-relaxed"
@@ -296,6 +376,9 @@ export function ChatInput({
                 <span className="mx-2 text-gray-600">|</span>
                 <kbd className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 font-mono text-[10px] mr-1">Shift + Enter</kbd>
                 for new line
+                <span className="mx-2 text-gray-600">|</span>
+                <kbd className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 font-mono text-[10px] mr-1">/</kbd>
+                for commands
               </span>
             )}
           </p>

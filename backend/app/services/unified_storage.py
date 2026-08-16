@@ -245,6 +245,11 @@ class UnifiedStorageService:
     - Layer 3: PostgreSQL (metadata only - handled by SQLAlchemy models)
     """
 
+    # Ceiling for content stored directly in the DB row when no object store is
+    # configured. Above this, save_to_database fails loudly rather than writing
+    # a COMPLETED row whose content was never persisted anywhere.
+    MAX_INLINE_BYTES: int = 1_048_576  # 1 MiB
+
     def __init__(self):
         self.sandbox_path = Path(SANDBOX_BASE_PATH)
         self.sandbox_path.mkdir(parents=True, exist_ok=True)
@@ -1530,6 +1535,7 @@ class UnifiedStorageService:
         """
         s3_key = None
         s3_upload_verified = False
+        content_is_inline = False
 
         try:
             # Import here to avoid circular imports
@@ -1557,38 +1563,67 @@ class UnifiedStorageService:
             if not language:
                 language = self._detect_language(file_name)
 
-            # ==================== STEP 1: UPLOAD TO S3 FIRST ====================
-            # S3 upload MUST succeed before we touch the database
-            try:
-                logger.info(f"[Layer3-S3] Uploading to S3: {project_id}/{file_path} ({size_bytes} bytes)")
-                upload_result = await storage_service.upload_file(
-                    project_id,
-                    file_path,
-                    content_bytes
-                )
-                s3_key = upload_result.get('s3_key')
+            # ==================== STEP 1: PERSIST CONTENT ====================
+            # Content MUST be durably stored before we touch the database. Two
+            # routes: object storage, or inline in the row when no object store
+            # is configured. Never both-none - a row whose content lives only in
+            # the sandbox is lost the moment the sandbox is cleaned.
+            from app.core.config import settings as app_settings
+            store_inline = (
+                (not getattr(app_settings, 'USE_MINIO', True))
+                or (getattr(app_settings, 'STORAGE_MODE', 'local') == 'local')
+            )
 
-                # VERIFY S3 upload succeeded
-                if not s3_key:
-                    logger.error(f"[Layer3-S3] ✗ S3 upload returned no s3_key for {file_path}")
+            if store_inline:
+                # Previously this branch fabricated an s3_key, set
+                # s3_upload_verified = True, and stored no content anywhere -
+                # writing rows marked COMPLETED that pointed at objects which
+                # were never uploaded. Store the bytes in the row instead.
+                if size_bytes > self.MAX_INLINE_BYTES:
+                    logger.error(
+                        f"[Layer3-DB] x Refusing to save {file_path}: {size_bytes} bytes exceeds "
+                        f"the {self.MAX_INLINE_BYTES}-byte inline limit and no object store is "
+                        f"configured (USE_MINIO={getattr(app_settings, 'USE_MINIO', True)}, "
+                        f"STORAGE_MODE={getattr(app_settings, 'STORAGE_MODE', 'local')}). "
+                        f"Configure MinIO/S3 - saving now would discard the content."
+                    )
                     return False
+                s3_key = None
+                content_is_inline = True
+                logger.info(f"[Layer3-DB] Storing inline ({size_bytes} bytes, no object store): {file_path}")
+            else:
+                content_is_inline = False
+                try:
+                    logger.info(f"[Layer3-S3] Uploading to S3: {project_id}/{file_path} ({size_bytes} bytes)")
+                    upload_result = await storage_service.upload_file(
+                        project_id,
+                        file_path,
+                        content_bytes
+                    )
+                    s3_key = upload_result.get('s3_key')
 
-                # Verify the key format is correct
-                if not s3_key.startswith('projects/'):
-                    logger.error(f"[Layer3-S3] ✗ Invalid s3_key format: {s3_key}")
+                    # VERIFY S3 upload succeeded
+                    if not s3_key:
+                        logger.error(f"[Layer3-S3] ✗ S3 upload returned no s3_key for {file_path}")
+                        return False
+
+                    # Verify the key format is correct
+                    if not s3_key.startswith('projects/'):
+                        logger.error(f"[Layer3-S3] ✗ Invalid s3_key format: {s3_key}")
+                        return False
+
+                    s3_upload_verified = True
+                    logger.info(f"[Layer3-S3] ✓ Uploaded: {s3_key}")
+
+                except Exception as s3_err:
+                    logger.error(f"[Layer3-S3] ✗ S3 upload FAILED for {file_path}: {s3_err}", exc_info=True)
                     return False
-
-                s3_upload_verified = True
-                logger.info(f"[Layer3-S3] ✓ Uploaded: {s3_key}")
-
-            except Exception as s3_err:
-                logger.error(f"[Layer3-S3] ✗ S3 upload FAILED for {file_path}: {s3_err}", exc_info=True)
-                return False
 
             # ==================== STEP 2: SAVE METADATA TO DATABASE ====================
-            # Only proceed if S3 upload was verified
-            if not s3_upload_verified:
-                logger.error(f"[Layer3-DB] Skipping database save - S3 upload not verified for {file_path}")
+            # Only proceed if the content is durably stored - either verified in
+            # object storage, or held inline in the row we are about to write.
+            if not (s3_upload_verified or content_is_inline):
+                logger.error(f"[Layer3-DB] Skipping database save - content not durably stored for {file_path}")
                 return False
 
             async with AsyncSessionLocal() as session:
@@ -1602,8 +1637,9 @@ class UnifiedStorageService:
                     )
                     existing_file = result.scalar_one_or_none()
 
-                    content_inline = None  # Never store content inline
-                    is_inline = False  # Always use S3
+                    # Inline only when there is no object store to hold the bytes.
+                    content_inline = content if content_is_inline else None
+                    is_inline = content_is_inline
 
                     if existing_file:
                         # Update existing file
@@ -1655,7 +1691,8 @@ class UnifiedStorageService:
 
                     # Commit transaction
                     await session.commit()
-                    logger.info(f"[Layer3-DB] ✓ Saved metadata: {project_id}/{file_path} (s3_key={s3_key[:50]}...)")
+                    where = f"s3_key={s3_key[:50]}..." if s3_key else f"inline={size_bytes}b"
+                    logger.info(f"[Layer3-DB] ✓ Saved metadata: {project_id}/{file_path} ({where})")
                     return True
 
                 except Exception as db_err:

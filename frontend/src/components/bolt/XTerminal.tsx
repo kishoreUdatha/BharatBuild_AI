@@ -151,6 +151,9 @@ function XTerminalComponent({ logs = [], onCommand }: XTerminalProps) {
 
     // Open terminal
     terminal.open(terminalRef.current)
+    
+    // Focus terminal so keyboard shortcuts work immediately
+    terminal.focus()
 
     // Store refs
     xtermRef.current = terminal
@@ -383,6 +386,7 @@ function XTerminalComponent({ logs = [], onCommand }: XTerminalProps) {
         className="h-full w-full"
         style={{ padding: '12px 16px' }}
         onContextMenu={handleContextMenu}
+        onClick={() => xtermRef.current?.focus()}
       />
 
       {/* Context Menu for Copy */}

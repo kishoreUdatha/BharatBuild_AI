@@ -32,7 +32,7 @@ class Profile:
 
     # API Settings
     api_key: str = ""
-    model: str = "claude-3-sonnet-20240229"
+    model: str = "sonnet"
     max_tokens: int = 4096
     temperature: float = 0.7
 
@@ -60,14 +60,14 @@ PROFILE_PRESETS = {
     "default": Profile(
         name="default",
         description="Default balanced configuration",
-        model="claude-3-sonnet-20240229",
+        model="sonnet",
         max_tokens=4096,
         temperature=0.7,
     ),
     "fast": Profile(
         name="fast",
         description="Fast responses with Haiku model",
-        model="claude-3-haiku-20240307",
+        model="haiku",
         max_tokens=2048,
         temperature=0.5,
         compact_mode=True,
@@ -75,14 +75,14 @@ PROFILE_PRESETS = {
     "quality": Profile(
         name="quality",
         description="High quality with Opus model",
-        model="claude-3-opus-20240229",
+        model="opus",
         max_tokens=8192,
         temperature=0.8,
     ),
     "coding": Profile(
         name="coding",
         description="Optimized for coding tasks",
-        model="claude-3-sonnet-20240229",
+        model="sonnet",
         max_tokens=4096,
         temperature=0.3,
         confirm_writes=True,
@@ -91,7 +91,7 @@ PROFILE_PRESETS = {
     "creative": Profile(
         name="creative",
         description="Creative writing and brainstorming",
-        model="claude-3-opus-20240229",
+        model="opus",
         max_tokens=8192,
         temperature=1.0,
     ),
@@ -306,12 +306,9 @@ class ProfileManager:
             choices=["haiku", "sonnet", "opus"],
             default="sonnet"
         )
-        model_map = {
-            "haiku": "claude-3-haiku-20240307",
-            "sonnet": "claude-3-sonnet-20240229",
-            "opus": "claude-3-opus-20240229"
-        }
-        profile.model = model_map[model_choice]
+        # Store the tier, not a model ID. Resolution belongs to the server's
+        # router (see cli/models.py) so a retirement never strands a profile.
+        profile.model = model_choice
 
         # Max tokens
         profile.max_tokens = int(Prompt.ask("Max tokens", default=str(profile.max_tokens)))

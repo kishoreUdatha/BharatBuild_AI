@@ -385,13 +385,19 @@ class AgenticCLI:
         self.model = self._get_model_name()
 
     def _get_model_name(self) -> str:
-        """Get full model name"""
-        model_map = {
-            "haiku": "claude-3-5-haiku-20241022",
-            "sonnet": "claude-3-5-sonnet-20241022",
-            "opus": "claude-3-opus-20240229",
-        }
-        return model_map.get(self.config.model, self.config.model)
+        """
+        Resolve the configured tier to a model ID.
+
+        Resolution lives in cli/models.py, which defers to the server's router.
+        Do not reintroduce a local map here — the previous one held three
+        retired model IDs and every call through it returned 404.
+        """
+        from cli.models import resolve, is_tier
+
+        # A raw model ID passed through config wins, so power users can pin one.
+        if self.config.model and not is_tier(self.config.model):
+            return self.config.model
+        return resolve(self.config.model)
 
     def _get_system_prompt(self) -> str:
         """Generate system prompt with context including failure history"""

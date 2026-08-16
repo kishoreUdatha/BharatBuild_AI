@@ -4,6 +4,15 @@ from dataclasses import dataclass, field, InitVar
 from app.utils.claude_client import claude_client
 from app.core.logging_config import logger
 from app.core.config import settings
+from app.utils.security import (
+    INJECTION_DEFENSE_PREAMBLE,
+    sanitize_user_input,
+    wrap_user_input,
+    sanitize_file_content_for_prompt,
+    validate_file_path,
+    sanitize_file_path,
+)
+from app.utils.token_budget import TokenBudget, estimate_tokens
 
 
 @dataclass
@@ -16,6 +25,11 @@ class AgentContext:
     project_id: str
     user_id: Optional[str] = None  # User ID for isolation (diagrams, documents, etc.)
     metadata: Optional[Dict[str, Any]] = field(default_factory=dict)
+    # Token budget for this request (optional, set by orchestrator)
+    token_budget: Optional[TokenBudget] = field(default=None, repr=False)
+    # Dynamic model selection
+    model_preference: str = "auto"  # "auto", "fast", "balanced", "smart", or model ID
+    user_plan: str = "free"         # User's subscription plan
 
     def __post_init__(self):
         """Ensure metadata is never None - always use empty dict as fallback"""
@@ -36,12 +50,42 @@ class BaseAgent(ABC):
         self.name = name
         self.role = role
         self.capabilities = capabilities
-        self.model = model
+        self.model = model  # Default model (can be overridden by context)
         self.claude = claude_client
         # Token tracking
         self._total_input_tokens = 0
         self._total_output_tokens = 0
         self._call_count = 0
+
+    def resolve_model(self, context: Optional['AgentContext'] = None) -> str:
+        """
+        Resolve which model to use for this agent call.
+        
+        Priority:
+        1. User's explicit preference from context (if set)
+        2. Agent's default model
+        
+        Args:
+            context: Optional AgentContext with user preferences
+            
+        Returns:
+            Model ID string ("haiku", "sonnet", etc.)
+        """
+        if context and context.model_preference != "auto":
+            try:
+                from app.config.model_registry import model_registry
+                resolved = model_registry.resolve_model(
+                    agent_type=self.role,
+                    user_plan=context.user_plan,
+                    user_preference=context.model_preference,
+                )
+                if resolved != self.model:
+                    logger.info(f"[{self.name}] Model override: {self.model} -> {resolved} (user preference: {context.model_preference})")
+                return resolved
+            except ImportError:
+                pass  # model_registry not available, use default
+        
+        return self.model
 
     def reset_token_tracking(self):
         """Reset token tracking counters"""
@@ -143,42 +187,99 @@ class BaseAgent(ABC):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int = 4096,
-        temperature: float = 0.7
+        temperature: float = 0.7,
+        token_budget: Optional[TokenBudget] = None,
+        context: Optional['AgentContext'] = None
     ) -> str:
         """
-        Call Claude API with system and user prompts (optimized for plain text)
+        Call Claude API with system and user prompts (with injection defense and budget enforcement)
 
         Args:
             system_prompt: System prompt for the agent
             user_prompt: User's request/prompt
             max_tokens: Maximum tokens to generate
             temperature: Temperature for generation
+            token_budget: Optional token budget to enforce
+            context: Optional AgentContext for dynamic model selection
 
         Returns:
             Generated text response from Claude
         """
         try:
+            # Resolve model dynamically based on user preference
+            active_model = self.resolve_model(context)
+
+            # Check token budget before calling
+            if token_budget:
+                estimated_input = estimate_tokens(system_prompt) + estimate_tokens(user_prompt)
+                if not token_budget.can_spend_input(estimated_input):
+                    raise ValueError(
+                        f"[{self.name}] Token budget exceeded: "
+                        f"need ~{estimated_input} input tokens, "
+                        f"only {token_budget.remaining_input} remaining"
+                    )
+                if not token_budget.can_make_call():
+                    raise ValueError(
+                        f"[{self.name}] Call budget exceeded: "
+                        f"{token_budget.calls_made}/{token_budget.max_calls} calls used"
+                    )
+                # Respect budget for output tokens
+                max_tokens = min(max_tokens, token_budget.get_recommended_max_tokens(max_tokens))
+
+            # Add injection defense to system prompt
+            secured_system_prompt = INJECTION_DEFENSE_PREAMBLE + "\n" + system_prompt
+
             # Optimize for plain text if enabled (20% performance boost!)
-            optimized_system_prompt = self._optimize_system_prompt_for_plain_text(system_prompt)
+            optimized_system_prompt = self._optimize_system_prompt_for_plain_text(secured_system_prompt)
 
             response = await self.claude.generate(
                 prompt=user_prompt,
                 system_prompt=optimized_system_prompt,
-                model=self.model,
+                model=active_model,
                 max_tokens=max_tokens,
                 temperature=temperature
             )
 
             # Track token usage
-            self._total_input_tokens += response.get("input_tokens", 0)
-            self._total_output_tokens += response.get("output_tokens", 0)
+            input_tokens = response.get("input_tokens", 0)
+            output_tokens = response.get("output_tokens", 0)
+            self._total_input_tokens += input_tokens
+            self._total_output_tokens += output_tokens
             self._call_count += 1
-            logger.debug(f"[{self.name}] Token usage: +{response.get('input_tokens', 0)} in, +{response.get('output_tokens', 0)} out (call #{self._call_count})")
+
+            # Update budget if provided
+            if token_budget:
+                token_budget.record_call(input_tokens, output_tokens)
+
+            logger.debug(f"[{self.name}] Token usage: +{input_tokens} in, +{output_tokens} out (call #{self._call_count}, model={active_model})")
 
             return response.get("content", "")
         except Exception as e:
             logger.error(f"[{self.name}] Claude API error: {e}", exc_info=True)
             raise
+
+    @staticmethod
+    def safe_user_input(text: str, max_length: int = 50000) -> str:
+        """Wrap user input with injection-safe boundary tags."""
+        return wrap_user_input(text, max_length)
+
+    @staticmethod
+    def safe_file_content(content: str, file_path: str, max_length: int = 10000) -> str:
+        """Sanitize file content for safe inclusion in prompts."""
+        return sanitize_file_content_for_prompt(content, file_path, max_length)
+
+    @staticmethod
+    def validate_output_path(path: str, base_dir: Optional[str] = None) -> Optional[str]:
+        """
+        Validate and sanitize a file path from LLM output.
+        Returns sanitized path or None if invalid.
+        """
+        sanitized = sanitize_file_path(path)
+        if sanitized and base_dir:
+            is_valid, _ = validate_file_path(sanitized, base_dir=base_dir)
+            if not is_valid:
+                return None
+        return sanitized
 
     def format_output(
         self,

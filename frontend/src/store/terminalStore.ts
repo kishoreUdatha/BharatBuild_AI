@@ -135,7 +135,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         },
         body: JSON.stringify({
           command,
-          timeout: 120
+          timeout: 300
         })
       })
 

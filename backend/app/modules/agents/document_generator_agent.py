@@ -34,6 +34,8 @@ from typing import Dict, List, Optional, Any, Tuple
 from collections import OrderedDict
 import json
 import re
+import atexit
+import threading
 from datetime import datetime
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -47,8 +49,30 @@ import tempfile
 import os
 import shutil
 
-# Thread pool for CPU-bound PDF generation
-_pdf_executor = ThreadPoolExecutor(max_workers=5)
+# Thread pool for CPU-bound PDF generation (lazy initialized)
+_pdf_executor: Optional[ThreadPoolExecutor] = None
+_pdf_executor_lock = threading.Lock()
+
+
+def _get_pdf_executor() -> ThreadPoolExecutor:
+    """Lazily initialize the PDF executor thread pool."""
+    global _pdf_executor
+    if _pdf_executor is None:
+        with _pdf_executor_lock:
+            if _pdf_executor is None:
+                _pdf_executor = ThreadPoolExecutor(max_workers=5)
+    return _pdf_executor
+
+
+def _shutdown_pdf_executor() -> None:
+    """Shut down the PDF executor gracefully at process exit."""
+    global _pdf_executor
+    if _pdf_executor is not None:
+        _pdf_executor.shutdown(wait=False)
+        _pdf_executor = None
+
+
+atexit.register(_shutdown_pdf_executor)
 
 
 class DocumentGeneratorAgent(BaseAgent):
@@ -471,28 +495,46 @@ Generate complete, meaningful content (not placeholders).
     async def process(
         self,
         context: AgentContext,
-        plan: Optional[Dict] = None,
-        architecture: Optional[Dict] = None,
-        code_files: Optional[List[Dict]] = None,
-        test_results: Optional[Dict] = None,
-        document_types: Optional[List[str]] = None,
-        parallel_mode: bool = True  # ✅ NEW: Enable parallel processing
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Generate academic documentation with all 20 improvements + parallel optimization
 
         Args:
-            context: Agent context
-            plan: Project plan from Planner Agent
-            architecture: Architecture details
-            code_files: Generated code files
-            test_results: Test results
-            document_types: Specific documents to generate
-            parallel_mode: Use parallel Claude calls (default: True for speed)
+            context: Agent context.
+                Expected metadata keys:
+                - plan (Dict, optional): Project plan from Planner Agent
+                - architecture (Dict, optional): Architecture details
+                - code_files (List[Dict], optional): Generated code files
+                - test_results (Dict, optional): Test results
+                - document_types (List[str], optional): Specific documents to generate
+                - parallel_mode (bool, optional): Use parallel Claude calls (default: True)
 
         Returns:
             Dict with generated documents and validation results
         """
+        # Backward compatibility: accept kwargs and populate metadata
+        if kwargs:
+            import warnings
+            warnings.warn(
+                "Passing plan, architecture, code_files, test_results, document_types, parallel_mode "
+                "as keyword arguments to DocumentGeneratorAgent.process() is deprecated. "
+                "Pass them in context.metadata instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            for key in ("plan", "architecture", "code_files", "test_results", "document_types", "parallel_mode"):
+                if key in kwargs and key not in (context.metadata or {}):
+                    context.metadata[key] = kwargs[key]
+
+        # Extract parameters from context.metadata
+        plan: Optional[Dict] = context.metadata.get("plan")
+        architecture: Optional[Dict] = context.metadata.get("architecture")
+        code_files: Optional[List[Dict]] = context.metadata.get("code_files")
+        test_results: Optional[Dict] = context.metadata.get("test_results")
+        document_types: Optional[List[str]] = context.metadata.get("document_types")
+        parallel_mode: bool = context.metadata.get("parallel_mode", True)
+
         try:
             import time
             start_time = time.time()
@@ -1318,7 +1360,7 @@ Output valid JSON only.
 
                 # Run CPU-bound PDF generation in thread pool
                 success = await loop.run_in_executor(
-                    _pdf_executor,
+                    _get_pdf_executor(),
                     self._generate_pdf_sync,
                     doc_type,
                     doc_data,
@@ -1353,7 +1395,7 @@ Output valid JSON only.
 
                 # Run CPU-bound PPTX generation in thread pool
                 success = await loop.run_in_executor(
-                    _pdf_executor,
+                    _get_pdf_executor(),
                     ppt_generator.generate_project_presentation,
                     doc_data,
                     tmp_path

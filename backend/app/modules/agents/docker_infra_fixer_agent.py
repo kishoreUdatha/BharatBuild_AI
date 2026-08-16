@@ -295,10 +295,52 @@ class DockerInfraFixerAgent:
 
     def __init__(self):
         self.fix_history: Dict[str, List[FixResult]] = {}
+        self._history_lock = asyncio.Lock()
         self.max_fixes_per_error = 3
         self.default_memory_limit = "512m"
         self.increased_memory_limit = "1g"
         self.max_memory_limit = "2g"
+
+    # ========================================================================
+    # SAFE SHELL EXECUTION HELPERS
+    # ========================================================================
+
+    @staticmethod
+    def _safe_path(path: str) -> str:
+        """
+        Escape a file path for safe shell usage.
+        Validates it doesn't contain shell metacharacters.
+        """
+        import shlex
+        # Reject paths with obvious injection attempts
+        if any(c in path for c in [';', '&&', '||', '`', '$', '\n', '\r']):
+            raise ValueError(f"Unsafe characters in path: {path!r}")
+        return shlex.quote(path)
+
+    @staticmethod
+    def _safe_port(port_str: str) -> str:
+        """Validate and return a safe port string."""
+        from app.utils.security import validate_port
+        port_num = validate_port(port_str)
+        if port_num is None:
+            raise ValueError(f"Invalid port: {port_str!r}")
+        return str(port_num)
+
+    @staticmethod
+    def _safe_container_name(name: str) -> str:
+        """Validate and return a safe container name."""
+        from app.utils.security import validate_container_name
+        if not validate_container_name(name):
+            raise ValueError(f"Invalid container name: {name!r}")
+        return name
+
+    @staticmethod
+    def _safe_image_name(image: str) -> str:
+        """Validate and return a safe Docker image name."""
+        from app.utils.security import validate_docker_image_name
+        if not validate_docker_image_name(image):
+            raise ValueError(f"Invalid Docker image name: {image!r}")
+        return image
 
     # ========================================================================
     # ERROR DETECTION
@@ -398,7 +440,8 @@ class DockerInfraFixerAgent:
             volume_fixes = await self._validate_volume_mounts(project_path, sandbox_runner)
             fixes.extend(volume_fixes)
 
-        self.fix_history[project_id] = self.fix_history.get(project_id, []) + fixes
+        async with self._history_lock:
+            self.fix_history[project_id] = self.fix_history.get(project_id, []) + fixes
         return fixes
 
     # ========================================================================
@@ -654,11 +697,18 @@ class DockerInfraFixerAgent:
         try:
             # Step 1: Try to kill processes on each port
             for port in ports_found:
+                # Validate port before shell use
+                try:
+                    safe_port = self._safe_port(port)
+                except ValueError:
+                    logger.warning(f"[DockerInfraFixer] Skipping invalid port: {port!r}")
+                    continue
+
                 # Kill process using port
-                sandbox_runner(f"fuser -k {port}/tcp 2>/dev/null || true", None, 10)
+                sandbox_runner(f"fuser -k {safe_port}/tcp 2>/dev/null || true", None, 10)
 
                 # Remove containers using port
-                sandbox_runner(f"docker ps --filter 'publish={port}' -q | xargs -r docker rm -f", None, 30)
+                sandbox_runner(f"docker ps --filter 'publish={safe_port}' -q | xargs -r docker rm -f", None, 30)
 
                 logger.info(f"[DockerInfraFixer] Attempted to free port {port}")
 
@@ -860,11 +910,12 @@ class DockerInfraFixerAgent:
 
         container = match.group(1)
         try:
-            exit_code, output = sandbox_runner(f"docker rm -f {container}", None, 30)
+            safe_name = self._safe_container_name(container)
+            exit_code, output = sandbox_runner(f"docker rm -f {safe_name}", None, 30)
             return FixResult(
                 success=exit_code == 0,
-                message=f"Removed stale container: {container}",
-                command_executed=f"docker rm -f {container}"
+                message=f"Removed stale container: {safe_name}",
+                command_executed=f"docker rm -f {safe_name}"
             )
         except Exception as e:
             return FixResult(success=False, message=f"Container removal failed: {e}")
@@ -933,6 +984,12 @@ class DockerInfraFixerAgent:
                         logger.warning(f"[DockerInfraFixer] Failed to update {dockerfile_path}: {e}")
 
         try:
+            # Validate image name before shell use
+            try:
+                self._safe_image_name(image_to_pull)
+            except ValueError:
+                return FixResult(success=False, message=f"Invalid image name: {image_to_pull}")
+
             exit_code, output = sandbox_runner(f"docker pull {image_to_pull}", None, 300)
             if exit_code == 0:
                 message = f"Pulled image: {image_to_pull}"
@@ -948,6 +1005,10 @@ class DockerInfraFixerAgent:
             else:
                 # Try without tag
                 base_image = image_to_pull.split(':')[0]
+                try:
+                    self._safe_image_name(f"{base_image}:latest")
+                except ValueError:
+                    return FixResult(success=False, message=f"Invalid base image name: {base_image}")
                 exit_code, output = sandbox_runner(f"docker pull {base_image}:latest", None, 300)
                 return FixResult(
                     success=exit_code == 0,
@@ -1023,7 +1084,7 @@ class DockerInfraFixerAgent:
         try:
             # Try to fix common permission issues
             if project_path:
-                sandbox_runner(f"chmod -R 755 {project_path} 2>/dev/null || true", None, 30)
+                sandbox_runner(f"chmod -R 755 {self._safe_path(project_path)} 2>/dev/null || true", None, 30)
 
             # Also try to fix node_modules permissions
             sandbox_runner("chmod -R 755 node_modules 2>/dev/null || true", None, 30)
@@ -2746,8 +2807,8 @@ http {{
     def _read_file_from_sandbox(self, file_path: str, sandbox_runner: callable) -> Optional[str]:
         """Read a file from the sandbox (works for both local and remote)."""
         try:
-            # Try using sandbox_runner (for remote sandbox)
-            exit_code, output = sandbox_runner(f'cat "{file_path}"', None, 30)
+            safe_path = self._safe_path(file_path)
+            exit_code, output = sandbox_runner(f'cat {safe_path}', None, 30)
             if exit_code == 0 and output:
                 return output
             return None
@@ -2763,50 +2824,54 @@ http {{
         try:
             import base64
 
-            # Create a backup first
+            safe_path = self._safe_path(file_path)
             backup_path = f"{file_path}.bak"
-            sandbox_runner(f'cp "{file_path}" "{backup_path}" 2>/dev/null || true', None, 10)
+            safe_backup = self._safe_path(backup_path)
+
+            # Create a backup first
+            sandbox_runner(f'cp {safe_path} {safe_backup} 2>/dev/null || true', None, 10)
 
             # Encode content to base64
             encoded = base64.b64encode(content.encode()).decode()
 
             # Write base64 in chunks to avoid command line length limits
             temp_file = f"{file_path}.b64tmp"
+            safe_temp = self._safe_path(temp_file)
             chunk_size = 50000  # Safe chunk size for shell commands
 
             # Clear/create temp file
-            sandbox_runner(f'> "{temp_file}"', None, 10)
+            sandbox_runner(f'> {safe_temp}', None, 10)
 
             # Write in chunks
             for i in range(0, len(encoded), chunk_size):
                 chunk = encoded[i:i + chunk_size]
-                # Use echo with double quotes - base64 only has A-Za-z0-9+/= which are shell-safe
-                write_cmd = f'echo -n "{chunk}" >> "{temp_file}"'
+                # base64 only has A-Za-z0-9+/= which are shell-safe in double quotes
+                write_cmd = f'echo -n "{chunk}" >> {safe_temp}'
                 exit_code, output = sandbox_runner(write_cmd, None, 30)
                 if exit_code != 0:
                     logger.warning(f"[DockerInfraFixer] Failed to write chunk {i//chunk_size}: {output}")
-                    sandbox_runner(f'mv "{backup_path}" "{file_path}" 2>/dev/null || true', None, 10)
-                    sandbox_runner(f'rm -f "{temp_file}"', None, 10)
+                    sandbox_runner(f'mv {safe_backup} {safe_path} 2>/dev/null || true', None, 10)
+                    sandbox_runner(f'rm -f {safe_temp}', None, 10)
                     return False
 
             # Decode temp file to final file
-            decode_cmd = f'base64 -d "{temp_file}" > "{file_path}" && rm -f "{temp_file}"'
+            decode_cmd = f'base64 -d {safe_temp} > {safe_path} && rm -f {safe_temp}'
             exit_code, output = sandbox_runner(decode_cmd, None, 30)
 
             if exit_code != 0:
                 logger.warning(f"[DockerInfraFixer] Failed to decode file: {output}")
-                sandbox_runner(f'mv "{backup_path}" "{file_path}" 2>/dev/null || true', None, 10)
+                sandbox_runner(f'mv {safe_backup} {safe_path} 2>/dev/null || true', None, 10)
                 return False
 
             # Verify the file exists and has content
-            verify_code, verify_output = sandbox_runner(f'test -s "{file_path}" && head -1 "{file_path}"', None, 10)
+            verify_code, verify_output = sandbox_runner(f'test -s {safe_path} && head -1 {safe_path}', None, 10)
             if verify_code != 0:
                 logger.warning(f"[DockerInfraFixer] File verification failed: {file_path}")
-                sandbox_runner(f'mv "{backup_path}" "{file_path}" 2>/dev/null || true', None, 10)
+                sandbox_runner(f'mv {safe_backup} {safe_path} 2>/dev/null || true', None, 10)
                 return False
 
             # Clean up backup on success
-            sandbox_runner(f'rm -f "{backup_path}"', None, 10)
+            sandbox_runner(f'rm -f {safe_backup}', None, 10)
 
             logger.info(f"[DockerInfraFixer] Successfully wrote {file_path}")
             return True
@@ -2814,7 +2879,12 @@ http {{
         except Exception as e:
             logger.warning(f"[DockerInfraFixer] Failed to write {file_path}: {e}")
             # Try to restore backup
-            sandbox_runner(f'mv "{backup_path}" "{file_path}" 2>/dev/null || true', None, 10)
+            try:
+                safe_path = self._safe_path(file_path)
+                safe_backup = self._safe_path(f"{file_path}.bak")
+                sandbox_runner(f'mv {safe_backup} {safe_path} 2>/dev/null || true', None, 10)
+            except ValueError:
+                pass
             return False
 
     def _file_exists_in_sandbox(self, file_path: str, sandbox_runner: callable) -> bool:
@@ -3066,14 +3136,16 @@ http {{
     # UTILITY METHODS
     # ========================================================================
 
-    def get_fix_history(self, project_id: str) -> List[FixResult]:
+    async def get_fix_history(self, project_id: str) -> List[FixResult]:
         """Get history of fixes applied for a project."""
-        return self.fix_history.get(project_id, [])
+        async with self._history_lock:
+            return self.fix_history.get(project_id, [])
 
-    def clear_fix_history(self, project_id: str) -> None:
+    async def clear_fix_history(self, project_id: str) -> None:
         """Clear fix history for a project."""
-        if project_id in self.fix_history:
-            del self.fix_history[project_id]
+        async with self._history_lock:
+            if project_id in self.fix_history:
+                del self.fix_history[project_id]
 
 
 # Global instance

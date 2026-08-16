@@ -282,14 +282,16 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
       return true
     }
 
-    // SECOND: Check for _PREVIEW_URL_ marker - just set the URL but don't mark as fully ready yet
+    // SECOND: Check for _PREVIEW_URL_ marker - server is ready, show preview
     const backendUrl = parsePreviewUrl(cleanOutput)
     if (backendUrl && !serverStartedRef.current) {
-      console.log('[DetectServer] Found _PREVIEW_URL_ marker (waiting for ready):', backendUrl)
-      setPreviewUrl(backendUrl)  // Set URL for display
-      setStatus('starting')      // Keep status as starting until ready
-      // Don't call onPreviewUrlChange yet - wait for __PREVIEW_READY__
-      return false  // Return false - server not fully ready yet
+      console.log('[DetectServer] Found _PREVIEW_URL_ marker - server ready:', backendUrl)
+      serverStartedRef.current = true
+      setPreviewUrl(backendUrl)
+      setStatus('running')
+      onPreviewUrlChange?.(backendUrl)
+      setServerRunning(true)
+      return true
     }
 
     // Patterns to detect server URL and extract port (fallback for local development)
@@ -1097,7 +1099,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
 
       // Step 3: Execute commands
       const commands = detectProjectType() === 'node'
-        ? ['npm install', 'npm run dev']
+        ? ['npx vite --host 0.0.0.0']
         : detectProjectType() === 'python'
         ? ['pip install -r requirements.txt', 'python main.py']
         : ['python -m http.server 3000']
@@ -1143,7 +1145,7 @@ export function ProjectRunControls({ onOpenTerminal, onPreviewUrlChange, onOutpu
         const result = await executeCommandWithTimeout(
           reader,
           isDevServer,
-          isDevServer ? 10000 : 120000, // 10s for dev server, 2min timeout (but install waits for completion)
+          isDevServer ? 30000 : 120000, // 30s for dev server URL detection, 2min for install
           containerPreviewUrl,
           onOutput,
           isInstallCommand // Critical #4: Wait for install commands to fully complete

@@ -50,9 +50,9 @@ class RetryLimiter:
     """
 
     # Configuration
-    MAX_RETRIES_PER_ERROR = 3  # Bolt uses 2-3
-    MAX_RETRIES_PER_SESSION = 10  # Total retries per build session
-    MAX_TOKENS_PER_SESSION = 50000  # Token limit per session
+    MAX_RETRIES_PER_ERROR = 5      # FIX 5: Raised from 3 — complex files need more fix attempts
+    MAX_RETRIES_PER_SESSION = 20   # FIX 5: Raised from 10 — larger projects need more total fixes
+    MAX_TOKENS_PER_SESSION = 100000  # FIX 5: Raised from 50000 — budget for full project fix passes
     SESSION_TIMEOUT = timedelta(minutes=30)  # Session expires after 30 min
 
     def __init__(self):

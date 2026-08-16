@@ -388,6 +388,20 @@ export function Terminal({
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+C to copy selected text or all terminal content
+      if (e.ctrlKey && e.key === 'c') {
+        const selection = window.getSelection()?.toString()
+        if (selection) {
+          // Copy selected text
+          navigator.clipboard.writeText(selection)
+        } else {
+          // Copy all terminal content
+          const text = lines.map(l => l.content || '').join('\n')
+          navigator.clipboard.writeText(text)
+        }
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      }
       // Ctrl+F to search
       if (e.ctrlKey && e.key === 'f') {
         e.preventDefault()
@@ -407,7 +421,7 @@ export function Terminal({
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [toggleSearch, showSearch, clearTerminal])
+  }, [toggleSearch, showSearch, clearTerminal, lines])
 
   // Get line icon and color
   const getLineStyle = (type: TerminalLine['type']) => {

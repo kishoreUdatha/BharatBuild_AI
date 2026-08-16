@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from app.core.logging_config import logger
 from app.services.unified_fixer.classifier import ClassifiedError, ErrorCategory
 from app.services.unified_fixer.strategies.deterministic import FixResult
+from app.core.config import settings
+from app.core.models import price_usd
 
 
 # Haiku-optimized prompts (concise for speed)
@@ -49,7 +51,8 @@ class HaikuStrategy:
     Fast AI - $0.001 - ~2s
     """
 
-    COST_PER_FIX = 0.001  # Approximate cost
+    # Cost is measured from token usage per call, not assumed.
+    # See app/core/models.py for the rate table.
 
     def __init__(self, file_manager=None, anthropic_client=None):
         """
@@ -59,6 +62,9 @@ class HaikuStrategy:
         """
         self.file_manager = file_manager
         self.client = anthropic_client
+        # Real USD cost of the most recent API call, from measured token usage.
+        # Reset per fix() so a cached/no-op path reports 0.0 rather than a stale value.
+        self._last_call_cost: float = 0.0
 
     async def fix(
         self,
@@ -81,6 +87,7 @@ class HaikuStrategy:
         Returns:
             FixResult with success status and details
         """
+        self._last_call_cost = 0.0
         start_time = time.time()
 
         try:
@@ -114,7 +121,7 @@ class HaikuStrategy:
                     files_modified=[],
                     error="Haiku did not return a valid fix",
                     time_ms=int((time.time() - start_time) * 1000),
-                    cost=self.COST_PER_FIX
+                    cost=self._last_call_cost
                 )
 
             # Apply the fix
@@ -128,7 +135,7 @@ class HaikuStrategy:
             )
 
             result.time_ms = int((time.time() - start_time) * 1000)
-            result.cost = self.COST_PER_FIX
+            result.cost = self._last_call_cost
 
             return result
 
@@ -140,7 +147,7 @@ class HaikuStrategy:
                 files_modified=[],
                 error=str(e),
                 time_ms=int((time.time() - start_time) * 1000),
-                cost=self.COST_PER_FIX
+                cost=self._last_call_cost
             )
 
     async def _read_file(
@@ -191,12 +198,26 @@ class HaikuStrategy:
 
         try:
             response = await self.client.messages.create(
-                model="claude-3-haiku-20240307",
+                model=settings.CLAUDE_HAIKU_MODEL,
                 max_tokens=1024,
                 system=HAIKU_SYSTEM_PROMPT,
                 messages=[
                     {"role": "user", "content": user_prompt}
                 ]
+            )
+
+            # Measure actual spend from the response rather than assuming a flat rate.
+            _usage = getattr(response, 'usage', None)
+            self._last_call_cost = price_usd(
+                settings.CLAUDE_HAIKU_MODEL,
+                getattr(_usage, 'input_tokens', 0) or 0,
+                getattr(_usage, 'output_tokens', 0) or 0,
+            )
+            logger.debug(
+                '[HaikuStrategy] call cost $%.6f (%s in / %s out)',
+                self._last_call_cost,
+                getattr(_usage, 'input_tokens', 0),
+                getattr(_usage, 'output_tokens', 0),
             )
 
             # Parse JSON response

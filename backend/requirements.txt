@@ -37,34 +37,34 @@ flower==2.0.1
 anthropic>=0.39.0  # Updated for Agent SDK support with tools
 openai==1.12.0
 google-genai>=1.0.0  # Google Gemini API for chatbot (new SDK with google.genai)
-langchain==0.1.9
-langchain-community==0.0.24
-langchain-openai==0.0.6
-langchain-anthropic==0.1.1
-llama-index>=0.10.13
+# removed (unused, 0 imports in app/): langchain==0.1.9
+# removed (unused, 0 imports in app/): langchain-community==0.0.24
+# removed (unused, 0 imports in app/): langchain-openai==0.0.6
+# removed (unused, 0 imports in app/): langchain-anthropic==0.1.1
+# removed (unused, 0 imports in app/): llama-index>=0.10.13
 tiktoken>=0.8.0
-sentence-transformers>=3.0.0
+# removed (unused, 0 imports in app/): sentence-transformers>=3.0.0
 
 # ============================================
 # Deep Learning Frameworks
 # ============================================
-torch>=2.6.0
-torchvision>=0.21.0
-torchaudio>=2.6.0
-tensorflow>=2.18.0
+# removed (unused, 0 imports in app/): torch>=2.6.0
+# removed (unused, 0 imports in app/): torchvision>=0.21.0
+# removed (unused, 0 imports in app/): torchaudio>=2.6.0
+# removed (unused, 0 imports in app/): tensorflow>=2.18.0
 # keras version managed by tensorflow
-jax[cpu]>=0.4.35
-flax>=0.10.0
+# removed (unused, 0 imports in app/): jax[cpu]>=0.4.35
+# removed (unused, 0 imports in app/): flax>=0.10.0
 
 # ============================================
 # Machine Learning
 # ============================================
-scikit-learn==1.4.0
-xgboost==2.0.3
-lightgbm==4.3.0
-catboost==1.2.2
-optuna==3.5.0
-hyperopt==0.2.7
+# removed (unused, 0 imports in app/): scikit-learn==1.4.0
+# removed (unused, 0 imports in app/): xgboost==2.0.3
+# removed (unused, 0 imports in app/): lightgbm==4.3.0
+# removed (unused, 0 imports in app/): catboost==1.2.2
+# removed (unused, 0 imports in app/): optuna==3.5.0
+# removed (unused, 0 imports in app/): hyperopt==0.2.7
 
 # ============================================
 # Data Science & Analysis
@@ -72,8 +72,8 @@ hyperopt==0.2.7
 numpy==1.26.4
 pandas==2.1.4
 scipy==1.12.0
-polars==0.20.7
-dask==2024.1.1
+# removed (unused, 0 imports in app/): polars==0.20.7
+# removed (unused, 0 imports in app/): dask==2024.1.1
 # vaex removed - not used and fails to compile on newer GCC
 
 # ============================================

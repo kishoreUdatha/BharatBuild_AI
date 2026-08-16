@@ -42,6 +42,70 @@ def _get_preview_url(port: int, project_id: str = None) -> str:
     """Generate preview URL - delegates to centralized function."""
     return _get_preview_url_centralized(port, project_id or "")
 
+
+# Dev-server ports we prefer for the preview, most-likely first.
+PREVIEW_PRIORITY_PORTS = [3000, 5173, 5174, 4173, 8080, 8000, 5000]
+
+
+def _port_is_live(host_port: int, timeout: float = 0.6) -> bool:
+    """
+    True if a server on this host port actually answers an HTTP request.
+
+    A bare TCP connect is NOT sufficient: Docker's published-port proxy accepts
+    the connection even when nothing is listening inside the container, so
+    connect() succeeds on every mapped port and the check is useless. We send a
+    minimal request and require bytes back.
+    """
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", int(host_port)), timeout=timeout) as s:
+            s.settimeout(timeout)
+            s.sendall(b"GET / HTTP/1.0\r\nHost: localhost\r\n\r\n")
+            return bool(s.recv(16))
+    except OSError:
+        return False
+
+
+def _select_primary_port(port_mappings: dict, active_port: Optional[int] = None) -> Optional[int]:
+    """
+    Pick the host port to advertise as the preview.
+
+    Three rules, in order:
+      1. Trust the port the dev server itself reported. container_manager parses
+         it out of the startup banner ("Local: http://localhost:5173/") into
+         container.active_port. This is the only race-free signal: Vite prints
+         "ready in ..." slightly BEFORE it accepts connections, so a client that
+         asks the moment it sees that line would otherwise get the step-2 probe
+         result of "nothing is live yet" and pin the preview to a fallback port.
+      2. Otherwise prefer a port with a live listener. The dev server binds
+         whatever its own config says, which is often NOT the first mapped port -
+         advertising a dead port renders a blank preview.
+      3. Otherwise fall back to PREVIEW_PRIORITY_PORTS order. Note this walks the
+         priority list, not the mapping dict: iterating the mapping and taking the
+         first entry that happens to appear in the list ignores the priority
+         entirely and is what previously pinned every preview to 3000.
+    """
+    valid = {
+        int(cp): int(hp)
+        for cp, hp in (port_mappings or {}).items()
+        if hp and int(hp) != 0
+    }
+    if not valid:
+        return None
+
+    if active_port and int(active_port) in valid:
+        return valid[int(active_port)]
+
+    ordered = [p for p in PREVIEW_PRIORITY_PORTS if p in valid]
+    ordered += [p for p in valid if p not in PREVIEW_PRIORITY_PORTS]
+
+    for container_port in ordered:
+        if _port_is_live(valid[container_port]):
+            return valid[container_port]
+
+    # Nothing listening yet (dev server still booting) - best guess by priority.
+    return valid[ordered[0]] if ordered else None
+
 from app.modules.execution import (
     get_container_manager,
     ContainerConfig,
@@ -298,28 +362,19 @@ async def create_container(
         preview_urls = {}
         primary_url = None
 
-        # Common dev server ports in priority order
-        priority_ports = [3000, 5173, 5174, 4173, 8080, 8000, 5000]
-
         for container_port, host_port in container.port_mappings.items():
             # CRITICAL #4: Validate host_port is valid
             if host_port is None or host_port == 0:
                 logger.warning(f"[Container] Invalid host_port for container_port {container_port}")
                 continue
 
-            direct_url = _get_preview_url(host_port)
-            preview_urls[str(container_port)] = direct_url
+            preview_urls[str(container_port)] = _get_preview_url(host_port)
 
-            # Set primary URL from first matching priority port
-            if primary_url is None and int(container_port) in priority_ports:
-                primary_url = direct_url
-
-        # Fallback to first available port if no priority port found
-        if primary_url is None and container.port_mappings:
-            valid_ports = [p for p in container.port_mappings.values() if p and p != 0]
-            if valid_ports:
-                first_host_port = valid_ports[0]
-                primary_url = _get_preview_url(first_host_port)
+        # Pick the port that is actually serving, not just the first one mapped.
+        selected_host_port = _select_primary_port(container.port_mappings, container.active_port)
+        if selected_host_port:
+            primary_url = _get_preview_url(selected_host_port)
+            logger.info(f"[Container] Preview primary -> host port {selected_host_port} for {project_id}")
 
         # Also include reverse proxy as fallback (may work in some setups)
         bolt_style_preview_url = f"/api/v1/preview/{project_id}/"
@@ -646,11 +701,19 @@ async def get_all_ports(project_id: str):
 
     container = manager.containers[project_id]
 
+    # Re-resolve on every poll: at container-create time the dev server is
+    # usually still booting, so the live-listener check there finds nothing and
+    # falls back to a guess. By the time the UI polls this, the server is up and
+    # we can point at the port it actually bound.
+    selected_host_port = _select_primary_port(container.port_mappings, container.active_port)
+
     return {
         "project_id": project_id,
         "active_port": container.active_port,
         "port_mappings": container.port_mappings,  # container_port -> host_port
         "preview_urls": manager.get_all_preview_urls(project_id),
+        "primary_preview_url": _get_preview_url(selected_host_port) if selected_host_port else None,
+        "primary_host_port": selected_host_port,
     }
 
 

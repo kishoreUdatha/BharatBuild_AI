@@ -85,30 +85,10 @@ export function useUnifiedRunner(options: UseUnifiedRunnerOptions = {}): UseUnif
     errorBufferRef.current = []
   }, [])
 
-  // Detect if project can use WebContainer
+  // Always use Docker - WebContainer disabled
   const canUseWebContainer = useCallback((): boolean => {
-    if (!isWebContainerSupported()) {
-      addOutput('⚠️ WebContainer not supported in this browser')
-      return false
-    }
-
-    if (!currentProject?.files) return false
-
-    // Check for Node.js project indicators
-    const hasPackageJson = currentProject.files.some(f => f.path === 'package.json')
-    const hasPythonFiles = currentProject.files.some(f => f.path.endsWith('.py'))
-    const hasJavaFiles = currentProject.files.some(f => f.path.endsWith('.java'))
-    const hasGoFiles = currentProject.files.some(f => f.path.endsWith('.go'))
-    const hasRustFiles = currentProject.files.some(f => f.path.endsWith('.rs'))
-    const hasFlutterFiles = currentProject.files.some(f => f.path === 'pubspec.yaml')
-
-    // WebContainer only supports Node.js
-    if (hasPackageJson && !hasPythonFiles && !hasJavaFiles && !hasGoFiles && !hasRustFiles && !hasFlutterFiles) {
-      return true
-    }
-
     return false
-  }, [currentProject?.files, addOutput])
+  }, [])
 
   // Detect errors in output
   const detectError = useCallback((text: string): boolean => {
@@ -359,6 +339,14 @@ export function useUnifiedRunner(options: UseUnifiedRunnerOptions = {}): UseUnif
 
       const container = await createResponse.json()
 
+      // The backend resolves which mapped port is actually serving and returns
+      // it as preview_urls.primary (always set - it falls back to the reverse
+      // proxy path when no port qualifies). Port priority belongs there, in
+      // PREVIEW_PRIORITY_PORTS; guessing ports here is what pointed the panel at
+      // a dead port in the first place. Hold onto it - without this the Docker
+      // path never sets a preview URL at all and the panel stays blank.
+      let previewCandidate: string | null = container.preview_urls?.primary ?? null
+
       // Sync files silently
       const syncResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/files/batch`, {
         method: 'POST',
@@ -388,7 +376,7 @@ export function useUnifiedRunner(options: UseUnifiedRunnerOptions = {}): UseUnif
           'Content-Type': 'application/json',
           ...(token && { 'Authorization': `Bearer ${token}` })
         },
-        body: JSON.stringify({ command: 'npm install', timeout: 120 }),
+        body: JSON.stringify({ command: 'test -d node_modules && echo "Dependencies already installed" || npm install', timeout: 300 }),
         signal: abortControllerRef.current?.signal,
       })
 
@@ -406,13 +394,36 @@ export function useUnifiedRunner(options: UseUnifiedRunnerOptions = {}): UseUnif
           'Content-Type': 'application/json',
           ...(token && { 'Authorization': `Bearer ${token}` })
         },
-        body: JSON.stringify({ command: 'npm run dev', timeout: 600 }),
+        body: JSON.stringify({ command: 'npx vite --host 0.0.0.0', timeout: 600 }),
         signal: abortControllerRef.current?.signal,
       })
 
       if (devResponse.ok) {
         const serverStarted = await processSSEStream(devResponse, true)
         if (serverStarted) {
+          // Re-resolve the port now that the dev server is listening. At create
+          // time it was still booting, so the backend could only fall back to a
+          // priority guess; this asks again once there is something to detect.
+          try {
+            const portsResponse = await fetch(`${API_BASE_URL}/containers/${currentProject.id}/ports`, {
+              headers: { ...(token && { 'Authorization': `Bearer ${token}` }) },
+            })
+            if (portsResponse.ok) {
+              const ports = await portsResponse.json()
+              previewCandidate = ports.primary_preview_url || previewCandidate
+            }
+          } catch {
+            // keep the create-time candidate
+          }
+
+          if (previewCandidate) {
+            setPreviewUrl(previewCandidate)
+            onPreviewReady?.(previewCandidate)
+            addOutput(`📍 Preview: ${previewCandidate}`)
+          } else {
+            addOutput('⚠️ Server started but no preview URL was returned')
+          }
+
           setStatus('running')
           return true
         }
@@ -425,7 +436,7 @@ export function useUnifiedRunner(options: UseUnifiedRunnerOptions = {}): UseUnif
       addOutput(`❌ Docker error: ${error.message}`)
       return false
     }
-  }, [currentProject, addOutput])
+  }, [currentProject, addOutput, onPreviewReady])
 
   // Process SSE stream from Docker
   const processSSEStream = useCallback(async (response: Response, detectServer = false): Promise<boolean> => {

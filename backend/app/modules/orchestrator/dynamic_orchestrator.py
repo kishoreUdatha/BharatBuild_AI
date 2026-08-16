@@ -764,10 +764,30 @@ class AgentConfig:
     max_tokens: int = 4096
     capabilities: List[str] = None
     enabled: bool = True
+    # Allowlist of tools this agent may use. See app/core/agent_tools.py.
+    # `capabilities` is descriptive; `tools` is enforced.
+    # None means unrestricted (legacy agents defined in code, not YAML).
+    tools: Optional[List[str]] = None
 
     def __post_init__(self):
         if self.capabilities is None:
             self.capabilities = []
+
+    def permits(self, tool: str) -> bool:
+        """Whether this agent is allowed to use `tool`."""
+        return True if self.tools is None else tool in self.tools
+
+    @property
+    def is_read_only(self) -> bool:
+        """True if this agent cannot modify the workspace."""
+        from app.core.agent_tools import is_read_only
+        return False if self.tools is None else is_read_only(self.tools)
+
+    @property
+    def requires_checkpoint(self) -> bool:
+        """True if this agent must run behind a git checkpoint."""
+        from app.core.agent_tools import requires_checkpoint
+        return True if self.tools is None else requires_checkpoint(self.tools)
 
 
 @dataclass
@@ -785,7 +805,7 @@ class WorkflowStep:
 
 # Per-file generation timeout (prevents indefinite hangs on complex files)
 # Complex files like cart.tsx, dashboard.tsx can take longer, but should never hang forever
-SINGLE_FILE_GENERATION_TIMEOUT = 120  # seconds (2 minutes per file max)
+SINGLE_FILE_GENERATION_TIMEOUT = 300  # seconds (5 minutes per file max - raised for 32768 max_tokens)
 SINGLE_FILE_RETRY_COUNT = 2  # Number of retries before marking as failed
 
 
@@ -3607,7 +3627,7 @@ Generate ONLY the file content, no explanations. Output the complete, working co
 
                 file_content = ""
                 async with client.messages.stream(
-                    model="claude-sonnet-4-20250514",
+                    model=settings.CLAUDE_SONNET_MODEL,
                     max_tokens=8000,
                     messages=[{"role": "user", "content": prompt}]
                 ) as stream:
@@ -4409,29 +4429,45 @@ Ensure every import in every file has a corresponding file in the plan.
                 except Exception as db_err:
                     logger.warning(f"[Writer-Resume] Database query failed, using plan files: {db_err}")
 
-        # PARALLEL FILE GENERATION MODE (FAST - generates 3 files at a time)
-        PARALLEL_BATCH_SIZE = 3  # Generate 3 files concurrently
+        # TIERED PARALLEL FILE GENERATION
+        # Files are generated in TIERS based on dependency priority.
+        # Within each tier, independent files are generated IN PARALLEL.
+        # Between tiers, we wait for the previous tier to complete.
+        #
+        # Example for a React project:
+        #   Tier 1: types/index.ts (alone - foundational)
+        #   Tier 2: config files IN PARALLEL (package.json, tsconfig, vite.config)
+        #   Tier 3: utils/helpers IN PARALLEL
+        #   Tier 4: contexts/stores IN PARALLEL
+        #   Tier 5: ALL components IN PARALLEL (biggest speedup!)
+        #   Tier 6: ALL pages IN PARALLEL
+        #   Tier 7: entry files (App.tsx - needs to know all components)
+        #
+        # This is safe because files within the same tier do NOT import each other.
+        # A component never imports another component; it only imports from types/context/utils.
+        #
+        # Max parallel within a tier (prevents API rate limiting)
+        MAX_PARALLEL_PER_TIER = int(os.environ.get("MAX_PARALLEL_PER_TIER", "4"))
+        
+        # Entry point files (App.tsx, main.tsx, index.html) must be generated LAST
+        # because they import from all other files and need to know their exports
+        ENTRY_PATTERNS = ['App.tsx', 'App.jsx', 'App.vue', 'main.tsx', 'main.jsx', 'main.ts', 'index.html']
 
-        # CRITICAL FIX: Sort files to generate types/models FIRST
-        # This ensures components have access to type definitions when being generated
+        # Sort files to generate foundational files first:
+        # types → configs → utils/hooks → stores/services → components → pages
         def get_file_priority(file_info: dict) -> int:
+            # Prefer the priority set by the planner (lower = earlier)
+            planner_priority = file_info.get('priority', 99)
+            if planner_priority < 99:
+                return planner_priority
+
             path = file_info.get('path', '').lower()
             # Priority 1: Types, interfaces, models, entities, DTOs (ALL languages)
-            # NOTE: All patterns must be lowercase since path is lowercased
             type_patterns = [
-                # TypeScript/React/Vue/Angular
                 '/types/', '/interfaces/', '/models/', 'types.ts', 'types.d.ts',
-                # Java/Spring Boot
                 '/entity/', '/entities/', '/dto/', '/dtos/',
-                # Python/FastAPI/Django
                 '/schemas/', 'models.py', 'schemas.py',
-                # Go
-                '/structs/',
-                # .NET/C# (lowercase for matching)
-                '/viewmodels/',
-                # Ruby/Rails
-                '/app/models/',
-                # Node.js/Express (already covered by /models/)
+                '/structs/', '/viewmodels/', '/app/models/',
             ]
             if any(t in path for t in type_patterns):
                 return 1
@@ -4464,18 +4500,47 @@ Ensure every import in every file has a corresponding file in the plan.
             return 7
 
         if files_to_generate:
-            # Sort by priority (types first, then configs, then utils, then components)
+            # Sort by dependency order (types first, then configs, then utils, then components)
             files_to_generate = sorted(files_to_generate, key=get_file_priority)
-            logger.info(f"[Writer] Sorted files by dependency order (types first)")
-            logger.info(f"[Writer] ⚡ Parallel mode: generating {len(files_to_generate)} files ({PARALLEL_BATCH_SIZE} at a time)")
+            
+            # Group files into tiers (same priority = same tier = can run in parallel)
+            from itertools import groupby
+            tiers = []
+            entry_files = []
+            
+            for file_info in files_to_generate:
+                path = file_info.get('path', '')
+                # Entry files go LAST regardless of priority
+                if any(entry in path for entry in ENTRY_PATTERNS):
+                    entry_files.append(file_info)
+                    continue
+            
+            # Group remaining files by priority tier
+            non_entry_files = [f for f in files_to_generate if f not in entry_files]
+            non_entry_files = sorted(non_entry_files, key=get_file_priority)
+            
+            for priority, group in groupby(non_entry_files, key=get_file_priority):
+                tier_files = list(group)
+                tiers.append(tier_files)
+            
+            # Add entry files as the final tier (always sequential, 1 at a time)
+            if entry_files:
+                tiers.append(entry_files)
+            
+            total_files = len(files_to_generate)
+            tier_info = [(len(t), get_file_priority(t[0]) if t else 0) for t in tiers]
+            logger.info(f"[Writer] Tiered parallel mode: {len(tiers)} tiers, {total_files} total files")
+            logger.info(f"[Writer] Tier sizes: {tier_info}")
+            logger.info(f"[Writer] Max parallel per tier: {MAX_PARALLEL_PER_TIER}")
 
             yield OrchestratorEvent(
                 type=EventType.STATUS,
                 data={
-                    "message": f"Generating {len(files_to_generate)} files ({PARALLEL_BATCH_SIZE} in parallel)...",
-                    "total_files": len(files_to_generate),
-                    "mode": "parallel",
-                    "batch_size": PARALLEL_BATCH_SIZE
+                    "message": f"Generating {total_files} files in {len(tiers)} tiers (parallel within tiers)...",
+                    "total_files": total_files,
+                    "mode": "tiered_parallel",
+                    "tiers": len(tiers),
+                    "max_parallel": MAX_PARALLEL_PER_TIER
                 }
             )
 
@@ -4576,44 +4641,51 @@ Ensure every import in every file has a corresponding file in the plan.
                     "error": error_msg
                 }
 
-            # Process files in batches
-            total_files = len(files_to_generate)
-            for batch_start in range(0, total_files, PARALLEL_BATCH_SIZE):
-                batch_end = min(batch_start + PARALLEL_BATCH_SIZE, total_files)
-                batch_files = files_to_generate[batch_start:batch_end]
-                batch_indices = list(range(batch_start + 1, batch_end + 1))
-
-                # Emit batch start
-                file_paths_in_batch = [f.get('path', '') for f in batch_files]
+            # Process files TIER BY TIER (sequential between tiers, parallel within)
+            files_completed = 0
+            for tier_idx, tier_files in enumerate(tiers):
+                tier_size = len(tier_files)
+                is_entry_tier = tier_idx == len(tiers) - 1 and entry_files
+                
+                # For entry files or single-file tiers, run sequentially
+                effective_parallel = 1 if is_entry_tier or tier_size == 1 else min(MAX_PARALLEL_PER_TIER, tier_size)
+                
+                tier_label = f"Tier {tier_idx + 1}/{len(tiers)}"
+                logger.info(f"[Writer] {tier_label}: {tier_size} files, parallel={effective_parallel}")
+                
                 yield OrchestratorEvent(
                     type=EventType.STATUS,
                     data={
-                        "message": f"Generating batch {batch_start//PARALLEL_BATCH_SIZE + 1}: {', '.join(file_paths_in_batch[:3])}...",
-                        "batch_files": file_paths_in_batch,
-                        "batch_start": batch_start + 1,
-                        "batch_end": batch_end,
-                        "total_files": total_files
+                        "message": f"{tier_label}: Generating {tier_size} file{'s' if tier_size > 1 else ''} {'in parallel' if effective_parallel > 1 else 'sequentially'}...",
+                        "tier": tier_idx + 1,
+                        "tier_files": [f.get('path', '') for f in tier_files],
+                        "parallel": effective_parallel
                     }
                 )
 
-                # Emit file start events for all files in batch
-                for i, file_info in enumerate(batch_files):
-                    file_path = file_info.get('path', '')
-                    file_index = batch_start + i + 1
-                    yield OrchestratorEvent(
-                        type=EventType.FILE_OPERATION,
-                        data={
-                            "operation": "create",
-                            "path": file_path,
-                            "operation_status": "in_progress",
-                            "file_number": file_index,
-                            "total_files": total_files,
-                            "description": file_info.get('description', ''),
-                            "generation_status": "generating"
-                        }
-                    )
+                # Process this tier in sub-batches of effective_parallel
+                for batch_start in range(0, tier_size, effective_parallel):
+                    batch_end = min(batch_start + effective_parallel, tier_size)
+                    batch_files = tier_files[batch_start:batch_end]
 
-                # Generate all files in batch IN PARALLEL with REAL-TIME event streaming
+                    # Emit file start events for all files in batch
+                    for i, file_info in enumerate(batch_files):
+                        file_path = file_info.get('path', '')
+                        file_index = files_completed + batch_start + i + 1
+                        yield OrchestratorEvent(
+                            type=EventType.FILE_OPERATION,
+                            data={
+                                "operation": "create",
+                                "path": file_path,
+                                "operation_status": "in_progress",
+                                "file_number": file_index,
+                                "total_files": total_files,
+                                "description": file_info.get('description', ''),
+                                "generation_status": "generating"
+                            }
+                        )
+
+                # Generate all files in batch SEQUENTIALLY with REAL-TIME event streaming
                 # Use create_task + queue to yield events as they happen (not after batch)
                 batch_done = asyncio.Event()
                 active_tasks = []
@@ -4658,9 +4730,9 @@ Ensure every import in every file has a corresponding file in the plan.
                         yield OrchestratorEvent(
                             type=EventType.STATUS,
                             data={
-                                "message": f"Generating files... (batch {batch_start//PARALLEL_BATCH_SIZE + 1})",
+                                "message": f"Generating file {batch_start + 1}/{total_files}...",
                                 "keepalive": True,
-                                "batch": batch_start//PARALLEL_BATCH_SIZE + 1,
+                                "file_index": batch_start + 1,
                                 # Large padding (8KB) to force CloudFront HTTP/2 flush immediately
                                 "_p": "." * 8192
                             }
@@ -4701,8 +4773,11 @@ Ensure every import in every file has a corresponding file in the plan.
                         )
 
                 # Small delay between batches for rate limiting
-                if batch_end < total_files:
-                    await asyncio.sleep(0.5)
+                if batch_end < tier_size:
+                    await asyncio.sleep(0.3)
+
+                # Update tier-level completed count
+                files_completed += len(batch_files)
 
             # ============================================================
             # RETRY FAILED SAVES: Try to save files that failed initially
@@ -4929,6 +5004,345 @@ Ensure every import in every file has a corresponding file in the plan.
             except Exception as essential_err:
                 logger.warning(f"[EssentialFiles] Essential files check skipped: {essential_err}")
 
+            # ============================================================
+            # FIX E: LIGHTWEIGHT STATIC SYNTAX CHECK
+            # Detect obviously broken files BEFORE runtime errors occur.
+            # - .py  → ast.parse() detects SyntaxError
+            # - .json → json.loads() detects malformed JSON
+            # - .ts/.tsx/.js/.jsx → brace-balance check detects unclosed { } ( )
+            # Files that fail are added to context.errors for the fixer.
+            # ============================================================
+            import ast
+            import json as _json
+
+            syntax_errors_found = []
+
+            for fc in context.files_created:
+                fp = fc.get('path', '')
+                fc_content = fc.get('content', '')
+                if not fp or not fc_content:
+                    continue
+
+                try:
+                    if fp.endswith('.py'):
+                        ast.parse(fc_content)  # raises SyntaxError if broken
+
+                    elif fp.endswith('.json'):
+                        _json.loads(fc_content)  # raises json.JSONDecodeError if broken
+
+                    elif fp.endswith(('.ts', '.tsx', '.js', '.jsx')):
+                        # Lightweight brace-balance check (catches truncated/incomplete files)
+                        opens = fc_content.count('{') + fc_content.count('(') + fc_content.count('[')
+                        closes = fc_content.count('}') + fc_content.count(')') + fc_content.count(']')
+                        imbalance = abs(opens - closes)
+                        # Allow small imbalance (template literals can have unbalanced braces)
+                        if imbalance > 5:
+                            raise ValueError(
+                                f"Brace imbalance: {opens} open vs {closes} close "
+                                f"(delta={imbalance}). File may be truncated."
+                            )
+
+                except SyntaxError as se:
+                    msg = f"Python SyntaxError in {fp}: {se}"
+                    logger.warning(f"[StaticCheck] {msg}")
+                    syntax_errors_found.append(msg)
+                    context.errors.append({
+                        "type": "syntax_error",
+                        "message": msg,
+                        "file": fp,
+                        "line": getattr(se, 'lineno', 0),
+                        "source": "static_check"
+                    })
+                except _json.JSONDecodeError as je:
+                    msg = f"JSON syntax error in {fp}: {je}"
+                    logger.warning(f"[StaticCheck] {msg}")
+                    syntax_errors_found.append(msg)
+                    context.errors.append({
+                        "type": "syntax_error",
+                        "message": msg,
+                        "file": fp,
+                        "line": getattr(je, 'lineno', 0),
+                        "source": "static_check"
+                    })
+                except ValueError as ve:
+                    msg = f"Structural error in {fp}: {ve}"
+                    logger.warning(f"[StaticCheck] {msg}")
+                    syntax_errors_found.append(msg)
+                    context.errors.append({
+                        "type": "syntax_error",
+                        "message": msg,
+                        "file": fp,
+                        "line": 0,
+                        "source": "static_check"
+                    })
+                except Exception:
+                    pass  # Unexpected parse errors are non-fatal
+
+            if syntax_errors_found:
+                logger.warning(f"[StaticCheck] Found {len(syntax_errors_found)} syntax error(s) in generated files")
+                yield OrchestratorEvent(
+                    type=EventType.WARNING,
+                    data={
+                        "message": f"Static check found {len(syntax_errors_found)} syntax error(s) - auto-fixer will correct them",
+                        "syntax_errors": syntax_errors_found,
+                        "phase": "static_check"
+                    }
+                )
+            else:
+                logger.info("[StaticCheck] ✓ All generated files passed static syntax check")
+
+            # ============================================================
+            # KIRO-STYLE VERIFY → FIX → DELIVER LOOP
+            # Run TypeScript/build verification BEFORE delivering to user.
+            # If errors found, send to Fixer Agent, then re-verify.
+            # Max 3 attempts. Only mark as "completed" with 0 errors.
+            # ============================================================
+            VERIFY_FIX_ENABLED = os.environ.get("VERIFY_FIX_ENABLED", "true").lower() == "true"
+            MAX_FIX_ATTEMPTS = int(os.environ.get("MAX_FIX_ATTEMPTS", "3"))
+            
+            if VERIFY_FIX_ENABLED:
+                # Determine verification command based on project type
+                created_paths = [f.get("path", "") if isinstance(f, dict) else str(f) for f in context.files_created]
+                has_typescript = any(p.endswith(('.ts', '.tsx')) for p in created_paths)
+                has_python = any(p.endswith('.py') for p in created_paths)
+                
+                if has_typescript:
+                    verify_command = "npx tsc --noEmit --pretty 2>&1"
+                elif has_python:
+                    verify_command = "python -m py_compile *.py 2>&1"
+                else:
+                    verify_command = None
+                
+                if verify_command:
+                    yield OrchestratorEvent(
+                        type=EventType.STATUS,
+                        data={"message": "Verifying code quality...", "phase": "verify_fix"}
+                    )
+                    
+                    for attempt in range(1, MAX_FIX_ATTEMPTS + 1):
+                        logger.info(f"[VerifyFix] Attempt {attempt}/{MAX_FIX_ATTEMPTS}: Running {verify_command}")
+                        
+                        yield OrchestratorEvent(
+                            type=EventType.STATUS,
+                            data={
+                                "message": f"Build check ({attempt}/{MAX_FIX_ATTEMPTS})...",
+                                "phase": "verify_fix",
+                                "attempt": attempt
+                            }
+                        )
+                        
+                        # Run verification inside the sandbox
+                        try:
+                            from app.services.universal_autofixer import UniversalAutoFixer
+                            sandbox_path = self._unified_storage.get_sandbox_path(
+                                context.project_id, context.user_id
+                            )
+                            verifier = UniversalAutoFixer(context.project_id, sandbox_path, context.user_id)
+                            exit_code, stdout, stderr = await verifier.execute_command(
+                                verify_command, cwd=sandbox_path, timeout=60
+                            )
+                            
+                            error_output = (stdout or "") + (stderr or "")
+                            
+                            # Parse errors
+                            error_lines = [l for l in error_output.split('\n') if 'error TS' in l or 'Error:' in l]
+                            error_count = len(error_lines)
+                            
+                            if error_count == 0 and exit_code == 0:
+                                logger.info(f"[VerifyFix] ✓ Build passed with 0 errors on attempt {attempt}")
+                                yield OrchestratorEvent(
+                                    type=EventType.STATUS,
+                                    data={
+                                        "message": f"Build verified - 0 errors",
+                                        "phase": "verify_fix_passed"
+                                    }
+                                )
+                                break  # Clean build - proceed to deliver
+                            
+                            logger.warning(f"[VerifyFix] Found {error_count} errors on attempt {attempt}")
+                            yield OrchestratorEvent(
+                                type=EventType.STATUS,
+                                data={
+                                    "message": f"Found {error_count} errors - fixing (attempt {attempt}/{MAX_FIX_ATTEMPTS})...",
+                                    "phase": "verify_fix_fixing",
+                                    "error_count": error_count
+                                }
+                            )
+                            
+                            # If last attempt, don't try to fix
+                            if attempt >= MAX_FIX_ATTEMPTS:
+                                logger.warning(f"[VerifyFix] Max attempts reached with {error_count} remaining errors")
+                                yield OrchestratorEvent(
+                                    type=EventType.WARNING,
+                                    data={
+                                        "message": f"Could not fix all errors ({error_count} remaining). Delivering with warnings.",
+                                        "phase": "verify_fix_partial",
+                                        "remaining_errors": error_count
+                                    }
+                                )
+                                break
+                            
+                            # Send errors to Fixer Agent
+                            # Build error context with affected file contents
+                            affected_files = set()
+                            for line in error_lines[:10]:  # Max 10 errors at a time
+                                # Parse "src/file.tsx(12,5): error TS..." format
+                                import re as _re
+                                file_match = _re.match(r'([^\(]+)\(', line)
+                                if file_match:
+                                    affected_files.add(file_match.group(1).strip())
+                            
+                            # Get file contents for fixer context
+                            file_contents = {}
+                            for af in affected_files:
+                                for fc in context.files_created:
+                                    if fc.get('path', '').endswith(af) or fc.get('path', '') == af:
+                                        file_contents[af] = fc.get('content', '')
+                                        break
+                            
+                            # Call the fixer - KIRO STYLE (strReplace patches)
+                            try:
+                                from app.modules.agents.production_fixer_agent import ProductionFixerAgent
+                                from app.modules.agents.base_agent import AgentContext
+                                from app.utils.patch_applier import parse_str_replace_response, apply_patches_async
+                                
+                                fixer = ProductionFixerAgent(model="sonnet")
+                                
+                                # Build Kiro-style prompt: full error + full file contents
+                                files_context = ""
+                                for fp, content in file_contents.items():
+                                    files_context += f"\n=== {fp} ===\n{content}\n"
+                                
+                                kiro_prompt = f"""Fix these TypeScript build errors using SURGICAL str_replace patches.
+
+## ERRORS:
+{error_output[:4000]}
+
+## AFFECTED FILES (FULL CONTENT):
+{files_context}
+
+## OUTPUT FORMAT:
+For each fix, output a <str_replace> block. Only change what's broken - don't rewrite entire files.
+
+<str_replace path="src/pages/Quiz.tsx">
+<old_str>
+const exact lines to find
+</old_str>
+<new_str>
+the corrected lines
+</new_str>
+</str_replace>
+
+RULES:
+1. old_str must EXACTLY match text in the file (copy-paste from the file above)
+2. new_str is the corrected version
+3. Make minimal changes - only fix the error, don't refactor
+4. You can output multiple <str_replace> blocks for multiple fixes
+5. Include 2-3 lines of context around the change so old_str is unique
+
+Fix ALL {error_count} errors now:"""
+
+                                fix_context = AgentContext(
+                                    user_request=kiro_prompt,
+                                    project_id=context.project_id,
+                                    user_id=context.user_id,
+                                    metadata={
+                                        "error_message": error_output[:4000],
+                                        "stack_trace": "",
+                                        "file_contents": file_contents,
+                                        "project_files": created_paths,
+                                        "command": verify_command
+                                    }
+                                )
+                                
+                                fix_result = await fixer.process(fix_context)
+                                
+                                if fix_result.get("success"):
+                                    # Try strReplace patches first (Kiro-style)
+                                    raw_response = fix_result.get("raw_response", "")
+                                    patches = parse_str_replace_response(raw_response) if raw_response else []
+                                    
+                                    if patches:
+                                        # Apply strReplace patches
+                                        patch_results = await apply_patches_async(
+                                            patches, context.project_id, context.user_id,
+                                            self._unified_storage
+                                        )
+                                        applied = sum(1 for r in patch_results if r.success)
+                                        failed = sum(1 for r in patch_results if not r.success)
+                                        
+                                        logger.info(f"[VerifyFix] Applied {applied} strReplace patches ({failed} failed)")
+                                        
+                                        # Update context.files_created with patched content
+                                        for patch in patches:
+                                            fp = patch["path"]
+                                            new_content = await self._unified_storage.read_from_sandbox(
+                                                context.project_id, fp, context.user_id
+                                            )
+                                            if new_content:
+                                                for i, existing in enumerate(context.files_created):
+                                                    if existing.get('path') == fp:
+                                                        context.files_created[i]['content'] = new_content
+                                                        break
+                                        
+                                        yield OrchestratorEvent(
+                                            type=EventType.STATUS,
+                                            data={
+                                                "message": f"Applied {applied} surgical fixes - re-verifying...",
+                                                "phase": "verify_fix_applied",
+                                                "patches_applied": applied,
+                                                "patches_failed": failed
+                                            }
+                                        )
+                                    else:
+                                        # Fallback: use full file replacement (old style)
+                                        fixed_files = fix_result.get("fixed_files", [])
+                                        for ff in fixed_files:
+                                            fp = ff.get("path", "")
+                                            fc_content = ff.get("content", "")
+                                            if fp and fc_content:
+                                                await self._unified_storage.write_to_sandbox(
+                                                    context.project_id, fp, fc_content, context.user_id
+                                                )
+                                                for i, existing in enumerate(context.files_created):
+                                                    if existing.get('path') == fp:
+                                                        context.files_created[i]['content'] = fc_content
+                                                        break
+                                                else:
+                                                    context.files_created.append({'path': fp, 'content': fc_content})
+                                        
+                                        logger.info(f"[VerifyFix] Fallback: replaced {len(fixed_files)} full files")
+                                        yield OrchestratorEvent(
+                                            type=EventType.STATUS,
+                                            data={
+                                                "message": f"Fixed {len(fixed_files)} files - re-verifying...",
+                                                "phase": "verify_fix_applied",
+                                                "files_fixed": [f.get('path', '') for f in fixed_files]
+                                            }
+                                        )
+                                else:
+                                    logger.warning(f"[VerifyFix] Fixer returned no fixes")
+                                    yield OrchestratorEvent(
+                                        type=EventType.WARNING,
+                                        data={"message": "Fixer could not resolve errors", "phase": "verify_fix_failed"}
+                                    )
+                                    break
+                                    
+                            except Exception as fix_err:
+                                logger.error(f"[VerifyFix] Fixer failed: {fix_err}")
+                                yield OrchestratorEvent(
+                                    type=EventType.WARNING,
+                                    data={"message": f"Auto-fix error: {str(fix_err)[:100]}", "phase": "verify_fix_error"}
+                                )
+                                break
+                                
+                        except Exception as verify_err:
+                            logger.warning(f"[VerifyFix] Verification command failed: {verify_err}")
+                            # Non-fatal - continue to deliver
+                            break
+                    
+                    logger.info(f"[VerifyFix] Verify-fix loop completed")
+
             return
 
         # TASK-BASED MODE (Legacy - for backward compatibility)
@@ -5031,51 +5445,87 @@ Ensure every import in every file has a corresponding file in the plan.
                 file_info = f
                 break
 
-        # Build context about available dependencies (what can be imported)
+        # FIX 2 (COST-OPTIMISED): FEED GENERATED FILE CONTENT BACK INTO WRITER CONTEXT
+        # Strategy: be surgical — only include context that is directly relevant
+        # to THIS file. Sending all type files to every file is expensive.
+        # Rules:
+        #   - Type files: include ONLY the type file(s) that share the same
+        #     language and are most likely imported by this file (max 2, 2000 chars each)
+        #   - Explicit depends_on files: full content, capped at 4000 chars each
+        #   - All other files: exports/paths only (cheap, no content)
+
         available_exports = []
-        types_content = ""  # Critical: Include actual type definitions for components
+        types_content = ""
+        dependency_file_contents = {}
+
+        # Collect depends_on paths for this file from the plan
+        current_file_depends_on = set()
+        if context.plan:
+            for f in context.plan.get('files', []):
+                if f.get('path') == file_path:
+                    for dep in f.get('depends_on', []):
+                        current_file_depends_on.add(dep.strip())
+                    break
 
         if context.files_created:
-            # First pass: Find types files in ALL files (types are generated early)
+            type_folders = [
+                '/types/', '/interfaces/', '/models/', '/entity/', '/entities/',
+                '/dto/', '/dtos/', '/schemas/', '/structs/', '/viewmodels/',
+            ]
+            # Detect the language of the current file for relevance filtering
+            current_ext = '.' + file_path.rsplit('.', 1)[-1] if '.' in file_path else ''
+            lang_group = {
+                '.ts': ['.ts', '.tsx'], '.tsx': ['.ts', '.tsx'],
+                '.js': ['.js', '.jsx'], '.jsx': ['.js', '.jsx'],
+                '.java': ['.java'],
+                '.py': ['.py'],
+                '.go': ['.go'],
+                '.cs': ['.cs'],
+                '.kt': ['.kt'],
+            }.get(current_ext, [current_ext])
+
+            type_file_parts = []
+            MAX_TYPE_FILES = 3       # At most 3 type files per prompt
+            TYPE_FILE_MAX_CHARS = 2500  # 2500 chars per type file (~625 tokens)
+            DEP_FILE_MAX_CHARS = 4000   # 4000 chars per explicit dependency file
+
             for created_file in context.files_created:
                 created_path = created_file.get('path', '')
                 created_content = created_file.get('content', '')
-
-                # CRITICAL FIX: Include actual content of types/models files
-                # This prevents type mismatch errors across ALL technologies
-                # NOTE: All patterns lowercase since we compare with .lower()
-                type_folders = [
-                    '/types/', '/interfaces/', '/models/', '/entity/', '/entities/',
-                    '/dto/', '/dtos/', '/schemas/', '/structs/', '/viewmodels/',
-                ]
-                is_type_file = any(t in created_path.lower() for t in type_folders)
-                # Support all common programming language extensions
-                valid_extensions = ['.ts', '.tsx', '.java', '.py', '.go', '.cs', '.rb', '.php', '.rs', '.kt']
-                is_valid_ext = any(ext in created_path for ext in valid_extensions)
-                if is_type_file and created_content and is_valid_ext:
-                    # Limit types content to prevent token overflow (first 5000 chars)
-                    truncated_content = created_content[:5000] if len(created_content) > 5000 else created_content
-                    types_content = f"""
-⚠️ CRITICAL - TYPE/MODEL DEFINITIONS (use EXACTLY these property/field names):
-```
-{truncated_content}
-```
-RULES:
-- Use ONLY the property/field names defined above
-- Do NOT invent or abbreviate names
-- Check nested types/relationships
-"""
-                    break  # Use first types file found
-
-            # Second pass: Build exports list from last 20 files for import context
-            for created_file in context.files_created[-20:]:
-                created_path = created_file.get('path', '')
                 created_exports = created_file.get('exports', [])
 
+                if not created_content:
+                    continue
+
+                is_type_file = any(t in created_path.lower() for t in type_folders)
+                same_language = any(created_path.endswith(ext) for ext in lang_group)
+
+                # (a) Type files: same language only, capped at MAX_TYPE_FILES
+                if is_type_file and same_language and len(type_file_parts) < MAX_TYPE_FILES:
+                    snippet = created_content[:TYPE_FILE_MAX_CHARS]
+                    if len(created_content) > TYPE_FILE_MAX_CHARS:
+                        snippet += f"\n... (truncated for brevity)"
+                    type_file_parts.append(f"📄 {created_path}:\n```\n{snippet}\n```")
+
+                # (b) Explicit depends_on files: always include, capped at DEP_FILE_MAX_CHARS
+                if created_path in current_file_depends_on:
+                    dependency_file_contents[created_path] = (
+                        created_content[:DEP_FILE_MAX_CHARS]
+                    )
+
+                # (c) All other files: exports list only (no content = cheap)
                 if created_exports:
                     available_exports.append(f"  - {created_path}: exports {', '.join(created_exports)}")
                 else:
                     available_exports.append(f"  - {created_path}")
+
+            if type_file_parts:
+                types_content = (
+                    "⚠️ TYPE/MODEL DEFINITIONS "
+                    "(use EXACTLY these property/field names):\n\n"
+                    + "\n\n".join(type_file_parts)
+                    + "\n\nRules: Use ONLY these names. Do NOT invent names.\n"
+                )
 
         dependency_context = ""
         if file_info:
@@ -5084,13 +5534,27 @@ RULES:
             expected_exports = file_info.get('exports', [])
 
             if depends_on or imports_needed:
+                # FIX 2: Include FULL CONTENT of explicit dependency files
+                dep_content_parts = []
+                for dep_path in (depends_on if depends_on else []):
+                    if dep_path in dependency_file_contents:
+                        dep_content_parts.append(
+                            f"📄 {dep_path} (FULL CONTENT - import from this exactly):\n"
+                            f"```\n{dependency_file_contents[dep_path]}\n```"
+                        )
+
+                dep_content_block = (
+                    "\n\nFULL CONTENT OF DEPENDENCY FILES:\n" + "\n\n".join(dep_content_parts)
+                    if dep_content_parts else ""
+                )
+
                 dependency_context = f"""
 DEPENDENCIES FOR THIS FILE:
 - This file depends on: {', '.join(depends_on) if depends_on else 'None'}
 - Imports needed: {imports_needed if imports_needed else 'None'}
 - This file should export: {', '.join(expected_exports) if expected_exports else 'As needed'}
-
-⚠️ CRITICAL: Make sure to import from the correct paths listed above!
+{dep_content_block}
+⚠️ CRITICAL: Import ONLY from the dependency files shown above. Match signatures exactly.
 """
 
         # CRITICAL FIX: Include package_structure for Java projects to ensure consistent packages
@@ -5455,6 +5919,11 @@ Output using <file path="{file_path}">CONTENT</file> format.
 Make sure the file is COMPLETE and PRODUCTION-READY.
 Include all necessary imports at the top.
 For Java: Use EXACT package names from PACKAGE STRUCTURE above!
+
+IMPORTANT: Generate the COMPLETE file. Do NOT truncate. Do NOT use TODO/placeholder comments.
+Do NOT use // ... rest of code, # ... existing code, or any similar shortcuts.
+Every function must have a complete, working implementation.
+The max token budget is large enough for the full file - use it.
 """
 
         # Initialize Bolt streaming buffer
@@ -5473,14 +5942,47 @@ For Java: Use EXACT package names from PACKAGE STRUCTURE above!
         KEEPALIVE_INTERVAL = 10  # seconds - reduced from 25s to prevent 30s browser timeout
         file_generated = False
 
+        # COST OPTIMISATION: Use haiku for simple/config files, sonnet for complex logic.
+        # Haiku is ~5x cheaper and perfectly capable for boilerplate and config files.
+        SIMPLE_FILE_PATTERNS = [
+            # Config and setup files
+            'package.json', 'tsconfig', 'tailwind.config', 'vite.config',
+            'postcss.config', '.env', 'requirements.txt', 'pom.xml',
+            'docker-compose', 'dockerfile', '.gitignore', 'nginx.conf',
+            'README', '.eslintrc', 'jest.config', 'babel.config',
+            # Simple Java/Python config
+            'application.properties', 'application.yml', 'settings.py',
+            # CSS / styling only
+            '.css', '.scss',
+        ]
+        COMPLEX_FILE_PATTERNS = [
+            # Logic-heavy files that need sonnet
+            'service', 'controller', 'repository', 'orchestrat',
+            'useChat', 'useProject', 'dashboard', 'auth', 'payment',
+            'executor', 'generator', 'fixer', 'planner', 'analyzer',
+            'store', 'context', 'reducer', 'middleware',
+        ]
+        file_lower = file_path.lower()
+        is_simple_file = any(p in file_lower for p in SIMPLE_FILE_PATTERNS)
+        is_complex_file = any(p in file_lower for p in COMPLEX_FILE_PATTERNS)
+
+        if is_simple_file and not is_complex_file:
+            effective_model = "haiku"
+            effective_max_tokens = 4096  # Config files are small
+        else:
+            effective_model = config.model  # sonnet for logic files
+            effective_max_tokens = config.max_tokens
+
+        logger.info(f"[Writer] Using model={effective_model} max_tokens={effective_max_tokens} for {file_path}")
+
         try:
             # Wrap file generation with timeout to prevent indefinite hangs
             async with asyncio.timeout(SINGLE_FILE_GENERATION_TIMEOUT):
                 async for chunk in self.claude_client.generate_stream(
                     prompt=user_prompt,
                     system_prompt=system_prompt,
-                    model=config.model,
-                    max_tokens=config.max_tokens,
+                    model=effective_model,
+                    max_tokens=effective_max_tokens,
                     temperature=config.temperature
                 ):
                     # Check if we need to send keepalive (time since last yielded event)
@@ -6357,12 +6859,25 @@ Stream code in chunks for real-time display.
             )
 
             # Call fixer to generate fix
+            # FIX C: Pre-populate additional_files with the broken file's content
+            # from context.files_created so fixer always has in-memory content
+            # (disk may not be current, especially for newly generated files)
+            error_file_path = error.get("file", "")
+            prefilled_additional_files = {}
+            if error_file_path and error_file_path != "unknown":
+                for fc in context.files_created:
+                    if fc.get('path') == error_file_path and fc.get('content'):
+                        prefilled_additional_files[error_file_path] = fc['content']
+                        logger.info(f"[Fixer] Pre-filling broken file content for: {error_file_path}")
+                        break
+
             fix_result = await fixer.fix_error(
                 error=error,
                 project_id=context.project_id,
                 file_context={
                     "files_created": context.files_created,
-                    "tech_stack": context.tech_stack
+                    "tech_stack": context.tech_stack,
+                    "additional_files": prefilled_additional_files
                 }
             )
 
@@ -6469,6 +6984,21 @@ Stream code in chunks for real-time display.
                                         "operation": "patch",
                                         "error": error.get("message")
                                     })
+
+                                    # FIX G: Update context.files_created so later files see the patched content
+                                    existing_idx = next(
+                                        (i for i, f in enumerate(context.files_created) if f.get('path') == file_path),
+                                        None
+                                    )
+                                    if existing_idx is not None:
+                                        context.files_created[existing_idx]['content'] = result["new_content"]
+                                    else:
+                                        context.files_created.append({
+                                            'path': file_path,
+                                            'content': result["new_content"],
+                                            'patched': True
+                                        })
+
                                     logger.info(f"[Fixer] Successfully applied patch to {file_path}")
                                 else:
                                     logger.warning(f"[Fixer] Patch failed for {file_path}: {result.get('error')}")
@@ -6523,6 +7053,20 @@ Stream code in chunks for real-time display.
                         "operation": "fix",
                         "error": error.get("message")
                     })
+
+                    # FIX G: Update context.files_created so later files see the fixed content
+                    existing_idx = next(
+                        (i for i, f in enumerate(context.files_created) if f.get('path') == file_path),
+                        None
+                    )
+                    if existing_idx is not None:
+                        context.files_created[existing_idx]['content'] = file_content
+                    else:
+                        context.files_created.append({
+                            'path': file_path,
+                            'content': file_content,
+                            'fixed': True
+                        })
 
             # Handle additional instructions (e.g., install missing deps)
             if "instructions" in parsed:
@@ -7038,10 +7582,20 @@ Output ONLY the files that need changes using this format:
             # Detect errors
             if result.get("has_errors") or not result.get("success"):
                 # Parse errors from terminal output
+                raw_output = result.get("terminal_output", "")
                 errors = self._parse_errors_from_output(
-                    terminal_output=result.get("terminal_output", ""),
+                    terminal_output=raw_output,
                     command=command
                 )
+
+                # Store full terminal output in metadata so fixer has complete build log
+                if "terminal_logs" not in context.metadata:
+                    context.metadata["terminal_logs"] = []
+                context.metadata["terminal_logs"].append({
+                    "command": command,
+                    "output": raw_output,  # Full output, not truncated
+                    "success": False
+                })
 
                 if errors:
                     context.errors.extend(errors)
@@ -7257,7 +7811,9 @@ Output ONLY the files that need changes using this format:
                     "file": file_path,
                     "line": line_number,
                     "command": command,
-                    "full_output": terminal_output[-500:] if len(terminal_output) > 500 else terminal_output  # GAP 4: Include context
+                    # Include last 3000 chars — tsc/javac errors are multi-line and need full context
+                    "full_output": terminal_output[-3000:] if len(terminal_output) > 3000 else terminal_output,
+                    "stderr": terminal_output  # Full raw output so fixer has everything
                 })
 
         return errors
@@ -8396,64 +8952,76 @@ Output ONLY the files that need changes using this format:
 
         docs_generated = 0
 
-        # Generate Dockerfile
-        dockerfile_content = self._generate_dockerfile(
-            has_package_json=has_package_json,
-            has_requirements=has_requirements,
-            has_pom_xml=has_pom_xml,
-            has_vite=has_vite,
-            has_next=has_next,
-            has_fastapi=has_fastapi,
-            has_django=has_django
+        # Only write deployment files for full-stack projects or if user explicitly requested Docker.
+        # Simple frontend-only projects (React/Vite) do NOT need Dockerfile, docker-compose.yml, etc.
+        is_fullstack = any(
+            any(pattern in (f.get('path', '') if isinstance(f, dict) else str(f))
+                for pattern in ['requirements.txt', 'main.py', 'server.', 'backend/', 'api/', 'pom.xml', 'go.mod'])
+            for f in files_created
         )
+        needs_docker = is_fullstack or has_requirements or has_pom_xml or has_fastapi or has_django or getattr(context, 'needs_docker', False)
 
-        try:
-            await self.file_manager.write_file(context.project_id, "Dockerfile", dockerfile_content)
-            docs_generated += 1
-            yield OrchestratorEvent(
-                type=EventType.FILE_OPERATION,
-                data={"path": "Dockerfile", "operation": "create", "status": "complete"}
+        if needs_docker:
+            # Generate Dockerfile
+            dockerfile_content = self._generate_dockerfile(
+                has_package_json=has_package_json,
+                has_requirements=has_requirements,
+                has_pom_xml=has_pom_xml,
+                has_vite=has_vite,
+                has_next=has_next,
+                has_fastapi=has_fastapi,
+                has_django=has_django
             )
-            context.files_created.append({"path": "Dockerfile", "type": "documentation"})
-            logger.info(f"[Documenter] Generated Dockerfile")
-        except Exception as e:
-            logger.error(f"[Documenter] Failed to create Dockerfile: {e}")
 
-        # Generate docker-compose.yml
-        compose_content = self._generate_docker_compose(
-            project_id=context.project_id,
-            has_package_json=has_package_json,
-            has_requirements=has_requirements,
-            has_vite=has_vite,
-            has_next=has_next,
-            has_fastapi=has_fastapi,
-            has_django=has_django
-        )
+            try:
+                await self.file_manager.write_file(context.project_id, "Dockerfile", dockerfile_content)
+                docs_generated += 1
+                yield OrchestratorEvent(
+                    type=EventType.FILE_OPERATION,
+                    data={"path": "Dockerfile", "operation": "create", "status": "complete"}
+                )
+                context.files_created.append({"path": "Dockerfile", "type": "documentation"})
+                logger.info(f"[Documenter] Generated Dockerfile")
+            except Exception as e:
+                logger.error(f"[Documenter] Failed to create Dockerfile: {e}")
 
-        try:
-            await self.file_manager.write_file(context.project_id, "docker-compose.yml", compose_content)
-            docs_generated += 1
-            yield OrchestratorEvent(
-                type=EventType.FILE_OPERATION,
-                data={"path": "docker-compose.yml", "operation": "create", "status": "complete"}
+            # Generate docker-compose.yml
+            compose_content = self._generate_docker_compose(
+                project_id=context.project_id,
+                has_package_json=has_package_json,
+                has_requirements=has_requirements,
+                has_vite=has_vite,
+                has_next=has_next,
+                has_fastapi=has_fastapi,
+                has_django=has_django
             )
-            context.files_created.append({"path": "docker-compose.yml", "type": "documentation"})
-            logger.info(f"[Documenter] Generated docker-compose.yml")
-        except Exception as e:
-            logger.error(f"[Documenter] Failed to create docker-compose.yml: {e}")
 
-        # Generate .dockerignore
-        dockerignore_content = self._generate_dockerignore()
-        try:
-            await self.file_manager.write_file(context.project_id, ".dockerignore", dockerignore_content)
-            docs_generated += 1
-            yield OrchestratorEvent(
-                type=EventType.FILE_OPERATION,
-                data={"path": ".dockerignore", "operation": "create", "status": "complete"}
-            )
-            context.files_created.append({"path": ".dockerignore", "type": "documentation"})
-        except Exception as e:
-            logger.error(f"[Documenter] Failed to create .dockerignore: {e}")
+            try:
+                await self.file_manager.write_file(context.project_id, "docker-compose.yml", compose_content)
+                docs_generated += 1
+                yield OrchestratorEvent(
+                    type=EventType.FILE_OPERATION,
+                    data={"path": "docker-compose.yml", "operation": "create", "status": "complete"}
+                )
+                context.files_created.append({"path": "docker-compose.yml", "type": "documentation"})
+                logger.info(f"[Documenter] Generated docker-compose.yml")
+            except Exception as e:
+                logger.error(f"[Documenter] Failed to create docker-compose.yml: {e}")
+
+            # Generate .dockerignore
+            dockerignore_content = self._generate_dockerignore()
+            try:
+                await self.file_manager.write_file(context.project_id, ".dockerignore", dockerignore_content)
+                docs_generated += 1
+                yield OrchestratorEvent(
+                    type=EventType.FILE_OPERATION,
+                    data={"path": ".dockerignore", "operation": "create", "status": "complete"}
+                )
+                context.files_created.append({"path": ".dockerignore", "type": "documentation"})
+            except Exception as e:
+                logger.error(f"[Documenter] Failed to create .dockerignore: {e}")
+        else:
+            logger.info(f"[Documenter] Skipping Docker deployment files - frontend-only project does not need them")
 
         yield OrchestratorEvent(
             type=EventType.STATUS,

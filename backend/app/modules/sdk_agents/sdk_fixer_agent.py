@@ -693,7 +693,7 @@ class SDKFixerAgent:
 
     def __init__(
         self,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = settings.CLAUDE_SONNET_MODEL,
         max_tokens: int = 8192
     ):
         """Initialize the SDK Fixer Agent"""

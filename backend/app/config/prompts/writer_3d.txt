@@ -1,0 +1,221 @@
+3D/ANIMATION WRITER RULES:
+
+CRITICAL - FILE GENERATION ORDER:
+1. package.json (with Three.js + R3F + GSAP deps)
+2. vite.config.ts
+3. tsconfig.json
+4. tailwind.config.js + postcss.config.js
+5. index.html
+6. src/index.css (Tailwind + custom 3D styles)
+7. src/main.tsx
+8. src/components/canvas/* (3D scene files)
+9. src/components/ui/* (HTML overlay components)
+10. src/App.tsx (combines Canvas + UI)
+
+REACT THREE FIBER RULES:
+1. Import from '@react-three/fiber', NOT from 'three' for React components
+2. Three.js objects become JSX: <mesh>, <boxGeometry>, <meshStandardMaterial>
+3. Props use camelCase: castShadow, receiveShadow, position-y={1}
+4. Array props use args: <sphereGeometry args={[1, 32, 32]} />
+5. Colors: use string "#ff0000" or color prop, NOT new THREE.Color() in JSX
+6. Refs: useRef<THREE.Mesh>(null!) - use non-null assertion
+7. Events: onPointerOver, onPointerOut, onClick (NOT addEventListener)
+8. NEVER return null from a component inside Canvas - return <group /> instead
+
+MATERIAL PATTERNS:
+```tsx
+// Glass/Crystal
+<meshPhysicalMaterial
+  color="#ffffff"
+  transmission={0.9}
+  thickness={0.5}
+  roughness={0}
+  metalness={0}
+  ior={1.5}
+/>
+
+// Gradient Sphere (shader material)
+<meshStandardMaterial color="#6366f1" metalness={0.8} roughness={0.2} />
+
+// Wireframe
+<meshBasicMaterial color="#8b5cf6" wireframe />
+
+// Holographic
+<MeshDistortMaterial color="#06b6d4" speed={2} distort={0.3} metalness={0.9} />
+```
+
+DREI HELPERS TO USE:
+- <Float> - gentle floating animation
+- <Text3D> - 3D text (needs font JSON)
+- <MeshDistortMaterial> - morphing effect
+- <MeshWobbleMaterial> - jelly effect
+- <Stars> - starfield background
+- <Sparkles> - floating sparkles
+- <Cloud> - volumetric clouds
+- <Trail> - motion trails
+- <Billboard> - always faces camera
+- <Html> - HTML inside 3D scene
+- <useGLTF> - load .glb models
+- <Environment preset="..."> - HDR lighting (city, sunset, dawn, warehouse, forest, apartment, studio, night, park, lobby)
+- <ContactShadows> - soft ground shadows
+- <AccumulativeShadows> - baked shadows
+- <useProgress> - loading progress
+
+ANIMATION PATTERNS:
+
+1. Hover Scale:
+```tsx
+const [hovered, setHovered] = useState(false)
+<mesh
+  onPointerOver={() => setHovered(true)}
+  onPointerOut={() => setHovered(false)}
+  scale={hovered ? 1.2 : 1}
+>
+```
+
+2. Spring Animation (with react-spring):
+```tsx
+import { useSpring, animated } from '@react-spring/three'
+const { scale } = useSpring({ scale: hovered ? 1.5 : 1 })
+<animated.mesh scale={scale}>
+```
+
+3. Scroll-linked Camera:
+```tsx
+import { useScroll } from '@react-three/drei'
+function CameraRig() {
+  const scroll = useScroll()
+  useFrame((state) => {
+    state.camera.position.z = 5 - scroll.offset * 10
+    state.camera.lookAt(0, 0, 0)
+  })
+  return null
+}
+// Wrap scene in <ScrollControls pages={5}>
+```
+
+4. Mouse Parallax:
+```tsx
+useFrame((state) => {
+  const { x, y } = state.mouse // -1 to 1
+  meshRef.current.rotation.y = x * 0.5
+  meshRef.current.rotation.x = -y * 0.3
+})
+```
+
+POST-PROCESSING EFFECTS:
+```tsx
+import { EffectComposer, Bloom, ChromaticAberration, Vignette, Noise } from '@react-three/postprocessing'
+
+<EffectComposer>
+  <Bloom luminanceThreshold={0.8} luminanceSmoothing={0.9} intensity={0.5} />
+  <ChromaticAberration offset={[0.002, 0.002]} />
+  <Vignette darkness={0.5} offset={0.5} />
+  <Noise opacity={0.02} />
+</EffectComposer>
+```
+
+GSAP + THREE.JS INTEGRATION:
+```tsx
+useEffect(() => {
+  if (!meshRef.current) return
+  
+  gsap.to(meshRef.current.position, {
+    y: 2,
+    duration: 2,
+    ease: "elastic.out(1, 0.3)",
+    scrollTrigger: {
+      trigger: sectionRef.current,
+      start: "top center",
+      end: "bottom center",
+      scrub: true
+    }
+  })
+}, [])
+```
+
+PERFORMANCE RULES:
+1. Use <Instances> for 100+ identical meshes (NOT .map with individual <mesh>)
+2. Limit draw calls: merge static geometry with <Merged>
+3. Use LOD (Level of Detail) for complex models
+4. Disable shadows on mobile: check window.innerWidth < 768
+5. Use <PerformanceMonitor> from drei to auto-downgrade quality
+6. Keep polygon count < 100k for smooth 60fps
+7. Use instanced particles (THREE.Points) for 1000+ particles
+8. Dispose textures/geometries in cleanup: useEffect return
+
+LOADING SCREEN:
+```tsx
+import { useProgress, Html } from '@react-three/drei'
+
+function Loader() {
+  const { progress } = useProgress()
+  return (
+    <Html center>
+      <div className="text-white text-xl">
+        {progress.toFixed(0)}%
+      </div>
+    </Html>
+  )
+}
+
+// Use as Suspense fallback
+<Suspense fallback={<Loader />}>
+```
+
+RESPONSIVE 3D:
+```tsx
+import { useThree } from '@react-three/fiber'
+
+function ResponsiveScene() {
+  const { viewport } = useThree()
+  const isMobile = viewport.width < 5 // Three.js units
+
+  return (
+    <mesh scale={isMobile ? 0.6 : 1}>
+      {/* ... */}
+    </mesh>
+  )
+}
+```
+
+INDEX.CSS MUST INCLUDE:
+```css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; overflow-x: hidden; }
+body { background: #0a0a0f; color: white; font-family: 'Inter', sans-serif; }
+
+/* Smooth scroll for GSAP ScrollTrigger */
+html { scroll-behavior: auto !important; }
+
+/* Canvas container */
+.canvas-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+/* Content overlay */
+.content-overlay {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+.content-overlay > * {
+  pointer-events: auto;
+}
+```
+
+NEVER:
+- Generate .glb/.gltf model files (reference them, don't create binary)
+- Use document.querySelector inside Canvas components
+- Mix React state updates with useFrame (causes 60fps re-renders)
+- Forget to add "three" to dependencies alongside @react-three/fiber
+- Use position={[x,y,z]} when only changing one axis (use position-y={y} instead)

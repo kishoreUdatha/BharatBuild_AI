@@ -395,7 +395,7 @@ Make sure to:
 
         try:
             response = await client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=settings.CLAUDE_SONNET_MODEL,
                 max_tokens=8192,
                 messages=[{"role": "user", "content": prompt}]
             )

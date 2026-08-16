@@ -150,8 +150,16 @@ async def lifespan(app: FastAPI):
     if not db_ready:
         logger.warning("[Startup] Database not ready - some features may fail")
 
-    # Step 3: Validate Claude API connection (critical for AI generation)
-    claude_ready = await validate_claude_api()
+    # Step 3: Validate Claude API connection (non-blocking, with timeout)
+    import asyncio
+    try:
+        claude_ready = await asyncio.wait_for(validate_claude_api(), timeout=10)
+    except asyncio.TimeoutError:
+        claude_ready = False
+        logger.warning("[Startup] Claude API validation timed out (10s) - continuing startup")
+    except Exception as e:
+        claude_ready = False
+        logger.warning(f"[Startup] Claude API validation failed: {e} - continuing startup")
     if not claude_ready:
         logger.warning("[Startup] Claude API not ready - AI generation may fail")
 

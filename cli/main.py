@@ -1,387 +1,183 @@
 #!/usr/bin/env python3
 """
-BharatBuild AI CLI - Main Entry Point
+BharatBuild CLI - Entry Point
 
 Usage:
-    bharatbuild                     # Start interactive REPL (server mode)
-    bharatbuild --standalone        # Start standalone mode (direct Claude API)
-    bharatbuild "create a todo app" # Run single prompt
-    bharatbuild -p "prompt"         # Run with prompt flag
-    bharatbuild --help              # Show help
-
-Modes:
-    Server Mode (default):
-        Connects to BharatBuild backend server for orchestrated workflows.
-        Requires the backend server to be running.
-
-    Standalone Mode (--standalone):
-        Works directly with Claude API, no server required.
-        Similar to how Claude Code CLI works.
+    bharatbuild                          Interactive REPL
+    bharatbuild "create a todo app"      Single-shot generation
+    bharatbuild login                    Authenticate
+    bharatbuild logout                   Clear credentials
+    bharatbuild register                 Create account
+    bharatbuild whoami                   Show account info
+    bharatbuild projects                 List projects
+    bharatbuild doctor                   Run diagnostics
 """
+
+from __future__ import annotations
 
 import argparse
 import asyncio
 import sys
-import os
 from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from cli.config import CLIConfig
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-def create_parser() -> argparse.ArgumentParser:
-    """Create argument parser for CLI"""
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bharatbuild",
-        description="BharatBuild AI - Claude Code Style CLI for AI-driven development",
+        description="BharatBuild AI - AI-powered code generation for India",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  bharatbuild login                            Login to your account
-  bharatbuild logout                           Logout from CLI
-  bharatbuild status                           Check login status
-  bharatbuild                                  Start interactive mode
-  bharatbuild "create a React todo app"        Generate project
-  bharatbuild "fix the errors in main.py"      Debug and fix code
-  bharatbuild -m sonnet "your request"         Use Claude Sonnet model
-
-How It Works (Claude Code Style):
-  BharatBuild CLI works like Claude Code - it can:
-  - Read, write, and edit files in your project
-  - Execute bash commands (builds, tests, git, etc.)
-  - Search code with glob and grep patterns
-  - Iterate until the task is complete
-
-  All conversations go through BharatBuild backend API.
-  Tools are executed locally on your machine.
-
-Authentication:
-  Register on the web portal first, then login via CLI.
-  Your requests are processed using the platform's API.
-
-Capabilities:
-  - Project Generation    Create complete projects from scratch
-  - Code Writing          Write new code, functions, modules
-  - Debugging             Find bugs and identify root causes
-  - Error Fixing          Analyze and fix compilation errors
-  - Build & Run           Compile, build, and run projects
-  - Documentation         Generate IEEE documents (60-80 pages)
-  - Testing               Write and run tests
-
-Keyboard Shortcuts (Interactive Mode):
-  Ctrl+C          Cancel current operation
-  Ctrl+L          Clear screen
-  Ctrl+R          Search command history
-  Tab             Auto-complete commands
-  Up/Down         Navigate history
-
-Slash Commands:
-  /help           Show available commands
-  /clear          Clear conversation
-  /model          Change AI model
-  /status         Show agent status
-  /ieee-auto      Generate college documents
-  /quit           Exit
-        """
+  bharatbuild                             Start interactive REPL
+  bharatbuild login                       Login to your account
+  bharatbuild register                    Create a new account
+  bharatbuild "create a React todo app"   Generate a project
+  bharatbuild -p "add dark mode"          Run a single prompt
+  bharatbuild projects                    List your projects
+  bharatbuild doctor                      Diagnose environment
+        """,
     )
 
-    # Subcommands for auth
-    subparsers = parser.add_subparsers(dest="command", help="Commands")
+    parser.add_argument("prompt", nargs="?", default=None,
+                        help="Prompt to send (single-shot mode)")
+    parser.add_argument("-p", "--prompt-flag", dest="prompt_flag",
+                        metavar="PROMPT", help="Prompt (flag form)")
+    parser.add_argument("-m", "--model", default=None,
+                        choices=["haiku", "sonnet", "opus"])
+    parser.add_argument("--api-url", default=None)
+    parser.add_argument("--api-key", default=None)
+    parser.add_argument("--mode", default=None, choices=["ask", "auto", "deny"])
+    parser.add_argument("-n", "--non-interactive", action="store_true")
+    parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("--version", action="version", version="bharatbuild 1.0.0")
 
-    # Login command
-    login_parser = subparsers.add_parser("login", help="Login to BharatBuild")
-    login_parser.add_argument("--token", "-t", help="Login with CLI token from web portal")
+    sub = parser.add_subparsers(dest="command")
 
-    # Logout command
-    subparsers.add_parser("logout", help="Logout from BharatBuild")
+    login_p = sub.add_parser("login", help="Login to BharatBuild")
+    login_p.add_argument("--token", "-t", metavar="TOKEN",
+                         help="CLI token from web portal")
 
-    # Status command
-    subparsers.add_parser("status", help="Show authentication status")
+    sub.add_parser("logout",   help="Clear stored credentials")
+    sub.add_parser("register", help="Create a new account")
+    sub.add_parser("whoami",   help="Show logged-in account details")
 
-    # Whoami command
-    subparsers.add_parser("whoami", help="Show current user info")
+    proj_p = sub.add_parser("projects", help="List your projects")
+    proj_p.add_argument("--limit", type=int, default=20)
 
-    # Positional argument for prompt
-    parser.add_argument(
-        "prompt",
-        nargs="?",
-        help="Prompt to execute (starts interactive mode if omitted)"
-    )
+    doc_p = sub.add_parser("doctor", help="Run environment diagnostics")
 
-    # Prompt flag (alternative to positional)
-    parser.add_argument(
-        "-p", "--prompt",
-        dest="prompt_flag",
-        help="Prompt to execute"
-    )
+    del_p = sub.add_parser("delete", help="Delete a project")
+    del_p.add_argument("project_id", help="Project ID to delete")
+    del_p.add_argument("--force", "-f", action="store_true")
 
-    # Model selection
-    parser.add_argument(
-        "-m", "--model",
-        choices=["haiku", "sonnet"],
-        default="haiku",
-        help="Claude model to use (default: haiku)"
-    )
-
-    # Output format
-    parser.add_argument(
-        "--output-format",
-        choices=["text", "json", "stream-json"],
-        default="text",
-        help="Output format (default: text)"
-    )
-
-    # Continue session
-    parser.add_argument(
-        "-c", "--continue",
-        dest="continue_session",
-        action="store_true",
-        help="Continue from last session"
-    )
-
-    # Max turns for agentic mode
-    parser.add_argument(
-        "--max-turns",
-        type=int,
-        default=10,
-        help="Maximum turns for agentic execution (default: 10)"
-    )
-
-    # Working directory
-    parser.add_argument(
-        "-d", "--directory",
-        type=str,
-        default=".",
-        help="Working directory (default: current directory)"
-    )
-
-    # Verbose mode
-    parser.add_argument(
-        "-v", "--verbose",
-        action="store_true",
-        help="Enable verbose output"
-    )
-
-    # Print version
-    parser.add_argument(
-        "--version",
-        action="version",
-        version="%(prog)s 1.0.0"
-    )
-
-    # System prompt customization
-    parser.add_argument(
-        "--system-prompt",
-        type=str,
-        help="Custom system prompt"
-    )
-
-    parser.add_argument(
-        "--append-system-prompt",
-        type=str,
-        help="Append to default system prompt"
-    )
-
-    # Permission mode
-    parser.add_argument(
-        "--permission-mode",
-        choices=["ask", "auto", "deny"],
-        default="ask",
-        help="Permission mode for file/bash operations (default: ask)"
-    )
-
-    # Allowed/disallowed tools
-    parser.add_argument(
-        "--allowed-tools",
-        type=str,
-        help="Comma-separated list of allowed tools"
-    )
-
-    parser.add_argument(
-        "--disallowed-tools",
-        type=str,
-        help="Comma-separated list of disallowed tools"
-    )
-
-    # Non-interactive mode (for scripting)
-    parser.add_argument(
-        "--non-interactive",
-        action="store_true",
-        help="Run in non-interactive mode (no prompts)"
-    )
-
-    # Config file
-    parser.add_argument(
-        "--config",
-        type=str,
-        help="Path to config file"
-    )
-
-    # Standalone mode (direct Claude API, no server)
-    parser.add_argument(
-        "--standalone", "-s",
-        action="store_true",
-        help="Run in standalone mode (direct Claude API, no server required)"
-    )
-
-
-    # API Key (for standalone mode)
-    parser.add_argument(
-        "--api-key",
-        type=str,
-        help="Anthropic API key (or set ANTHROPIC_API_KEY env var)"
-    )
-
-    # Server URL (for server mode)
-    parser.add_argument(
-        "--server-url",
-        type=str,
-        default="http://localhost:8000/api/v1",
-        help="Backend server URL (default: http://localhost:8000/api/v1)"
-    )
+    dl_p = sub.add_parser("download", help="Download a project as ZIP")
+    dl_p.add_argument("project_id")
+    dl_p.add_argument("--dest", "-d", default=None)
 
     return parser
 
 
-def main():
-    """Main entry point"""
-    parser = create_parser()
-    args = parser.parse_args()
+async def _async_main() -> None:
+    from cli.config import CLIConfig
+    from cli.auth import AuthManager, interactive_login, interactive_register, login_with_token, print_whoami
 
-    # Import auth manager
-    from cli.auth import get_auth_manager
-    from rich.console import Console
+    parser = _build_parser()
+    args   = parser.parse_args()
 
-    console = Console()
+    # ── load config & apply CLI overrides ────────────────────────────────────
+    config = CLIConfig.load_default()
 
-    # Get auth manager
-    auth_manager = get_auth_manager(args.server_url)
+    if args.model:
+        config.model = args.model
+    if args.api_url:
+        config.api_base_url = args.api_url
+    if args.api_key:
+        config.api_key = args.api_key
+    if args.mode:
+        config.permission_mode = args.mode
+    if args.non_interactive:
+        config.non_interactive = True
+    if args.verbose:
+        config.verbose = True
 
-    # Handle authentication commands first
-    if args.command == "login":
-        # Login command
-        if args.token:
-            # Login with token
-            success = asyncio.run(auth_manager.login_with_token(args.token))
+    # inject stored credentials into config
+    creds = AuthManager.load()
+    if creds:
+        AuthManager.inject_into_config(config, creds)
+
+    # ── sub-command dispatch ──────────────────────────────────────────────────
+    cmd = args.command
+
+    if cmd == "login":
+        token = getattr(args, "token", None)
+        if token:
+            await login_with_token(config, token)
         else:
-            # Interactive login
-            success = asyncio.run(auth_manager.interactive_login())
+            await interactive_login(config)
+        return
 
-        if success:
-            console.print("\n[green]✓ Login successful![/green]")
-            console.print(f"Welcome, [bold]{auth_manager.credentials.name}[/bold]!")
-            console.print("\nYou can now use BharatBuild AI. Try:")
-            console.print("  [cyan]bharatbuild[/cyan]                    Start interactive mode")
-            console.print('  [cyan]bharatbuild "your request"[/cyan]    Run a single prompt')
-        else:
-            console.print("\n[red]✗ Login failed[/red]")
-            console.print("Please check your credentials or register at the web portal.")
-        sys.exit(0 if success else 1)
+    if cmd == "logout":
+        AuthManager.logout()
+        from rich.console import Console
+        Console().print("[green]Logged out.[/green]")
+        return
 
-    elif args.command == "logout":
-        # Logout command
-        auth_manager.logout()
-        sys.exit(0)
+    if cmd == "register":
+        await interactive_register(config)
+        return
 
-    elif args.command == "status" or args.command == "whoami":
-        # Status command
-        auth_manager.show_status()
-        sys.exit(0)
+    if cmd == "whoami":
+        creds = AuthManager.require()
+        print_whoami(creds)
+        return
 
-    # For all operations, require authentication (uses backend API)
-    if not auth_manager.is_authenticated():
-        console.print("\n[red]✗ Authentication required[/red]")
-        console.print("\nPlease login first:")
-        console.print("  [cyan]bharatbuild login[/cyan]           Interactive login")
-        console.print("  [cyan]bharatbuild login -t TOKEN[/cyan]  Login with CLI token")
-        console.print("\nDon't have an account? Register at the web portal.")
-        sys.exit(1)
+    if cmd == "projects":
+        from cli.projects import list_projects
+        await list_projects(config, limit=args.limit)
+        return
 
-    # Determine the prompt
+    if cmd == "doctor":
+        from cli.doctor import run_doctor
+        await run_doctor(config)
+        return
+
+    if cmd == "delete":
+        from cli.projects import delete_project
+        await delete_project(config, args.project_id, force=args.force)
+        return
+
+    if cmd == "download":
+        from cli.projects import download_project
+        dest = Path(args.dest) if args.dest else None
+        await download_project(config, args.project_id, dest=dest)
+        return
+
+    # ── resolve prompt (positional or flag) ───────────────────────────────────
     prompt = args.prompt or args.prompt_flag
 
-    # Create config with auth info
-    config = CLIConfig(
-        model=args.model,
-        output_format=args.output_format,
-        max_turns=args.max_turns,
-        working_directory=os.path.abspath(args.directory),
-        verbose=args.verbose,
-        permission_mode=args.permission_mode,
-        system_prompt=args.system_prompt,
-        append_system_prompt=args.append_system_prompt,
-        allowed_tools=args.allowed_tools.split(",") if args.allowed_tools else None,
-        disallowed_tools=args.disallowed_tools.split(",") if args.disallowed_tools else None,
-        non_interactive=args.non_interactive,
-        continue_session=args.continue_session,
-        api_base_url=args.server_url,
-        api_key=args.api_key,
-        # Add auth info to config
-        auth_token=auth_manager.credentials.access_token,
-        user_id=auth_manager.credentials.user_id,
-        user_email=auth_manager.credentials.email,
-        user_name=auth_manager.credentials.name
-    )
+    # ── single-shot mode ──────────────────────────────────────────────────────
+    if prompt:
+        from cli.app import BharatBuildCLI
+        app = BharatBuildCLI(config)
+        await app.run_once(prompt)
+        return
 
-    # Load config file if specified
-    if args.config:
-        config.load_from_file(args.config)
+    # ── interactive REPL ──────────────────────────────────────────────────────
+    from cli.app import BharatBuildCLI
+    app = BharatBuildCLI(config)
+    await app.run()
 
+
+def main() -> None:
     try:
-        # Default: Agentic mode (Claude Code style) - uses backend API
-        # Orchestrator mode available with --orchestrator flag for project generation
-
-        if args.standalone:
-            # Standalone mode is disabled
-            console.print("[yellow]Note: Standalone mode is disabled.[/yellow]")
-            console.print("All requests are processed through the BharatBuild platform.\n")
-            sys.exit(1)
-
-        # Create config for agentic mode
-        agentic_config = CLIConfig(
-            model=args.model,
-            output_format=args.output_format,
-            max_turns=args.max_turns,
-            working_directory=os.path.abspath(args.directory),
-            verbose=args.verbose,
-            permission_mode=args.permission_mode,
-            system_prompt=args.system_prompt,
-            append_system_prompt=args.append_system_prompt,
-            api_base_url=args.server_url,
-            auth_token=auth_manager.credentials.access_token,
-            user_id=auth_manager.credentials.user_id,
-            user_email=auth_manager.credentials.email,
-            user_name=auth_manager.credentials.name
-        )
-
-        from cli.agentic_cli import AgenticCLI
-        cli = AgenticCLI(agentic_config, console)
-
-        console.print(f"[green]Logged in as:[/green] {auth_manager.credentials.name}")
-        console.print(f"[dim]Working directory: {agentic_config.working_directory}[/dim]")
-        console.print()
-
-        if prompt:
-            asyncio.run(cli.run(prompt))
-        else:
-            asyncio.run(cli.run_interactive())
-
+        asyncio.run(_async_main())
     except KeyboardInterrupt:
-        print("\n\nGoodbye! 👋")
-        sys.exit(0)
-    except ConnectionError as e:
-        print(f"\n❌ Connection Error: {e}")
-        print("\nThe BharatBuild server is not available.")
-        print("Please try again later or contact support.")
-        sys.exit(1)
-    except Exception as e:
-        if args.verbose:
-            import traceback
-            traceback.print_exc()
-        else:
-            print(f"\n❌ Error: {e}")
+        print("\nBye!")
+    except Exception as exc:
+        from rich.console import Console
+        Console().print(f"[bold red]Error:[/bold red] {exc}")
         sys.exit(1)
 
 

@@ -1,0 +1,192 @@
+3D/ANIMATION WEB PROJECT RULES:
+
+TECH STACK (ALWAYS USE):
+- React + Vite + TypeScript
+- React Three Fiber (@react-three/fiber) - NOT raw Three.js
+- @react-three/drei - helpers (OrbitControls, Environment, Text3D, Float, MeshDistortMaterial, etc.)
+- @react-three/postprocessing - effects (Bloom, ChromaticAberration, Vignette)
+- GSAP + ScrollTrigger - scroll-based animations
+- Framer Motion - UI element animations
+- Tailwind CSS - 2D UI styling
+- Leva - debug controls (dev only)
+
+CRITICAL RULES:
+1. ALWAYS wrap 3D scene in <Canvas> from @react-three/fiber
+2. NEVER use raw Three.js classes directly in JSX - use R3F equivalents
+3. ALWAYS add <OrbitControls> or camera animation for interactivity
+4. ALWAYS include lighting: <ambientLight> + <directionalLight> or <Environment preset="...">
+5. Use <Suspense> with fallback for async 3D content (models, textures)
+6. Keep Canvas and HTML UI separate - use @react-three/drei's <Html> for overlays inside Canvas
+7. ALWAYS add responsive Canvas: style={{ width: '100%', height: '100vh' }}
+8. Use useFrame() hook for per-frame animations, NOT setInterval
+9. For scroll animations: use GSAP ScrollTrigger, NOT intersection observers
+10. ALWAYS include shadows: <Canvas shadows> + castShadow/receiveShadow on meshes
+
+PACKAGE.JSON DEPENDENCIES:
+{
+  "@react-three/fiber": "^8.15.0",
+  "@react-three/drei": "^9.92.0",
+  "@react-three/postprocessing": "^2.16.0",
+  "three": "^0.160.0",
+  "@types/three": "^0.160.0",
+  "gsap": "^3.12.0",
+  "framer-motion": "^10.18.0",
+  "leva": "^0.9.35"
+}
+
+PROJECT STRUCTURE:
+src/
+├── main.tsx
+├── App.tsx                    # Main app with routes/sections
+├── index.css                  # Tailwind + custom CSS
+├── components/
+│   ├── canvas/               # 3D components (inside Canvas)
+│   │   ├── Scene.tsx         # Main 3D scene
+│   │   ├── Model.tsx         # 3D models/geometries
+│   │   ├── Lights.tsx        # Lighting setup
+│   │   ├── Effects.tsx       # Post-processing effects
+│   │   └── Particles.tsx     # Particle systems (optional)
+│   ├── ui/                   # 2D HTML components (outside Canvas)
+│   │   ├── Navbar.tsx
+│   │   ├── Hero.tsx
+│   │   ├── Sections.tsx
+│   │   └── Footer.tsx
+│   └── animations/           # GSAP/Framer animation configs
+│       └── ScrollAnimations.tsx
+├── hooks/
+│   ├── useScrollAnimation.ts # GSAP ScrollTrigger hook
+│   └── useMousePosition.ts   # Mouse parallax hook
+├── utils/
+│   └── animations.ts         # Animation constants/easing
+└── assets/
+    └── models/               # .glb files (referenced, not generated)
+
+SCENE SETUP TEMPLATE:
+```tsx
+import { Canvas } from '@react-three/fiber'
+import { OrbitControls, Environment, Float } from '@react-three/drei'
+import { EffectComposer, Bloom } from '@react-three/postprocessing'
+import { Suspense } from 'react'
+
+function Scene() {
+  return (
+    <Canvas
+      shadows
+      camera={{ position: [0, 2, 5], fov: 45 }}
+      style={{ width: '100%', height: '100vh' }}
+    >
+      <Suspense fallback={null}>
+        {/* Lighting */}
+        <ambientLight intensity={0.5} />
+        <directionalLight position={[5, 5, 5]} castShadow intensity={1} />
+        <Environment preset="city" />
+
+        {/* 3D Content */}
+        <Float speed={2} rotationIntensity={0.5}>
+          <mesh castShadow>
+            <torusKnotGeometry args={[1, 0.3, 128, 32]} />
+            <meshStandardMaterial color="#6366f1" metalness={0.8} roughness={0.2} />
+          </mesh>
+        </Float>
+
+        {/* Floor */}
+        <mesh receiveShadow rotation-x={-Math.PI / 2} position-y={-2}>
+          <planeGeometry args={[50, 50]} />
+          <meshStandardMaterial color="#111" />
+        </mesh>
+
+        {/* Controls */}
+        <OrbitControls enableZoom={false} autoRotate autoRotateSpeed={0.5} />
+
+        {/* Effects */}
+        <EffectComposer>
+          <Bloom luminanceThreshold={0.8} intensity={0.5} />
+        </EffectComposer>
+      </Suspense>
+    </Canvas>
+  )
+}
+```
+
+SCROLL ANIMATION TEMPLATE:
+```tsx
+import { useEffect, useRef } from 'react'
+import gsap from 'gsap'
+import { ScrollTrigger } from 'gsap/ScrollTrigger'
+
+gsap.registerPlugin(ScrollTrigger)
+
+function useScrollAnimation() {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!ref.current) return
+
+    gsap.fromTo(ref.current, 
+      { opacity: 0, y: 100 },
+      {
+        opacity: 1, y: 0,
+        scrollTrigger: {
+          trigger: ref.current,
+          start: 'top 80%',
+          end: 'top 20%',
+          scrub: 1,
+        }
+      }
+    )
+
+    return () => ScrollTrigger.getAll().forEach(t => t.kill())
+  }, [])
+
+  return ref
+}
+```
+
+PER-FRAME ANIMATION (useFrame):
+```tsx
+import { useFrame } from '@react-three/fiber'
+import { useRef } from 'react'
+import * as THREE from 'three'
+
+function RotatingMesh() {
+  const meshRef = useRef<THREE.Mesh>(null!)
+
+  useFrame((state, delta) => {
+    meshRef.current.rotation.y += delta * 0.5
+    meshRef.current.position.y = Math.sin(state.clock.elapsedTime) * 0.3
+  })
+
+  return (
+    <mesh ref={meshRef}>
+      <icosahedronGeometry args={[1, 4]} />
+      <meshStandardMaterial color="#8b5cf6" wireframe />
+    </mesh>
+  )
+}
+```
+
+PROJECT TYPES:
+1. 3D Portfolio - Floating objects, scroll sections, dark theme
+2. Product Showcase - 3D model viewer, rotate/zoom, annotations
+3. Interactive Landing - Particles, morph animations, parallax
+4. 3D Configurator - Color/material picker, real-time preview
+5. Scroll Story - Camera moves through 3D scene on scroll
+6. WebGL Game - Simple browser game with physics
+7. Data Visualization 3D - 3D charts, globe, network graphs
+
+DESIGN PRINCIPLES:
+- Dark background (#0a0a0f or #000) for 3D scenes - makes lighting pop
+- Use gradient overlays between 3D and 2D sections
+- Smooth easing: gsap "power2.out" or "elastic.out(1, 0.5)"
+- Loading screen while 3D assets load (useProgress from drei)
+- Performance: use <Instances> for repeated geometry, LOD for complex models
+- Mobile: reduce geometry complexity, disable post-processing on mobile
+- Always preload with useGLTF.preload() for models
+
+COMMON MISTAKES TO AVOID:
+- DON'T put HTML elements inside <Canvas> (use <Html> from drei instead)
+- DON'T use setState inside useFrame (causes re-render every frame)
+- DON'T load huge .glb models (keep under 5MB, use Draco compression)
+- DON'T forget <Suspense> around async content
+- DON'T use OrbitControls + ScrollTrigger together (they conflict)
+- DON'T set Canvas position:absolute over HTML content without pointer-events:none

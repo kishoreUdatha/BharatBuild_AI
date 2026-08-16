@@ -47,7 +47,8 @@ STRICT RULES:
 - Do NOT explain.
 - Do NOT invent files.
 - Do NOT modify unrelated code.
-- Do NOT output anything outside <patch> or <newfile> or <file> blocks.
+- Do NOT output anything outside <patch>, <newfile>, <file>, or <instructions> blocks.
+- Use <instructions>...</instructions> ONLY for install commands (npm install, pip install, etc.).
 
 JAVA CONSISTENCY (MULTI-FILE):
 When fixing Java "cannot find symbol" errors:
@@ -171,7 +172,7 @@ If additional commands are needed (npm install, pip install, etc.), use <instruc
         response = await self._call_claude(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=prompt,
-            max_tokens=4096,
+            max_tokens=6144,  # 6144: cost-efficient for full file replacements
             temperature=0.2  # Lower temperature for precise fixes
         )
 
@@ -672,18 +673,26 @@ If additional commands are needed (npm install, pip install, etc.), use <instruc
         # Choose system prompt based on error type
         if classified.error_type == ErrorType.SYNTAX_ERROR:
             system_prompt = self.SYNTAX_FIX_PROMPT
-            max_tokens = 16384  # Need more tokens for full file
+            max_tokens = 16384  # Syntax fix needs full file — still cheaper than 32768
         else:
             system_prompt = self.SYSTEM_PROMPT
-            max_tokens = 4096  # Smaller for diffs
+            max_tokens = 6144  # Diffs are small; 6144 is enough and cost-efficient
 
         # Build the strict user prompt
+        # Include the raw stderr/full_output so Claude sees the COMPLETE compiler error,
+        # not just the regex-extracted snippet (which loses multi-line error context)
+        raw_build_output = error.get("stderr", "") or error.get("full_output", "")
+        raw_output_section = (
+            f"\nRAW BUILD OUTPUT (complete - use this to understand the full error):\n{raw_build_output[-3000:]}\n"
+            if raw_build_output else ""
+        )
+
         prompt = f"""{error_type_prompt}
 
 ERROR: {error_message}
 FILE: {classified.file_path or error_file}
 LINE: {classified.line_number or error_line}
-
+{raw_output_section}
 CONTEXT:
 {json.dumps(classified.extracted_context, indent=2) if classified.extracted_context else "None"}
 

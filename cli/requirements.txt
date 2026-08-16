@@ -1,19 +1,21 @@
-# BharatBuild AI CLI Requirements
+# BharatBuild CLI — Python dependencies
+# Install:  pip install -r cli/requirements.txt
 
-# Core dependencies
-anthropic>=0.18.0
-httpx>=0.26.0
+# HTTP client with SSE streaming support
+httpx[http2]>=0.27.0
 
-# Terminal UI
+# Terminal UI — rendering, markdown, syntax highlighting
 rich>=13.7.0
-prompt-toolkit>=3.0.43
 
-# Async support
+# Interactive prompt — autocomplete, history, key bindings
+prompt-toolkit>=3.0.47
+
+# Async file I/O
 aiofiles>=23.2.1
 
-# Configuration
-python-dotenv>=1.0.0
+# Config / env
+python-dotenv>=1.0.1
 pyyaml>=6.0.1
 
-# Optional: For better performance
-uvloop>=0.19.0;platform_system!="Windows"
+# Faster event loop (Linux / macOS only)
+uvloop>=0.19.0; platform_system != "Windows"

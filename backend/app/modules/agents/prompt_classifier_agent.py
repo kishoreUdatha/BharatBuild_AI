@@ -16,9 +16,12 @@ from app.utils.claude_client import claude_client
 from app.core.logging_config import logger
 
 
-# In-memory cache for classifications (with TTL)
-_classification_cache: Dict[str, Dict[str, Any]] = {}
-CACHE_TTL_SECONDS = 300  # 5 minutes
+# Bounded LRU cache for classifications (with TTL)
+from app.utils.cache import LRUCache
+
+_classification_cache: LRUCache[Dict[str, Any]] = LRUCache(
+    max_size=500, ttl_seconds=300, name="prompt_classifier_cache"
+)
 
 
 # Clean, focused system prompt for classification (no existing project)
@@ -142,36 +145,19 @@ class PromptClassifierAgent:
         return hashlib.md5(combined.encode()).hexdigest()
 
     def _get_from_cache(self, cache_key: str) -> Optional[Dict[str, Any]]:
-        """Get classification from cache if valid."""
-        if cache_key in self.cache:
-            cached = self.cache[cache_key]
-            if datetime.now() < cached["expires_at"]:
-                logger.info(f"[Classifier] Cache hit for key: {cache_key[:8]}...")
-                return cached["result"]
-            else:
-                # Expired, remove from cache
-                del self.cache[cache_key]
-        return None
+        """Get classification from cache if valid (LRU with TTL)."""
+        result = self.cache.get(cache_key)
+        if result is not None:
+            logger.info(f"[Classifier] Cache hit for key: {cache_key[:8]}...")
+        return result
 
     def _set_cache(self, cache_key: str, result: Dict[str, Any]):
-        """Store classification in cache."""
-        self.cache[cache_key] = {
-            "result": result,
-            "expires_at": datetime.now() + timedelta(seconds=CACHE_TTL_SECONDS)
-        }
-        # Clean old entries if cache is too large
-        if len(self.cache) > 1000:
-            self._cleanup_cache()
+        """Store classification in cache (bounded LRU)."""
+        self.cache.set(cache_key, result)
 
     def _cleanup_cache(self):
         """Remove expired entries from cache."""
-        now = datetime.now()
-        expired_keys = [
-            key for key, value in self.cache.items()
-            if now >= value["expires_at"]
-        ]
-        for key in expired_keys:
-            del self.cache[key]
+        self.cache.cleanup_expired()
 
     async def classify(
         self,

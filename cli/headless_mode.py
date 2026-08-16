@@ -18,6 +18,7 @@ from datetime import datetime
 from enum import Enum
 
 from rich.console import Console
+from cli.models import DEFAULT_TIER
 
 
 class OutputFormat(str, Enum):
@@ -135,7 +136,7 @@ class HeadlessModeManager:
                 success=True,
                 output=response,
                 session_id=self._session_id,
-                model=kwargs.get("model", "claude-3-sonnet"),
+                model=kwargs.get("model", DEFAULT_TIER),
                 input_tokens=self._total_input_tokens,
                 output_tokens=self._total_output_tokens,
                 cost_usd=self._calculate_cost(),
@@ -155,7 +156,7 @@ class HeadlessModeManager:
                 success=False,
                 output="",
                 session_id=self._session_id,
-                model=kwargs.get("model", "claude-3-sonnet"),
+                model=kwargs.get("model", DEFAULT_TIER),
                 duration_ms=duration_ms,
                 error=str(e)
             )

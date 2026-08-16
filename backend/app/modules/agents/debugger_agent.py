@@ -286,22 +286,39 @@ REMEMBER:
     async def process(
         self,
         context: AgentContext,
-        error_message: str,
-        stack_trace: Optional[str] = None,
-        relevant_files: Optional[List[Dict]] = None
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Analyze and fix an error
 
         Args:
-            context: Agent context
-            error_message: The error message
-            stack_trace: Full stack trace if available
-            relevant_files: Files that might be related to the error
+            context: Agent context.
+                Expected metadata keys:
+                - error_message (str): The error message
+                - stack_trace (str, optional): Full stack trace if available
+                - relevant_files (List[Dict], optional): Files related to the error
 
         Returns:
             Dict with error analysis and fixes
         """
+        # Backward compatibility: accept kwargs and populate metadata
+        if kwargs:
+            import warnings
+            warnings.warn(
+                "Passing error_message, stack_trace, relevant_files as keyword arguments to "
+                "DebuggerAgent.process() is deprecated. Pass them in context.metadata instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            for key in ("error_message", "stack_trace", "relevant_files"):
+                if key in kwargs and key not in (context.metadata or {}):
+                    context.metadata[key] = kwargs[key]
+
+        # Extract parameters from context.metadata
+        error_message: str = context.metadata.get("error_message", "")
+        stack_trace: Optional[str] = context.metadata.get("stack_trace")
+        relevant_files: Optional[List[Dict]] = context.metadata.get("relevant_files")
+
         try:
             logger.info(f"[Debugger Agent] Analyzing error: {error_message[:100]}")
 
@@ -389,22 +406,26 @@ Output valid JSON following the specified format.
         return "\n".join(prompt_parts)
 
     def _parse_debug_output(self, response: str) -> Dict:
-        """Parse JSON debug output from Claude"""
-        try:
-            start = response.find('{')
-            end = response.rfind('}') + 1
+        """Parse JSON debug output from Claude with multiple fallback strategies"""
+        from app.utils.output_parser import OutputParser
 
-            if start == -1 or end == 0:
-                raise ValueError("No JSON found in response")
+        result, error = OutputParser.parse_json(response, required_keys=["fixes"])
+        if result is not None:
+            return result
 
-            json_str = response[start:end]
-            debug_output = json.loads(json_str)
+        # If full parse fails, try to at least extract fixes
+        result_partial, _ = OutputParser.parse_json(response)
+        if result_partial is not None:
+            return result_partial
 
-            return debug_output
-
-        except json.JSONDecodeError as e:
-            logger.error(f"[Debugger Agent] JSON parse error: {e}")
-            raise ValueError(f"Invalid JSON in Claude response: {e}")
+        logger.error(f"[Debugger Agent] All JSON parse strategies failed: {error}")
+        # Return minimal valid structure rather than crashing
+        return {
+            "error_analysis": {"error_type": "Unknown", "root_cause": "Parse failure"},
+            "fixes": [],
+            "fixed": False,
+            "confidence": "0%"
+        }
 
     async def _apply_fixes(
         self,
@@ -412,7 +433,10 @@ Output valid JSON following the specified format.
         fixes: List[Dict]
     ) -> List[Dict]:
         """
-        Apply fixes to files
+        Apply fixes to files safely.
+
+        Uses first-occurrence replacement to avoid replacing all instances.
+        Falls back to context-aware patching instead of overwriting entire files.
 
         Args:
             project_id: Project identifier
@@ -421,12 +445,23 @@ Output valid JSON following the specified format.
         Returns:
             List of applied fixes
         """
+        from app.utils.security import validate_file_path
+
         applied_fixes = []
 
         for fix in fixes:
             try:
-                file_path = fix["file"]
-                fixed_code = fix["fixed_code"]
+                file_path = fix.get("file", "")
+                fixed_code = fix.get("fixed_code", "")
+
+                if not file_path or not fixed_code:
+                    continue
+
+                # Validate file path to prevent directory traversal
+                is_valid, error_msg = validate_file_path(file_path)
+                if not is_valid:
+                    logger.warning(f"[Debugger Agent] Rejected unsafe path: {file_path} ({error_msg})")
+                    continue
 
                 # Read current file
                 current_content = await file_manager.read_file(project_id, file_path)
@@ -435,13 +470,43 @@ Output valid JSON following the specified format.
                     logger.error(f"[Debugger Agent] File not found: {file_path}")
                     continue
 
-                # Replace original code with fixed code
+                # Replace original code with fixed code (FIRST occurrence only)
                 original_code = fix.get("original_code", "")
                 if original_code and original_code in current_content:
-                    new_content = current_content.replace(original_code, fixed_code)
+                    # Use str.replace with count=1 to replace only FIRST occurrence
+                    # This prevents accidentally replacing similar code blocks elsewhere
+                    new_content = current_content.replace(original_code, fixed_code, 1)
+                elif original_code:
+                    # Exact match not found - try fuzzy matching (strip whitespace)
+                    original_stripped = original_code.strip()
+                    if original_stripped and original_stripped in current_content:
+                        new_content = current_content.replace(original_stripped, fixed_code.strip(), 1)
+                    else:
+                        # Cannot find original code - skip this fix instead of overwriting
+                        logger.warning(
+                            f"[Debugger Agent] Cannot find original code in {file_path}, "
+                            f"skipping fix to prevent file corruption"
+                        )
+                        applied_fixes.append({
+                            "file": file_path,
+                            "description": fix.get("description", ""),
+                            "applied": False,
+                            "reason": "Original code not found in file"
+                        })
+                        continue
                 else:
-                    # If exact match not found, replace entire file
-                    new_content = fixed_code
+                    # No original_code provided - skip (never overwrite entire file)
+                    logger.warning(
+                        f"[Debugger Agent] No original_code provided for {file_path}, "
+                        f"skipping to prevent file overwrite"
+                    )
+                    applied_fixes.append({
+                        "file": file_path,
+                        "description": fix.get("description", ""),
+                        "applied": False,
+                        "reason": "No original_code provided"
+                    })
+                    continue
 
                 # Write fixed file
                 result = await file_manager.update_file(
@@ -453,7 +518,7 @@ Output valid JSON following the specified format.
                 if result["success"]:
                     applied_fixes.append({
                         "file": file_path,
-                        "description": fix["description"],
+                        "description": fix.get("description", ""),
                         "applied": True
                     })
                     logger.info(f"[Debugger Agent] Applied fix to {file_path}")

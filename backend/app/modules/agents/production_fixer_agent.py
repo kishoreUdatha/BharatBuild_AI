@@ -15,6 +15,7 @@ Prevents:
 from typing import Dict, List, Optional, Any, Set
 import json
 import re
+import asyncio
 from datetime import datetime
 from dataclasses import dataclass
 
@@ -394,44 +395,46 @@ Be surgical. Fix only what's broken. Output valid JSON only.
 
         # Track fix attempts to prevent infinite loops
         self.fix_history: Dict[str, List[FixAttempt]] = {}
+        self._history_lock = asyncio.Lock()
 
-    def _get_previous_attempts_context(self, error_hash: str) -> str:
+    async def _get_previous_attempts_context(self, error_hash: str) -> str:
         """Build context about previous fix attempts to help Claude try different approaches"""
-        if error_hash not in self.fix_history or not self.fix_history[error_hash]:
-            return ""
+        async with self._history_lock:
+            if error_hash not in self.fix_history or not self.fix_history[error_hash]:
+                return ""
 
-        attempts = self.fix_history[error_hash]
-        attempt_count = len(attempts)
+            attempts = self.fix_history[error_hash]
+            attempt_count = len(attempts)
 
-        if attempt_count == 0:
-            return ""
+            if attempt_count == 0:
+                return ""
 
-        lines = [
-            f"\n## PREVIOUS ATTEMPTS ({attempt_count} failed - TRY A DIFFERENT APPROACH!)",
-            ""
-        ]
+            lines = [
+                f"\n## PREVIOUS ATTEMPTS ({attempt_count} failed - TRY A DIFFERENT APPROACH!)",
+                ""
+            ]
 
-        for i, attempt in enumerate(attempts[-3:], 1):  # Show last 3 attempts
-            lines.append(f"### Attempt {attempt.attempt_number}:")
-            lines.append(f"- Files modified: {', '.join(attempt.files_modified) if attempt.files_modified else 'None'}")
-            if attempt.fix_description:
-                lines.append(f"- What was tried: {attempt.fix_description}")
-            if attempt.result_error:
-                lines.append(f"- Result error: {attempt.result_error[:200]}...")
-            if attempt.approach_used:
-                lines.append(f"- Approach: {attempt.approach_used}")
-            lines.append("")
+            for i, attempt in enumerate(attempts[-3:], 1):  # Show last 3 attempts
+                lines.append(f"### Attempt {attempt.attempt_number}:")
+                lines.append(f"- Files modified: {', '.join(attempt.files_modified) if attempt.files_modified else 'None'}")
+                if attempt.fix_description:
+                    lines.append(f"- What was tried: {attempt.fix_description}")
+                if attempt.result_error:
+                    lines.append(f"- Result error: {attempt.result_error[:200]}...")
+                if attempt.approach_used:
+                    lines.append(f"- Approach: {attempt.approach_used}")
+                lines.append("")
 
-        # Add guidance based on attempt count
-        if attempt_count >= 5:
-            lines.append("⚠️ MULTIPLE FAILURES - Consider:")
-            lines.append("- Is there a deeper architectural issue?")
-            lines.append("- Are there multiple files that need changing together?")
-            lines.append("- Is a dependency missing or wrong version?")
-        elif attempt_count >= 3:
-            lines.append("⚠️ Several attempts failed - try a COMPLETELY different approach!")
-        else:
-            lines.append("💡 Previous fix didn't work - analyze what went wrong and try differently")
+            # Add guidance based on attempt count
+            if attempt_count >= 5:
+                lines.append("⚠️ MULTIPLE FAILURES - Consider:")
+                lines.append("- Is there a deeper architectural issue?")
+                lines.append("- Are there multiple files that need changing together?")
+                lines.append("- Is a dependency missing or wrong version?")
+            elif attempt_count >= 3:
+                lines.append("⚠️ Several attempts failed - try a COMPLETELY different approach!")
+            else:
+                lines.append("💡 Previous fix didn't work - analyze what went wrong and try differently")
 
         return "\n".join(lines)
 
@@ -469,7 +472,7 @@ Be surgical. Fix only what's broken. Output valid JSON only.
         error_hash = self._hash_error(error_message, stack_trace)
 
         # Check if we've tried to fix this error too many times
-        if not self._can_attempt_fix(error_hash):
+        if not await self._can_attempt_fix(error_hash):
             return {
                 "success": False,
                 "error": f"Maximum fix attempts ({self.MAX_FIX_ATTEMPTS_PER_ERROR}) reached for this error",
@@ -535,8 +538,24 @@ Be surgical. Fix only what's broken. Output valid JSON only.
         files_to_load = list(set(existing_files + nearby_files))[:10]  # Max 10 files
 
         # Files that don't exist are potential new files to create
-        missing_files = [f for f in error_mentioned_files if f not in existing_files]
+        # BUT FIRST: Check if they are duplicates of existing files
+        raw_missing_files = [f for f in error_mentioned_files if f not in existing_files]
+        missing_files = []
+        duplicate_mappings = {}  # new_path -> existing_path
+        
+        for mf in raw_missing_files:
+            existing_match = self._detect_duplicate_candidates(mf, project_files)
+            if existing_match:
+                duplicate_mappings[mf] = existing_match
+                logger.info(f"[ProductionFixerAgent] PREVENTING DUPLICATE: '{mf}' -> use existing '{existing_match}' instead")
+            else:
+                missing_files.append(mf)
+        
+        if duplicate_mappings:
+            logger.info(f"[ProductionFixerAgent] DUPLICATE PREVENTION: {len(duplicate_mappings)} files blocked from creation")
+        
         logger.info(f"[ProductionFixerAgent] DYNAMIC: Missing files (can be created): {missing_files}")
+        logger.info(f"[ProductionFixerAgent] DYNAMIC: Duplicate mappings (fix imports instead): {duplicate_mappings}")
 
         # Build file tree metadata (Bolt.new style - structure only, no content)
         file_tree = self._build_file_tree(project_files)
@@ -554,8 +573,13 @@ Be surgical. Fix only what's broken. Output valid JSON only.
         file_contents = await self._get_file_contents(files_to_load, context)
 
         # Get previous attempts context for retry guidance
-        previous_attempts_context = self._get_previous_attempts_context(error_hash)
-        attempt_number = len(self.fix_history.get(error_hash, [])) + 1
+        previous_attempts_context = await self._get_previous_attempts_context(error_hash)
+        async with self._history_lock:
+            attempt_number = len(self.fix_history.get(error_hash, [])) + 1
+
+        # Pass duplicate mappings to prompt builder via metadata
+        if duplicate_mappings:
+            metadata["duplicate_mappings"] = duplicate_mappings
 
         # Build Bolt.new-style prompt with:
         # - openFiles (file contents for error-mentioned files)
@@ -610,7 +634,7 @@ Be surgical. Fix only what's broken. Output valid JSON only.
             fix_description += f"; Instructions: {parsed['instructions'][:100]}"
 
         # Record fix attempt with full context
-        self._record_fix_attempt(
+        await self._record_fix_attempt(
             error_hash=error_hash,
             files_modified=all_modified,
             success=True,
@@ -815,6 +839,79 @@ Be surgical. Fix only what's broken. Output valid JSON only.
                 if pf_normalized == candidate or pf_normalized.endswith('/' + candidate):
                     return pf
 
+        return None
+
+    def _detect_duplicate_candidates(self, new_file_path: str, project_files: List[str]) -> Optional[str]:
+        """
+        Detect if a 'new' file is actually a duplicate of an existing file.
+        
+        Example: If fixer wants to create 'src/pages/Home.tsx' but 'src/pages/HomePage.tsx' exists,
+        this returns 'src/pages/HomePage.tsx' as the existing match.
+        
+        Returns the existing file path if a duplicate is detected, None otherwise.
+        """
+        import os
+        
+        new_normalized = new_file_path.replace('\\', '/').strip('/')
+        new_dir = '/'.join(new_normalized.split('/')[:-1])
+        new_filename = new_normalized.split('/')[-1]
+        new_name_no_ext = new_filename.rsplit('.', 1)[0] if '.' in new_filename else new_filename
+        new_ext = '.' + new_filename.rsplit('.', 1)[1] if '.' in new_filename else ''
+        
+        candidates = []
+        
+        for existing_path in project_files:
+            existing_normalized = existing_path.replace('\\', '/').strip('/')
+            existing_dir = '/'.join(existing_normalized.split('/')[:-1])
+            existing_filename = existing_normalized.split('/')[-1]
+            existing_name_no_ext = existing_filename.rsplit('.', 1)[0] if '.' in existing_filename else existing_filename
+            existing_ext = '.' + existing_filename.rsplit('.', 1)[1] if '.' in existing_filename else ''
+            
+            # Skip if different directory or different extension
+            if existing_dir != new_dir or existing_ext != new_ext:
+                continue
+            
+            # Skip exact match (not a duplicate situation)
+            if existing_normalized == new_normalized:
+                continue
+            
+            # Check for common naming variants:
+            # Home <-> HomePage, Quiz <-> QuizPage, Results <-> ResultsPage
+            # UserList <-> UserListPage, Dashboard <-> DashboardPage
+            new_lower = new_name_no_ext.lower()
+            existing_lower = existing_name_no_ext.lower()
+            
+            # Case 1: new is prefix of existing (Home -> HomePage)
+            if existing_lower.startswith(new_lower) and len(existing_lower) > len(new_lower):
+                suffix = existing_lower[len(new_lower):]
+                if suffix in ['page', 'view', 'screen', 'component', 'container', 'section']:
+                    candidates.append((existing_path, len(suffix)))  # prefer shorter suffix
+                    continue
+            
+            # Case 2: existing is prefix of new (HomePage -> Home)
+            if new_lower.startswith(existing_lower) and len(new_lower) > len(existing_lower):
+                suffix = new_lower[len(existing_lower):]
+                if suffix in ['page', 'view', 'screen', 'component', 'container', 'section']:
+                    candidates.append((existing_path, len(suffix)))
+                    continue
+            
+            # Case 3: Same name, different casing (home -> Home)
+            if new_lower == existing_lower:
+                candidates.append((existing_path, 0))
+                continue
+            
+            # Case 4: One contains the other as a substring
+            if new_lower in existing_lower or existing_lower in new_lower:
+                candidates.append((existing_path, abs(len(new_lower) - len(existing_lower))))
+                continue
+        
+        if candidates:
+            # Return the best match (shortest suffix difference)
+            candidates.sort(key=lambda x: x[1])
+            match = candidates[0][0]
+            logger.info(f"[ProductionFixerAgent] DUPLICATE DETECTED: '{new_file_path}' is likely a variant of '{match}'")
+            return match
+        
         return None
 
     def _get_nearby_files(self, error_files: List[str], project_files: List[str], max_nearby: int = 5) -> List[str]:
@@ -1139,6 +1236,24 @@ Has Docker: {env_info.get('has_docker', False)}
 {chr(10).join(recent_entries)}
 """
 
+        # Build section for duplicate prevention guidance
+        duplicate_prevention_section = ""
+        duplicate_mappings = metadata.get("duplicate_mappings", {})
+        if duplicate_mappings:
+            duplicate_entries = []
+            for new_path, existing_path in duplicate_mappings.items():
+                duplicate_entries.append(f"  - DO NOT create '{new_path}' → Instead fix imports to use '{existing_path}'")
+            duplicate_prevention_section = f"""
+## ⚠️ DUPLICATE PREVENTION (CRITICAL):
+The following files MUST NOT be created because they are duplicates of existing files.
+Instead, fix the IMPORT PATHS in the importing files to point to the correct existing file.
+
+{chr(10).join(duplicate_entries)}
+
+**ACTION**: Generate a PATCH for the importing file (e.g., App.tsx) to fix the import path.
+Example: Change `import Home from './pages/Home'` to `import Home from './pages/HomePage'`
+"""
+
         # Build section for new files that can be created
         new_files_section = ""
         if allowed_new_files:
@@ -1234,6 +1349,7 @@ Previous fix attempts DID NOT WORK. You MUST try a DIFFERENT approach!
 {stack_trace[:2000] if stack_trace else 'No stack trace available'}
 ```
 {retry_indicator}
+{duplicate_prevention_section}
 ## ENVIRONMENT
 {env_str}
 {file_tree_section}{recently_modified_section}
@@ -1543,16 +1659,17 @@ OUTPUT THE FIX NOW:
 
         return True
 
-    def _can_attempt_fix(self, error_hash: str) -> bool:
+    async def _can_attempt_fix(self, error_hash: str) -> bool:
         """Check if we can attempt to fix this error (loop prevention)"""
 
-        if error_hash not in self.fix_history:
-            return True
+        async with self._history_lock:
+            if error_hash not in self.fix_history:
+                return True
 
-        attempts = self.fix_history[error_hash]
-        return len(attempts) < self.MAX_FIX_ATTEMPTS_PER_ERROR
+            attempts = self.fix_history[error_hash]
+            return len(attempts) < self.MAX_FIX_ATTEMPTS_PER_ERROR
 
-    def _record_fix_attempt(
+    async def _record_fix_attempt(
         self,
         error_hash: str,
         files_modified: List[str],
@@ -1563,21 +1680,22 @@ OUTPUT THE FIX NOW:
     ):
         """Record fix attempt for loop prevention and retry guidance"""
 
-        if error_hash not in self.fix_history:
-            self.fix_history[error_hash] = []
+        async with self._history_lock:
+            if error_hash not in self.fix_history:
+                self.fix_history[error_hash] = []
 
-        attempt_number = len(self.fix_history[error_hash]) + 1
+            attempt_number = len(self.fix_history[error_hash]) + 1
 
-        self.fix_history[error_hash].append(FixAttempt(
-            timestamp=datetime.utcnow(),
-            error_hash=error_hash,
-            files_modified=files_modified,
-            success=success,
-            attempt_number=attempt_number,
-            fix_description=fix_description,
-            result_error=result_error,
-            approach_used=approach_used
-        ))
+            self.fix_history[error_hash].append(FixAttempt(
+                timestamp=datetime.utcnow(),
+                error_hash=error_hash,
+                files_modified=files_modified,
+                success=success,
+                attempt_number=attempt_number,
+                fix_description=fix_description,
+                result_error=result_error,
+                approach_used=approach_used
+            ))
 
     def _hash_error(self, error_message: str, stack_trace: str) -> str:
         """Generate hash for error to track fix attempts"""

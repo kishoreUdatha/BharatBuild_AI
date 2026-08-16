@@ -24,6 +24,10 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
 
+# Model used solely to validate an API key. Kept here rather than inline so a
+# retirement is a one-line fix; see backend/app/core/models.py for routing.
+_VALIDATION_MODEL = "claude-haiku-4-5"
+
 
 class KeyProvider(str, Enum):
     """API key providers"""
@@ -306,7 +310,8 @@ class APIKeyManager:
                     "content-type": "application/json"
                 },
                 json={
-                    "model": "claude-3-haiku-20240307",
+                    # Cheapest live model — this call only validates the key.
+                    "model": _VALIDATION_MODEL,
                     "max_tokens": 1,
                     "messages": [{"role": "user", "content": "Hi"}]
                 },

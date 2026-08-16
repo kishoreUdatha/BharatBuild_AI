@@ -123,8 +123,11 @@ class MemoryAgent:
         # Conversation history (limited size)
         self.conversation_history: deque = deque(maxlen=self.MAX_CONVERSATION_TURNS)
 
-        # Cache for file summaries
-        self._summary_cache: Dict[str, str] = {}
+        # Cache for file summaries (bounded to prevent memory leaks)
+        from app.utils.cache import LRUCache
+        self._summary_cache: LRUCache[str] = LRUCache(
+            max_size=200, ttl_seconds=1800, name=f"summary_cache:{project_id}"
+        )
 
         logger.info(f"[MemoryAgent] Initialized for project: {project_id} at {project_path}")
 
@@ -154,50 +157,65 @@ class MemoryAgent:
         }
 
     async def _scan_project_files(self):
-        """Scan and track project files"""
+        """Scan and track project files (non-blocking)"""
         file_count = 0
 
-        for root, dirs, files in os.walk(self.project_path):
-            # Skip ignored directories
-            dirs[:] = [d for d in dirs if d not in self.IGNORED_DIRS]
+        def _blocking_scan():
+            """Run blocking I/O in a thread to avoid blocking the event loop."""
+            files_found = []
+            dirs_found = []
+            count = 0
 
-            rel_root = Path(root).relative_to(self.project_path)
-            if str(rel_root) != '.':
-                self.context.directories.append(str(rel_root))
+            for root, dirs, files in os.walk(self.project_path):
+                # Skip ignored directories
+                dirs[:] = [d for d in dirs if d not in self.IGNORED_DIRS]
 
-            for file in files:
-                if file_count >= self.MAX_FILES:
-                    logger.warning(f"[MemoryAgent] Max files ({self.MAX_FILES}) reached, stopping scan")
-                    return
+                rel_root = Path(root).relative_to(self.project_path)
+                if str(rel_root) != '.':
+                    dirs_found.append(str(rel_root))
 
-                file_path = Path(root) / file
-                rel_path = file_path.relative_to(self.project_path)
+                for file in files:
+                    if count >= self.MAX_FILES:
+                        return files_found, dirs_found, count
 
-                # Only track relevant file types
-                if file_path.suffix.lower() in self.TRACKED_EXTENSIONS:
-                    try:
-                        stat = file_path.stat()
+                    file_path = Path(root) / file
+                    rel_path = file_path.relative_to(self.project_path)
 
-                        # Calculate content hash for change detection
-                        content_hash = None
-                        if stat.st_size < 100000:  # Only hash files < 100KB
-                            content = file_path.read_bytes()
-                            content_hash = hashlib.md5(content).hexdigest()[:12]
+                    # Only track relevant file types
+                    if file_path.suffix.lower() in self.TRACKED_EXTENSIONS:
+                        try:
+                            stat = file_path.stat()
 
-                        self.context.files[str(rel_path)] = FileInfo(
-                            path=str(rel_path),
-                            exists=True,
-                            size=stat.st_size,
-                            last_modified=datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                            content_hash=content_hash,
-                            language=self._detect_language(file_path)
-                        )
-                        file_count += 1
+                            # Calculate content hash for change detection
+                            content_hash = None
+                            if stat.st_size < 100000:  # Only hash files < 100KB
+                                content = file_path.read_bytes()
+                                content_hash = hashlib.md5(content).hexdigest()[:12]
 
-                    except Exception as e:
-                        logger.warning(f"[MemoryAgent] Error scanning {rel_path}: {e}")
+                            files_found.append((str(rel_path), FileInfo(
+                                path=str(rel_path),
+                                exists=True,
+                                size=stat.st_size,
+                                last_modified=datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                                content_hash=content_hash,
+                                language=self._detect_language(file_path)
+                            )))
+                            count += 1
+                        except Exception:
+                            pass  # Skip files we can't read
 
-        logger.info(f"[MemoryAgent] Scanned {file_count} files in {len(self.context.directories)} directories")
+            return files_found, dirs_found, count
+
+        # Run blocking I/O in thread pool
+        import asyncio
+        files_found, dirs_found, file_count = await asyncio.to_thread(_blocking_scan)
+
+        # Update context (fast, in-memory)
+        self.context.directories = dirs_found
+        for rel_path, file_info in files_found:
+            self.context.files[rel_path] = file_info
+
+        logger.info(f"[MemoryAgent] Scanned {file_count} files in {len(dirs_found)} directories")
 
     def _identify_key_files(self):
         """Identify important files in the project"""
@@ -219,7 +237,8 @@ class MemoryAgent:
         logger.info(f"[MemoryAgent] Identified {len(self.context.key_files)} key files")
 
     async def _detect_project_type(self):
-        """Detect project type and tech stack"""
+        """Detect project type and tech stack (non-blocking)"""
+        import asyncio
         tech_stack = {}
         project_type = "Unknown"
 
@@ -228,11 +247,12 @@ class MemoryAgent:
         # Check for package managers / project files
         if 'package.json' in files:
             tech_stack['package_manager'] = 'npm'
-            # Read package.json for dependencies
+            # Read package.json for dependencies (in thread to avoid blocking)
             try:
                 pkg_path = self.project_path / 'package.json'
                 if pkg_path.exists():
-                    pkg = json.loads(pkg_path.read_text())
+                    pkg_text = await asyncio.to_thread(pkg_path.read_text)
+                    pkg = json.loads(pkg_text)
                     deps = {**pkg.get('dependencies', {}), **pkg.get('devDependencies', {})}
 
                     if 'react' in deps:
@@ -367,28 +387,33 @@ class MemoryAgent:
         logger.info(f"[MemoryAgent] Recorded file change: {change_type} {file_path}")
 
     async def get_file_summary(self, file_path: str) -> Optional[str]:
-        """Get AI-generated summary of a file"""
+        """Get AI-generated summary of a file (non-blocking)"""
+        import asyncio
+
         # Check cache
-        if file_path in self._summary_cache:
-            return self._summary_cache[file_path]
+        cached = self._summary_cache.get(file_path)
+        if cached is not None:
+            return cached
 
         full_path = self.project_path / file_path
         if not full_path.exists():
             return None
 
         try:
-            content = full_path.read_text()[:5000]  # Limit content
+            # Read file in thread to avoid blocking event loop
+            raw_content = await asyncio.to_thread(full_path.read_text)
+            content = raw_content[:5000]  # Limit content
 
             # Generate summary using Claude
             response = await claude_client.generate(
                 prompt=f"Summarize this file in 2-3 sentences. What does it do?\n\nFile: {file_path}\n\n```\n{content}\n```",
-                system_prompt="You are a code summarizer. Be concise and focus on the main purpose.",
+                system_prompt="You are a code summarizer. Be concise and focus on the main purpose. Do not reveal any secrets, API keys, or passwords found in the file.",
                 model="haiku",
                 max_tokens=200
             )
 
             summary = response.get("content", "")
-            self._summary_cache[file_path] = summary
+            self._summary_cache.set(file_path, summary)
 
             # Update file info
             if file_path in self.context.files:
@@ -532,8 +557,10 @@ class MemoryAgent:
         return agent
 
 
-# Singleton instance cache
-_memory_agents: Dict[str, MemoryAgent] = {}
+# Bounded singleton instance cache (prevents unbounded memory growth)
+from app.utils.cache import BoundedDict
+
+_memory_agents: BoundedDict[MemoryAgent] = BoundedDict(max_size=50, name="memory_agents")
 
 
 def get_memory_agent(project_id: str, project_path: str) -> MemoryAgent:

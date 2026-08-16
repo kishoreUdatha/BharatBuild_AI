@@ -5,6 +5,7 @@ import enum
 
 from app.core.database import Base
 from app.core.types import GUID, generate_uuid
+from app.core.logging_config import logger
 
 
 class AgentType(str, enum.Enum):
@@ -192,26 +193,53 @@ class TokenUsageLog(Base):
         """
         Calculate cost in paise based on model pricing.
 
-        Pricing (per 1M tokens):
-        - Haiku:  Input $0.25, Output $1.25  (approx ₹21, ₹104)
-        - Sonnet: Input $3.00, Output $15.00 (approx ₹250, ₹1250)
-        - Opus:   Input $15.00, Output $75.00 (approx ₹1250, ₹6250)
+        Pricing (per 1M tokens, USD list price @ ~₹84/USD):
+        - Haiku 4.5:  Input $1.00, Output $5.00   (approx ₹84, ₹420)
+        - Sonnet 5:   Input $3.00, Output $15.00  (approx ₹252, ₹1260)
+        - Opus 5:     Input $5.00, Output $25.00  (approx ₹420, ₹2100)
 
         Returns cost in paise (1/100 of rupee)
         """
-        # Pricing in paise per 1000 tokens (for easier calculation)
+        # Pricing in ₹ per 1000 tokens. USD list price converted at ~₹84/USD,
+        # the rate implied by the original Haiku 3 entries below.
+        #
+        # Entries for retired models are retained so historical usage rows stay
+        # priceable — do not delete them when a model is superseded.
         pricing = {
-            "haiku": {"input": 0.021, "output": 0.104},      # ₹0.021/1K input, ₹0.104/1K output
-            "sonnet": {"input": 0.25, "output": 1.25},       # ₹0.25/1K input, ₹1.25/1K output
-            "opus": {"input": 1.25, "output": 6.25},         # ₹1.25/1K input, ₹6.25/1K output
+            # generic tier aliases
+            "haiku": {"input": 0.084, "output": 0.42},       # Haiku 4.5  $1 / $5
+            "sonnet": {"input": 0.252, "output": 1.26},      # Sonnet 5   $3 / $15
+            "opus": {"input": 0.42, "output": 2.10},         # Opus 5     $5 / $25
+
+            # current model IDs
+            "claude-haiku-4-5": {"input": 0.084, "output": 0.42},
+            "claude-sonnet-5": {"input": 0.252, "output": 1.26},
+            "claude-opus-5": {"input": 0.42, "output": 2.10},
+
+            # retired — historical rows only. Keep in step with
+            # app/core/models.py::LEGACY_PRICING. A missing entry here does not
+            # zero out; it silently bills at the standard tier instead, which
+            # over-charges cheap-tier rows.
             "claude-3-haiku-20240307": {"input": 0.021, "output": 0.104},
+            "claude-3-5-haiku-20241022": {"input": 0.067, "output": 0.336},
             "claude-3-5-sonnet-20241022": {"input": 0.25, "output": 1.25},
+            "claude-3-sonnet-20240229": {"input": 0.25, "output": 1.25},
             "claude-sonnet-4-20250514": {"input": 0.25, "output": 1.25},
+            # Non-canonical alias present in older rows; priced as Sonnet 3.5.
+            "claude-3.5-sonnet": {"input": 0.25, "output": 1.25},
         }
 
-        # Get pricing for model (default to haiku if unknown)
+        # An unknown model must never fall through to the cheapest tier — that
+        # silently under-bills. Default to the standard tier and log it so the
+        # gap is visible rather than absorbed.
         model_lower = model.lower()
-        model_pricing = pricing.get(model_lower, pricing["haiku"])
+        model_pricing = pricing.get(model_lower)
+        if model_pricing is None:
+            logger.warning(
+                "[TokenUsage] No pricing entry for model %r — billing at "
+                "standard tier. Add it to app/models/usage.py.", model
+            )
+            model_pricing = pricing["sonnet"]
 
         # Calculate cost
         input_cost = (input_tokens / 1000) * model_pricing["input"]

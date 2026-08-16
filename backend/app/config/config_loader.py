@@ -11,6 +11,7 @@ import yaml
 
 from app.modules.orchestrator.dynamic_orchestrator import AgentType, AgentConfig, WorkflowStep
 from app.core.logging_config import logger
+from app.core import agent_tools
 
 
 class ConfigLoader:
@@ -58,6 +59,15 @@ class ConfigLoader:
                     # Load system prompt from file
                     system_prompt = self._load_prompt(agent_data['system_prompt_file'])
 
+                    # Tool allowlist. Unknown names are dropped by validate()
+                    # rather than raising — a typo must narrow permissions,
+                    # never widen them or break startup.
+                    raw_tools = agent_data.get('tools')
+                    tools = (
+                        agent_tools.validate(raw_tools, context=f"agent '{agent_key}'")
+                        if raw_tools is not None else None
+                    )
+
                     # Create AgentConfig
                     agent_config = AgentConfig(
                         name=agent_data['name'],
@@ -67,11 +77,21 @@ class ConfigLoader:
                         temperature=agent_data.get('temperature', 0.7),
                         max_tokens=agent_data.get('max_tokens', 4096),
                         capabilities=agent_data.get('capabilities', []),
-                        enabled=agent_data.get('enabled', True)
+                        enabled=agent_data.get('enabled', True),
+                        tools=tools,
                     )
 
                     agents[agent_type] = agent_config
-                    logger.info(f"Loaded agent config: {agent_key} ({agent_data['name']})")
+                    if tools is None:
+                        logger.warning(
+                            f"Agent '{agent_key}' declares no `tools:` — running "
+                            f"unrestricted. Add a tool allowlist to scope it."
+                        )
+                    scope = "read-only" if agent_config.is_read_only else "mutating"
+                    logger.info(
+                        f"Loaded agent config: {agent_key} ({agent_data['name']}) "
+                        f"[{scope}: {','.join(tools) if tools else 'unrestricted'}]"
+                    )
 
                 except ValueError as e:
                     logger.warning(f"Skipping unknown agent type: {agent_key}")

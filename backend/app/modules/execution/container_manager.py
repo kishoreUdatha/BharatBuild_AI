@@ -27,6 +27,7 @@ Why this matters:
 import asyncio
 import docker
 import docker.tls
+import queue as _queue
 import os
 import uuid
 import json
@@ -39,6 +40,11 @@ from typing import Optional, Dict, Any, AsyncGenerator, List, Set, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# CSI sequences (colours, cursor moves, erase-line) plus OSC title sequences.
+# exec output runs with tty=True and is full of these; they hide the text we
+# parse for (e.g. Vite's "ready in" / "Local:" banner).
+_ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]|\x1B\][^\x07]*(?:\x07|\x1B\\)")
 from enum import Enum
 from threading import Lock
 from app.core.config import settings
@@ -1152,6 +1158,32 @@ class ContainerManager:
                 container.start()
                 await asyncio.sleep(1)
 
+            # OPTIMIZATION: Skip npm install if node_modules already exists
+            if command.strip() in ('npm install', 'npm i', 'npm ci'):
+                check = container.exec_run("test -d /workspace/node_modules/.bin")
+                if check.exit_code == 0:
+                    logger.info(f"[Container] Skipping '{command}' - node_modules already exists")
+                    yield {"type": "stdout", "data": "Dependencies already installed, skipping npm install..."}
+                    yield {"type": "exit", "data": 0}
+                    return
+
+            # OPTIMIZATION: Before starting vite/dev server, kill old instances and check if already running
+            if any(dev_cmd in command for dev_cmd in ['vite', 'npm run dev', 'npm start', 'next dev']):
+                # Kill any existing dev-server processes to prevent port conflicts.
+                # 'node.*vite' did NOT match how these actually run - `npx vite`
+                # appears as "npm exec vite" and "node /workspace/node_modules/
+                # .bin/vite" - so nothing was ever killed and each Run leaked
+                # another server: 5173 taken -> 5174 -> ... -> 5179, drifting off
+                # the container's published port map and leaving the preview
+                # pointing at a stale instance.
+                container.exec_run(
+                    "sh -c \"pkill -f 'node_modules/.bin/vite'; pkill -f 'npm exec'; "
+                    "pkill -f 'npm run dev'; pkill -f 'next dev'; pkill -x vite; true\"",
+                    demux=False,
+                )
+                await asyncio.sleep(2)  # let the ports actually release
+                logger.info(f"[Container] Cleaned up old server processes before starting new one")
+
             yield {"type": "status", "data": f"Executing: {command}"}
 
             # Get LogBus for this project to collect backend logs
@@ -1183,10 +1215,51 @@ class ContainerManager:
             start_time = time.time()
             buffer = ""
 
-            for chunk in output:
+            # `output` is the docker SDK's SYNCHRONOUS blocking iterator. Iterating
+            # it directly here would block the event loop thread until Docker sends
+            # the next chunk - and a dev server (`npx vite`) never exits, so the
+            # whole backend froze for the full command timeout: no logins, no
+            # health checks, nothing. Drain it on a worker thread instead and hand
+            # chunks over through a bounded queue (bounded = backpressure, so a
+            # chatty process can't balloon memory).
+            loop = asyncio.get_running_loop()
+            chunk_queue: "_queue.Queue" = _queue.Queue(maxsize=1000)
+            _DONE = object()
+            _IDLE = object()
+
+            def _pump_chunks():
+                """Runs on a worker thread; blocking reads are fine here."""
+                try:
+                    for raw_chunk in output:
+                        chunk_queue.put(raw_chunk)
+                except Exception as pump_err:  # surface, don't swallow
+                    chunk_queue.put(pump_err)
+                finally:
+                    chunk_queue.put(_DONE)
+
+            def _next_chunk():
+                """Wait briefly for a chunk so the timeout check still runs."""
+                try:
+                    return chunk_queue.get(timeout=1.0)
+                except _queue.Empty:
+                    return _IDLE
+
+            loop.run_in_executor(None, _pump_chunks)
+
+            while True:
                 # Check timeout
                 if time.time() - start_time > timeout:
                     yield {"type": "error", "data": f"Command timed out after {timeout}s"}
+                    break
+
+                chunk = await loop.run_in_executor(None, _next_chunk)
+
+                if chunk is _IDLE:
+                    continue  # nothing yet - re-check the timeout and keep serving
+                if chunk is _DONE:
+                    break
+                if isinstance(chunk, BaseException):
+                    yield {"type": "error", "data": str(chunk)}
                     break
 
                 if isinstance(chunk, bytes):
@@ -1194,11 +1267,48 @@ class ContainerManager:
                 else:
                     text = str(chunk)
 
+                # exec runs with tty=True, so this is raw terminal output: Vite and
+                # npm redraw in place using ANSI cursor codes and \r. Strip the
+                # escapes and turn \r into a real newline. The previous approach
+                # (keep only the segment after the last \r) threw the banner away -
+                # "VITE ready in 1872 ms" / "Local: http://localhost:5173/" never
+                # reached the client, so the server was never detected as started
+                # and the preview URL was never set.
+                text = _ANSI_ESCAPE_RE.sub("", text)
+                text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+                # EARLY DETECTION: Check raw chunk for server URL before filtering
+                # Vite outputs: "  ➜  Local:   http://localhost:5173/"
+                # This might get mangled by \r splitting, so detect it early
+                raw_text = text
+                if 'Local:' in raw_text or 'http://localhost:' in raw_text or 'Network:' in raw_text:
+                    detected_port = self._detect_active_port(project_id, raw_text)
+                    if detected_port:
+                        host_port = None
+                        if project_id in self.containers:
+                            port_mappings = self.containers[project_id].port_mappings
+                            host_port = port_mappings.get(detected_port)
+                        if host_port:
+                            preview_url = f"http://localhost:{host_port}"
+                            yield {"type": "stdout", "data": f"_PREVIEW_URL_:{preview_url}"}
+                            logger.info(f"[Container] Emitted preview URL: {preview_url} (container port {detected_port} -> host {host_port})")
+
                 buffer += text
 
-                # Yield complete lines
+                # Yield complete lines. Spinner filtering happens per-line now -
+                # doing it on the raw chunk discarded whole reads that merely
+                # happened to start with a spinner frame.
                 while "\n" in buffer:
                     line, buffer = buffer.split("\n", 1)
+
+                    stripped = line.strip()
+                    if not stripped:
+                        continue  # blank frame left over from \r redraws
+                    if all(c in '\\|/-' for c in stripped) and not any(
+                        kw in line for kw in ['http', 'Local', 'Network', 'ready', 'started', 'listening', 'port']
+                    ):
+                        continue  # spinner-only frame
+
                     yield {"type": "stdout", "data": line}
 
                     # Detect active port from output (e.g., "Local: http://localhost:3001/")
@@ -1214,6 +1324,15 @@ class ContainerManager:
                     if log_bus:
                         self._send_to_logbus(log_bus, buffer, command)
                     buffer = ""
+
+            # Close the underlying stream so the pump thread isn't left parked on
+            # a blocking read after an early break (timeout / error).
+            try:
+                close = getattr(output, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                pass
 
             # Yield remaining buffer
             if buffer:
@@ -1271,6 +1390,12 @@ class ContainerManager:
 
         # Create parent directories
         full_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # GUARD: Don't overwrite existing files with empty content
+        # This prevents lazy-loaded files (no content yet) from zeroing out disk files
+        if not content and full_path.exists() and full_path.stat().st_size > 0:
+            logger.info(f"Skipping write of empty content to existing file {file_path} ({full_path.stat().st_size}b on disk)")
+            return True
 
         # Write file
         full_path.write_text(content, encoding="utf-8")

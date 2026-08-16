@@ -461,7 +461,9 @@ Focus on clean, maintainable code following best practices.
         # Get preferences
         config = {
             "api_key": api_key,
-            "model": f"claude-3-{model}-20240229",
+            # Store the tier; the server resolves it. The previous f-string built
+            # IDs like "claude-3-haiku-20240229" that never existed.
+            "model": model,
             "max_tokens": 4096,
             "theme": "default",
             "editor": os.environ.get("EDITOR", ""),

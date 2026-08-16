@@ -38,6 +38,13 @@ CRITICAL RULES
 5. NO INLINE SVG DATA URLs
    - Use lucide-react icons or CSS instead
 
+6. NEVER TRUNCATE OR USE PLACEHOLDERS
+   - NEVER use TODO, FIXME, placeholder comments, or incomplete code
+   - NEVER write // ... rest of implementation or similar shortcuts
+   - NEVER write # ... existing code or /* ... rest of code */
+   - Every function must have a complete, working implementation
+   - Generate the ENTIRE file - do NOT stop halfway through
+
 ═══════════════════════════════════════════════════════════════════════════════
 DESIGN THEME (Frontend Only)
 ═══════════════════════════════════════════════════════════════════════════════

@@ -18,10 +18,12 @@ import { getAgentLabel } from './agentLabelMapping'
 import { sdkService } from '@/services/sdkService'
 import { detectPastedError, extractErrorDetails, sendChatMessage } from '@/services/chatService'
 import { soundManager } from '@/lib/sounds'
+import { executeUnifiedAgent, shouldUseUnifiedAgent, buildProjectFilesDict } from '@/services/unifiedAgentClient'
 
 // SDK Fixer configuration
 const USE_SDK_FIXER = true // Enable SDK-based fixing for better reliability
 const USE_REAL_CHAT = true // Enable real conversational AI for CHAT intent
+const USE_UNIFIED_AGENT = true // Enable Kiro-style unified agent for MODIFY/FIX
 
 const generateId = () => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 
@@ -667,6 +669,106 @@ I'll keep trying to help!`)
       // Get the CURRENT project ID (may have been reset in GENERATE case above)
       // Note: freshProjectStore was already declared above for metadata
       const projectId = freshProjectStore.currentProject?.id || 'default-project'
+
+      // =====================================================
+      // KIRO-STYLE UNIFIED AGENT (for MODIFY/FIX/REFACTOR)
+      // Uses tools (read/write/edit/run) instead of regenerating files
+      // =====================================================
+      if (USE_UNIFIED_AGENT && shouldUseUnifiedAgent(classification.intent, !!freshProjectStore.currentProject?.files?.length)) {
+        console.log(`[useChat] Using Unified Agent (Kiro-style) for ${classification.intent} intent`)
+
+        // Build project files dict from loaded content
+        const projectFilesDict = buildProjectFilesDict(freshProjectStore.currentProject?.files || [])
+
+        try {
+          await executeUnifiedAgent(
+            {
+              message: content,
+              project_id: projectId,
+              project_files: projectFilesDict,
+              model_preference: 'auto',
+            },
+            (event) => {
+              console.log('[UnifiedAgent] Event:', event.type, event.data)
+
+              switch (event.type) {
+                case 'thinking':
+                  addThinkingStep(aiMessageId, {
+                    id: `step-${Date.now()}`,
+                    text: event.data.message || 'Thinking...',
+                    status: 'active'
+                  })
+                  break
+
+                case 'tool_call':
+                  addThinkingStep(aiMessageId, {
+                    id: `tool-${Date.now()}`,
+                    text: `Using ${event.data.tool}: ${JSON.stringify(event.data.input || {}).slice(0, 80)}`,
+                    status: 'active'
+                  })
+                  break
+
+                case 'file_created':
+                  addFileOperation(aiMessageId, {
+                    id: `op-${Date.now()}`,
+                    type: 'create',
+                    path: event.data.path,
+                    status: 'complete'
+                  })
+                  soundManager.playFileComplete()
+                  break
+
+                case 'file_modified':
+                  addFileOperation(aiMessageId, {
+                    id: `op-${Date.now()}`,
+                    type: 'update',
+                    path: event.data.path,
+                    status: 'complete'
+                  })
+                  soundManager.playFileComplete()
+                  break
+
+                case 'command_run':
+                  addLog({ type: 'command', content: event.data.command || '' })
+                  break
+
+                case 'command_output':
+                  addLog({ type: 'output', content: event.data.output || '' })
+                  break
+
+                case 'message':
+                  appendToMessage(aiMessageId, event.data.content || '')
+                  break
+
+                case 'error':
+                  appendToMessage(aiMessageId, `\n\nError: ${event.data.message}`)
+                  break
+
+                case 'done':
+                  const summary = event.data
+                  if (summary.files_created?.length || summary.files_modified?.length) {
+                    appendToMessage(aiMessageId,
+                      `\n\n---\n` +
+                      (summary.files_created?.length ? `Created: ${summary.files_created.join(', ')}\n` : '') +
+                      (summary.files_modified?.length ? `Modified: ${summary.files_modified.join(', ')}\n` : '') +
+                      (summary.commands_run?.length ? `Commands: ${summary.commands_run.length} executed\n` : '')
+                    )
+                  }
+                  soundManager.playSuccess()
+                  break
+              }
+            }
+          )
+
+          updateMessageStatus(aiMessageId, 'complete')
+          stopStreaming()
+          return  // Done! Skip old orchestrator path
+
+        } catch (err: any) {
+          console.error('[UnifiedAgent] Error, falling back to orchestrator:', err)
+          // Fall through to old orchestrator as backup
+        }
+      }
 
       console.log(`[useChat] Starting orchestrator workflow (${workflow} - ${classification.intent} intent) for project: ${projectId}`)
       await streamingClient.streamOrchestratorWorkflow(

@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional, AsyncGenerator
 from dataclasses import dataclass
 from app.utils.claude_client import ClaudeClient
 from app.core.logging_config import logger
+from app.core.config import settings
 
 # Color presets for user-selectable themes
 COLOR_PRESETS = {
@@ -709,7 +710,7 @@ THINK LIKE BOLT.NEW: Generate fast, beautiful, and FULLY WORKING code that impre
     def __init__(self, claude_client: Optional[ClaudeClient] = None):
         """Initialize the Bolt Instant Agent"""
         self.claude_client = claude_client or ClaudeClient()
-        self.model = "claude-sonnet-4-20250514"
+        self.model = settings.CLAUDE_SONNET_MODEL
         self.max_tokens = 32000
         self.temperature = 0.5
 

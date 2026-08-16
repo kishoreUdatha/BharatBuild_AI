@@ -240,8 +240,19 @@ BE STRICT: If a file looks incomplete, mark it as incomplete.
         # Step 2.5: IMPORT VALIDATION (PRODUCTION FIX)
         # Check if all local imports in source files resolve to actual files
         import_issues = self._validate_imports(files_created)
+        
+        # Handle import path fixes (similar files exist but import path is wrong)
+        import_path_fixes = import_issues.get("import_path_fixes", [])
+        if import_path_fixes:
+            logger.info(f"[Verification Agent] Found {len(import_path_fixes)} import path mismatches (NOT missing files)")
+            for fix in import_path_fixes:
+                logger.info(f"  - {fix['source_file']} imports '{fix['import_path']}' but should use '{fix['actual_file']}'")
+            # Store import fixes for the fixer to handle (fix the import, don't create files)
+            result["import_path_fixes"] = import_path_fixes
+        
+        # Handle truly missing files (no similar file exists)
         if import_issues["missing_imports"]:
-            logger.warning(f"[Verification Agent] Found {len(import_issues['missing_imports'])} missing import targets!")
+            logger.warning(f"[Verification Agent] Found {len(import_issues['missing_imports'])} truly missing import targets!")
             for mi in import_issues["missing_imports"]:
                 logger.warning(f"  - {mi['source_file']} imports '{mi['import_path']}' which doesn't exist")
                 if mi["suggested_path"] not in result["missing_files"]:
@@ -806,22 +817,113 @@ Focus on:
                             break
 
                     if not found:
-                        # Suggest the most likely path
-                        suggested = resolved + '.tsx' if ext in ['.tsx', '.ts'] else resolved + '.js'
+                        # DUPLICATE PREVENTION: Before marking as missing, check if a similar file exists
+                        # e.g., import './pages/Home' when 'src/pages/HomePage.tsx' exists
+                        similar_match = self._find_similar_file(resolved, existing_paths, ext)
+                        
+                        if similar_match:
+                            # A similar file exists - this is an import path issue, NOT a missing file
+                            result.setdefault("import_path_fixes", []).append({
+                                "source_file": file_path,
+                                "import_path": import_path,
+                                "resolved_path": resolved,
+                                "actual_file": similar_match,
+                                "fix_type": "rename_import"
+                            })
+                            logger.info(f"[Verification Agent] Import path fix needed: {file_path} imports '{import_path}' but actual file is '{similar_match}'")
+                        else:
+                            # Truly missing file - suggest the most likely path
+                            suggested = resolved + '.tsx' if ext in ['.tsx', '.ts'] else resolved + '.js'
 
-                        result["missing_imports"].append({
-                            "source_file": file_path,
-                            "import_path": import_path,
-                            "resolved_path": resolved,
-                            "suggested_path": suggested,
-                            "tried_paths": possible_paths[:3]  # First 3 attempts
-                        })
+                            result["missing_imports"].append({
+                                "source_file": file_path,
+                                "import_path": import_path,
+                                "resolved_path": resolved,
+                                "suggested_path": suggested,
+                                "tried_paths": possible_paths[:3]  # First 3 attempts
+                            })
 
-                        logger.warning(f"[Verification Agent] Missing import: {file_path} -> {import_path} (resolved: {resolved})")
+                            logger.warning(f"[Verification Agent] Missing import: {file_path} -> {import_path} (resolved: {resolved})")
 
         logger.info(f"[Verification Agent] Import validation complete: {len(result['valid_imports'])} valid, {len(result['missing_imports'])} missing")
 
         return result
+
+    def _find_similar_file(self, resolved_path: str, existing_paths: set, source_ext: str) -> Optional[str]:
+        """
+        Find a similar file that likely matches the import intent.
+        
+        Example: resolved='src/pages/Home' with existing 'src/pages/HomePage.tsx'
+        Returns 'src/pages/HomePage.tsx' as the match.
+        
+        This prevents the system from creating duplicate files when the issue
+        is just an import path mismatch.
+        """
+        # Get the directory and base name from the resolved path
+        parts = resolved_path.replace('\\', '/').split('/')
+        target_dir = '/'.join(parts[:-1]) if len(parts) > 1 else ''
+        target_name = parts[-1].lower() if parts else ''
+        
+        if not target_name:
+            return None
+        
+        # Common suffixes that indicate the same component
+        variant_suffixes = ['page', 'view', 'screen', 'component', 'container', 'section', 'panel']
+        
+        best_match = None
+        best_score = 0
+        
+        for existing in existing_paths:
+            existing_normalized = existing.replace('\\', '/')
+            
+            # Get directory and filename
+            existing_parts = existing_normalized.split('/')
+            existing_filename = existing_parts[-1] if existing_parts else ''
+            existing_dir = '/'.join(existing_parts[:-1]) if len(existing_parts) > 1 else ''
+            
+            # Remove extension for comparison
+            existing_name_no_ext = existing_filename.rsplit('.', 1)[0].lower() if '.' in existing_filename else existing_filename.lower()
+            
+            # Must be in the same directory
+            if existing_dir != target_dir:
+                continue
+            
+            # Skip exact matches (they would have been found already)
+            if existing_name_no_ext == target_name:
+                continue
+            
+            # Check variant patterns
+            score = 0
+            
+            # Pattern 1: target is prefix of existing (Home -> HomePage)
+            if existing_name_no_ext.startswith(target_name):
+                suffix = existing_name_no_ext[len(target_name):]
+                if suffix in variant_suffixes:
+                    score = 10  # High confidence
+                elif len(suffix) <= 6:  # Short suffix, might still be a variant
+                    score = 5
+            
+            # Pattern 2: existing is prefix of target (HomePage -> Home)
+            if target_name.startswith(existing_name_no_ext):
+                suffix = target_name[len(existing_name_no_ext):]
+                if suffix in variant_suffixes:
+                    score = 10
+                elif len(suffix) <= 6:
+                    score = 5
+            
+            # Pattern 3: One contains the other
+            if target_name in existing_name_no_ext or existing_name_no_ext in target_name:
+                score = max(score, 3)
+            
+            if score > best_score:
+                best_score = score
+                best_match = existing
+        
+        # Only return high-confidence matches
+        if best_score >= 5:
+            return best_match
+        
+        return None
 
     def _get_extension(self, file_path: str) -> str:
         """Get file extension"""

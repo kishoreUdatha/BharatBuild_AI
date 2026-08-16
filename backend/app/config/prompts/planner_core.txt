@@ -33,9 +33,10 @@ OUTPUT FORMAT
   </entity_specs>
 
   <files>
-    <file path="path/to/file.ext" priority="1">
+    <file path="path/to/file.ext" priority="1" depends_on="path/to/dep1.ts,path/to/dep2.ts">
       <description>What this file does</description>
-      <exports>ExportName</exports>
+      <exports>ExportedClassName, exportedFunction, ExportedInterface</exports>
+      <imports>import { Foo } from './foo'; import { Bar } from '../bar';</imports>
     </file>
   </files>
 </plan>
@@ -57,10 +58,29 @@ CRITICAL RULES
    - Pages: 41-60
    - Entry points: 61+
 
-3. FILE SIZE - MAX 300 LINES
+3. EXPORTS ARE MANDATORY ON EVERY FILE
+   Every <file> tag MUST have an <exports> tag listing every symbol the file
+   exports. The writer generates files sequentially and uses your exports list
+   to write correct import statements in later files.
+   - Component file:  <exports>default LoginPage, LoginFormProps</exports>
+   - Service file:    <exports>authService, AuthService</exports>
+   - Types file:      <exports>User, Product, ApiResponse</exports>
+   - Hook file:       <exports>useAuth, AuthState</exports>
+   If a file exports nothing (e.g. CSS), write: <exports>none</exports>
+
+4. DEPENDS_ON REQUIRED FOR ANY FILE THAT IMPORTS ANOTHER PROJECT FILE
+   Set depends_on to the comma-separated paths of files it imports from.
+   Example: depends_on="src/types/index.ts,src/services/api.ts"
+   This ensures the writer has the full content of those files available.
+
+5. IMPORTS RECOMMENDED
+   List the exact import statements the writer should use:
+   <imports>import { User } from '../types'; import { api } from '../services/api';</imports>
+
+6. FILE SIZE - MAX 300 LINES
    - Split large files into smaller components
 
-4. DOCKER REQUIRED
+7. DOCKER REQUIRED
    - Always include Dockerfile and docker-compose.yml
 
 ═══════════════════════════════════════════════════════════════════════════════

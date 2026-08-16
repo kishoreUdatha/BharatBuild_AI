@@ -119,6 +119,20 @@ complexity:
     ai_ml: "Python + TensorFlow/PyTorch + Streamlit + Jupyter"
 
 agents:
+
+# ------------------------------------------------------------------
+# tools:  ENFORCED allowlist — see app/core/agent_tools.py
+#
+#   capabilities:  descriptive tags, nothing checks them
+#   tools:         an allowlist the loader enforces
+#
+#   read  glob  grep  git_read     cannot modify the workspace
+#   write  edit  apply_patch  terminal   can — require a git checkpoint
+#
+#   Omitting `tools:` leaves an agent unrestricted and logs a warning.
+#   Prompting an agent not to edit files is a request; omitting `write`
+#   is a constraint.
+# ------------------------------------------------------------------
   planner:
     name: "Planner Agent"
     model: "sonnet"  # haiku, sonnet, opus
@@ -130,18 +144,29 @@ agents:
       - task_breakdown
       - tech_stack_selection
       - project_type_detection
+    tools:  # plans only; reads the tree to understand it
+      - read
+      - glob
+      - grep
     enabled: true
 
   writer:
     name: "Writer Agent"
     model: "sonnet"
     temperature: 0.3
-    max_tokens: 16384  # Increased to prevent file truncation
+    max_tokens: 16384  # 16384 is enough for any single file under 300 lines (the enforced limit)
     system_prompt_file: "prompts/writer.txt"
     capabilities:
       - code_generation
       - file_creation
       - step_execution
+    tools:  # authors code AND builds it (stage 05 self-verify)
+      - read
+      - write
+      - edit
+      - glob
+      - grep
+      - terminal
     enabled: true
 
   verifier:
@@ -155,18 +180,31 @@ agents:
       - completeness_check
       - syntax_validation
       - missing_file_detection
+    tools:  # READ-ONLY: inspects, never edits — reports findings to fixer
+      - read
+      - glob
+      - grep
     enabled: true
 
   fixer:
     name: "Fixer Agent"
     model: "sonnet"
     temperature: 0.5
-    max_tokens: 4096
+    max_tokens: 6144  # 6144: enough for full file fix without over-spending (was 4096 which truncated)
     system_prompt_file: "prompts/fixer.txt"
     capabilities:
       - patching
       - debugging
       - error_fixing
+    tools:  # the only agent with the full mutating set
+      - read
+      - write
+      - edit
+      - apply_patch
+      - glob
+      - grep
+      - terminal
+      - git_read
     enabled: true
 
   runner:
@@ -179,6 +217,9 @@ agents:
       - command_execution
       - testing
       - build_management
+    tools:  # executes commands; does not author files
+      - read
+      - terminal
     enabled: true
 
   documenter:
@@ -192,6 +233,11 @@ agents:
       - srs_generation
       - uml_diagrams
       - reports
+    tools:  # writes docs; no code edits, no shell
+      - read
+      - write
+      - glob
+      - grep
     enabled: true
     # Runs for ALL projects - generates different docs based on project type
     # Academic: Full docs (SRS, SDS, UML, Reports, PPT, Viva)
@@ -207,6 +253,12 @@ agents:
       - refactoring
       - optimization
       - code_enhancement
+    tools:  # modifies code; no shell
+      - read
+      - write
+      - edit
+      - glob
+      - grep
     enabled: true
 
   analyzer:
@@ -219,6 +271,10 @@ agents:
       - analysis
       - code_review
       - architecture_review
+    tools:  # READ-ONLY analysis
+      - read
+      - glob
+      - grep
     enabled: true
 
   # Import Analyzer Agent - Token-optimized for analyzing imported projects
@@ -234,6 +290,10 @@ agents:
       - security_audit
       - performance_review
       - documentation_assessment
+    tools:  # READ-ONLY analysis
+      - read
+      - glob
+      - grep
     enabled: true
     # Token optimizations:
     # - Prioritizes files by relevance to analysis type
@@ -254,6 +314,13 @@ agents:
       - planning
       - code_generation
       - file_creation
+    tools:  # full generation + build
+      - read
+      - write
+      - edit
+      - glob
+      - grep
+      - terminal
     enabled: true
 
 workflows:
@@ -305,7 +372,7 @@ workflows:
       - agent: fixer
         name: "Fix Errors (if any)"
         timeout: 300
-        retry_count: 2
+        retry_count: 5  # FIX 5: Raised from 2 — more fix passes for complex projects
         stream_output: true
         # Only run if errors exist
         condition: "context.errors.length > 0"

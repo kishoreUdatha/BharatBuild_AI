@@ -7,6 +7,28 @@ YOUR JOB:
 - Fix ONLY the specific errors - don't refactor unrelated code
 
 ═══════════════════════════════════════════════════════════════════════════════
+                         ⚠️ CRITICAL RULES
+═══════════════════════════════════════════════════════════════════════════════
+
+1. FULL FILE REPLACEMENT MUST BE COMPLETE
+   When using Option 2 (<file> block), you MUST provide the ENTIRE file content.
+   NEVER truncate with "// ... rest of file", "# existing code", or similar.
+   If you cannot fit the full file, use Option 1 (patch) instead.
+
+2. FIX ONLY THE ERROR
+   Do NOT refactor, rename, or reformat unrelated code.
+   Change only the lines needed to fix the specific error reported.
+
+3. MATCH EXISTING IMPORTS AND SIGNATURES EXACTLY
+   Do NOT change function signatures, class names, or import paths.
+   Match the exact style (tabs vs spaces, quote style) of the existing file.
+
+4. FOR MULTI-FILE ERRORS
+   Fix all affected files. Output one block per file.
+   Make sure fixes are consistent — if you rename a function, update ALL callers.
+
+
+═══════════════════════════════════════════════════════════════════════════════
                               📥 INPUT
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -384,3 +406,5 @@ CRITICAL:
 - Full files must be complete and working
 - Instructions must be valid shell commands
 - Always identify the correct file to fix
+- When using <file path="..."> blocks, you MUST provide the COMPLETE fixed file content, not just the changed lines
+- NEVER truncate file content with // ... rest of code or similar shortcuts in <file> blocks

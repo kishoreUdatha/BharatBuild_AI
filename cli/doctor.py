@@ -1,597 +1,329 @@
 """
-BharatBuild CLI Doctor Command
+BharatBuild CLI — Doctor
+===========================
+Runs a series of diagnostic checks and prints a pass/fail report.
 
-Diagnose and fix common issues:
-  /doctor           Run all checks
-  /doctor fix       Attempt to fix issues
-  /doctor --verbose Show detailed output
+    await run_doctor(config)
+
+Checks
+------
+  ✓ Python version         ≥ 3.10
+  ✓ Required packages      httpx, rich, prompt_toolkit
+  ✓ Config directory       ~/.bharatbuild exists & writeable
+  ✓ Credentials file       exists & valid JSON
+  ✓ Backend reachable      GET /health → {"status":"healthy"}
+  ✓ Authentication         GET /users/me → 200
+  ✓ Token balance          GET /tokens/balance
+  ✓ Docker available       `docker info` exits 0
+  ✓ Git available          `git --version`
 """
 
-import os
-import sys
+from __future__ import annotations
+
+import asyncio
+import importlib
 import shutil
 import subprocess
-import platform
+import sys
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
-from dataclasses import dataclass
-from enum import Enum
+from typing import Awaitable, Callable, List, Optional
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.text import Text
 
+from cli.config import CLIConfig
 
-class CheckStatus(str, Enum):
-    """Status of a diagnostic check"""
-    PASS = "pass"
-    WARN = "warn"
-    FAIL = "fail"
-    SKIP = "skip"
+console = Console()
 
+# ── result model ─────────────────────────────────────────────────────────────
 
 @dataclass
 class CheckResult:
-    """Result of a diagnostic check"""
-    name: str
-    status: CheckStatus
-    message: str
-    details: str = ""
-    fix_available: bool = False
-    fix_command: str = ""
+    name:    str
+    ok:      bool
+    detail:  str = ""
+    warning: bool = False   # True → yellow instead of green
 
 
-class DoctorCommand:
-    """
-    Diagnostic tool for BharatBuild CLI.
+@dataclass
+class DoctorReport:
+    results: List[CheckResult] = field(default_factory=list)
 
-    Checks:
-    - Python version
-    - Required packages
-    - API key configuration
-    - Git installation
-    - Network connectivity
-    - Disk space
-    - Configuration files
-    - Permissions
+    def add(self, result: CheckResult) -> None:
+        self.results.append(result)
 
-    Usage:
-        doctor = DoctorCommand(console, config_dir)
+    @property
+    def all_ok(self) -> bool:
+        return all(r.ok or r.warning for r in self.results)
 
-        # Run all checks
-        doctor.run_checks()
+    @property
+    def failures(self) -> List[CheckResult]:
+        return [r for r in self.results if not r.ok and not r.warning]
 
-        # Run specific check
-        result = doctor.check_python()
 
-        # Fix issues
-        doctor.fix_issues()
-    """
+# ── individual checks ─────────────────────────────────────────────────────────
 
-    def __init__(
-        self,
-        console: Console,
-        config_dir: Path = None,
-        project_dir: Path = None
-    ):
-        self.console = console
-        self.config_dir = config_dir or Path.home() / ".bharatbuild"
-        self.project_dir = project_dir or Path.cwd()
-        self._results: List[CheckResult] = []
+async def _check_python(config: CLIConfig) -> CheckResult:
+    major, minor = sys.version_info[:2]
+    ok = (major, minor) >= (3, 10)
+    return CheckResult(
+        name   = "Python version",
+        ok     = ok,
+        detail = f"{major}.{minor}  (need ≥ 3.10)" if not ok else f"{major}.{minor}",
+    )
 
-    def run_checks(self, verbose: bool = False) -> List[CheckResult]:
-        """Run all diagnostic checks"""
-        self._results = []
 
-        checks = [
-            ("Python Version", self.check_python),
-            ("Required Packages", self.check_packages),
-            ("API Key", self.check_api_key),
-            ("Git Installation", self.check_git),
-            ("Node.js (optional)", self.check_node),
-            ("Network Connectivity", self.check_network),
-            ("Disk Space", self.check_disk_space),
-            ("Configuration", self.check_config),
-            ("Permissions", self.check_permissions),
-            ("Project Structure", self.check_project),
-        ]
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=self.console,
-            transient=True
-        ) as progress:
-            task = progress.add_task("Running diagnostics...", total=len(checks))
-
-            for name, check_func in checks:
-                progress.update(task, description=f"Checking {name}...")
-                try:
-                    result = check_func()
-                    self._results.append(result)
-                except Exception as e:
-                    self._results.append(CheckResult(
-                        name=name,
-                        status=CheckStatus.FAIL,
-                        message=f"Check failed with error",
-                        details=str(e)
-                    ))
-                progress.advance(task)
-
-        self._display_results(verbose)
-        return self._results
-
-    def _display_results(self, verbose: bool = False):
-        """Display check results"""
-        # Summary counts
-        passed = sum(1 for r in self._results if r.status == CheckStatus.PASS)
-        warnings = sum(1 for r in self._results if r.status == CheckStatus.WARN)
-        failed = sum(1 for r in self._results if r.status == CheckStatus.FAIL)
-
-        # Results table
-        table = Table(show_header=True, header_style="bold cyan", title="Diagnostic Results")
-        table.add_column("Check", style="bold")
-        table.add_column("Status", width=8)
-        table.add_column("Message")
-
-        for result in self._results:
-            if result.status == CheckStatus.PASS:
-                status = "[green]✓ Pass[/green]"
-            elif result.status == CheckStatus.WARN:
-                status = "[yellow]⚠ Warn[/yellow]"
-            elif result.status == CheckStatus.FAIL:
-                status = "[red]✗ Fail[/red]"
-            else:
-                status = "[dim]○ Skip[/dim]"
-
-            message = result.message
-            if verbose and result.details:
-                message += f"\n[dim]{result.details}[/dim]"
-
-            table.add_row(result.name, status, message)
-
-        self.console.print(table)
-
-        # Summary
-        summary_parts = []
-        if passed > 0:
-            summary_parts.append(f"[green]{passed} passed[/green]")
-        if warnings > 0:
-            summary_parts.append(f"[yellow]{warnings} warnings[/yellow]")
-        if failed > 0:
-            summary_parts.append(f"[red]{failed} failed[/red]")
-
-        self.console.print(f"\n{' · '.join(summary_parts)}")
-
-        # Suggestions
-        if failed > 0:
-            self.console.print("\n[yellow]Run '/doctor fix' to attempt automatic fixes[/yellow]")
-
-    # ==================== Individual Checks ====================
-
-    def check_python(self) -> CheckResult:
-        """Check Python version"""
-        version = sys.version_info
-        version_str = f"{version.major}.{version.minor}.{version.micro}"
-
-        if version.major < 3 or (version.major == 3 and version.minor < 8):
-            return CheckResult(
-                name="Python Version",
-                status=CheckStatus.FAIL,
-                message=f"Python {version_str} - requires 3.8+",
-                details="Please upgrade Python to version 3.8 or higher",
-                fix_available=False
-            )
-
-        if version.minor < 10:
-            return CheckResult(
-                name="Python Version",
-                status=CheckStatus.WARN,
-                message=f"Python {version_str} - 3.10+ recommended",
-                details="Some features work better with Python 3.10+"
-            )
-
+async def _check_packages(config: CLIConfig) -> CheckResult:
+    required = ["httpx", "rich", "prompt_toolkit", "aiofiles"]
+    missing  = []
+    for pkg in required:
+        try:
+            importlib.import_module(pkg)
+        except ImportError:
+            missing.append(pkg)
+    if missing:
         return CheckResult(
-            name="Python Version",
-            status=CheckStatus.PASS,
-            message=f"Python {version_str}"
+            name   = "Required packages",
+            ok     = False,
+            detail = f"Missing: {', '.join(missing)}  →  pip install {' '.join(missing)}",
+        )
+    return CheckResult(name="Required packages", ok=True, detail="all present")
+
+
+async def _check_config_dir(config: CLIConfig) -> CheckResult:
+    d = Path(config.config_dir)
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        probe = d / ".write_test"
+        probe.write_text("ok")
+        probe.unlink()
+        return CheckResult(name="Config directory", ok=True, detail=str(d))
+    except Exception as exc:
+        return CheckResult(name="Config directory", ok=False, detail=str(exc))
+
+
+async def _check_credentials(config: CLIConfig) -> CheckResult:
+    from cli.auth import AuthManager
+    creds = AuthManager.load()
+    if creds is None:
+        return CheckResult(
+            name    = "Credentials",
+            ok      = False,
+            warning = True,
+            detail  = "Not logged in — run [cyan]bharatbuild login[/cyan]",
+        )
+    return CheckResult(
+        name   = "Credentials",
+        ok     = True,
+        detail = f"{creds.email}  (tier: {creds.tier})",
+    )
+
+
+async def _check_backend(config: CLIConfig) -> CheckResult:
+    from cli.client import BharatBuildClient
+
+    try:
+        async with BharatBuildClient(config) as client:
+            healthy = await client.health()
+        if healthy:
+            return CheckResult(name="Backend reachable", ok=True, detail=config.api_base_url)
+        return CheckResult(
+            name   = "Backend reachable",
+            ok     = False,
+            detail = f"Unhealthy response from {config.api_base_url}",
+        )
+    except Exception as exc:
+        return CheckResult(
+            name   = "Backend reachable",
+            ok     = False,
+            detail = f"{exc}  (is the server running?)",
         )
 
-    def check_packages(self) -> CheckResult:
-        """Check required packages"""
-        required = [
-            "rich",
-            "prompt_toolkit",
-            "httpx",
-            "pydantic",
-        ]
 
-        optional = [
-            "anthropic",
-            "pygments",
-            "watchdog",
-        ]
+async def _check_auth_api(config: CLIConfig) -> CheckResult:
+    from cli.client import BharatBuildClient, APIError, AuthError
+    from cli.auth  import AuthManager
 
-        missing_required = []
-        missing_optional = []
-
-        for pkg in required:
-            try:
-                __import__(pkg)
-            except ImportError:
-                missing_required.append(pkg)
-
-        for pkg in optional:
-            try:
-                __import__(pkg)
-            except ImportError:
-                missing_optional.append(pkg)
-
-        if missing_required:
-            return CheckResult(
-                name="Required Packages",
-                status=CheckStatus.FAIL,
-                message=f"Missing: {', '.join(missing_required)}",
-                details=f"pip install {' '.join(missing_required)}",
-                fix_available=True,
-                fix_command=f"pip install {' '.join(missing_required)}"
-            )
-
-        if missing_optional:
-            return CheckResult(
-                name="Required Packages",
-                status=CheckStatus.WARN,
-                message=f"Optional missing: {', '.join(missing_optional)}",
-                details="Some features may not work without these packages"
-            )
-
+    creds = AuthManager.load()
+    if not creds:
         return CheckResult(
-            name="Required Packages",
-            status=CheckStatus.PASS,
-            message="All packages installed"
+            name    = "API authentication",
+            ok      = False,
+            warning = True,
+            detail  = "Skipped — not logged in",
         )
 
-    def check_api_key(self) -> CheckResult:
-        """Check API key configuration"""
-        # Check environment variable
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-
-        if not api_key:
-            # Check config file
-            config_file = self.config_dir / "config.json"
-            if config_file.exists():
-                try:
-                    import json
-                    with open(config_file) as f:
-                        config = json.load(f)
-                    api_key = config.get("api_key", "")
-                except Exception:
-                    pass
-
-        if not api_key:
-            return CheckResult(
-                name="API Key",
-                status=CheckStatus.FAIL,
-                message="No API key configured",
-                details="Set ANTHROPIC_API_KEY environment variable or run /config api-key",
-                fix_available=False
-            )
-
-        # Validate format (basic check)
-        if not api_key.startswith("sk-"):
-            return CheckResult(
-                name="API Key",
-                status=CheckStatus.WARN,
-                message="API key format may be incorrect",
-                details="Anthropic API keys typically start with 'sk-'"
-            )
-
-        # Mask key for display
-        masked = api_key[:7] + "..." + api_key[-4:]
-
+    try:
+        async with BharatBuildClient(config) as client:
+            me = await client.me()
         return CheckResult(
-            name="API Key",
-            status=CheckStatus.PASS,
-            message=f"Configured ({masked})"
+            name   = "API authentication",
+            ok     = True,
+            detail = f"Token valid for {me.get('email', '?')}",
+        )
+    except AuthError:
+        return CheckResult(
+            name   = "API authentication",
+            ok     = False,
+            detail = "Token rejected — run [cyan]bharatbuild login[/cyan] again",
+        )
+    except APIError as exc:
+        return CheckResult(
+            name   = "API authentication",
+            ok     = False,
+            detail = str(exc),
         )
 
-    def check_git(self) -> CheckResult:
-        """Check Git installation"""
-        git_path = shutil.which("git")
 
-        if not git_path:
-            return CheckResult(
-                name="Git Installation",
-                status=CheckStatus.WARN,
-                message="Git not found",
-                details="Some features require Git. Install from https://git-scm.com"
-            )
+async def _check_token_balance(config: CLIConfig) -> CheckResult:
+    from cli.client import BharatBuildClient, APIError
+    from cli.auth  import AuthManager
 
-        # Get version
+    creds = AuthManager.load()
+    if not creds:
+        return CheckResult(
+            name    = "Token balance",
+            ok      = True,
+            warning = True,
+            detail  = "Skipped — not logged in",
+        )
+
+    try:
+        async with BharatBuildClient(config) as client:
+            data = await client.token_balance()
+        balance = data.get("balance", data.get("tokens_remaining", "?"))
+        return CheckResult(name="Token balance", ok=True, detail=str(balance))
+    except Exception as exc:
+        return CheckResult(
+            name    = "Token balance",
+            ok      = True,
+            warning = True,
+            detail  = f"Could not fetch: {exc}",
+        )
+
+
+async def _check_docker(config: CLIConfig) -> CheckResult:
+    if not shutil.which("docker"):
+        return CheckResult(
+            name    = "Docker",
+            ok      = True,
+            warning = True,
+            detail  = "Not installed — required for sandbox execution",
+        )
+    try:
+        proc = subprocess.run(
+            ["docker", "info"], capture_output=True, timeout=8
+        )
+        if proc.returncode == 0:
+            return CheckResult(name="Docker", ok=True, detail="daemon running")
+        return CheckResult(
+            name    = "Docker",
+            ok      = True,
+            warning = True,
+            detail  = "Installed but daemon not running",
+        )
+    except subprocess.TimeoutExpired:
+        return CheckResult(
+            name    = "Docker",
+            ok      = True,
+            warning = True,
+            detail  = "Timeout querying daemon",
+        )
+    except Exception as exc:
+        return CheckResult(name="Docker", ok=True, warning=True, detail=str(exc))
+
+
+async def _check_git(config: CLIConfig) -> CheckResult:
+    if shutil.which("git"):
         try:
             result = subprocess.run(
-                ["git", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5
+                ["git", "--version"], capture_output=True, text=True, timeout=5
             )
-            version = result.stdout.strip()
-
             return CheckResult(
-                name="Git Installation",
-                status=CheckStatus.PASS,
-                message=version
-            )
-        except Exception as e:
-            return CheckResult(
-                name="Git Installation",
-                status=CheckStatus.WARN,
-                message="Git found but error getting version",
-                details=str(e)
-            )
-
-    def check_node(self) -> CheckResult:
-        """Check Node.js installation (optional)"""
-        node_path = shutil.which("node")
-
-        if not node_path:
-            return CheckResult(
-                name="Node.js (optional)",
-                status=CheckStatus.SKIP,
-                message="Not installed",
-                details="Only needed for JavaScript/TypeScript projects"
-            )
-
-        try:
-            result = subprocess.run(
-                ["node", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            version = result.stdout.strip()
-
-            return CheckResult(
-                name="Node.js (optional)",
-                status=CheckStatus.PASS,
-                message=f"Node.js {version}"
+                name   = "Git",
+                ok     = True,
+                detail = result.stdout.strip(),
             )
         except Exception:
-            return CheckResult(
-                name="Node.js (optional)",
-                status=CheckStatus.SKIP,
-                message="Not available"
-            )
+            pass
+    return CheckResult(
+        name    = "Git",
+        ok      = True,
+        warning = True,
+        detail  = "Not found — some features may not work",
+    )
 
-    def check_network(self) -> CheckResult:
-        """Check network connectivity"""
-        import socket
 
-        hosts = [
-            ("api.anthropic.com", 443),
-            ("github.com", 443),
-        ]
+# ── runner ────────────────────────────────────────────────────────────────────
 
-        for host, port in hosts:
-            try:
-                socket.create_connection((host, port), timeout=5)
-            except (socket.timeout, socket.error) as e:
-                return CheckResult(
-                    name="Network Connectivity",
-                    status=CheckStatus.FAIL,
-                    message=f"Cannot reach {host}",
-                    details=str(e)
-                )
+_ALL_CHECKS: List[Callable[[CLIConfig], Awaitable[CheckResult]]] = [
+    _check_python,
+    _check_packages,
+    _check_config_dir,
+    _check_credentials,
+    _check_backend,
+    _check_auth_api,
+    _check_token_balance,
+    _check_docker,
+    _check_git,
+]
 
-        return CheckResult(
-            name="Network Connectivity",
-            status=CheckStatus.PASS,
-            message="Connected"
-        )
 
-    def check_disk_space(self) -> CheckResult:
-        """Check available disk space"""
-        try:
-            if platform.system() == "Windows":
-                import ctypes
-                free_bytes = ctypes.c_ulonglong(0)
-                ctypes.windll.kernel32.GetDiskFreeSpaceExW(
-                    ctypes.c_wchar_p(str(self.project_dir)),
-                    None, None, ctypes.pointer(free_bytes)
-                )
-                free_gb = free_bytes.value / (1024 ** 3)
-            else:
-                stat = os.statvfs(self.project_dir)
-                free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+async def run_doctor(config: CLIConfig) -> DoctorReport:
+    """Run all checks and print a formatted report. Returns the DoctorReport."""
+    report = DoctorReport()
 
-            if free_gb < 1:
-                return CheckResult(
-                    name="Disk Space",
-                    status=CheckStatus.FAIL,
-                    message=f"Low disk space: {free_gb:.1f} GB",
-                    details="At least 1 GB recommended"
-                )
+    console.print()
+    console.print(Panel(
+        "[bold]Running diagnostics…[/bold]\n"
+        "[dim]This checks your environment, connectivity, and configuration.[/dim]",
+        title="[cyan]BharatBuild Doctor[/cyan]",
+        border_style="cyan",
+    ))
+    console.print()
 
-            if free_gb < 5:
-                return CheckResult(
-                    name="Disk Space",
-                    status=CheckStatus.WARN,
-                    message=f"Available: {free_gb:.1f} GB",
-                    details="Consider freeing up space"
-                )
+    t = Table(show_header=True, header_style="bold cyan",
+              border_style="dim", show_lines=False)
+    t.add_column("Check",   style="white", min_width=24)
+    t.add_column("",        width=3,  justify="center")
+    t.add_column("Detail",  style="dim")
 
-            return CheckResult(
-                name="Disk Space",
-                status=CheckStatus.PASS,
-                message=f"Available: {free_gb:.1f} GB"
-            )
+    for check_fn in _ALL_CHECKS:
+        with console.status(f"[dim]Checking {check_fn.__name__[7:].replace('_',' ')}…[/dim]",
+                            spinner="dots"):
+            result = await check_fn(config)
 
-        except Exception as e:
-            return CheckResult(
-                name="Disk Space",
-                status=CheckStatus.SKIP,
-                message="Could not check",
-                details=str(e)
-            )
+        report.add(result)
 
-    def check_config(self) -> CheckResult:
-        """Check configuration files"""
-        issues = []
+        if result.ok and not result.warning:
+            icon  = Text("✓", style="bold green")
+        elif result.warning:
+            icon  = Text("⚠", style="bold yellow")
+        else:
+            icon  = Text("✗", style="bold red")
 
-        # Check config directory
-        if not self.config_dir.exists():
-            issues.append("Config directory not found")
+        t.add_row(result.name, icon, result.detail)
 
-        # Check for config file
-        config_file = self.config_dir / "config.json"
-        if not config_file.exists():
-            issues.append("No config.json file")
+    console.print(t)
+    console.print()
 
-        if issues:
-            return CheckResult(
-                name="Configuration",
-                status=CheckStatus.WARN,
-                message="; ".join(issues),
-                details=f"Config dir: {self.config_dir}",
-                fix_available=True,
-                fix_command="init"
-            )
+    if report.all_ok:
+        console.print(Panel(
+            "[bold green]✓ All checks passed.[/bold green]\n"
+            "[dim]Your environment is ready to use BharatBuild CLI.[/dim]",
+            border_style="green",
+        ))
+    else:
+        failures = report.failures
+        items = "\n".join(f"  • [red]{r.name}[/red]: {r.detail}" for r in failures)
+        console.print(Panel(
+            f"[bold red]{len(failures)} check(s) failed:[/bold red]\n{items}\n\n"
+            "[dim]Fix the issues above and run [cyan]bharatbuild doctor[/cyan] again.[/dim]",
+            border_style="red",
+        ))
 
-        return CheckResult(
-            name="Configuration",
-            status=CheckStatus.PASS,
-            message=f"Config found at {self.config_dir}"
-        )
-
-    def check_permissions(self) -> CheckResult:
-        """Check file permissions"""
-        issues = []
-
-        # Check config dir writable
-        if self.config_dir.exists():
-            if not os.access(self.config_dir, os.W_OK):
-                issues.append("Config directory not writable")
-
-        # Check project dir writable
-        if not os.access(self.project_dir, os.W_OK):
-            issues.append("Project directory not writable")
-
-        if issues:
-            return CheckResult(
-                name="Permissions",
-                status=CheckStatus.FAIL,
-                message="; ".join(issues),
-                details="Check directory permissions"
-            )
-
-        return CheckResult(
-            name="Permissions",
-            status=CheckStatus.PASS,
-            message="Read/write access OK"
-        )
-
-    def check_project(self) -> CheckResult:
-        """Check project structure"""
-        # Look for common project indicators
-        indicators = {
-            "package.json": "Node.js",
-            "requirements.txt": "Python",
-            "pyproject.toml": "Python",
-            "Cargo.toml": "Rust",
-            "go.mod": "Go",
-            "pom.xml": "Java/Maven",
-            "build.gradle": "Java/Gradle",
-        }
-
-        found = []
-        for file, lang in indicators.items():
-            if (self.project_dir / file).exists():
-                found.append(lang)
-
-        # Check for BHARATBUILD.md
-        has_instructions = (self.project_dir / "BHARATBUILD.md").exists()
-
-        if not found:
-            return CheckResult(
-                name="Project Structure",
-                status=CheckStatus.WARN,
-                message="No recognized project type",
-                details="Run '/init' to set up project"
-            )
-
-        message = f"Detected: {', '.join(set(found))}"
-        if has_instructions:
-            message += " + BHARATBUILD.md"
-
-        return CheckResult(
-            name="Project Structure",
-            status=CheckStatus.PASS,
-            message=message
-        )
-
-    # ==================== Fix Issues ====================
-
-    def fix_issues(self) -> int:
-        """Attempt to fix issues"""
-        if not self._results:
-            self.run_checks(verbose=False)
-
-        fixed = 0
-        failed_fixes = []
-
-        for result in self._results:
-            if result.status == CheckStatus.FAIL and result.fix_available:
-                self.console.print(f"\n[cyan]Fixing: {result.name}[/cyan]")
-
-                try:
-                    if result.fix_command.startswith("pip install"):
-                        # Run pip install
-                        subprocess.run(
-                            result.fix_command.split(),
-                            check=True,
-                            capture_output=True
-                        )
-                        self.console.print(f"[green]✓ Fixed: {result.name}[/green]")
-                        fixed += 1
-
-                    elif result.fix_command == "init":
-                        # Create config directory
-                        self.config_dir.mkdir(parents=True, exist_ok=True)
-                        self.console.print(f"[green]✓ Created config directory[/green]")
-                        fixed += 1
-
-                except Exception as e:
-                    failed_fixes.append((result.name, str(e)))
-                    self.console.print(f"[red]✗ Failed to fix: {result.name}[/red]")
-
-        if fixed > 0:
-            self.console.print(f"\n[green]Fixed {fixed} issue(s)[/green]")
-
-        if failed_fixes:
-            self.console.print(f"\n[red]Failed to fix {len(failed_fixes)} issue(s):[/red]")
-            for name, error in failed_fixes:
-                self.console.print(f"  - {name}: {error}")
-
-        return fixed
-
-    def show_system_info(self):
-        """Display system information"""
-        info = {
-            "Platform": platform.platform(),
-            "Python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-            "Python Path": sys.executable,
-            "Working Dir": str(self.project_dir),
-            "Config Dir": str(self.config_dir),
-            "OS": platform.system(),
-            "Architecture": platform.machine(),
-        }
-
-        table = Table(title="System Information", show_header=False)
-        table.add_column("Property", style="bold")
-        table.add_column("Value")
-
-        for key, value in info.items():
-            table.add_row(key, value)
-
-        self.console.print(table)
+    console.print()
+    return report

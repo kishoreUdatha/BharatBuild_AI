@@ -5,6 +5,8 @@ import os
 import json
 from pathlib import Path
 
+from app.core.models import MODELS, PRICING_USD_PER_MTOK, ModelTier
+
 
 def parse_cors_origins(v: Any) -> List[str]:
     """Parse CORS origins from string or list"""
@@ -113,8 +115,12 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-2.0-flash"  # Fast and free
     ANTHROPIC_BASE_URL: str = ""  # Empty means use default Anthropic URL
     USE_MOCK_CLAUDE: bool = False
-    CLAUDE_HAIKU_MODEL: str = "claude-3-haiku-20240307"
-    CLAUDE_SONNET_MODEL: str = "claude-sonnet-4-20250514"
+    # AI Model Configuration - ALL models from environment, no hardcoded strings.
+    # Defaults are all haiku (safest/cheapest fallback). The .env overrides these.
+    CLAUDE_HAIKU_MODEL: str = "claude-haiku-4-5"
+    CLAUDE_SONNET_MODEL: str = "claude-haiku-4-5"
+    CLAUDE_OPUS_MODEL: str = "claude-haiku-4-5"
+    CLAUDE_DEFAULT_MODEL: str = "claude-haiku-4-5"
     CLAUDE_MAX_TOKENS: int = 4096
     CLAUDE_TEMPERATURE: float = 0.7
     USE_PLAIN_TEXT_RESPONSES: bool = True
@@ -442,13 +448,14 @@ class Settings(BaseSettings):
     AUTOFIXER_INSTALL_TIMEOUT: int = 120  # Timeout for install commands
     LOG_RETENTION_MINUTES: int = 30  # Log bus retention
 
-    # SimpleFixer Model & Cost Settings
-    SIMPLEFIXER_HAIKU_MODEL: str = "claude-3-haiku-20240307"
-    SIMPLEFIXER_SONNET_MODEL: str = "claude-sonnet-4-20250514"
-    SIMPLEFIXER_HAIKU_INPUT_COST: float = 0.25  # $ per 1M tokens
-    SIMPLEFIXER_HAIKU_OUTPUT_COST: float = 1.25  # $ per 1M tokens
-    SIMPLEFIXER_SONNET_INPUT_COST: float = 3.0  # $ per 1M tokens
-    SIMPLEFIXER_SONNET_OUTPUT_COST: float = 15.0  # $ per 1M tokens
+    # SimpleFixer Model & Cost Settings — rates come from app.core.models so
+    # they cannot drift away from the model they price.
+    SIMPLEFIXER_HAIKU_MODEL: str = MODELS[ModelTier.CHEAP]
+    SIMPLEFIXER_SONNET_MODEL: str = MODELS[ModelTier.STANDARD]
+    SIMPLEFIXER_HAIKU_INPUT_COST: float = PRICING_USD_PER_MTOK[MODELS[ModelTier.CHEAP]][0]
+    SIMPLEFIXER_HAIKU_OUTPUT_COST: float = PRICING_USD_PER_MTOK[MODELS[ModelTier.CHEAP]][1]
+    SIMPLEFIXER_SONNET_INPUT_COST: float = PRICING_USD_PER_MTOK[MODELS[ModelTier.STANDARD]][0]
+    SIMPLEFIXER_SONNET_OUTPUT_COST: float = PRICING_USD_PER_MTOK[MODELS[ModelTier.STANDARD]][1]
 
     # SimpleFixer Iteration Limits (by error complexity)
     SIMPLEFIXER_SIMPLE_MAX_ITERATIONS: int = 2

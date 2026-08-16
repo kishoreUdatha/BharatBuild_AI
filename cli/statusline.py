@@ -22,6 +22,7 @@ from rich.table import Table
 from rich.prompt import Prompt, Confirm
 from rich.style import Style
 from rich.text import Text
+from cli.models import DEFAULT_TIER
 
 
 @dataclass
@@ -82,7 +83,7 @@ class StatusLineManager:
         self._load_config()
 
         # Runtime state
-        self._current_model: str = "claude-3-sonnet"
+        self._current_model: str = DEFAULT_TIER
         self._token_count: int = 0
         self._cost: float = 0.0
 
