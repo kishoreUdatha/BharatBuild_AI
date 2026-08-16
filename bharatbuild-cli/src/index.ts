@@ -84,13 +84,22 @@ program
 
 program
   .command("login")
-  .description("Login to your BharatBuild account")
+  .description("Login to your BharatBuild account (opens browser)")
   .option("-t, --token <token>", "Use a pre-issued CLI token")
-  .option("--email", "Log in with email/password instead of browser")
+  .option("--email", "Log in with email/password in terminal (no browser)")
   .option("--no-browser-open", "Print the login URL instead of launching a browser")
+  .option("--use-device-flow", "Force device flow for SSH/remote environments")
   .action(async (opts) => {
     const config = loadConfig();
     const client = makeClient(program.opts().apiUrl);
+
+    // Check if already logged in
+    const existingCreds = loadCredentials();
+    if (existingCreds) {
+      console.log(chalk.yellow(`\n  Already logged in as ${chalk.bold(existingCreds.name)} (${existingCreds.email})`));
+      console.log(chalk.dim(`  Run: bharatbuild logout first, then login again.\n`));
+      return;
+    }
 
     if (opts.token) {
       // Token-based login: validate by calling /me
@@ -116,56 +125,69 @@ program
     }
 
     if (opts.email) {
-      // Email/password login (fallback)
+      // Email/password login in terminal (fallback)
       const email = await prompt("  Email: ");
       const password = await promptPassword("  Password: ");
 
       const spinner = new Spinner();
-      spinner.start("Logging in…");
+      spinner.start("Verifying credentials…");
       try {
         const creds = await login(client, email, password);
         spinner.succeed(`Logged in as ${chalk.green(creds.name)} (${creds.tier})`);
+        console.log(chalk.dim(`\n  You now have full access to BharatBuild CLI.\n`));
       } catch (err) {
-        spinner.fail("Login failed");
+        spinner.fail("Login failed — invalid email or password");
         console.error(chalk.red(`  ${err instanceof Error ? err.message : err}`));
         process.exit(1);
       }
       return;
     }
 
-    // Default: Browser-based login (like kiro-cli)
-    const { browserLogin } = await import("./api/browser-login.js");
-    const { LOGIN_PAGE_URL } = await import("./config/constants.js");
+    // ── Default: Browser-based login ──────────────────────────────────────
+    // Opens browser with login form → user enters credentials →
+    // server verifies → CLI gets access token
+    const { startBrowserLogin } = await import("./auth/browser-auth.js");
     const { saveCredentials } = await import("./api/auth.js");
 
-    console.log(chalk.dim("\n  Opening your browser to sign in…"));
+    console.log(chalk.bold("\n  🔐 BharatBuild CLI Login\n"));
+    console.log(chalk.dim("  Opening your browser to sign in…\n"));
+
     const spinner = new Spinner();
     try {
-      const result = await browserLogin({
-        loginUrl: LOGIN_PAGE_URL,
+      const result = await startBrowserLogin({
+        apiBaseUrl: config.apiBaseUrl,
         noBrowser: opts.browserOpen === false,
-        onUrl: (url) => {
-          console.log(chalk.dim(`  If it doesn't open, visit:\n  ${chalk.cyan(url)}\n`));
-          spinner.start("Waiting for browser sign-in…");
+        onUrl: (url: string) => {
+          console.log(chalk.dim(`  Login page: ${chalk.cyan(url)}`));
+          if (opts.browserOpen === false) {
+            console.log(chalk.dim(`\n  Open this URL in your browser to sign in.\n`));
+          }
+          spinner.start("Waiting for you to sign in via browser…");
         },
       });
       spinner.stop();
 
-      // Trust but verify: confirm the token against /me before storing it.
-      client.setToken(result.token);
-      const info = await whoami(client);
+      // Save credentials
       saveCredentials({
-        token:  result.token,
-        userId: result.userId ?? "",
-        email:  info.email,
-        name:   info.name,
-        tier:   info.tier,
+        token: result.token,
+        refreshToken: result.refreshToken,
+        userId: result.userId,
+        email: result.email,
+        name: result.name,
+        tier: result.tier,
       });
-      console.log(chalk.green(`\n  ✓ Logged in as ${chalk.bold(info.name)} (${info.tier})\n`));
+
+      console.log(chalk.green(`\n  ✓ Login successful!`));
+      console.log(chalk.bold(`    Welcome, ${result.name}!`));
+      console.log(chalk.dim(`    Email: ${result.email}`));
+      console.log(chalk.dim(`    Plan:  ${result.tier}\n`));
+      console.log(chalk.dim(`  You now have full access to BharatBuild CLI.\n`));
     } catch (err) {
       spinner.stop();
-      console.error(chalk.red(`\n  ✗ Browser login failed: ${err instanceof Error ? err.message : err}\n`));
-      console.log(chalk.dim(`  Tip: try ${chalk.cyan("bharatbuild login --email")} for email/password login\n`));
+      console.error(chalk.red(`\n  ✗ Login failed: ${err instanceof Error ? err.message : err}\n`));
+      console.log(chalk.dim(`  Alternatives:`));
+      console.log(chalk.dim(`    bharatbuild login --email         Terminal-based login`));
+      console.log(chalk.dim(`    bharatbuild login --token <tok>   Use a pre-issued token\n`));
       process.exit(1);
     }
   });

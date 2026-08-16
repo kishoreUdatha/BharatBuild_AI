@@ -237,3 +237,11 @@ api_router.include_router(unified_agent.router, tags=["Unified Agent (Kiro-style
 api_router.include_router(models.router, tags=["Model Selection"])
 api_router.include_router(admin_router)
 
+# MCP Deploy integration (GitHub + Vercel)
+from app.mcp.deploy_endpoint import router as deploy_router
+api_router.include_router(deploy_router, tags=["Deploy (MCP)"])
+
+# Usage tracking
+from app.llm.usage_endpoint import router as usage_router
+api_router.include_router(usage_router, tags=["Usage Tracking"])
+

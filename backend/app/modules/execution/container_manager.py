@@ -671,16 +671,19 @@ class ContainerManager:
             return False
 
         try:
-            docker_container = self.docker.containers.get(container.container_id)
+            loop = asyncio.get_running_loop()
+            docker_container = await loop.run_in_executor(None, self.docker.containers.get, container.container_id)
             if docker_container.status != "running":
                 # Try to start paused container
                 if docker_container.status == "paused":
-                    docker_container.unpause()
+                    await loop.run_in_executor(None, docker_container.unpause)
                     await asyncio.sleep(1)
+                    docker_container = await loop.run_in_executor(None, self.docker.containers.get, container.container_id)
                     return docker_container.status == "running"
                 elif docker_container.status == "exited":
-                    docker_container.start()
+                    await loop.run_in_executor(None, docker_container.start)
                     await asyncio.sleep(1)
+                    docker_container = await loop.run_in_executor(None, self.docker.containers.get, container.container_id)
                     return docker_container.status == "running"
                 return False
             return True
@@ -704,7 +707,8 @@ class ContainerManager:
             return None
 
         try:
-            docker_container = self.docker.containers.get(redis_info.container_id)
+            loop = asyncio.get_running_loop()
+            docker_container = await loop.run_in_executor(None, self.docker.containers.get, redis_info.container_id)
             if docker_container.status == "running":
                 # Recover the container
                 project_container = ProjectContainer(
@@ -763,9 +767,10 @@ class ContainerManager:
         project_container = self.containers[project_id]
 
         try:
-            container = self.docker.containers.get(project_container.container_id)
+            loop = asyncio.get_running_loop()
+            container = await loop.run_in_executor(None, self.docker.containers.get, project_container.container_id)
             if container.status == "running":
-                container.pause()
+                await loop.run_in_executor(None, container.pause)
                 project_container.status = ContainerStatus.STOPPED
                 await self._persist_container_state(project_container)
                 logger.info(f"Paused container for project {project_id}")
@@ -1078,8 +1083,9 @@ class ContainerManager:
             if user_network:
                 container_kwargs["network"] = user_network
 
-            # Create container
-            container = self.docker.containers.run(**container_kwargs)
+            # Create container (run in executor to avoid blocking event loop)
+            loop = asyncio.get_running_loop()
+            container = await loop.run_in_executor(None, lambda: self.docker.containers.run(**container_kwargs))
 
             # Create container record
             project_container = ProjectContainer(
@@ -1150,17 +1156,18 @@ class ContainerManager:
         timeout = timeout or project_container.config.command_timeout
 
         try:
-            # Get Docker container
-            container = self.docker.containers.get(project_container.container_id)
+            # Get Docker container (run in executor to avoid blocking event loop)
+            loop = asyncio.get_running_loop()
+            container = await loop.run_in_executor(None, self.docker.containers.get, project_container.container_id)
 
             # Check container is running
             if container.status != "running":
-                container.start()
+                await loop.run_in_executor(None, container.start)
                 await asyncio.sleep(1)
 
             # OPTIMIZATION: Skip npm install if node_modules already exists
             if command.strip() in ('npm install', 'npm i', 'npm ci'):
-                check = container.exec_run("test -d /workspace/node_modules/.bin")
+                check = await loop.run_in_executor(None, container.exec_run, "test -d /workspace/node_modules/.bin")
                 if check.exit_code == 0:
                     logger.info(f"[Container] Skipping '{command}' - node_modules already exists")
                     yield {"type": "stdout", "data": "Dependencies already installed, skipping npm install..."}
@@ -1170,16 +1177,13 @@ class ContainerManager:
             # OPTIMIZATION: Before starting vite/dev server, kill old instances and check if already running
             if any(dev_cmd in command for dev_cmd in ['vite', 'npm run dev', 'npm start', 'next dev']):
                 # Kill any existing dev-server processes to prevent port conflicts.
-                # 'node.*vite' did NOT match how these actually run - `npx vite`
-                # appears as "npm exec vite" and "node /workspace/node_modules/
-                # .bin/vite" - so nothing was ever killed and each Run leaked
-                # another server: 5173 taken -> 5174 -> ... -> 5179, drifting off
-                # the container's published port map and leaving the preview
-                # pointing at a stale instance.
-                container.exec_run(
-                    "sh -c \"pkill -f 'node_modules/.bin/vite'; pkill -f 'npm exec'; "
-                    "pkill -f 'npm run dev'; pkill -f 'next dev'; pkill -x vite; true\"",
-                    demux=False,
+                await loop.run_in_executor(
+                    None,
+                    lambda: container.exec_run(
+                        "sh -c \"pkill -f 'node_modules/.bin/vite'; pkill -f 'npm exec'; "
+                        "pkill -f 'npm run dev'; pkill -f 'next dev'; pkill -x vite; true\"",
+                        demux=False,
+                    )
                 )
                 await asyncio.sleep(2)  # let the ports actually release
                 logger.info(f"[Container] Cleaned up old server processes before starting new one")

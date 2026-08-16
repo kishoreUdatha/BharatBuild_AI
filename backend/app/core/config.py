@@ -106,7 +106,17 @@ class Settings(BaseSettings):
     # ==========================================
     # Claude AI
     # ==========================================
-    ANTHROPIC_API_KEY: str
+    ANTHROPIC_API_KEY: str = ""
+
+    # ==========================================
+    # Claude Provider: "direct" or "bedrock"
+    # Switch via .env - no code changes needed
+    # ==========================================
+    CLAUDE_PROVIDER: str = "direct"  # "direct" = Anthropic API, "bedrock" = AWS Bedrock
+    
+    # AWS Bedrock settings (only needed when CLAUDE_PROVIDER=bedrock)
+    AWS_BEDROCK_REGION: str = "us-east-1"
+    AWS_SESSION_TOKEN: str = ""  # Optional - for temporary credentials
 
     # ==========================================
     # Google Gemini (for Chatbot - Free tier)

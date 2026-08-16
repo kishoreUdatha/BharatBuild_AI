@@ -20,31 +20,54 @@ class ClaudeClient:
     """Claude API client wrapper for both streaming and non-streaming requests"""
 
     def __init__(self):
-        # Configure client - use mock server if base URL is provided
-        client_kwargs = {"api_key": settings.ANTHROPIC_API_KEY}
+        # Configure client based on provider mode (Direct Anthropic vs AWS Bedrock)
+        self.use_bedrock = settings.CLAUDE_PROVIDER == "bedrock"
+        
+        if self.use_bedrock:
+            # AWS Bedrock mode - uses AWS credentials
+            from anthropic import AsyncAnthropicBedrock, AnthropicBedrock
+            
+            bedrock_kwargs = {
+                "aws_region": settings.AWS_BEDROCK_REGION,
+            }
+            # Optional: explicit credentials (otherwise uses default AWS chain)
+            if settings.AWS_ACCESS_KEY_ID:
+                bedrock_kwargs["aws_access_key"] = settings.AWS_ACCESS_KEY_ID
+                bedrock_kwargs["aws_secret_key"] = settings.AWS_SECRET_ACCESS_KEY
+            if settings.AWS_SESSION_TOKEN:
+                bedrock_kwargs["aws_session_token"] = settings.AWS_SESSION_TOKEN
+            
+            self.async_client = AsyncAnthropicBedrock(**bedrock_kwargs)
+            self.sync_client = AnthropicBedrock(**bedrock_kwargs)
+            logger.info(f"Claude client initialized: BEDROCK mode, region={settings.AWS_BEDROCK_REGION}")
+        else:
+            # Direct Anthropic API mode
+            client_kwargs = {"api_key": settings.ANTHROPIC_API_KEY}
 
-        # Only set base_url if it's a non-empty string with actual content
-        if settings.ANTHROPIC_BASE_URL and settings.ANTHROPIC_BASE_URL.strip():
-            client_kwargs["base_url"] = settings.ANTHROPIC_BASE_URL.strip()
-            logger.info(f"Using custom Claude API base URL: {settings.ANTHROPIC_BASE_URL}")
+            # Only set base_url if it's a non-empty string with actual content
+            if settings.ANTHROPIC_BASE_URL and settings.ANTHROPIC_BASE_URL.strip():
+                client_kwargs["base_url"] = settings.ANTHROPIC_BASE_URL.strip()
+                logger.info(f"Using custom Claude API base URL: {settings.ANTHROPIC_BASE_URL}")
 
-        # Configure timeouts for production reliability
-        client_kwargs["timeout"] = httpx.Timeout(
-            connect=CONNECT_TIMEOUT,
-            read=REQUEST_TIMEOUT,
-            write=REQUEST_TIMEOUT,
-            pool=REQUEST_TIMEOUT
-        )
+            # Configure timeouts for production reliability
+            client_kwargs["timeout"] = httpx.Timeout(
+                connect=CONNECT_TIMEOUT,
+                read=REQUEST_TIMEOUT,
+                write=REQUEST_TIMEOUT,
+                pool=REQUEST_TIMEOUT
+            )
 
-        if settings.USE_MOCK_CLAUDE:
-            logger.info("Mock Claude API mode enabled")
+            if settings.USE_MOCK_CLAUDE:
+                logger.info("Mock Claude API mode enabled")
 
-        self.async_client = AsyncAnthropic(**client_kwargs)
-        self.sync_client = Anthropic(**client_kwargs)
+            self.async_client = AsyncAnthropic(**client_kwargs)
+            self.sync_client = Anthropic(**client_kwargs)
+            logger.info(f"Claude client initialized: DIRECT mode, timeout={REQUEST_TIMEOUT}s")
+
         self.haiku_model = settings.CLAUDE_HAIKU_MODEL
         self.sonnet_model = settings.CLAUDE_SONNET_MODEL
 
-        logger.info(f"Claude client initialized: timeout={REQUEST_TIMEOUT}s, models=[{self.haiku_model}, {self.sonnet_model}]")
+        logger.info(f"Claude models: [{self.haiku_model}, {self.sonnet_model}]")
 
     def _is_retryable_error(self, error: Exception) -> bool:
         """Check if an error is retryable (overload, rate limit, network issues, etc.)"""

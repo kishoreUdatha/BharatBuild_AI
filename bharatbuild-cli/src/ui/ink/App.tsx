@@ -13,7 +13,7 @@ import React, { useState, useCallback } from "react";
 import { Box, Text, useInput, useApp, useStdout } from "ink";
 import { StatusBar, type Phase } from "./StatusBar.js";
 import { ChatMessages, type ChatMessage } from "./ChatMessages.js";
-import { ToolOutputList, type ToolCall } from "./ToolOutput.js";
+import { ToolOutputList, type ToolCall, type ToolStatus } from "./ToolOutput.js";
 import { InputPrompt } from "./InputPrompt.js";
 
 export interface AppProps {
@@ -99,10 +99,77 @@ export function App({ runtime, model, mode }: AppProps): React.ReactElement {
 
       // In a real implementation, this would call the runtime
       // For now, simulate an assistant response
-      if (runtime && typeof runtime.send === "function") {
-        runtime.send(input);
+      if (runtime && typeof runtime.run === "function") {
+        // Wire into the real AgentRuntime
+        let assistantContent = "";
+
+        // Listen for events from the runtime
+        runtime.events.on("*", (event: any) => {
+          if (event.type === "text" && event.content) {
+            assistantContent += event.content;
+            setState((prev) => {
+              const msgs = [...prev.messages];
+              const lastMsg = msgs[msgs.length - 1];
+              if (lastMsg && lastMsg.role === "assistant") {
+                lastMsg.content = assistantContent;
+              } else {
+                msgs.push({
+                  id: `msg-${Date.now()}-assistant`,
+                  role: "assistant",
+                  content: assistantContent,
+                  timestamp: new Date(),
+                });
+              }
+              return { ...prev, messages: msgs, phase: "coding" };
+            });
+          }
+          if (event.type === "tool_call") {
+            setState((prev) => ({
+              ...prev,
+              phase: "coding",
+              tools: [...prev.tools, {
+                id: event.id,
+                name: event.toolName,
+                input: event.input,
+                status: "running" as const,
+              }],
+            }));
+          }
+          if (event.type === "tool_result") {
+            setState((prev) => ({
+              ...prev,
+              tools: prev.tools.map((t) =>
+                t.id === event.id
+                  ? { ...t, status: (event.isError ? "error" : "success") as ToolStatus, output: event.output, durationMs: event.durationMs }
+                  : t
+              ),
+            }));
+          }
+          if (event.type === "complete") {
+            setState((prev) => ({ ...prev, phase: "idle" }));
+          }
+          if (event.type === "usage") {
+            setState((prev) => ({ ...prev, tokenCount: prev.tokenCount + (event.inputTokens ?? 0) + (event.outputTokens ?? 0) }));
+          }
+        });
+
+        // Run the agent
+        runtime.run(input).then(() => {
+          setState((prev) => ({ ...prev, phase: "idle" }));
+        }).catch((err: Error) => {
+          setState((prev) => ({
+            ...prev,
+            phase: "idle",
+            messages: [...prev.messages, {
+              id: `msg-${Date.now()}-error`,
+              role: "assistant",
+              content: `Error: ${err.message}`,
+              timestamp: new Date(),
+            }],
+          }));
+        });
       } else {
-        // Demo response
+        // Demo response (no runtime connected)
         setTimeout(() => {
           const assistantMsg: ChatMessage = {
             id: `msg-${Date.now()}-assistant`,

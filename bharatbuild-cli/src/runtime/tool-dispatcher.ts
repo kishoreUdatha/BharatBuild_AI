@@ -3,11 +3,16 @@
  * Routes tool calls from the agent loop to the correct implementation.
  *
  * Registered tools:
- *   Filesystem : read_file, write_file, list_files, find_files, apply_patch, delete_file
- *   Shell      : execute_command
- *   Git        : git_status, git_diff, git_log, git_add, git_commit
- *   Search     : search_code, search_files
- *   Agent      : subagent, delegate, goal, thinking, knowledge, todo_list, guide
+ *   Built-in (14 Kiro-style):
+ *     read, write, glob, grep, shell, code, web_fetch, web_search,
+ *     knowledge, subagent, todo_list, goal, introspect, use_aws
+ *
+ *   Legacy (backward compat):
+ *     Filesystem : read_file, write_file, list_files, find_files, apply_patch, delete_file
+ *     Shell      : execute_command
+ *     Git        : git_status, git_diff, git_log, git_add, git_commit
+ *     Search     : search_code, search_files
+ *     Agent      : delegate, thinking, guide
  */
 
 import { EventStream } from "./event-stream.js";
@@ -54,6 +59,12 @@ import {
   type WebFetchInput, type WebSearchInput,
 } from "../tools/web/index.js";
 import type { MCPClient } from "../mcp/mcp-client.js";
+import {
+  createToolRegistry,
+  BuiltInToolRegistry,
+  checkToolApproval,
+  applyApprovalDecision,
+} from "../tools/built-in/index.js";
 
 export interface ToolResult {
   toolUseId: string;
@@ -65,10 +76,44 @@ export class ToolDispatcher {
   private _events: EventStream;
   private _modelClient?: import("../runtime/agent-loop.js").ModelClient;
   private _mcp?: MCPClient;
+  private _builtInRegistry: BuiltInToolRegistry;
 
   constructor(events: EventStream, modelClient?: import("../runtime/agent-loop.js").ModelClient) {
     this._events = events;
     this._modelClient = modelClient;
+    this._builtInRegistry = createToolRegistry();
+  }
+
+  /** Get the built-in tool registry (for /tools display and approval management) */
+  getBuiltInRegistry(): BuiltInToolRegistry {
+    return this._builtInRegistry;
+  }
+
+  /** Render built-in tools list (Kiro-style output) */
+  renderBuiltInToolsList(): string {
+    return this._builtInRegistry.renderToolsList();
+  }
+
+  /** Allow a built-in tool for the session (skip approval) */
+  trustBuiltInTool(toolName: string): void {
+    this._builtInRegistry.allowTool(toolName);
+  }
+
+  /** Deny a built-in tool for the session */
+  denyBuiltInTool(toolName: string): void {
+    this._builtInRegistry.denyTool(toolName);
+  }
+
+  /** Reset all built-in tool approvals */
+  resetBuiltInApprovals(): void {
+    this._builtInRegistry.resetSessionApprovals();
+  }
+
+  /** Trust all built-in tools (skip all confirmations) */
+  trustAllBuiltInTools(): void {
+    for (const tool of this._builtInRegistry.getAll()) {
+      this._builtInRegistry.allowTool(tool.definition.name);
+    }
   }
 
   /** Inject model client (needed for guide tool) */
@@ -87,6 +132,9 @@ export class ToolDispatcher {
   /** Returns all tool definitions for sending to the model */
   getDefinitions(): object[] {
     return [
+      // ── 14 Kiro-style built-in tools ──────────────────────────────────
+      ...this._builtInRegistry.getModelToolDefinitions(),
+      // ── Legacy tools (backward compat) ────────────────────────────────
       // Filesystem
       readFileDefinition,
       writeFileDefinition,
@@ -136,11 +184,35 @@ export class ToolDispatcher {
     let result: { content: string; isError: boolean };
 
     try {
-      // MCP tools are namespaced, so they can never shadow a built-in.
-      if (this._mcp?.handles(toolName)) {
+      // ── Try built-in tools first (14 Kiro-style tools) ──────────────────
+      if (this._builtInRegistry.has(toolName)) {
+        // Check approval status
+        const decision = await checkToolApproval(
+          this._builtInRegistry,
+          toolName,
+          input,
+          { nonInteractive: !!process.env["BHARATBUILD_TRUST_ALL_TOOLS"] }
+        );
+
+        if (decision === "deny") {
+          result = { content: `Tool '${toolName}' was denied.`, isError: true };
+        } else if (decision === "cancel") {
+          result = { content: "Tool execution cancelled by user.", isError: false };
+        } else {
+          // Apply "allow_always" to registry
+          applyApprovalDecision(this._builtInRegistry, toolName, decision);
+          // Execute
+          const tool = this._builtInRegistry.get(toolName)!;
+          result = await tool.execute(input, signal);
+        }
+      }
+      // ── MCP tools (namespaced, never shadow built-in) ───────────────────
+      else if (this._mcp?.handles(toolName)) {
         result = await this._mcp.callTool(toolName, input);
-      } else
-      switch (toolName) {
+      }
+      // ── Legacy tools (backward compat) ──────────────────────────────────
+      else {
+        switch (toolName) {
         // ── Filesystem ────────────────────────────────────────────────────
         case "read_file":
           result = await readFile(input as Parameters<typeof readFile>[0]);
@@ -245,6 +317,7 @@ export class ToolDispatcher {
         // ── Unknown ───────────────────────────────────────────────────────
         default:
           result = { content: `Unknown tool: ${toolName}`, isError: true };
+        }
       }
     } catch (err) {
       result = { content: err instanceof Error ? err.message : String(err), isError: true };
