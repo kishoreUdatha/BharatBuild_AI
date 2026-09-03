@@ -25,6 +25,21 @@ export async function checkToolApproval(
   if (status === "allowed") return "allow";
   if (status === "denied") return "deny";
 
+  // --trust-all-tools means "run without asking". This gate is separate from
+  // the agent loop's permission check and never saw the flag, so built-in
+  // tools (write, shell, grep, glob…) stayed at "approval_required".
+  if (process.env["BHARATBUILD_TRUST_ALL_TOOLS"] === "1") return "allow";
+
+  // A full-screen UI installs its own asker. Falling through to the readline
+  // prompt below would fight ink for stdin and be painted over immediately,
+  // so the user could never answer and every call ended up denied.
+  const { getPermissionAsker } = await import("../../permissions/permission-manager.js");
+  const asker = getPermissionAsker();
+  if (asker) {
+    const decision = await asker(toolName, params);
+    return decision === "allow" ? "allow" : decision === "cancel" ? "cancel" : "deny";
+  }
+
   // Status is "approval_required" — need to prompt
   if (options?.nonInteractive || !process.stdin.isTTY) {
     // Can't prompt — deny by default in non-interactive mode

@@ -4,6 +4,11 @@ import React, { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AdminThemeProvider, useAdminTheme } from '@/contexts/AdminThemeContext'
 import { useAdminStore } from '@/store/adminStore'
+
+// Who the admin panel is for. `manager` is BharatBuild's operations staff:
+// they run colleges and trainers from here, and are refused billing, plans
+// and API keys by the server rather than by this list.
+const ADMIN_ROLES = ['admin', 'manager']
 import AdminSidebar from '@/components/admin/AdminSidebar'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -27,8 +32,11 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
   }, [isLoading, isAuthenticated, router])
 
   useEffect(() => {
-    // Check if user is admin
-    if (!isLoading && user && user.role !== 'admin' && !user.is_superuser) {
+    // Check if user may reach the admin panel. A platform manager runs the
+    // operations screens here, so this list has to match the server's guard -
+    // while it did not, a manager the API happily served was bounced to the
+    // builder by the browser.
+    if (!isLoading && user && !ADMIN_ROLES.includes(user.role ?? '') && !user.is_superuser) {
       router.push('/build')
     }
   }, [isLoading, user, router])
@@ -53,7 +61,7 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
   }
 
   // Check admin role
-  if (user && user.role !== 'admin' && !user.is_superuser) {
+  if (user && !ADMIN_ROLES.includes(user.role ?? '') && !user.is_superuser) {
     return (
       <div className={`min-h-screen flex items-center justify-center ${isDark ? 'bg-[#121212]' : 'bg-gray-50'}`}>
         <div className={`text-center p-8 rounded-xl ${isDark ? 'bg-[#1a1a1a]' : 'bg-white'}`}>

@@ -57,21 +57,68 @@ Register-ArgumentCompleter -Native -CommandName bharatbuild -ScriptBlock {
 }`;
 }
 
-export function installCompletion(shell?: string): string {
-  const detected = shell ?? (process.env["SHELL"] ?? "bash").split("/").pop() ?? "bash";
-  let script = "";
-  let installPath = "";
-  if (detected.includes("zsh")) {
-    script = generateZshCompletion();
-    installPath = path.join(os.homedir(), ".zsh", "completions", "_bharatbuild");
-  } else if (detected.includes("powershell") || process.platform === "win32") {
-    script = generatePowerShellCompletion();
-    installPath = path.join(os.homedir(), "Documents", "PowerShell", "bharatbuild-completion.ps1");
-  } else {
-    script = generateBashCompletion();
-    installPath = path.join(os.homedir(), ".bash_completion.d", "bharatbuild");
+/** Shells this can actually generate a completion script for. */
+export const SUPPORTED_SHELLS = ["bash", "zsh", "powershell"] as const;
+export type SupportedShell = (typeof SUPPORTED_SHELLS)[number];
+
+/**
+ * Work out which shell to target.
+ *
+ * The platform check used to sit in the same condition as the name check:
+ *   detected.includes("powershell") || process.platform === "win32"
+ * On Windows that second clause swallowed everything, so `autocomplete bash`
+ * installed a PowerShell script and then told the user to source a .ps1 from
+ * ~/.bashrc. The platform is a fallback for when nothing was asked for, not an
+ * override of what was.
+ */
+export function resolveShell(requested?: string): SupportedShell {
+  if (requested) {
+    const name = requested.toLowerCase().trim();
+    if (name === "pwsh" || name === "powershell") return "powershell";
+    if (name === "zsh") return "zsh";
+    if (name === "bash") return "bash";
+    throw new Error(
+      `Unsupported shell '${requested}'. Supported: ${SUPPORTED_SHELLS.join(", ")}.`,
+    );
   }
+  // Nothing asked for: infer. $SHELL is the better signal where it exists,
+  // because a user on Git Bash for Windows wants bash, not PowerShell.
+  const fromEnv = (process.env["SHELL"] ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  if (fromEnv.includes("zsh")) return "zsh";
+  if (fromEnv.includes("bash")) return "bash";
+  if (fromEnv.includes("pwsh") || fromEnv.includes("powershell")) return "powershell";
+  return process.platform === "win32" ? "powershell" : "bash";
+}
+
+/** The script and where it belongs, for one resolved shell. */
+export function completionFor(shell: SupportedShell): { script: string; installPath: string; hint: string } {
+  switch (shell) {
+    case "zsh":
+      return {
+        script: generateZshCompletion(),
+        installPath: path.join(os.homedir(), ".zsh", "completions", "_bharatbuild"),
+        hint: "Add to ~/.zshrc: fpath=(~/.zsh/completions $fpath) && autoload -U compinit && compinit",
+      };
+    case "powershell":
+      return {
+        script: generatePowerShellCompletion(),
+        installPath: path.join(os.homedir(), "Documents", "PowerShell", "bharatbuild-completion.ps1"),
+        hint: "Add to your PowerShell profile: . <path>",
+      };
+    case "bash":
+      return {
+        script: generateBashCompletion(),
+        installPath: path.join(os.homedir(), ".bash_completion.d", "bharatbuild"),
+        hint: "Add to ~/.bashrc: source <path>",
+      };
+  }
+}
+
+export function installCompletion(shell?: string): string {
+  const target = resolveShell(shell);
+  const { script, installPath } = completionFor(target);
   fs.mkdirSync(path.dirname(installPath), { recursive: true });
   fs.writeFileSync(installPath, script);
   return installPath;
 }
+

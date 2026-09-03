@@ -62,13 +62,17 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
-          cache-dependency-path: backend/requirements-minimal.txt
+          cache-dependency-path: backend/requirements.txt
 
+      # requirements-minimal.txt now includes requirements.txt (the set that
+      # actually ships) plus the sqlite driver. The packages previously listed
+      # by hand here (sqlalchemy, asyncpg, redis, celery, httpx, aiosqlite) come
+      # from there now, so CI and production can no longer drift apart.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-minimal.txt
-          pip install pytest pytest-asyncio pytest-cov httpx faker aiosqlite flake8 sqlalchemy asyncpg redis celery
+          pip install pytest pytest-asyncio pytest-cov faker flake8
 
       - name: Run Ruff linting
         run: |
@@ -92,7 +96,10 @@ jobs:
           CELERY_RESULT_BACKEND: 'redis://localhost:6379/1'
           USER_PROJECTS_PATH: '/tmp/projects'
         run: |
-          pytest tests/unit -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=15
+          # Gate ratcheted 15 -> 17. Measured coverage of tests/unit is 17.28%,
+          # so this locks in the current level without being unreachable. Raise
+          # it as coverage improves; never lower it to make a build pass.
+          pytest tests/unit -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=17
 
       - name: Run integration tests
         env:

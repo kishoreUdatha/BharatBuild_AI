@@ -5,7 +5,7 @@ Usage:
     from app.llm import unified_llm_client
     
     # Generate completion
-    result = await unified_llm_client.generate("claude-3-5-sonnet-20241022", "Hello!")
+    result = await unified_llm_client.generate("claude-sonnet-5", "Hello!")
     
     # Stream completion
     async for chunk in unified_llm_client.generate_stream("gpt-4o", "Write a story"):

@@ -21,6 +21,18 @@ const nextConfig = {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
     NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL,
   },
+  // Proxy the API through this origin so the app can be served from a single
+  // public hostname - a tunnel, a LAN address, anything. Without it the
+  // browser bundle has to name the backend absolutely, which means a second
+  // public URL and a CORS entry for every host the app is ever reached on.
+  async rewrites() {
+    return [
+      {
+        source: '/api/v1/:path*',
+        destination: `${process.env.BACKEND_ORIGIN || 'http://backend:8000'}/api/v1/:path*`,
+      },
+    ]
+  },
   // Headers for WebContainer support (cross-origin isolation)
   // Required for SharedArrayBuffer which WebContainer uses
   async headers() {

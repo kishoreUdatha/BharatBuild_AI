@@ -165,10 +165,12 @@ RUN pip install tensorflow[and-cuda]==2.15.0
 # ============================================
 # Copy and install Python requirements
 # ============================================
-COPY requirements.txt .
+# requirements.txt is the runtime set; requirements-ml.txt holds the heavy
+# research extras (spacy/nltk/transformers/...) that only this image needs.
+COPY requirements.txt requirements-ml.txt .
 
 # Install requirements (excluding torch/tensorflow which are already installed)
-RUN pip install --no-cache-dir -r requirements.txt \
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-ml.txt \
     --ignore-installed torch torchvision torchaudio tensorflow 2>&1 | tee /tmp/pip-install.log || \
     (cat /tmp/pip-install.log && exit 1)
 

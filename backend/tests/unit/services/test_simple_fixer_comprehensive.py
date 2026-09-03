@@ -111,17 +111,15 @@ class TestModelSelection:
 
         assert "haiku" in model.lower()
 
-    def test_select_sonnet_for_moderate(self, fixer):
-        """Test Sonnet is selected for MODERATE errors"""
-        model = fixer._select_model(ErrorComplexity.MODERATE)
+    # See test_simple_fixer.py: assert routing to the tier slot, not the
+    # resolved model string, so a cost-saving env profile can't fail the test.
+    def test_select_sonnet_tier_for_moderate(self, fixer):
+        """MODERATE errors route to the sonnet-tier slot"""
+        assert fixer._select_model(ErrorComplexity.MODERATE) == fixer.model_sonnet
 
-        assert "sonnet" in model.lower()
-
-    def test_select_sonnet_for_complex(self, fixer):
-        """Test Sonnet is selected for COMPLEX errors"""
-        model = fixer._select_model(ErrorComplexity.COMPLEX)
-
-        assert "sonnet" in model.lower()
+    def test_select_sonnet_tier_for_complex(self, fixer):
+        """COMPLEX errors route to the sonnet-tier slot"""
+        assert fixer._select_model(ErrorComplexity.COMPLEX) == fixer.model_sonnet
 
 
 class TestCostEstimation:

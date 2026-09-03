@@ -1,0 +1,112 @@
+name: Tenant Isolation
+
+# Proves that one college cannot read another's data.
+#
+# This exists because the portal shipped for a single institution and its list
+# queries filtered on academic year, department and section - never on the
+# institution. A faculty account created at an unrelated college could read
+# every batch and download the full student roster with names, roll numbers,
+# mobile numbers and email addresses. The fix is only as durable as the check,
+# so the check runs on every push.
+#
+# Two things this job does deliberately:
+#
+#   * it seeds real data first. Run against an empty database every endpoint
+#     returns nothing and every assertion passes while proving nothing, which
+#     is the most dangerous shape a security test can take. The test refuses
+#     to run unless the fixture is present.
+#
+#   * it runs the functional suite alongside. Isolation is easy to "fix" by
+#     breaking the product - a filter that returns nothing for everybody
+#     passes every isolation check. The two suites only mean something together.
+
+on:
+  push:
+    branches: [ master, main, 'chore/**', 'feat/**', 'fix/**' ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  isolation:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: bharatbuild
+          POSTGRES_PASSWORD: bharatbuild
+          POSTGRES_DB: bharatbuild_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://bharatbuild:bharatbuild@localhost:5432/bharatbuild_test
+      SECRET_KEY: ci-secret-key
+      JWT_SECRET_KEY: ci-jwt-secret
+      ANTHROPIC_API_KEY: ci-not-a-real-key
+      REQUIRE_CONTACT_VERIFICATION: 'False'
+      FILE_STORE_ROOT: /tmp/filestore
+      USER_PROJECTS_PATH: /tmp/projects
+      INSTITUTION_TIMEZONE: Asia/Kolkata
+      API_BASE: http://localhost:8000/api/v1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Apply migrations
+        run: |
+          cd backend
+          alembic upgrade head
+
+      - name: Seed the fixture college
+        # The isolation test asserts this data exists before measuring
+        # anything, so a seeding failure surfaces here rather than as a
+        # meaningless green run. batch_detail follows faculty because it fills
+        # in the documents and base papers the fetch-by-id probes ask for.
+        run: |
+          cd backend
+          python -m app.db.seed_faculty
+          python -m app.db.seed_batch_detail
+
+      - name: Start the API
+        run: |
+          cd backend
+          uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level warning &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8000/api/v1/health >/dev/null; then
+              echo "api up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "api did not start"; exit 1
+
+      - name: Cross-tenant isolation
+        run: |
+          cd backend
+          python "${{ github.workspace }}/backend/tests/integration/tenant_isolation_test.py"
+
+      - name: Functional suite
+        # Guards against "fixing" isolation by breaking the product. Runs
+        # second so an isolation failure is the headline.
+        run: |
+          cd backend
+          python "${{ github.workspace }}/backend/tests/integration/functional_check.py"

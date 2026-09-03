@@ -9,6 +9,11 @@ import type { ToolDefinition, ToolResult } from "../filesystem/index.js";
 
 const execFileAsync = promisify(execFile);
 
+/** Strip trailing whitespace only - leading columns are significant in porcelain. */
+function trimEnd(s: string): string {
+  return s.replace(/\s+$/, "");
+}
+
 async function runGit(
   args: string[],
   cwd?: string
@@ -20,10 +25,16 @@ async function runGit(
       timeout: 30_000,
       maxBuffer: 1_000_000,
     });
-    return { stdout: stdout.trim(), stderr: stderr.trim(), ok: true };
+    // Trailing only. `--porcelain` encodes the staged state in column 1 and
+    // the unstaged state in column 2, so an unstaged change starts with a
+    // space: " M alpha.txt". A full .trim() ate that column on the first line,
+    // which shifted everything left by one - the file was reported as staged
+    // when it was not, and `line.slice(3)` returned "lpha.txt" instead of
+    // "alpha.txt". The model then went looking for a file that did not exist.
+    return { stdout: trimEnd(stdout), stderr: trimEnd(stderr), ok: true };
   } catch (err: unknown) {
     const e = err as { stdout?: string; stderr?: string; message?: string };
-    return { stdout: (e.stdout ?? "").trim(), stderr: (e.stderr ?? e.message ?? "").trim(), ok: false };
+    return { stdout: trimEnd(e.stdout ?? ""), stderr: trimEnd(e.stderr ?? e.message ?? ""), ok: false };
   }
 }
 

@@ -208,7 +208,7 @@ Requirements:
 - Output: <file path="{file_path}">CODE</file>"""
 
         response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5",
             max_tokens=8192,
             system=python_system,
             messages=[{"role": "user", "content": user_prompt}]
@@ -272,7 +272,7 @@ Requirements:
 - Output: <file path="{file_path}">CODE</file>"""
 
         response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5",
             max_tokens=8192,
             system=react_system,
             messages=[{"role": "user", "content": user_prompt}]

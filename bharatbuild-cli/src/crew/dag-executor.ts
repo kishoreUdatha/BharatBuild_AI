@@ -14,6 +14,7 @@ import { AgentRuntime } from "../runtime/agent-runtime.js";
 import { createModelClientAuto } from "../models/model-router.js";
 import { loadConfig } from "../config/config.js";
 import type { AgentEvent } from "../runtime/event-stream.js";
+import { rolePrompt as rolePromptFor } from "../agents/apply-agent.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -54,16 +55,6 @@ export interface DAGResult {
 
 // ── Agent system prompts ───────────────────────────────────────────────────
 
-const AGENT_PROMPTS: Record<string, string> = {
-  default:  "You are BharatBuild AI, an expert software engineer. Complete the given task thoroughly.",
-  planner:  "You are a senior software architect. Create clear, ordered implementation plans.",
-  coder:    "You are an expert software engineer. Write clean, production-quality code.",
-  tester:   "You are a QA engineer. Write comprehensive tests and ensure they pass.",
-  fixer:    "You are a debugging expert. Identify root causes and apply minimal fixes.",
-  reviewer: "You are a code reviewer. Check for bugs, security issues, and quality problems. " +
-            "If changes are needed, include 'NEEDS_CHANGES' in your response and describe what to fix.",
-};
-
 // ── Stage runner ───────────────────────────────────────────────────────────
 
 async function runStage(
@@ -96,7 +87,7 @@ async function runStage(
     : stage.task;
 
   const runtime = new AgentRuntime({ config: { ...config, model: activeModel }, model: modelClient });
-  const rolePrompt = AGENT_PROMPTS[agentRole] ?? AGENT_PROMPTS["default"]!;
+  const rolePrompt = rolePromptFor(agentRole);
   runtime.context.setSystemPrompt(
     `${rolePrompt}\n\nWorking directory: ${config.workingDir}\n` +
     `You have access to all tools. Complete the task fully, then stop.`

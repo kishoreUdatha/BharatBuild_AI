@@ -94,6 +94,30 @@ class TempSessionStorage:
         """Get path for files within a session"""
         return self._get_session_path(session_id) / "files"
 
+    def _safe_file_path(self, session_id: str, file_path: str) -> Optional[Path]:
+        """
+        Resolve `file_path` inside the session's files directory, or return None
+        if it escapes.
+
+        `file_path` arrives straight from a `{file_path:path}` URL segment, so it
+        can contain `../` and absolute paths. Joining it onto the session dir
+        without this check allowed reading and WRITING arbitrary files on the
+        backend host.
+        """
+        # Reject a session_id that is not a single plain path segment.
+        if not session_id or "/" in session_id or "\\" in session_id or session_id in (".", ".."):
+            return None
+
+        root = self._get_files_path(session_id).resolve()
+        candidate = (root / file_path).resolve()
+
+        if candidate != root and root not in candidate.parents:
+            logger.warning(
+                f"[TempStorage] Rejected path escaping session {session_id}: {file_path!r}"
+            )
+            return None
+        return candidate
+
     def _get_plan_path(self, session_id: str) -> Path:
         """Get path for plan.json"""
         return self._get_session_path(session_id) / "plan.json"
@@ -192,7 +216,9 @@ class TempSessionStorage:
             logger.error(f"Session {session_id} does not exist")
             return False
 
-        full_path = self._get_files_path(session_id) / file_path
+        full_path = self._safe_file_path(session_id, file_path)
+        if full_path is None:
+            return False
 
         # Create parent directories
         full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -217,7 +243,9 @@ class TempSessionStorage:
             logger.error(f"Session {session_id} does not exist")
             return False
 
-        full_path = self._get_files_path(session_id) / file_path
+        full_path = self._safe_file_path(session_id, file_path)
+        if full_path is None:
+            return False
 
         # Create parent directories
         full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -237,9 +265,8 @@ class TempSessionStorage:
 
     def read_file(self, session_id: str, file_path: str) -> Optional[str]:
         """Read a file from the session (sync)"""
-        full_path = self._get_files_path(session_id) / file_path
-
-        if not full_path.exists():
+        full_path = self._safe_file_path(session_id, file_path)
+        if full_path is None or not full_path.exists():
             return None
 
         with open(full_path, 'r', encoding='utf-8') as f:
@@ -250,9 +277,8 @@ class TempSessionStorage:
 
     async def read_file_async(self, session_id: str, file_path: str) -> Optional[str]:
         """Read a file from the session (async)"""
-        full_path = self._get_files_path(session_id) / file_path
-
-        if not full_path.exists():
+        full_path = self._safe_file_path(session_id, file_path)
+        if full_path is None or not full_path.exists():
             return None
 
         async with aiofiles.open(full_path, 'r', encoding='utf-8') as f:

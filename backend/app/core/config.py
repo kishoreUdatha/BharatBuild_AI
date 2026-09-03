@@ -126,11 +126,13 @@ class Settings(BaseSettings):
     ANTHROPIC_BASE_URL: str = ""  # Empty means use default Anthropic URL
     USE_MOCK_CLAUDE: bool = False
     # AI Model Configuration - ALL models from environment, no hardcoded strings.
-    # Defaults are all haiku (safest/cheapest fallback). The .env overrides these.
+    # Each default is the CURRENT model of that tier. Defaulting every tier to
+    # haiku made a missing env var a silent capability downgrade rather than a
+    # visible error - see app/core/models.py.
     CLAUDE_HAIKU_MODEL: str = "claude-haiku-4-5"
-    CLAUDE_SONNET_MODEL: str = "claude-haiku-4-5"
-    CLAUDE_OPUS_MODEL: str = "claude-haiku-4-5"
-    CLAUDE_DEFAULT_MODEL: str = "claude-haiku-4-5"
+    CLAUDE_SONNET_MODEL: str = "claude-sonnet-5"
+    CLAUDE_OPUS_MODEL: str = "claude-opus-5"
+    CLAUDE_DEFAULT_MODEL: str = "claude-sonnet-5"
     CLAUDE_MAX_TOKENS: int = 4096
     CLAUDE_TEMPERATURE: float = 0.7
     USE_PLAIN_TEXT_RESPONSES: bool = True
@@ -154,6 +156,35 @@ class Settings(BaseSettings):
     S3_BUCKET: str = ""  # Alias for S3_BUCKET_NAME (used in ECS task definition)
     MINIO_ENDPOINT: str = "localhost:9000"
     STORAGE_URL_EXPIRY: int = 3600  # 1 hour
+
+    # Academic file store (base papers, registration documents, submissions).
+    # Under /app/uploads, which compose mounts as a named volume so the store
+    # survives a rebuild instead of living in the bind-mounted source tree.
+    FILE_STORE_ROOT: str = "/app/uploads/store"
+    MAX_UPLOAD_MB: int = 25
+
+    # The institution's local timezone. Containers run UTC, and India is
+    # UTC+5:30, so between 18:30 and midnight local the server's date is a day
+    # behind the coordinator's - which made taking evening attendance fail as
+    # "a day that has not happened". Anything that reasons about "today" as a
+    # person experiences it has to use this, not the server clock.
+    INSTITUTION_TIMEZONE: str = "Asia/Kolkata"
+
+    # Whether registration insists the email (and any mobile given) was proven
+    # with a one-time code.
+    #
+    # ON by default. With it OFF, anyone can create an account against an
+    # address they do not control - a student can register as a classmate, or
+    # as staff. This deployment runs with it off deliberately: there is no mail
+    # provider, and the gate fails closed, so leaving it on means nobody can
+    # register at all.
+    #
+    # What carries the weight instead is faculty verification. A self-registered
+    # student is VERIFICATION_PENDING and appears on no roster until a
+    # coordinator confirms them against the college's own records, which is a
+    # stronger check than an email round-trip anyway. Every registration that
+    # skips the code is logged individually so they can be audited later.
+    REQUIRE_CONTACT_VERIFICATION: bool = True
 
     @property
     def effective_bucket_name(self) -> str:
@@ -182,6 +213,18 @@ class Settings(BaseSettings):
     GITHUB_CLIENT_ID: str = ""
     GITHUB_CLIENT_SECRET: str = ""
     GITHUB_REDIRECT_URI: str = "http://localhost:3000/auth/callback/github"
+
+    # A GitHub App, used to create a batch's repository inside its college's
+    # own organisation. Deliberately not a student's OAuth token: GitHub's
+    # `repo` scope would grant full control of every private repository that
+    # student owns, and the college - not the platform, and not whichever
+    # teammate clicked first - should keep the work after they graduate.
+    #
+    # The private key is a PEM. It belongs in the environment, never in the
+    # repository; without it repository creation simply stays switched off and
+    # a team connects one by hand as before.
+    GITHUB_APP_ID: str = ""
+    GITHUB_APP_PRIVATE_KEY: str = ""
 
     # ==========================================
     # Frontend URL (for OAuth callbacks)
@@ -214,6 +257,21 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
+    # Whether to issue STARTTLS. Left unset it is inferred from the port
+    # (implicit TLS on 465, STARTTLS otherwise); set it explicitly for
+    # relays that speak plain SMTP, such as a local mail catcher.
+    SMTP_USE_TLS: Optional[bool] = None
+    # --- SMS / mobile OTP (MSG91) ---
+    # Declared explicitly: an env var with no field here is silently ignored by
+    # pydantic settings, which is how SMTP_USE_TLS appeared to do nothing.
+    MSG91_AUTH_KEY: Optional[str] = None
+    MSG91_OTP_TEMPLATE_ID: Optional[str] = None
+    MSG91_SENDER_ID: Optional[str] = None
+    TWILIO_SID: Optional[str] = None
+    TWILIO_TOKEN: Optional[str] = None
+    TWILIO_SMS_NUMBER: Optional[str] = None
+
+
 
     # Common Email Settings
     EMAIL_FROM: str = "noreply@bharatbuild.ai"
@@ -244,6 +302,11 @@ class Settings(BaseSettings):
     # Frontend
     # ==========================================
     NEXT_PUBLIC_API_URL: str = "http://localhost:8000/api/v1"
+
+    # Where a code-hosting provider can reach this API from the public
+    # internet. Only needed for repository push webhooks: GitHub cannot post
+    # to a localhost address, so a local instance needs a tunnel here.
+    WEBHOOK_PUBLIC_URL: str = ""
     NEXT_PUBLIC_WS_URL: str = "ws://localhost:8000/ws"
 
     # ==========================================
@@ -294,6 +357,12 @@ class Settings(BaseSettings):
     DEV_MOCK_TOTAL_TOKENS: int = 100000
     DEV_MOCK_USED_TOKENS: int = 5000
     DEV_MOCK_MONTHLY_ALLOWANCE: int = 50000
+
+    # Comma-separated feature names to unlock for the Free tier in local dev
+    # (e.g. "agentic_mode,document_generation"). Ignored unless is_dev_mode().
+    # Use this instead of editing FREE_TIER_FEATURES so the paywall cannot be
+    # disabled by an accidental commit.
+    FREE_TIER_UNLOCKED_FEATURES: str = ""
 
     # Token Packages (parsed from environment)
     TOKEN_PACKAGE_STARTER: str = "50000,9900,Starter Pack"

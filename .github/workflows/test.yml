@@ -26,14 +26,17 @@ jobs:
       with:
         python-version: '3.11'
         cache: 'pip'
-        cache-dependency-path: backend/requirements-minimal.txt
+        cache-dependency-path: backend/requirements.txt
 
+    # requirements-minimal.txt now includes requirements.txt (the set that
+    # actually ships) plus the sqlite driver, so CI tests the same packages
+    # production runs instead of a hand-maintained subset.
     - name: Install dependencies
       run: |
         cd backend
         python -m pip install --upgrade pip
         pip install -r requirements-minimal.txt
-        pip install pytest pytest-asyncio pytest-cov httpx faker aiosqlite
+        pip install pytest pytest-asyncio pytest-cov faker
 
     - name: Run unit tests with coverage
       env:
@@ -48,7 +51,9 @@ jobs:
         USER_PROJECTS_PATH: '/tmp/projects'
       run: |
         cd backend
-        pytest tests/ -v --tb=short --cov=app --cov-report=term-missing --cov-fail-under=15
+        # Gate ratcheted 15 -> 17 (measured: 17.28% on tests/unit; tests/ is a
+        # superset so it can only be higher). Raise as coverage improves.
+        pytest tests/ -v --tb=short --cov=app --cov-report=term-missing --cov-fail-under=17
 
   # Block deployment if tests fail
   deploy:

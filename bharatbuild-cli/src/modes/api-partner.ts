@@ -8,6 +8,7 @@ import readline from "readline";
 import { BharatBuildClient, APIError } from "../api/client.js";
 import { Spinner, printTable } from "../ui/spinner.js";
 import type { CLIConfig } from "../config/config.js";
+import { TOKENS_BALANCE, parseTokenBalance, formatTokenBalance } from "../api/token-balance.js";
 
 function ask(rl: readline.Interface, q: string): Promise<string> {
   return new Promise((resolve) =>
@@ -26,15 +27,18 @@ async function showTokenBalance(client: BharatBuildClient): Promise<void> {
   const spinner = new Spinner();
   spinner.start("Fetching token balance…");
   try {
-    const data = await client.get<Record<string, unknown>>("/api/v1/tokens/balance");
+    const data = await client.get<Record<string, unknown>>(TOKENS_BALANCE);
     spinner.succeed();
 
-    const balance = Number(data.balance ?? data.tokens_remaining ?? data.available ?? 0);
-    const used = Number(data.used ?? data.tokens_used ?? 0);
-    const total = Number(data.total ?? data.total_tokens ?? (balance + used));
+    // See token-balance.ts: the server sends `remaining_tokens`/`used_tokens`,
+    // not `tokens_remaining`/`used`, so all three of these read 0.
+    const b = parseTokenBalance(data);
+    const balance = b.remaining;
+    const used = b.used;
+    const total = b.total;
 
     console.log(chalk.bold("\n🪙 Token Balance\n"));
-    console.log(`  ${chalk.bold("Available:")}  ${chalk.green(balance.toLocaleString("en-IN"))}`);
+    console.log(`  ${chalk.bold("Available:")}  ${chalk.green(formatTokenBalance(b))}`);
     if (used) console.log(`  ${chalk.bold("Used:")}       ${chalk.yellow(used.toLocaleString("en-IN"))}`);
     if (total) console.log(`  ${chalk.bold("Total:")}      ${total.toLocaleString("en-IN")}`);
 

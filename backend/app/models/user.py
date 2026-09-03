@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, Enum as SQLEnum, Integer, Text
+from sqlalchemy import Boolean, Column, DateTime, Enum as SQLEnum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -13,8 +13,20 @@ class UserRole(str, enum.Enum):
     DEVELOPER = "developer"
     FOUNDER = "founder"
     FACULTY = "faculty"
+    TRAINER = "trainer"
+    # BharatBuild's own operations staff: they run every college's day to day
+    # and the trainers working across them, but not the business itself -
+    # revenue, plans and API keys stay with the operator (`is_superuser`).
+    MANAGER = "manager"
     ADMIN = "admin"
     API_PARTNER = "api_partner"
+
+
+# Faculty and trainers are both college staff. Either may be a batch's guide or
+# reviewer, so anywhere the code means "a staff member who can be assigned to a
+# batch" it must accept both - filtering on UserRole.FACULTY alone would make
+# every trainer invisible to guide and reviewer pickers.
+COLLEGE_STAFF_ROLES = (UserRole.FACULTY, UserRole.TRAINER)
 
 
 class User(Base):
@@ -52,6 +64,7 @@ class User(Base):
     course = Column(String(100), nullable=True)  # e.g., B.Tech, MCA, M.Tech
     year_semester = Column(String(50), nullable=True)  # e.g., 4th Year / 8th Semester
     batch = Column(String(20), nullable=True)  # e.g., 2021-2025
+    section = Column(String(10), nullable=True)  # e.g., A, B, C
 
     # Guide/Mentor Details
     guide_name = Column(String(255), nullable=True)  # e.g., Dr. Smith
@@ -59,7 +72,7 @@ class User(Base):
     hod_name = Column(String(255), nullable=True)  # e.g., Dr. Johnson
 
     # College fields (for students and faculty) - legacy
-    college_id = Column(GUID, nullable=True)
+    college_id = Column(GUID, ForeignKey("colleges.id"), nullable=True, index=True)
     batch_id = Column(GUID, nullable=True)
 
     # Password reset fields

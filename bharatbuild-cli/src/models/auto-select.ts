@@ -24,6 +24,7 @@
 
 import { MODEL_REGISTRY, type ModelInfo } from "./model-registry.js";
 import { MODEL_TIERS } from "../config/constants.js";
+import { availableProviders } from "../auth/provider-key.js";
 
 export type TaskComplexity = "simple" | "moderate" | "complex" | "expert";
 export type EffortLevel    = "low" | "medium" | "high" | "xhigh" | "max";
@@ -106,9 +107,16 @@ const EFFORT_PROFILES: Record<EffortLevel, EffortProfile> = {
 
 export function detectAvailableProviders(): string[] {
   const p: string[] = [];
-  if (process.env["ANTHROPIC_API_KEY"])                               p.push("anthropic");
-  if (process.env["OPENAI_API_KEY"])                                  p.push("openai");
-  if (process.env["GEMINI_API_KEY"] || process.env["GOOGLE_API_KEY"]) p.push("google");
+  // Through the shared resolver, so a key stored on disk counts. This read the
+  // environment directly, so once keys could be stored the candidate list came
+  // back empty and every task — "simple" or "expert" — hard-fell-back to the
+  // cheapest model. The complexity was still computed, then discarded.
+  const stored = availableProviders();
+  if (stored.includes("anthropic"))                                   p.push("anthropic");
+  if (stored.includes("openai"))                                      p.push("openai");
+  // The registry calls Gemini's provider "google"; the key store calls it
+  // "gemini". Same thing, two spellings.
+  if (stored.includes("gemini"))                                      p.push("google");
   if (process.env["AWS_ACCESS_KEY_ID"])                               p.push("bedrock");
   if (process.env["DEEPSEEK_API_KEY"])                                p.push("deepseek");
   if (process.env["MINIMAX_API_KEY"])                                 p.push("minimax");

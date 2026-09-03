@@ -8,6 +8,7 @@ import { BharatBuildClient } from "../api/client.js";
 import { Spinner } from "../ui/spinner.js";
 import { loadConfig } from "../config/config.js";
 import { createModelClientAuto, isAutoModel } from "../models/model-router.js";
+import { AGENTIC_CHAT_STREAM } from "../api/endpoints.js";
 
 export async function planCommand(
   goal: string | undefined,
@@ -50,14 +51,16 @@ export async function planCommand(
         if (chunk.type === "text_delta" && chunk.text) process.stdout.write(chunk.text);
       }
     } else {
-      const stream = client.streamSSE("/api/v1/chat/stream", {
+      const stream = client.streamSSE(AGENTIC_CHAT_STREAM, {
         model: usingAuto ? "auto" : activeModel,
         messages: [{ role: "user", content: planPrompt }],
         max_tokens: 4096,
       });
       for await (const event of stream) {
-        const d = event.data as Record<string, unknown>;
-        if (event.type === "text" || event.type === "text_delta") process.stdout.write(String(d.content ?? d.text ?? ""));
+        // See ask.ts: the payload is the event, there is no .data wrapper.
+        const e = event as unknown as Record<string, unknown>;
+        if (event.type === "text" || event.type === "text_delta") process.stdout.write(String(e["text"] ?? e["content"] ?? ""));
+        else if (event.type === "error") throw new Error(String(e["message"] ?? e["error"] ?? "stream error"));
         else if (event.type === "complete" || event.type === "done") break;
       }
     }

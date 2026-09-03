@@ -40,7 +40,14 @@ export const introspectTool: BuiltInTool = {
       return searchDocs(query);
     }
 
-    return { content: "Error: Provide either 'query' or 'doc_path'.", isError: true };
+    // The schema marks both arguments optional, so a bare call is valid and
+    // must not come back as an error. List what can be asked about instead -
+    // that is the useful answer to "introspect" with no question, and it lets
+    // the model pick a doc_path on the next turn rather than guessing.
+    return {
+      content: `Available documentation topics:\n${Object.keys(DOCS).map((k) => `  - ${k}`).join("\n")}\n\nCall again with doc_path=<topic> to read one, or query=<text> to search.`,
+      isError: false,
+    };
   },
 };
 

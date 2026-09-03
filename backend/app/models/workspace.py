@@ -29,8 +29,17 @@ class Workspace(Base):
     )
 
     id = Column(GUID, primary_key=True, default=generate_uuid)
+    # Whose workspace it is. Null for a batch's, which belongs to the team
+    # rather than to any one member - and SET NULL rather than CASCADE so
+    # removing a student cannot take the workspace, and through it the team's
+    # project, with them.
     # Note: index defined explicitly in __table_args__ as 'ix_workspaces_user_id', no need for index=True here
-    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(GUID, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    # The batch this workspace belongs to, if it is a team's rather than a
+    # person's. One per batch, holding that batch's single project.
+    batch_id = Column(GUID, ForeignKey("project_batches.id", ondelete="CASCADE"),
+                      nullable=True, unique=True, index=True)
 
     # Workspace info
     name = Column(String(255), nullable=False, default="My Workspace")

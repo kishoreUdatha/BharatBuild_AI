@@ -46,7 +46,15 @@ export const globTool: BuiltInTool = {
 
     if (!pattern) return { content: "Error: 'pattern' is required.", isError: true };
 
-    const rootDir = path.resolve(rootPath ?? ".");
+    // A pattern may carry its own absolute root, which is how a model usually
+    // writes one: `D:\proj\**\*.json` with no separate `path`. Matching is done
+    // against paths relative to rootDir, so taking the root from `path` alone
+    // searched the current directory for a pattern anchored somewhere else —
+    // reporting "No files found matching 'D:\proj\**\*.json' in 'C:\Users\you'",
+    // which is both wrong and a confusing thing to read.
+    const split = splitAbsolutePattern(pattern);
+    const rootDir = path.resolve(rootPath ?? split.root ?? ".");
+    const matchPattern = split.pattern;
 
     try {
       const stat = fs.statSync(rootDir);
@@ -61,14 +69,14 @@ export const globTool: BuiltInTool = {
     const ignorePatterns = loadGitignore(rootDir);
 
     // Convert glob pattern to regex
-    const regex = globToRegex(pattern);
+    const regex = globToRegex(matchPattern);
 
     // Walk and match
     const results: string[] = [];
     walkAndMatch(rootDir, rootDir, regex, ignorePatterns, results, limit, 0, maxDepth);
 
     if (results.length === 0) {
-      return { content: `No files found matching '${pattern}' in '${rootDir}'`, isError: false };
+      return { content: `No files found matching '${matchPattern}' in '${rootDir}'`, isError: false };
     }
 
     const output = results.join("\n");
@@ -120,6 +128,28 @@ function matchSimple(str: string, pattern: string): boolean {
       "$"
   );
   return re.test(str);
+}
+
+/**
+ * Separate an absolute pattern into the directory to search and the glob.
+ *
+ * A Windows pattern rooted at a drive becomes a root directory plus the
+ * wildcard tail. The split is at the first segment containing a wildcard, so
+ * everything before it is a real directory that can be walked.
+ */
+export function splitAbsolutePattern(pattern: string): { root?: string; pattern: string } {
+  const normalised = pattern.replace(/\\/g, "/");
+  if (!path.isAbsolute(normalised)) return { pattern: normalised };
+
+  const parts = normalised.split("/");
+  const wild = parts.findIndex((p) => /[*?[{]/.test(p));
+  // Absolute with no wildcard at all: the whole thing names one file, so match
+  // it by basename from its own directory.
+  if (wild === -1) {
+    return { root: path.dirname(normalised), pattern: path.basename(normalised) };
+  }
+  const root = parts.slice(0, wild).join("/");
+  return { root: root || "/", pattern: parts.slice(wild).join("/") };
 }
 
 function globToRegex(pattern: string): RegExp {

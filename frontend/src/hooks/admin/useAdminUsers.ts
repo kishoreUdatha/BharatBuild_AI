@@ -16,6 +16,10 @@ export interface AdminUser {
   is_superuser: boolean
   oauth_provider: string | null
   avatar_url: string | null
+  /** The institution this account belongs to, resolved from college_id.
+   *  Distinct from `college_name`, which is free text a student typed at
+   *  signup and is empty on every staff account. */
+  college: string | null
   created_at: string
   last_login: string | null
   projects_count: number
@@ -29,6 +33,7 @@ export interface AdminUser {
   course: string | null
   year_semester: string | null
   batch: string | null
+  section: string | null
   // Guide/Mentor Details
   guide_name: string | null
   guide_designation: string | null
@@ -41,6 +46,9 @@ export interface AdminUsersResponse {
   page: number
   page_size: number
   total_pages: number
+  /** Every tenant, so the filter offers real colleges rather than only the
+   *  ones that happen to be on the page being viewed. */
+  colleges: { id: string; name: string }[]
 }
 
 export interface UseAdminUsersParams {
@@ -65,6 +73,8 @@ export function useAdminUsers({
   const [totalPages, setTotalPages] = useState(0)
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState('')
+  const [collegeFilter, setCollegeFilter] = useState('')
+  const [colleges, setColleges] = useState<{ id: string; name: string }[]>([])
   const [activeFilter, setActiveFilter] = useState<boolean | null>(null)
   const [verifiedFilter, setVerifiedFilter] = useState<boolean | null>(null)
   const [sortBy, setSortBy] = useState(initialSortBy)
@@ -84,6 +94,7 @@ export function useAdminUsers({
 
       if (search) params.append('search', search)
       if (roleFilter) params.append('role', roleFilter)
+      if (collegeFilter) params.append('college_id', collegeFilter)
       if (activeFilter !== null) params.append('is_active', activeFilter.toString())
       if (verifiedFilter !== null) params.append('is_verified', verifiedFilter.toString())
 
@@ -92,6 +103,7 @@ export function useAdminUsers({
       setUsers(data.items || [])
       setTotal(data.total || 0)
       setTotalPages(data.total_pages || 1)
+      setColleges(data.colleges || [])
     } catch (err: any) {
       console.error('Failed to fetch users:', err)
       setError(err.message || 'Failed to fetch users')
@@ -99,7 +111,8 @@ export function useAdminUsers({
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, search, roleFilter, activeFilter, verifiedFilter, sortBy, sortOrder])
+  }, [page, pageSize, search, roleFilter, collegeFilter, activeFilter,
+      verifiedFilter, sortBy, sortOrder])
 
   useEffect(() => {
     fetchUsers()
@@ -125,6 +138,11 @@ export function useAdminUsers({
 
   const handleRoleFilter = useCallback((role: string) => {
     setRoleFilter(role)
+    setPage(1)
+  }, [])
+
+  const handleCollegeFilter = useCallback((id: string) => {
+    setCollegeFilter(id)
     setPage(1)
   }, [])
 
@@ -261,6 +279,8 @@ export function useAdminUsers({
     changePageSize,
     handleSearch,
     handleRoleFilter,
+    handleCollegeFilter,
+    colleges,
     handleActiveFilter,
     handleVerifiedFilter,
     handleSort,

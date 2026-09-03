@@ -239,7 +239,7 @@ Requirements:
 - Output ONLY the file content wrapped in: <file path="{file_path}">CODE</file>"""
 
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5",
         max_tokens=8192,
         system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}]

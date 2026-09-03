@@ -291,8 +291,10 @@ EOF
 
 # ==================== AI ====================
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
-CLAUDE_HAIKU_MODEL=claude-3-5-haiku-20241022
-CLAUDE_SONNET_MODEL=claude-sonnet-4-20250514
+CLAUDE_HAIKU_MODEL=claude-haiku-4-5
+CLAUDE_SONNET_MODEL=claude-sonnet-5
+CLAUDE_OPUS_MODEL=claude-opus-5
+CLAUDE_DEFAULT_MODEL=claude-sonnet-5
 CLAUDE_MAX_TOKENS=4096
 
 # ==================== AUTH ====================

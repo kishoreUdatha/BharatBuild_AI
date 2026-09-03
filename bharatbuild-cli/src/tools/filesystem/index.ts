@@ -6,6 +6,7 @@
 import fs from "fs";
 import path from "path";
 import { MAX_FILE_READ_BYTES } from "../../config/constants.js";
+import { buildUnifiedDiff, renderFileChange } from "./diff.js";
 
 export interface ToolDefinition {
   name: string;
@@ -100,8 +101,16 @@ export async function writeFile(input: {
       fs.appendFileSync(filePath, input.content, "utf8");
       return { content: `Appended ${input.content.length} chars to '${input.path}'`, isError: false };
     }
+    // Read the old contents first so the result can show what changed rather
+    // than just a byte count.
+    const existed = fs.existsSync(filePath);
+    const before = existed ? fs.readFileSync(filePath, "utf8") : "";
     fs.writeFileSync(filePath, input.content, "utf8");
-    return { content: `Written ${input.content.length} chars to '${input.path}'`, isError: false };
+    const summary = buildUnifiedDiff(before, input.content, input.path);
+    return {
+      content: renderFileChange(existed ? "Update" : "Create", input.path, summary),
+      isError: false,
+    };
   } catch (err) {
     return { content: `Error writing file: ${err instanceof Error ? err.message : err}`, isError: true };
   }
@@ -200,21 +209,55 @@ export const findFilesDefinition: ToolDefinition = {
   },
 };
 
-function matchPattern(name: string, pattern: string): boolean {
+/**
+ * Translate a glob to a regex.
+ *
+ * `*` stops at a directory separator and `**` crosses them, which is what
+ * every other glob in the toolset means by those. The previous version mapped
+ * both to `.*` and only ever tested the basename, so a pattern with a slash in
+ * it could not match anything - "gamma.ts" contains no slash - and the tool
+ * reported "No files found" with isError:false. A confident empty answer is
+ * worse than an error, because the model believes it.
+ */
+function globToRegExp(pattern: string): RegExp {
+  let out = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]!;
+    if (c === "*") {
+      if (pattern[i + 1] === "*") {
+        out += ".*";
+        i++;
+        // A leading `**/` should also match zero directories, so eat the slash.
+        if (pattern[i + 1] === "/") i++;
+      } else {
+        out += "[^/]*";
+      }
+    } else if (c === "?") {
+      out += "[^/]";
+    } else {
+      out += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return new RegExp("^" + out + "$", "i");
+}
+
+/**
+ * `name` is the basename, `rel` the path relative to the search root. A
+ * pattern containing a separator is matched against the relative path;
+ * otherwise against the basename, so "*.ts" keeps working unqualified.
+ */
+function matchPattern(name: string, pattern: string, rel?: string): boolean {
   if (!pattern.includes("*") && !pattern.includes("?")) {
     return name.toLowerCase().includes(pattern.toLowerCase());
   }
-  const re = new RegExp(
-    "^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$",
-    "i"
-  );
-  return re.test(name);
+  const subject = pattern.includes("/") ? (rel ?? name) : name;
+  return globToRegExp(pattern).test(subject);
 }
 
 function findInDir(
   dir: string,
   pattern: string,
-  opts: { maxResults: number; includeHidden: boolean },
+  opts: { maxResults: number; includeHidden: boolean; root: string },
   results: string[]
 ): void {
   if (results.length >= opts.maxResults) return;
@@ -225,7 +268,10 @@ function findInDir(
     if (!opts.includeHidden && e.name.startsWith(".")) continue;
     if (e.isDirectory() && IGNORED_DIRS.has(e.name)) continue;
     const full = path.join(dir, e.name);
-    if (e.isFile() && matchPattern(e.name, pattern)) results.push(full);
+    // Forward slashes whatever the platform: a glob is written with "/" even
+    // on Windows, so matching against a backslash path would never succeed.
+    const rel = path.relative(opts.root, full).split(path.sep).join("/");
+    if (e.isFile() && matchPattern(e.name, pattern, rel)) results.push(full);
     if (e.isDirectory()) findInDir(full, pattern, opts, results);
   }
 }
@@ -241,6 +287,7 @@ export async function findFiles(input: {
   findInDir(rootDir, input.pattern, {
     maxResults: input.max_results ?? 50,
     includeHidden: input.include_hidden ?? false,
+    root: rootDir,
   }, results);
   if (!results.length) {
     return { content: `No files found matching '${input.pattern}' in '${rootDir}'`, isError: false };

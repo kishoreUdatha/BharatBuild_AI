@@ -87,7 +87,11 @@ class EmailService:
             return bool(self.resend_api_key)
         if self.use_sendgrid:
             return bool(self.sendgrid_api_key)
-        return bool(self.smtp_user and self.smtp_password)
+        # A host is enough. Requiring credentials meant an unauthenticated
+        # relay - the normal setup for a local or internal mail server - was
+        # reported as "not configured" and skipped without ever being tried.
+        # Credentials, when present, are still sent.
+        return bool(self.smtp_host)
 
     async def send_email(
         self,
@@ -238,15 +242,31 @@ class EmailService:
             # Add HTML version
             message.attach(MIMEText(html_content, "html"))
 
-            # Send email
-            await aiosmtplib.send(
-                message,
-                hostname=self.smtp_host,
-                port=self.smtp_port,
-                username=self.smtp_user,
-                password=self.smtp_password,
-                start_tls=True
-            )
+            # STARTTLS used to be hardcoded on, which made this fail against
+            # any relay that does not advertise the extension - implicit-TLS
+            # servers on 465, and local development relays alike. Pick the mode
+            # from the port unless SMTP_USE_TLS says otherwise.
+            configured = getattr(settings, "SMTP_USE_TLS", None)
+            if isinstance(configured, str):
+                configured = configured.strip().lower() not in ("0", "false", "no", "")
+
+            implicit_tls = int(self.smtp_port) == 465
+            start_tls = bool(configured) if configured is not None else not implicit_tls
+            if implicit_tls:
+                start_tls = False
+
+            send_kwargs = {
+                "hostname": self.smtp_host,
+                "port": self.smtp_port,
+                "start_tls": start_tls,
+                "use_tls": implicit_tls,
+            }
+            # An unauthenticated relay rejects the AUTH command outright.
+            if self.smtp_user and self.smtp_password:
+                send_kwargs["username"] = self.smtp_user
+                send_kwargs["password"] = self.smtp_password
+
+            await aiosmtplib.send(message, **send_kwargs)
 
             logger.info(f"[Email/SMTP] Successfully sent email to {to_email}: {subject}")
             return True

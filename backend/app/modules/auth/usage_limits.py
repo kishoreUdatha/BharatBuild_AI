@@ -295,10 +295,18 @@ async def check_project_limit(user: User, db: AsyncSession) -> UsageLimitCheck:
 
     # Count ALL active projects (everything except FAILED and CANCELLED)
     # This ensures premium users can only have 1 project total
+    #
+    # A batch's project is not one of them. The college has already paid for
+    # it - the batch carries its own project_fee - and it belongs to a team of
+    # four rather than to the student who happened to open it. Counting it
+    # would spend a student's personal allowance on their coursework and, on
+    # the paid tiers where the limit is one, refuse them a project of their
+    # own entirely.
     project_count_result = await db.execute(
         select(func.count(Project.id)).where(
             and_(
                 Project.user_id == user.id,
+                Project.batch_id.is_(None),
                 Project.status.notin_([ProjectStatus.FAILED, ProjectStatus.CANCELLED])
             )
         )
@@ -667,10 +675,27 @@ async def deduct_credits(user_id: str, credits_used: float, db: AsyncSession,
             logger.warning(f"[Credits] No balance found for user {user_id}")
             return False
         
-        # Deduct
-        balance.remaining_tokens = max(0, balance.remaining_tokens - int(credits_used * 100) / 100)
-        balance.used_tokens += int(credits_used * 100) / 100
-        balance.monthly_used += int(credits_used * 100) / 100
+        # Deduct.
+        #
+        # remaining_tokens, used_tokens and monthly_used are Integer columns.
+        # The previous arithmetic produced floats — `100000 - 0.58` → 99999.42
+        # stored as 99999, and `used_tokens += 0.58` → 0 — so a 0.59-credit turn
+        # took a whole unit off the balance while recording nothing as used.
+        # used + remaining stopped equalling total, which makes every usage
+        # report and every "credits used" figure wrong.
+        #
+        # Charge whole units and apply the same number to all three, so the
+        # ledger balances. A turn that cost anything at all costs at least one
+        # unit: rounding sub-half turns to zero would make small requests free
+        # and unlimited. (Exact fractional billing needs these columns to be
+        # Numeric — a migration, not a code change.)
+        units = int(round(credits_used))
+        if credits_used > 0 and units < 1:
+            units = 1
+
+        balance.remaining_tokens = max(0, balance.remaining_tokens - units)
+        balance.used_tokens += units
+        balance.monthly_used += units
         balance.total_requests += 1
         balance.last_request_at = datetime.utcnow()
         

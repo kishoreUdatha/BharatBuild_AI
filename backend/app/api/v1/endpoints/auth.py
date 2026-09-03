@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from datetime import datetime, timedelta
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 import secrets
 import uuid
@@ -17,6 +17,7 @@ from app.core.security import (
     decode_token
 )
 from app.core.logging_config import logger, set_user_id
+from app.services.tenancy import resolve_for_signup
 from app.models.user import User, UserRole
 from app.schemas.auth import (
     UserRegister,
@@ -48,7 +49,116 @@ class VerifyEmailRequest(BaseModel):
     token: str
 
 
+from app.models.verification import VerificationChannel
+from app.services.enrollment_sync import ensure_enrollment
+from app.services.otp_service import (
+    OtpError,
+    OtpService,
+    normalise as otp_normalise,
+)
+
 router = APIRouter()
+
+
+# ============================================
+# Contact verification (email / mobile OTP)
+# ============================================
+
+
+class OtpRequestBody(BaseModel):
+    channel: str = Field(..., description="email | phone")
+    destination: str = Field(..., min_length=3, max_length=180)
+
+
+class OtpVerifyBody(BaseModel):
+    channel: str = Field(..., description="email | phone")
+    destination: str = Field(..., min_length=3, max_length=180)
+    code: str = Field(..., min_length=4, max_length=10)
+
+
+def _channel(raw: str) -> VerificationChannel:
+    try:
+        return VerificationChannel(raw.lower())
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="channel must be email or phone")
+
+
+@router.get("/signup-config")
+async def signup_config():
+    """
+    What the signup screen has to enforce.
+
+    Read before the form renders, so the screen and the server agree about
+    whether a one-time code is required. Without this the form would keep
+    demanding a code the server no longer checks, and nobody could register
+    for the opposite reason.
+    """
+    return {
+        "require_contact_verification": settings.REQUIRE_CONTACT_VERIFICATION,
+    }
+
+
+@router.post("/otp/request")
+@limiter.limit("10/minute")
+async def request_otp(
+    request: Request,
+    payload: OtpRequestBody,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Send a one-time code to an email address or mobile number.
+
+    Public: this runs on the registration form before an account exists. The
+    service applies its own per-destination cooldown and hourly cap on top of
+    the per-IP limit here.
+    """
+    channel = _channel(payload.channel)
+    service = OtpService(db)
+
+    # Refusing early keeps someone from using this to discover which addresses
+    # are registered... so only do it for email, where signup would fail anyway
+    # with the same message the form already shows.
+    if channel == VerificationChannel.EMAIL:
+        try:
+            normalised = otp_normalise(channel, payload.destination)
+        except OtpError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        taken = (await db.execute(select(User).where(User.email == normalised))).scalar_one_or_none()
+        if taken is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An account already exists for this email. Sign in instead.",
+            )
+
+    try:
+        return await service.request(
+            channel,
+            payload.destination,
+            request_ip=request.client.host if request.client else None,
+        )
+    except OtpError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS if exc.retry_after
+            else status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after)} if exc.retry_after else None,
+        )
+
+
+@router.post("/otp/verify")
+@limiter.limit("20/minute")
+async def verify_otp(
+    request: Request,
+    payload: OtpVerifyBody,
+    db: AsyncSession = Depends(get_db),
+):
+    """Check a code. On success the destination counts as proven for 30 minutes."""
+    channel = _channel(payload.channel)
+    try:
+        return await OtpService(db).verify(channel, payload.destination, payload.code)
+    except OtpError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -58,8 +168,35 @@ async def register(
     user_data: UserRegister,
     db: AsyncSession = Depends(get_db)
 ):
-    """Register new user (rate limited: 3/min)"""
+    """
+    Register new user (rate limited: 3/min).
+
+    The email address, and the mobile number when one is given, must have been
+    proven with a one-time code first. Without that check the earlier
+    verification email was decorative - nothing depended on it.
+    """
     client_ip = request.client.host if request.client else "unknown"
+
+    otp = OtpService(db)
+    if settings.REQUIRE_CONTACT_VERIFICATION:
+        if not await otp.check_proof(VerificationChannel.EMAIL, user_data.email,
+                                     user_data.email_verification_token):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Verify your email address with the code we sent before creating an account.",
+            )
+        if user_data.phone and not await otp.check_proof(VerificationChannel.PHONE, user_data.phone,
+                                                         user_data.phone_verification_token):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Verify your mobile number with the code we sent before creating an account.",
+            )
+    else:
+        # Logged on every single registration, not once at startup: an
+        # unverified account is a fact about that account, and whoever reads
+        # the log later needs to know which ones were let through.
+        logger.warning(f"[Auth] Contact verification is OFF - accepting "
+                       f"{user_data.email} without proof of the address")
 
     # Check if email already exists
     result = await db.execute(
@@ -106,12 +243,22 @@ async def register(
     except ValueError:
         user_role = UserRole.STUDENT  # Default to student if invalid role
 
+    # Which institution this account belongs to. Decided by the email domain,
+    # not by the college typed on the form: a name is a claim anybody can
+    # make, and it used to be enough to land inside a paying college's roster
+    # and exports. Anything unrecognised goes to the self-serve tenant, and a
+    # college that does not issue its own addresses onboards its students by
+    # roster or batch code instead.
+    college_id = await resolve_for_signup(db, user_data.email,
+                                          user_data.college_name)
+
     user = User(
         email=user_data.email,
         hashed_password=get_password_hash(user_data.password),
         full_name=user_data.full_name,
         phone=user_data.phone,
         role=user_role,
+        college_id=college_id,
         # Student Academic Details
         roll_number=user_data.roll_number,
         college_name=user_data.college_name,
@@ -120,15 +267,37 @@ async def register(
         course=user_data.course,
         year_semester=user_data.year_semester,
         batch=user_data.batch,
+        section=user_data.section,
         # Guide/Mentor Details
         guide_name=user_data.guide_name,
         guide_designation=user_data.guide_designation,
         hod_name=user_data.hod_name
     )
 
+    # The address was proven with a code moments ago, so the account starts
+    # verified rather than waiting on a second, redundant confirmation.
+    user.is_verified = True
+
     db.add(user)
     await db.commit()
     await db.refresh(user)
+
+    # Spend the proof so the same verification cannot open another account.
+    # Nothing to spend when verification is off, and calling consume anyway
+    # would be claiming a code was used that was never issued.
+    if settings.REQUIRE_CONTACT_VERIFICATION:
+        await otp.consume(VerificationChannel.EMAIL, user_data.email, user_id=user.id)
+        if user_data.phone:
+            await otp.consume(VerificationChannel.PHONE, user_data.phone, user_id=user.id)
+
+    # Without this the account exists but the student appears on no faculty
+    # screen: every one of them reads StudentEnrollment, not User.
+    try:
+        await ensure_enrollment(db, user)
+    except Exception as exc:
+        # An enrolment problem must not cost the student their account; the
+        # coordinator can add them by roster import instead.
+        logger.warning(f"[Auth] Could not enrol {user.email}: {type(exc).__name__}: {exc}")
 
     logger.log_auth_event(
         event="register",
@@ -138,34 +307,8 @@ async def register(
         user_role=user_role.value
     )
 
-    # Send verification email (async, don't block registration)
-    try:
-        from jose import jwt
-        verification_token_data = {
-            "sub": str(user.id),
-            "email": user.email,
-            "type": "email_verification",
-            "exp": datetime.utcnow() + timedelta(hours=24)
-        }
-        verification_token = jwt.encode(
-            verification_token_data,
-            settings.JWT_SECRET_KEY,
-            algorithm=settings.JWT_ALGORITHM
-        )
-
-        # Send email in background (don't wait)
-        import asyncio
-        asyncio.create_task(
-            email_service.send_verification_email(
-                to_email=user.email,
-                user_name=user.full_name,
-                verification_token=verification_token
-            )
-        )
-        logger.info(f"[Auth] Verification email queued for {user.email}")
-    except Exception as e:
-        # Don't fail registration if email fails
-        logger.warning(f"[Auth] Failed to send verification email: {e}")
+    # No confirmation link is sent: the address was verified by one-time code
+    # before this point, so a second round trip would only add friction.
 
     # Send admin notification for new user signup (async, don't block)
     # Uses database-configured notification settings (admin panel)
@@ -435,6 +578,7 @@ async def login(
             course=user.course,
             year_semester=user.year_semester,
             batch=user.batch,
+            section=user.section,
             # Guide/Mentor Details
             guide_name=user.guide_name,
             guide_designation=user.guide_designation,
@@ -638,6 +782,7 @@ class ProfileCompletionRequest(BaseModel):
     course: Optional[str] = None
     year_semester: Optional[str] = None
     batch: Optional[str] = None
+    section: Optional[str] = None
 
     # Guide/Mentor Details
     guide_name: Optional[str] = None
@@ -699,6 +844,8 @@ async def complete_profile(
         current_user.year_semester = profile_data.year_semester
     if profile_data.batch is not None:
         current_user.batch = profile_data.batch
+    if profile_data.section is not None:
+        current_user.section = profile_data.section
 
     # Update guide/mentor details
     if profile_data.guide_name is not None:
@@ -713,6 +860,14 @@ async def complete_profile(
     current_user.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(current_user)
+
+    # A student who completed their academic details after signing up (OAuth,
+    # or a profile filled in later) must land on the faculty screens too.
+    try:
+        await ensure_enrollment(db, current_user)
+    except Exception as exc:
+        logger.warning(f"[Auth] Could not enrol {current_user.email}: "
+                       f"{type(exc).__name__}: {exc}")
 
     logger.info(f"[Auth] Profile completed for user {current_user.email}")
 
@@ -735,6 +890,7 @@ async def complete_profile(
         course=current_user.course,
         year_semester=current_user.year_semester,
         batch=current_user.batch,
+        section=current_user.section,
         guide_name=current_user.guide_name,
         guide_designation=current_user.guide_designation,
         hod_name=current_user.hod_name
@@ -807,7 +963,8 @@ async def get_google_auth_url():
 
 
 # Allowed roles for OAuth registration (exclude admin)
-ALLOWED_OAUTH_ROLES = {UserRole.STUDENT, UserRole.DEVELOPER, UserRole.FOUNDER, UserRole.FACULTY}
+ALLOWED_OAUTH_ROLES = {UserRole.STUDENT, UserRole.DEVELOPER, UserRole.FOUNDER,
+                       UserRole.FACULTY, UserRole.TRAINER}
 
 
 def validate_oauth_role(role_value: str) -> UserRole:
@@ -1082,8 +1239,8 @@ async def forgot_password(
     """
     Request password reset.
 
-    For beta: Returns reset token directly (no email).
-    In production: Would send email with reset link.
+    Sends a reset link by email. The token is never returned in the response -
+    that would let anyone reset an account they do not own.
     """
     # Find user by email
     result = await db.execute(
@@ -1125,25 +1282,39 @@ async def forgot_password(
     user.reset_token_expires = datetime.utcnow() + timedelta(hours=1)
     await db.commit()
 
-    # In production, send email here
-    # For beta, we return the token in response (temporary)
-    # TODO: Implement email sending
-
-    # SECURITY FIX: Never expose tokens in response - send via email only
-    # In production, the token is sent via email. Removed beta token exposure.
+    # The token only ever leaves by email. It is deliberately not returned
+    # here: anyone could then ask for a reset on an address they do not own
+    # and take the account.
+    #
+    # Which means that without a mail provider there is no reset path at all.
+    # Saying "you will receive instructions" when nothing can be sent leaves
+    # someone waiting for an email that will never arrive, so the reply below
+    # tells them to contact the department instead. It still says nothing
+    # about whether the account exists - that is a fact about the system, not
+    # about them.
+    # Judged on whether the send actually worked, not on whether a host is
+    # configured: a host with placeholder credentials reports as configured
+    # and then fails silently, which is exactly the case here.
+    delivered = False
     try:
-        email_sent = await email_service.send_password_reset_email(
+        delivered = await email_service.send_password_reset_email(
             to_email=user.email,
             user_name=user.full_name,
             reset_token=reset_token
         )
-        if email_sent:
-            logger.info(f"[Auth] Password reset email sent to {user.email}")
-        else:
-            logger.warning(f"[Auth] Failed to send password reset email to {user.email}")
     except Exception as email_err:
         logger.error(f"[Auth] Error sending password reset email: {email_err}")
 
+    if not delivered:
+        logger.error(f"[Auth] Password reset for {user.email} could not be delivered - "
+                     "no working mail provider")
+        return PasswordResetResponse(
+            message="Password reset by email is not working on this deployment. "
+                    "Ask your department coordinator to reset it for you.",
+            success=False,
+        )
+
+    logger.info(f"[Auth] Password reset email sent to {user.email}")
     return PasswordResetResponse(
         message="If an account with that email exists, you will receive password reset instructions.",
         success=True

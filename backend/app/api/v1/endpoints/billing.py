@@ -587,8 +587,13 @@ async def get_usage(
 
     # Get project count
     from app.models.project import Project
+    # A batch's project is the college's, not this student's allowance - the
+    # same exclusion `check_project_limit` makes. Counting it here would show
+    # "1/5 used" to somebody who has created nothing of their own.
     project_result = await db.execute(
-        select(func.count(Project.id)).where(Project.user_id == current_user.id)
+        select(func.count(Project.id))
+        .where(Project.user_id == current_user.id)
+        .where(Project.batch_id.is_(None))
     )
     projects_created = project_result.scalar() or 0
 
@@ -1394,8 +1399,13 @@ async def get_plan_status(
     limits = await get_user_limits(current_user, db)
 
     # Get current project count
+    # A batch's project is the college's, not this student's allowance - the
+    # same exclusion `check_project_limit` makes. Counting it here would show
+    # "1/5 used" to somebody who has created nothing of their own.
     project_result = await db.execute(
-        select(func.count(Project.id)).where(Project.user_id == current_user.id)
+        select(func.count(Project.id))
+        .where(Project.user_id == current_user.id)
+        .where(Project.batch_id.is_(None))
     )
     projects_created = project_result.scalar() or 0
 

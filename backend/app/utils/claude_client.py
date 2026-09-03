@@ -6,6 +6,7 @@ import random
 import httpx
 from app.core.config import settings
 from app.core.logging_config import logger
+from app.core.models import sampling_kwargs
 
 # Retry configuration - loaded from settings
 MAX_RETRIES = settings.CLAUDE_MAX_RETRIES
@@ -157,7 +158,9 @@ class ClaudeClient:
                 response = await self.async_client.messages.create(
                     model=model_name,
                     max_tokens=max_tokens,
-                    temperature=temperature,
+                    # Opus 4.7+ and the 5-series reject temperature with a 400,
+                    # so it is only sent to models that still accept it.
+                    **sampling_kwargs(model_name, temperature),
                     system=system_prompt if system_prompt else "",
                     messages=messages
                 )
@@ -281,7 +284,7 @@ class ClaudeClient:
                 async with self.async_client.messages.stream(
                     model=model_name,
                     max_tokens=max_tokens,
-                    temperature=temperature,
+                    **sampling_kwargs(model_name, temperature),
                     system=system_prompt if system_prompt else "",
                     messages=messages
                 ) as stream:

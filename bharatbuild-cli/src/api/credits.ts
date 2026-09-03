@@ -16,6 +16,7 @@
  */
 
 import { BharatBuildClient, APIError } from "./client.js";
+import { TOKENS_BALANCE, BILLING_LIMITS, parseTokenBalance } from "./token-balance.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -63,6 +64,22 @@ export const TIER_CREDITS: Record<CreditTier, number> = {
 // ── CreditClient ──────────────────────────────────────────────────────────────
 
 export class CreditClient {
+  /**
+   * Why the last credit check failed, if it did. The preflight used to
+   * swallow a 404 on every turn and return {allowed:true}, so a completely
+   * absent credit system was indistinguishable from a working one.
+   */
+  lastPreflightError: string | null = null;
+
+  /** Why the last usage report failed, if it did. */
+  lastReportError: string | null = null;
+
+  /**
+   * Set once the backend answers 404 for usage reporting. Deduction is then
+   * server-side only, and any balance shown locally is an estimate.
+   */
+  usageReportingUnavailable = false;
+
   constructor(private client: BharatBuildClient) {}
 
   /**
@@ -71,30 +88,21 @@ export class CreditClient {
    */
   async getBalance(): Promise<CreditBalance> {
     try {
-      const res = await this.client.get<{
-        tier?:               string;
-        credits_total?:      number;
-        credits_used?:       number;
-        credits_remaining?:  number;
-        addon_credits?:      number;
-        add_on_credits?:     number;
-        reset_at?:           number;
-        balance?:            number;
-        tokens_remaining?:   number;
-      }>("/api/v1/credits/balance");
-
-      const remaining = res.credits_remaining ?? res.balance ?? res.tokens_remaining ?? 0;
-      const used      = res.credits_used ?? 0;
-      const total     = res.credits_total ?? (remaining + used);
+      // /api/v1/credits/balance is not served - it 404d, this caught it, and
+      // the caller was told the balance was unknown forever. The real route is
+      // /api/v1/tokens/balance.
+      const res = await this.client.get<Record<string, unknown>>(TOKENS_BALANCE);
+      const b = parseTokenBalance(res);
 
       return {
-        tier:             (res.tier ?? "free") as CreditTier,
-        creditsTotal:     total,
-        creditsUsed:      used,
-        creditsRemaining: remaining,
-        addOnCredits:     res.addon_credits ?? res.add_on_credits ?? 0,
-        resetAt:          res.reset_at ?? (Date.now() + 30 * 24 * 60 * 60 * 1000),
-        canRequest:       remaining > 0,
+        tier:             (typeof res["tier"] === "string" ? res["tier"] : "free") as CreditTier,
+        creditsTotal:     b.total,
+        creditsUsed:      b.used,
+        creditsRemaining: b.unknown ? -1 : b.remaining,
+        addOnCredits:     b.premiumRemaining,
+        resetAt:          b.resetAt || Date.now() + 30 * 24 * 60 * 60 * 1000,
+        // Only gate on a number the server actually gave us.
+        canRequest:       b.unknown || b.remaining > 0,
       };
     } catch (err) {
       if (err instanceof APIError && err.statusCode === 401) {
@@ -125,6 +133,9 @@ export class CreditClient {
     effort?:      string;
     sessionId?:   string;
   }): Promise<CreditDeduction | null> {
+    // Once the route has answered 404 there is no point paying a round trip
+    // for it on every subsequent turn.
+    if (this.usageReportingUnavailable) return null;
     try {
       const res = await this.client.post<{
         credits_deducted?:  number;
@@ -149,9 +160,17 @@ export class CreditClient {
         outputTokens:     res.output_tokens     ?? opts.outputTokens,
         multiplier:       res.multiplier        ?? 1.0,
       };
-    } catch {
-      // Backend unreachable — deduction failed silently
-      // Local CostMeter estimate is shown as fallback
+    } catch (err) {
+      // /api/v1/credits/report is not served. This caught the 404 and returned
+      // null on every turn, so nothing was ever deducted and the failure was
+      // invisible — the CLI then showed a local estimate as though it were an
+      // authoritative balance.
+      //
+      // Deduction belongs server-side during generation regardless: a client
+      // that reports its own usage can simply decline to report it.
+      const status = err instanceof APIError ? err.statusCode : 0;
+      this.lastReportError = err instanceof Error ? err.message : String(err);
+      if (status === 404) this.usageReportingUnavailable = true;
       return null;
     }
   }
@@ -162,14 +181,20 @@ export class CreditClient {
    */
   async canMakeRequest(model: string): Promise<{ allowed: boolean; reason?: string }> {
     try {
-      const res = await this.client.post<{
-        allowed: boolean;
-        reason?: string;
-      }>("/api/v1/credits/preflight", { model });
-      return res;
-    } catch {
-      // If server is unreachable, allow — don't block the user
-      return { allowed: true };
+      // /api/v1/credits/preflight does not exist. /api/v1/billing/limits
+      // answers the same question and is already served:
+      //   {"success":true,"allowed":true,"reason":null,"current_usage":0,"limit":null}
+      const res = await this.client.get<{
+        allowed?: boolean;
+        reason?:  string | null;
+      }>(BILLING_LIMITS);
+      return { allowed: res.allowed !== false, reason: res.reason ?? undefined };
+    } catch (err) {
+      // Still fail open - blocking a paying user because a check endpoint
+      // blipped is worse than one unmetered turn - but no longer silently.
+      // This swallowed a 404 on every single turn and nobody could tell.
+      this.lastPreflightError = err instanceof Error ? err.message : String(err);
+      return { allowed: true, reason: "credit check unavailable" };
     }
   }
 

@@ -5,7 +5,7 @@ Request/Response logging, timing, and context management
 
 import time
 import uuid
-from typing import Callable, Set
+from typing import Callable, Optional, Set
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
@@ -225,31 +225,55 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
     """
-    Middleware to limit request body size
+    Middleware to limit request body size.
+
+    File uploads get their own, larger ceiling. Without the split the global
+    limit would silently override whatever the upload API advertises, and a
+    picker offering 25 MB would be refused at 10 with a message from a
+    different layer.
     """
 
-    def __init__(self, app: ASGIApp, max_size: int = 10 * 1024 * 1024):  # 10MB default
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_size: int = 10 * 1024 * 1024,       # 10MB default
+        upload_max_size: Optional[int] = None,
+        upload_paths: Optional[tuple] = None,
+    ):
         super().__init__(app)
         self.max_size = max_size
+        self.upload_max_size = upload_max_size or max_size
+        # Suffix matched, so every batch id and student route is covered
+        # without listing them.
+        self.upload_paths = upload_paths or (
+            "/documents", "/base-paper", "/upload", "/import", "/imports",
+        )
+
+    def _limit_for(self, path: str) -> int:
+        if any(path.rstrip("/").endswith(p) for p in self.upload_paths):
+            return self.upload_max_size
+        return self.max_size
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         content_length = request.headers.get("content-length")
+        self.max_size_for_request = self._limit_for(request.url.path)
 
         if content_length:
-            if int(content_length) > self.max_size:
+            if int(content_length) > self.max_size_for_request:
                 logger.warning(
                     f"Request body too large: {content_length} bytes (max: {self.max_size})",
                     extra={
                         "event_type": "request_too_large",
                         "content_length": int(content_length),
-                        "max_size": self.max_size,
+                        "max_size": self.max_size_for_request,
                         "http_path": request.url.path,
                     }
                 )
                 from starlette.responses import JSONResponse
                 return JSONResponse(
                     status_code=413,
-                    content={"detail": f"Request body too large. Maximum size is {self.max_size // 1024 // 1024}MB"}
+                    content={"detail": "Request body too large. Maximum size is "
+                                       f"{self.max_size_for_request // 1024 // 1024}MB"}
                 )
 
         return await call_next(request)

@@ -6,7 +6,7 @@
  */
 
 import chalk from "chalk";
-import { loadCredentials, isTokenExpired, type Credentials } from "../api/auth.js";
+import { loadCredentials, isTokenExpired, canRefreshSession, type Credentials } from "../api/auth.js";
 
 export interface AuthCheckResult {
   authenticated: boolean;
@@ -29,7 +29,9 @@ export function checkAuth(): AuthCheckResult {
     };
   }
 
-  if (isTokenExpired(creds)) {
+  // An expired access token is fine as long as a refresh token can renew it —
+  // the client refreshes transparently on the first 401.
+  if (isTokenExpired(creds) && !canRefreshSession(creds)) {
     return {
       authenticated: false,
       credentials: creds,

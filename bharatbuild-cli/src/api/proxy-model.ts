@@ -23,28 +23,98 @@
  */
 
 import type { ModelClient, ModelChunk } from "../runtime/agent-loop.js";
+import { toWireMessages } from "../models/wire-format.js";
 import { loadCredentials } from "./auth.js";
 import { loadConfig } from "../config/config.js";
+import { resolveProviderKey } from "../auth/provider-key.js";
 
 // ── Wire format for the proxy SSE stream ─────────────────────────────────────
 //
 // Backend streams newline-delimited JSON events matching the CLI's ModelChunk
 // interface, plus a final "usage" event with credit deduction info.
 
+interface ProxyToolCall {
+  id?:    string;
+  name?:  string;
+  input?: Record<string, unknown>;
+}
+
 interface ProxyEvent {
   type:            string;
   text?:           string;
+  /** Backend shape: {"type":"tool_use","tool":{id,name,input}} */
+  tool?:           ProxyToolCall;
+  /** Terminal event carries the full call list, stop reason and usage. */
+  tool_calls?:     ProxyToolCall[];
+  usage?:          { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+  // Flat aliases — older/alternate backend builds emit these instead.
   tool_use_id?:    string;
   tool_name?:      string;
   tool_input?:     Record<string, unknown>;
   input_tokens?:   number;
   output_tokens?:  number;
   stop_reason?:    string;
+  /** Terminal failure reported inside a 200 response. */
+  error?:             string;
+  message?:           string;
+  /** tool_use_start / tool_use_progress: the tool being composed. */
+  name?:              string;
+  bytes?:             number;
   // Credit metadata — only in final "complete" event
   credits_deducted?:  number;
   credits_remaining?: number;
   model_used?:        string;
   multiplier?:        number;
+}
+
+/**
+ * Pull the human-readable part out of a provider error.
+ *
+ * These arrive as a stringified Python repr wrapped around JSON:
+ *   Error code: 400 - {'type': 'error', 'error': {'message': 'Your credit
+ *   balance is too low...'}}
+ * The message is the only part worth showing; the rest is transport noise.
+ */
+export function readableModelError(detail: unknown): string {
+  const text = typeof detail === "string" ? detail : JSON.stringify(detail ?? "");
+  if (!text) return "The model backend failed without giving a reason.";
+
+  // Both quoting styles, because this crosses a Python boundary.
+  const message = text.match(/['"]message['"]\s*:\s*['"]([^'"]+)['"]/);
+  if (message?.[1]) return attributeToServer(message[1]);
+
+  return attributeToServer(text.length > 300 ? `${text.slice(0, 300)}…` : text);
+}
+
+/**
+ * Say whose account the provider is complaining about.
+ *
+ * The provider's own wording is written for whoever holds the key — and on
+ * this path that is the BharatBuild server, not the person reading the screen.
+ * Relayed verbatim, "Your credit balance is too low… go to Plans & Billing"
+ * sends the user to their own billing page to fix an account that is not the
+ * one at fault. It cost a real debugging session: a working key was assumed
+ * dead because the message said "your".
+ */
+function attributeToServer(message: string): string {
+  // Only rewrite what is plainly about the key holder's account. Anything else
+  // — a bad request, a context-length error — is about this request and reads
+  // correctly as-is.
+  const aboutTheAccount = /credit balance|billing|quota|rate limit|insufficient funds/i.test(message);
+  if (!aboutTheAccount) return message;
+
+  return (
+    `The BharatBuild server's model account rejected the request: "${message}"\n` +
+    `  This is the server's account, not yours. To use your own key instead, run:\n` +
+    `      bharatbuild key set sk-ant-…\n` +
+    `  That stores it once and applies in every terminal.`
+  );
+}
+
+const VALID_STOP: ReadonlySet<string> = new Set(["end_turn", "tool_use", "max_tokens", "stop_sequence"]);
+
+function normaliseStop(reason: string | undefined): ModelChunk["stopReason"] {
+  return VALID_STOP.has(reason ?? "") ? (reason as ModelChunk["stopReason"]) : "end_turn";
 }
 
 // ── ProxyModelClient ──────────────────────────────────────────────────────────
@@ -85,7 +155,7 @@ export class ProxyModelClient implements ModelClient {
         body: JSON.stringify({
           model:      params.model,
           system:     params.system,
-          messages:   params.messages,
+          messages:   toWireMessages(params.messages),
           tools:      params.tools,
           max_tokens: params.maxTokens,
         }),
@@ -120,6 +190,9 @@ export class ProxyModelClient implements ModelClient {
     const reader  = res.body.getReader();
     const decoder = new TextDecoder();
     let   buf     = "";
+    // Guards against emitting a call twice when it appears both as a streamed
+    // "tool_use" event and again in the terminal "done" payload.
+    const seenToolIds = new Set<string>();
 
     try {
       while (true) {
@@ -145,31 +218,97 @@ export class ProxyModelClient implements ModelClient {
               if (ev.text) yield { type: "text_delta", text: ev.text };
               break;
 
-            case "tool_use":
-              if (ev.tool_use_id && ev.tool_name) {
+            // The backend reports a failed generation as an event inside a
+            // 200 response rather than as an HTTP error. There was no case
+            // for it, so the stream simply ended with nothing in it and the
+            // agent loop concluded "Model returned empty response
+            // repeatedly" — discarding a precise, actionable message. The
+            // real one, for the record, was that the server's own API key
+            // had run out of credit.
+            case "error": {
+              throw new Error(readableModelError(ev.error ?? ev.message));
+            }
+
+            // The model has committed to a tool but is still writing its
+            // arguments. Surfacing this is the difference between a visible
+            // "writing app.py" and nine seconds of apparent hang.
+            case "tool_use_start":
+              if (ev.tool_use_id && ev.name) {
+                yield { type: "tool_progress", toolUseId: ev.tool_use_id, toolName: ev.name, toolBytes: 0 };
+              }
+              break;
+
+            case "tool_use_progress":
+              if (ev.tool_use_id) {
                 yield {
-                  type:      "tool_use",
+                  type: "tool_progress",
                   toolUseId: ev.tool_use_id,
-                  toolName:  ev.tool_name,
-                  toolInput: ev.tool_input ?? {},
+                  toolName: ev.name ?? "",
+                  toolBytes: ev.bytes ?? 0,
                 };
               }
               break;
 
+            // The backend nests the call under `tool`; this only checked the
+            // flat aliases, so every tool call was silently dropped and the
+            // agent stopped after announcing what it was about to do.
+            case "tool_use": {
+              const id    = ev.tool?.id   ?? ev.tool_use_id;
+              const name  = ev.tool?.name ?? ev.tool_name;
+              const input = ev.tool?.input ?? ev.tool_input ?? {};
+              if (id && name) {
+                seenToolIds.add(id);
+                yield { type: "tool_use", toolUseId: id, toolName: name, toolInput: input };
+              }
+              break;
+            }
+
             case "usage":
               yield {
                 type:         "usage",
-                inputTokens:  ev.input_tokens  ?? 0,
-                outputTokens: ev.output_tokens ?? 0,
+                inputTokens:  ev.usage?.input_tokens  ?? ev.input_tokens  ?? 0,
+                outputTokens: ev.usage?.output_tokens ?? ev.output_tokens ?? 0,
               };
               break;
 
             case "stop":
-              yield {
-                type:       "stop",
-                stopReason: (ev.stop_reason ?? "end_turn") as ModelChunk["stopReason"],
-              };
+              yield { type: "stop", stopReason: normaliseStop(ev.stop_reason) };
               break;
+
+            // Terminal event. It was not handled at all, so no usage was ever
+            // recorded (tokens: 0, turns: 0) and the loop never saw a
+            // "tool_use" stop reason to continue on.
+            case "done": {
+              // Defensive: if a backend only reports calls in the final event,
+              // emit the ones we have not already streamed.
+              for (const call of ev.tool_calls ?? []) {
+                if (call.id && call.name && !seenToolIds.has(call.id)) {
+                  seenToolIds.add(call.id);
+                  yield {
+                    type: "tool_use",
+                    toolUseId: call.id,
+                    toolName: call.name,
+                    toolInput: call.input ?? {},
+                  };
+                }
+              }
+              // Credits arrive on "done" — the agentic stream's terminal
+              // event. These were only read from "complete", which this
+              // backend never emits, so a server-authoritative balance would
+              // have been discarded even once the server started sending one.
+              if (ev.credits_deducted !== undefined || ev.credits_remaining !== undefined) {
+                this.lastCreditsDeducted  = ev.credits_deducted  ?? 0;
+                this.lastCreditsRemaining = ev.credits_remaining ?? -1;
+                this.lastModelUsed        = ev.model_used ?? this.lastModelUsed;
+              }
+              const inTok  = ev.usage?.input_tokens  ?? ev.input_tokens  ?? 0;
+              const outTok = ev.usage?.output_tokens ?? ev.output_tokens ?? 0;
+              if (inTok || outTok) {
+                yield { type: "usage", inputTokens: inTok, outputTokens: outTok };
+              }
+              yield { type: "stop", stopReason: normaliseStop(ev.stop_reason) };
+              break;
+            }
 
             case "complete":
               // Server-authoritative credit deduction — store for status bar
@@ -202,10 +341,11 @@ export class ProxyModelClient implements ModelClient {
  * The caller decides what to do when null (fall back to direct provider).
  */
 export function createProxyClientIfLoggedIn(): ProxyModelClient | null {
-  // If user has a direct API key, skip the proxy — use it directly for lower latency
-  if (process.env["ANTHROPIC_API_KEY"] || process.env["OPENAI_API_KEY"]) {
-    return null;
-  }
+  // A direct key skips the proxy — lower latency, and the user's own account.
+  // Checked through resolveProviderKey so a key stored on disk counts too: an
+  // environment variable has to be set again in every new terminal, which is
+  // how a user with a working key ended up hitting the server's exhausted one.
+  if (resolveProviderKey()) return null;
 
   const creds = loadCredentials();
   if (!creds?.token) return null;

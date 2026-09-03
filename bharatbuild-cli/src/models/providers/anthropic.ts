@@ -1,7 +1,9 @@
 /** BharatBuild CLI - Anthropic Provider (Claude) */
 import type { ModelChunk } from "../../runtime/agent-loop.js";
+import { toWireMessages } from "../wire-format.js";
 import type { Message, MessageContent } from "../../runtime/context-manager.js";
 import { BaseModelProvider, type ModelProviderConfig } from "../model-provider.js";
+import { thinkingFor, configuredLevel, effortFor } from "../thinking-config.js";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
 const API_VERSION = "2023-06-01";
@@ -13,61 +15,7 @@ interface PendingBlock {
   json: string;
 }
 
-/**
- * Translate our internal message shape to the Anthropic wire format.
- *
- * The internal MessageContent uses `id` and `isError` for every block type;
- * the API expects `tool_use_id` and `is_error` on tool_result specifically.
- * Sending the internal shape through unchanged makes the API reject the turn
- * that follows any tool call, so the mapping has to happen here.
- */
-function toWireContent(block: MessageContent): Record<string, unknown> | null {
-  switch (block.type) {
-    case "text":
-      return { type: "text", text: block.text ?? "" };
-
-    case "tool_use":
-      return { type: "tool_use", id: block.id, name: block.name, input: block.input ?? {} };
-
-    case "tool_result": {
-      const wire: Record<string, unknown> = {
-        type: "tool_result",
-        tool_use_id: block.id,
-        content: typeof block.content === "string" ? block.content : (block.content ?? ""),
-      };
-      // Only send is_error when true - the API treats presence as meaningful.
-      if (block.isError) wire["is_error"] = true;
-      return wire;
-    }
-
-    default:
-      // Image blocks — send as base64 source to Claude Vision
-      if (block.type === "image") {
-        const b64 = block.imageBase64;
-        const mime = block.mimeType ?? "image/png";
-        if (b64) {
-          return {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: mime,
-              data: b64,
-            },
-          };
-        }
-      }
-      return null;
-  }
-}
-
-function toWireMessages(messages: unknown[]): unknown[] {
-  return (messages as Message[]).map((msg) => {
-    // The API has no top-level "system" role in messages; fold it into a user turn.
-    const role = msg.role === "system" ? "user" : msg.role;
-    if (typeof msg.content === "string") return { role, content: msg.content };
-    return { role, content: msg.content.map(toWireContent).filter(Boolean) };
-  });
-}
+// Wire translation lives in ../wire-format.js so the proxy client shares it.
 
 export class AnthropicProvider extends BaseModelProvider {
   constructor(config: ModelProviderConfig) { super(config); }
@@ -92,6 +40,17 @@ export class AnthropicProvider extends BaseModelProvider {
     };
     // An empty tools array is rejected; omit the key entirely when there are none.
     if (params.tools.length > 0) body["tools"] = params.tools;
+
+    // Native extended thinking, when the model takes it and it is switched on.
+    // Omitted rather than disabled: the API rejects the parameter outright on
+    // models that do not support it.
+    const level = configuredLevel();
+    const thinking = thinkingFor(params.model, level, params.maxTokens);
+    if (thinking) body["thinking"] = thinking;
+    // Claude 5 pairs adaptive thinking with an effort level rather than a
+    // token budget; sending a budget to it is a 400.
+    const effort = effortFor(params.model, level);
+    if (effort) body["output_config"] = effort;
 
     const res = await fetch(API_URL, {
       method: "POST",
@@ -122,6 +81,8 @@ export class AnthropicProvider extends BaseModelProvider {
     // and content_block_stop marks the block complete. We assemble per index
     // because blocks for parallel tool calls interleave.
     const pending = new Map<number, PendingBlock>();
+    /** Indices currently carrying a thinking block. */
+    const thinkingBlocks = new Set<number>();
 
     while (true) {
       const { done, value } = await reader.read();
@@ -158,7 +119,10 @@ export class AnthropicProvider extends BaseModelProvider {
           case "content_block_start": {
             const index = Number(ev["index"] ?? 0);
             const block = ev["content_block"] as Record<string, unknown> | undefined;
-            if (block?.["type"] === "tool_use") {
+            if (block?.["type"] === "thinking") {
+              // Its deltas arrive against this index as thinking_delta events.
+              thinkingBlocks.add(index);
+            } else if (block?.["type"] === "tool_use") {
               pending.set(index, {
                 id: String(block["id"] ?? ""),
                 name: String(block["name"] ?? ""),
@@ -174,6 +138,13 @@ export class AnthropicProvider extends BaseModelProvider {
 
             if (delta["type"] === "text_delta") {
               yield { type: "text_delta", text: String(delta["text"] ?? "") };
+            } else if (delta["type"] === "thinking_delta") {
+              // Its own chunk type, not text: reasoning is displayed
+              // differently and must never be concatenated into the reply.
+              yield { type: "thinking_delta", text: String(delta["thinking"] ?? "") };
+            } else if (delta["type"] === "signature_delta") {
+              // Authenticates the block when it is sent back on a later turn.
+              yield { type: "thinking_signature", text: String(delta["signature"] ?? "") };
             } else if (delta["type"] === "input_json_delta") {
               // Accumulate; the fragments are only valid JSON once concatenated.
               const block = pending.get(index);

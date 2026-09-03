@@ -48,8 +48,26 @@ class Project(Base):
     )
 
     id = Column(GUID, primary_key=True, default=generate_uuid)
+    # Who created it. Nullable, and SET NULL rather than CASCADE, because a
+    # batch project belongs to a team: deleting the student who happened to
+    # open it first must not take three teammates' work with it. A personal
+    # project still cascades in effect - nothing else references it - while a
+    # team's survives its founder leaving.
     # Note: index defined explicitly in __table_args__ as 'ix_projects_user_id', no need for index=True here
-    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(GUID, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    # The batch whose project this is, if it is one.
+    #
+    # A batch is four students working on one project, the way four developers
+    # share one repository. The column is what makes that project theirs and
+    # nobody else's: membership of this batch is the whole access rule, so a
+    # student in another batch - or another college - cannot reach it.
+    #
+    # Unique: a batch has at most one project. It also settles the race where
+    # two teammates open the builder at the same moment; one insert wins and
+    # the other reads the row that won.
+    batch_id = Column(GUID, ForeignKey("project_batches.id", ondelete="CASCADE"),
+                      nullable=True, unique=True, index=True)
     # Note: index defined explicitly in __table_args__ as 'ix_projects_workspace_id', no need for index=True here
     workspace_id = Column(GUID, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True)
 

@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { buildUnifiedDiff, renderFileChange } from "./diff.js";
 
 export const applyPatchDefinition = {
   name: "apply_patch",
@@ -55,10 +56,12 @@ export async function applyPatch(input: {
       };
     }
 
-    fs.writeFileSync(p, c.replace(input.old_string, input.new_string), "utf8");
-    const linesChanged = (input.new_string.split("\n").length - input.old_string.split("\n").length);
-    const sign = linesChanged >= 0 ? `+${linesChanged}` : String(linesChanged);
-    return { content: `Patched ${input.file_path} (${sign} lines)`, isError: false };
+    const updated = c.replace(input.old_string, input.new_string);
+    fs.writeFileSync(p, updated, "utf8");
+    // A net line count said nothing about what changed. A unified diff shows
+    // the edit to the user and confirms it back to the model.
+    const summary = buildUnifiedDiff(c, updated, input.file_path);
+    return { content: renderFileChange("Update", input.file_path, summary), isError: false };
   } catch (err) {
     return { content: `Error patching file: ${err instanceof Error ? err.message : err}`, isError: true };
   }

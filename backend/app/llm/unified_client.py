@@ -53,7 +53,7 @@ class UnifiedLLMClient:
         from app.llm import unified_llm_client
         
         # Simple generation
-        result = await unified_llm_client.generate("claude-3-5-sonnet-20241022", "Hello!")
+        result = await unified_llm_client.generate("claude-sonnet-5", "Hello!")
         
         # With explicit provider prefix
         result = await unified_llm_client.generate("openai/gpt-4o", "Hello!")

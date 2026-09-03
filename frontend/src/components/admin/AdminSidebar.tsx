@@ -4,9 +4,11 @@ import React from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAdminStore } from '@/store/adminStore'
+import { useAuth } from '@/hooks/useAuth'
 import { useAdminTheme } from '@/contexts/AdminThemeContext'
 import {
   LayoutDashboard,
+  UserPlus,
   Users,
   FolderKanban,
   CreditCard,
@@ -22,6 +24,7 @@ import {
   Sun,
   Shield,
   Server,
+  Building2,
   GraduationCap,
   FileSpreadsheet,
   Trophy,
@@ -31,16 +34,18 @@ import {
 const navItems = [
   { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/admin/users', label: 'Users', icon: Users },
+  { href: '/admin/colleges', label: 'Colleges', icon: Building2 },
+  { href: '/admin/trainer-assignments', label: 'Trainers', icon: GraduationCap },
   { href: '/admin/enrollments', label: 'Enrollments', icon: GraduationCap },
   { href: '/admin/campus-drive', label: 'Campus Drive', icon: Trophy },
   { href: '/admin/projects', label: 'Projects', icon: FolderKanban },
   { href: '/admin/documents', label: 'Documents', icon: FileSpreadsheet },
   { href: '/admin/sandboxes', label: 'Sandboxes', icon: Server },
-  { href: '/admin/billing', label: 'Billing', icon: CreditCard },
+  { href: '/admin/billing', label: 'Billing', icon: CreditCard, operatorOnly: true },
   { href: '/admin/coupons', label: 'Coupons', icon: Ticket },
-  { href: '/admin/analytics', label: 'Analytics', icon: BarChart3 },
-  { href: '/admin/plans', label: 'Plans', icon: Layers },
-  { href: '/admin/api-keys', label: 'API Keys', icon: Key },
+  { href: '/admin/analytics', label: 'Analytics', icon: BarChart3, operatorOnly: true },
+  { href: '/admin/plans', label: 'Plans', icon: Layers, operatorOnly: true },
+  { href: '/admin/api-keys', label: 'API Keys', icon: Key, operatorOnly: true },
   { href: '/admin/audit-logs', label: 'Audit Logs', icon: FileText },
   { href: '/admin/settings', label: 'Settings', icon: Settings },
   { href: '/admin/feedback', label: 'Feedback', icon: MessageSquare },
@@ -50,8 +55,16 @@ export default function AdminSidebar() {
   const pathname = usePathname()
   const { sidebarCollapsed, toggleSidebar } = useAdminStore()
   const { theme, toggleTheme } = useAdminTheme()
+  const { user } = useAuth()
 
   const isDark = theme === 'dark'
+
+  // The business - revenue, plans, API keys, cross-tenant analytics - belongs
+  // to the operator. The server already refuses a manager there, but leaving
+  // the links in their sidebar made the refusal read as "no transactions
+  // found" rather than "not yours".
+  const isOperator = Boolean(user?.is_superuser)
+  const items = navItems.filter((item) => isOperator || !item.operatorOnly)
 
   return (
     <aside
@@ -80,7 +93,7 @@ export default function AdminSidebar() {
       {/* Navigation */}
       <nav className="flex-1 py-4 overflow-y-auto" style={{ height: 'calc(100vh - 128px)' }}>
         <ul className="space-y-1 px-2">
-          {navItems.map((item) => {
+          {items.map((item) => {
             const isActive = pathname === item.href ||
               (item.href !== '/admin' && pathname?.startsWith(item.href))
             const Icon = item.icon

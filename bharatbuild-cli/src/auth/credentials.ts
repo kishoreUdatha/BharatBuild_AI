@@ -5,6 +5,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { jwtExpiresAt, jwtIsExpired } from "./jwt.js";
 
 export interface Credentials {
   token: string;
@@ -24,7 +25,13 @@ function ensureDir(): void {
 
 export function saveCredentials(creds: Credentials): void {
   ensureDir();
-  fs.writeFileSync(AUTH_PATH, JSON.stringify(creds, null, 2), { mode: 0o600 });
+  // Always record the token's real expiry so later runs can tell a stale
+  // access token from a live one without a round-trip.
+  const withExpiry: Credentials = {
+    ...creds,
+    expiresAt: jwtExpiresAt(creds.token) ?? creds.expiresAt,
+  };
+  fs.writeFileSync(AUTH_PATH, JSON.stringify(withExpiry, null, 2), { mode: 0o600 });
 }
 
 export function loadCredentials(): Credentials | null {
@@ -39,6 +46,15 @@ export function clearCredentials(): void {
 }
 
 export function isExpired(creds: Credentials): boolean {
+  // Prefer the token's own `exp` claim — `expiresAt` may be absent (browser
+  // login) or a stale guess from an older CLI version.
+  if (jwtExpiresAt(creds.token) !== null) return jwtIsExpired(creds.token);
   if (!creds.expiresAt) return false;
   return Date.now() >= creds.expiresAt - 60_000;
+}
+
+/** Can we still mint a fresh access token without the user logging in again? */
+export function canRefresh(creds: Credentials): boolean {
+  if (!creds.refreshToken) return false;
+  return !jwtIsExpired(creds.refreshToken, 0);
 }

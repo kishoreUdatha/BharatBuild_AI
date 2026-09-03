@@ -9,6 +9,7 @@ import { Spinner } from "../ui/spinner.js";
 import { loadConfig } from "../config/config.js";
 import { createModelClientAuto, isAutoModel } from "../models/model-router.js";
 import { loadCredentials } from "../auth/credentials.js";
+import { AGENTIC_CHAT_STREAM } from "../api/endpoints.js";
 
 export async function askCommand(
   question: string,
@@ -52,16 +53,21 @@ export async function askCommand(
       }
     } else {
       // Route through backend
-      const stream = client.streamSSE("/api/v1/chat/stream", {
+      const stream = client.streamSSE(AGENTIC_CHAT_STREAM, {
         model: usingAuto ? "auto" : activeModel,
         messages: [{ role: "user", content: question }],
         max_tokens: 4096,
         stream: true,
       });
       for await (const event of stream) {
-        const d = event.data as Record<string, unknown>;
+        // streamSSE yields the parsed payload itself, not an {type, data}
+        // envelope. Reading event.data gave undefined, so the first text chunk
+        // threw "Cannot read properties of undefined (reading 'content')".
+        const e = event as unknown as Record<string, unknown>;
         if (event.type === "text" || event.type === "text_delta") {
-          process.stdout.write(String(d.content ?? d.text ?? ""));
+          process.stdout.write(String(e["text"] ?? e["content"] ?? ""));
+        } else if (event.type === "error") {
+          throw new Error(String(e["message"] ?? e["error"] ?? "stream error"));
         } else if (event.type === "complete" || event.type === "done") {
           break;
         }

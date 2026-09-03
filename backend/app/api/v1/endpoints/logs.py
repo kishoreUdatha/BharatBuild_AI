@@ -6,7 +6,7 @@ Includes:
 2. Project LogBus logs (browser, build, backend, network, docker errors)
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional, Literal
 from datetime import datetime
@@ -14,6 +14,8 @@ import json
 import os
 
 from app.core.logging_config import logger
+from app.models.user import User
+from app.modules.auth.dependencies import get_current_admin, get_current_user
 
 router = APIRouter(prefix="/logs", tags=["logs"])
 
@@ -95,8 +97,8 @@ async def get_claude_logs(
 
 
 @router.delete("/claude")
-async def clear_claude_logs():
-    """Clear all Claude API logs"""
+async def clear_claude_logs(current_admin: User = Depends(get_current_admin)):
+    """Clear all Claude API logs. Admin only - this is destructive and global."""
     _log_storage.clear()
     return {"message": "Logs cleared successfully", "count": 0}
 
@@ -342,8 +344,11 @@ async def get_project_logs(
 
 
 @router.delete("/project/{project_id}")
-async def clear_project_logs(project_id: str):
-    """Clear all logs for a project"""
+async def clear_project_logs(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Clear all logs for a project. Requires an authenticated user."""
     try:
         from app.services.log_bus import get_log_bus
         log_bus = get_log_bus(project_id)

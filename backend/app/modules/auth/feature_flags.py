@@ -12,11 +12,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from typing import Optional
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
 from app.models.system_setting import SystemSetting
 from app.models.billing import Plan, Subscription, SubscriptionStatus
 from app.modules.auth.dependencies import get_current_user
+
+
+# Features that may be unlocked for the free tier during local development so
+# that engineers can exercise the CLI without a paid plan. Never edit
+# FREE_TIER_FEATURES directly for this - set FREE_TIER_UNLOCKED_FEATURES in your
+# local .env instead, so the paywall can't be disabled by an accidental commit.
+# Guarded by is_dev_mode() so the override is inert in production regardless.
+def _dev_unlocked_features() -> set:
+    if not settings.is_dev_mode():
+        return set()
+    raw = getattr(settings, "FREE_TIER_UNLOCKED_FEATURES", "") or ""
+    return {name.strip() for name in raw.split(",") if name.strip()}
 
 
 # Default features for users without a plan (Free tier)
@@ -136,7 +149,10 @@ async def check_feature_access(
     if plan is None:
         # User has no active subscription - use free tier
         current_plan = "Free"
-        feature_allowed = FREE_TIER_FEATURES.get(feature_name, False)
+        feature_allowed = (
+            FREE_TIER_FEATURES.get(feature_name, False)
+            or feature_name in _dev_unlocked_features()
+        )
     else:
         current_plan = plan.name
         # Check plan's feature_flags
