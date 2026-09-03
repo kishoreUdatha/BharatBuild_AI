@@ -215,7 +215,7 @@ def main():
         log(f"\nCRITICAL CHECKS FAILED - Registration is broken!", Colors.RED)
         log(f"\nTo fix:", Colors.YELLOW)
         log(f"  1. Check database connection", Colors.YELLOW)
-        log(f"  2. Run: curl {base_url}/api/v1/create-tables", Colors.YELLOW)
+        log(f"  2. Apply migrations: alembic upgrade head (from backend/)", Colors.YELLOW)
         log(f"  3. Check RDS security groups allow ECS access", Colors.YELLOW)
         exit_code = 1
 

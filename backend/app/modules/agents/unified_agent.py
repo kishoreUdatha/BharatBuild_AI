@@ -430,7 +430,6 @@ USER REQUEST:
             response = await self.claude.async_client.messages.create(
                 model=self.claude.sonnet_model if active_model == "sonnet" else self.claude.haiku_model,
                 max_tokens=8192,
-                temperature=0.3,
                 system=UNIFIED_AGENT_SYSTEM_PROMPT,
                 tools=TOOLS,
                 messages=messages,

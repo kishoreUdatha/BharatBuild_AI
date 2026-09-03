@@ -138,12 +138,16 @@ jobs:
           cache: 'pip'
           cache-dependency-path: backend/requirements.txt
 
+      # requirements.txt is now the runtime set that ships (it previously
+      # pulled in tensorflow, torch-geometric, ray and ~50 other packages with
+      # zero imports in app/, on every single deploy). -minimal adds the sqlite
+      # driver the unit tests run against.
       - name: Install dependencies
         working-directory: ./backend
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-cov httpx coverage
+          pip install -r requirements-minimal.txt
+          pip install pytest pytest-asyncio pytest-cov coverage faker
 
       - name: Run unit tests
         id: tests
@@ -166,7 +170,7 @@ jobs:
             --cov-report=xml \
             --cov-report=html \
             --cov-report=term-missing \
-            --cov-fail-under=15 \
+            --cov-fail-under=17 \
             --junitxml=test-results.xml \
             -v \
             -m "not slow" \

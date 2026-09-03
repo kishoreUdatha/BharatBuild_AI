@@ -27,6 +27,7 @@ import os from "os";
 
 import { loadConfig, saveConfig } from "./config/config.js";
 import { BharatBuildClient } from "./api/client.js";
+import { attachAutoRefresh } from "./auth/refresh.js";
 import {
   loadCredentials,
   clearCredentials,
@@ -35,35 +36,25 @@ import {
   register,
 } from "./api/auth.js";
 import { printBanner, printModeSelector, Spinner, prompt, promptPassword } from "./ui/spinner.js";
-import { BharatBuildREPL, type PlatformMode, type ModeHandler, type ModeHandlers } from "./ui/repl.js";
-
-// ── Mode handlers (lazy-loaded) ───────────────────────────────────────────────
-
-async function buildModeHandlers(): Promise<ModeHandlers> {
-  const { runStudentMode } = await import("./modes/student.js");
-  const { runDeveloperMode } = await import("./modes/developer.js");
-  const { runFounderMode } = await import("./modes/founder.js");
-  const { runCollegeMode } = await import("./modes/college.js");
-  const { runApiPartnerMode } = await import("./modes/api-partner.js");
-
-  const handlers: ModeHandlers = new Map<PlatformMode, ModeHandler>();
-  handlers.set("student", runStudentMode);
-  handlers.set("developer", runDeveloperMode);
-  handlers.set("founder", runFounderMode);
-  handlers.set("college", runCollegeMode);
-  handlers.set("api-partner", runApiPartnerMode);
-  return handlers;
-}
+// Types only. The REPL class this module also exports is never constructed
+// anywhere — `chat` runs the ink TUI, or TUISession when there is no TTY — so
+// importing it made a third chat surface look reachable when it is not.
+// The mode-handler map and the MODES list that used to sit here fed
+// BharatBuildREPL, a third chat surface that was never constructed. Each mode
+// is reached through its own subcommand below, which loads its handler
+// directly.
 
 // ── Bootstrap client ──────────────────────────────────────────────────────────
 
 function makeClient(apiUrl?: string): BharatBuildClient {
   const config = loadConfig();
   const creds = loadCredentials();
+  const baseUrl = apiUrl ?? config.apiBaseUrl;
   const client = new BharatBuildClient({
-    apiBaseUrl: apiUrl ?? config.apiBaseUrl,
+    apiBaseUrl: baseUrl,
     authToken: creds?.token,
   });
+  attachAutoRefresh(client, baseUrl);
   return client;
 }
 
@@ -81,6 +72,43 @@ program
   .option("-v, --verbose", "Verbose output");
 
 // ── login ─────────────────────────────────────────────────────────────────────
+
+/*
+ * `key` — store a provider key so direct calls do not depend on the shell.
+ *
+ * An environment variable has to be set again in every new terminal and does
+ * nothing for a window already open, which is how a user with a working key
+ * hit the server's exhausted account three times in a row.
+ */
+const keyCmd = program
+  .command("key")
+  .description("Manage a provider API key for direct (non-proxied) model calls");
+
+keyCmd
+  .command("set <api-key>")
+  .description("Store an API key (anthropic|openai|gemini, detected from the key)")
+  .option("--provider <name>", "Force the provider instead of detecting it")
+  .action(async (apiKey: string, opts: { provider?: string }) => {
+    const { keySet } = await import("./commands/key.js");
+    process.exitCode = keySet(apiKey, opts.provider);
+  });
+
+keyCmd
+  .command("show")
+  .description("Show which key is in use, and where it came from")
+  .action(async () => {
+    const { keyShow } = await import("./commands/key.js");
+    process.exitCode = keyShow();
+  });
+
+keyCmd
+  .command("clear")
+  .description("Remove the stored key and go back to the BharatBuild server")
+  .option("--provider <name>", "Remove only this provider's key")
+  .action(async (opts: { provider?: string }) => {
+    const { keyClear } = await import("./commands/key.js");
+    process.exitCode = keyClear(opts.provider);
+  });
 
 program
   .command("login")
@@ -357,10 +385,17 @@ program
     const spinner = new Spinner();
     spinner.start("Fetching token balance…");
     try {
-      const data = await client.get<Record<string, unknown>>("/api/v1/tokens/balance");
+      const data = await client.get<Record<string, unknown>>(TOKENS_BALANCE);
       spinner.succeed();
-      const balance = Number(data.balance ?? data.tokens_remaining ?? 0);
-      console.log(`\n  ${chalk.bold("Token Balance:")} ${chalk.green(balance.toLocaleString())}\n`);
+      // The field is `remaining_tokens`. This read `tokens_remaining` — the
+      // same two words the other way round — so it always fell through to 0
+      // and an account with 100,000 tokens displayed as empty.
+      const b = parseTokenBalance(data);
+      console.log(`\n  ${chalk.bold("Token Balance:")} ${chalk.green(formatTokenBalance(b))}`);
+      if (!b.unknown) {
+        console.log(chalk.dim(`  used ${b.used.toLocaleString("en-IN")} of ${b.total.toLocaleString("en-IN")}`));
+      }
+      console.log();
     } catch (err) {
       spinner.fail();
       console.error(chalk.red(`  ${err instanceof Error ? err.message : err}`));
@@ -369,8 +404,6 @@ program
   });
 
 // ── mode subcommands ──────────────────────────────────────────────────────────
-
-const MODES: PlatformMode[] = ["student", "developer", "founder", "college", "api-partner"];
 
 // bharatbuild student "describe project"
 program
@@ -474,17 +507,27 @@ program
     if (!configExists) fs.mkdirSync(configDir, { recursive: true });
     console.log(`  Config   ${chalk.green("✓")}  ${configDir}`);
 
-    // Auth
+    // Auth — stored credentials alone prove nothing; the access token may be
+    // expired and unrefreshable, so report what the server actually accepts.
+    const config = loadConfig();
+    const client = makeClient(program.opts().apiUrl);
     const creds = loadCredentials();
     if (creds) {
-      console.log(`  Auth     ${chalk.green("✓")}  Logged in as ${chalk.green(creds.email ?? creds.name)}`);
+      const who = creds.email ?? creds.name;
+      process.stdout.write(`  Auth     `);
+      try {
+        await client.get("/api/v1/auth/me");
+        console.log(`${chalk.green("✓")}  Logged in as ${chalk.green(who)}`);
+      } catch {
+        console.log(
+          `${chalk.yellow("⚠")}  Session for ${who} is not valid  ${chalk.dim("→ run: bharatbuild login")}`
+        );
+      }
     } else {
       console.log(`  Auth     ${chalk.yellow("⚠")}  Not logged in  ${chalk.dim("→ run: bharatbuild login")}`);
     }
 
     // API connectivity — only warn, don't fail
-    const config = loadConfig();
-    const client = makeClient(program.opts().apiUrl);
     process.stdout.write(`  API      `);
     try {
       await Promise.race([
@@ -520,8 +563,9 @@ program
     // Apply --model flag if provided (overrides config; default is 'auto')
     if (opts.model) config.model = opts.model;
 
-    // Start hooks runtime (file watcher + git hooks)
-    hooksRuntime.start(process.cwd());
+    // Hooks start inside chatCommand now, so `bharatbuild` and
+    // `bharatbuild chat` behave identically rather than differing by which
+    // one you happened to type.
 
     // Launch the full TUI chat session (like kiro-cli does by default)
     const { chatCommand: runChat } = await import("./commands/chat.js");
@@ -557,10 +601,10 @@ import { reviewCommand }       from "./commands/review.js";
 import { modelCommand }        from "./commands/model.js";
 
 import { hookRunCommand } from "./commands/hook-run.js";
-import { hooksRuntime } from "./hooks/hooks-runtime.js";
 import { themeCommand } from "./commands/theme.js";
 import { integrationsCommand } from "./commands/integrations.js";
 import { inlineCommand } from "./commands/inline.js";
+import { TOKENS_BALANCE, parseTokenBalance, formatTokenBalance } from "./api/token-balance.js";
 
 program.addCommand(hookRunCommand());
 program.addCommand(updateCommand());
@@ -620,6 +664,9 @@ program
   .description("Interactive chat session with full agent (tool use)")
   .option("--model <model>",           "AI model to use")
   .option("-r, --resume",              "Resume the most recent session for this directory")
+  // Same behaviour, the name people reach for first — and what claude-code
+  // and several other CLIs call it.
+  .option("-c, --continue",            "Alias for --resume")
   .option("--resume-id <id>",          "Resume a specific session by ID")
   .option("--resume-picker",           "Open interactive session picker")
   .option("--list-sessions",           "List all saved sessions and exit")

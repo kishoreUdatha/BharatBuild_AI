@@ -140,7 +140,7 @@ Steps:
                 print(f"  [Iteration {iteration + 1}] Calling Claude...")
 
                 response = await self._client.messages.create(
-                    model="claude-sonnet-4-20250514",
+                    model="claude-sonnet-5",
                     max_tokens=16384,
                     system=self.SYSTEM_PROMPT,
                     tools=self.TOOLS,

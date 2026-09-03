@@ -25,6 +25,33 @@ class ApiClient {
         if (token) {
           config.headers.Authorization = `Bearer ${token}`
         }
+        // The college a trainer is currently working in. Sent on every
+        // request rather than threaded through each call, because a trainer
+        // teaches several colleges and every screen must show one at a time -
+        // two colleges both have a "CSE section A", and a merged view is how a
+        // register gets marked against the wrong students.
+        //
+        // The server only honours a college that trainer is assigned to, so
+        // this is a preference, not a permission.
+        const college = typeof window !== 'undefined'
+          ? localStorage.getItem('active_college_id') : null
+        if (college) {
+          config.headers['X-College-Id'] = college
+        }
+        // The trainer a manager is currently looking at. Same idea as the
+        // college above and honoured only for a manager, and only for a
+        // trainer who actually works in the college they have chosen.
+        const trainer = typeof window !== 'undefined'
+          ? localStorage.getItem('active_trainer_id') : null
+        if (trainer) {
+          config.headers['X-Trainer-Id'] = trainer
+        }
+        // The instance defaults to application/json, which is wrong for a file
+        // upload: multipart needs a boundary, and only axios can generate one.
+        // Clearing the header lets it set the full Content-Type itself.
+        if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+          delete config.headers['Content-Type']
+        }
         return config
       },
       (error) => Promise.reject(error)
@@ -61,7 +88,14 @@ class ApiClient {
             // No refresh token or refresh failed - logout
             removeAccessToken()
             localStorage.removeItem('refresh_token')
-            window.location.href = '/login'
+            // Come back to where they were. This interceptor fires before any
+            // page's own 401 handler, so a bare '/login' here discards the URL
+            // the visitor actually asked for - including the batch code on an
+            // invite link, which is the whole payload of that link.
+            const here = `${window.location.pathname}${window.location.search}`
+            window.location.href = here.startsWith('/login')
+              ? '/login'
+              : `/login?next=${encodeURIComponent(here)}`
           }
         }
 
@@ -99,6 +133,9 @@ class ApiClient {
     full_name: string;
     role?: string;
     phone?: string;
+    // Proof that this caller verified the address and number.
+    email_verification_token?: string;
+    phone_verification_token?: string;
     // Student Academic Details
     roll_number?: string;
     college_name?: string;
@@ -107,6 +144,7 @@ class ApiClient {
     course?: string;
     year_semester?: string;
     batch?: string;
+    section?: string;
     // Guide Details
     guide_name?: string;
     guide_designation?: string;

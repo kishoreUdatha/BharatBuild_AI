@@ -47,6 +47,14 @@ async def validate_critical_config():
     if not settings.ANTHROPIC_API_KEY:
         errors.append("ANTHROPIC_API_KEY is not set - AI generation will NOT work!")
 
+    # Retired model IDs 404 at the API, so every call on that tier fails at
+    # runtime rather than at deploy. Surface it at startup instead.
+    from app.core.models import assert_not_retired, collapsed_tiers
+    for problem in assert_not_retired():
+        errors.append(problem)
+    for note in collapsed_tiers():
+        warnings.append(f"Model config: {note}")
+
     # Warnings: App can function but some features may not work
     if not settings.REDIS_URL:
         warnings.append("REDIS_URL not set - rate limiting disabled")
@@ -254,8 +262,16 @@ app.add_middleware(RequestLoggingMiddleware)
 # 2. Security headers
 app.add_middleware(SecurityHeadersMiddleware)
 
-# 3. Request size limit (10MB default)
-app.add_middleware(RequestSizeLimitMiddleware, max_size=10 * 1024 * 1024)
+# 3. Request size limit. 10MB for ordinary requests; file uploads get the
+# ceiling the file store advertises, so the API and this layer agree.
+app.add_middleware(
+    RequestSizeLimitMiddleware,
+    max_size=10 * 1024 * 1024,
+    # A little headroom over the store's own cap: multipart framing adds
+    # bytes, so a file exactly at the limit must not be refused here with a
+    # message that names a different number.
+    upload_max_size=(settings.MAX_UPLOAD_MB + 2) * 1024 * 1024,
+)
 
 # 4. CORS - Origins from CORS_ORIGINS_STR in .env
 # Include sandbox server IP for browser error reporting from previews
@@ -269,9 +285,13 @@ sandbox_origins = [
     f"http://{sandbox_ip}:3001", f"http://{sandbox_ip}:3002", f"http://{sandbox_ip}:3003",
     f"http://{sandbox_ip}:4200", f"http://{sandbox_ip}:8000", f"http://{sandbox_ip}:8001",
 ]
+# NOTE: Starlette's `allow_origins` is an exact-match list - a literal
+# "https://*.bharatbuild.ai" entry never matches anything. Subdomain matching
+# must go through `allow_origin_regex`.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS + ["https://*.bharatbuild.ai"] + sandbox_origins,
+    allow_origins=settings.CORS_ORIGINS + sandbox_origins,
+    allow_origin_regex=r"https://([a-z0-9-]+\.)*bharatbuild\.ai",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -311,63 +331,9 @@ async def health_check():
     }
 
 
-# TEMPORARY: One-time database fix endpoint - DELETE AFTER USE
-@app.get("/fix-db-indexes", tags=["Admin"])
-async def fix_db_indexes():
-    """Drop orphaned indexes and recreate tables - ONE TIME USE"""
-    import asyncpg
-    from urllib.parse import urlparse
-
-    db_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
-    parsed = urlparse(db_url)
-
-    conn = await asyncpg.connect(
-        host=parsed.hostname,
-        port=parsed.port or 5432,
-        user=parsed.username,
-        password=parsed.password,
-        database=parsed.path.lstrip("/")
-    )
-
-    results = []
-    try:
-        # Drop all indexes
-        await conn.execute('DROP INDEX IF EXISTS "ix_workspaces_user_id" CASCADE')
-        results.append("Dropped ix_workspaces_user_id")
-
-        await conn.execute('DROP INDEX IF EXISTS "ix_workspaces_name" CASCADE')
-        results.append("Dropped ix_workspaces_name")
-
-        await conn.execute('DROP INDEX IF EXISTS "ix_projects_user_id" CASCADE')
-        results.append("Dropped ix_projects_user_id")
-
-        await conn.execute('DROP INDEX IF EXISTS "ix_users_email" CASCADE')
-        results.append("Dropped ix_users_email")
-
-        # Drop all tables
-        await conn.execute('DROP TABLE IF EXISTS workspaces CASCADE')
-        results.append("Dropped workspaces table")
-
-        await conn.execute('DROP TABLE IF EXISTS projects CASCADE')
-        results.append("Dropped projects table")
-
-        await conn.execute('DROP TABLE IF EXISTS chat_messages CASCADE')
-        results.append("Dropped chat_messages table")
-
-        await conn.execute('DROP TABLE IF EXISTS users CASCADE')
-        results.append("Dropped users table")
-
-        # List remaining objects
-        remaining = await conn.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
-        results.append(f"Remaining tables: {[r['tablename'] for r in remaining]}")
-
-        remaining_idx = await conn.fetch("SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND indexname NOT LIKE 'pg_%'")
-        results.append(f"Remaining indexes: {[r['indexname'] for r in remaining_idx]}")
-
-    finally:
-        await conn.close()
-
-    return {"status": "done", "results": results}
+# SECURITY NOTE: The unauthenticated /fix-db-indexes endpoint that used to live
+# here has been removed. It dropped the users/projects/workspaces tables over an
+# unauthenticated GET. Schema changes go through alembic; see app/api/v1/router.py.
 
 
 # Root endpoint
@@ -384,6 +350,14 @@ async def root():
 
 # Include API router
 app.include_router(api_router, prefix=f"/api/{settings.API_VERSION}")
+
+# Gemini-protocol compatibility layer.
+# Mounted at the app root rather than under /api/v1: the "/v1beta/models/..."
+# prefix is baked into the Google GenAI client SDK and cannot be configured, so
+# clients pointed here via GOOGLE_GEMINI_BASE_URL must find it at the root.
+from app.api.v1.endpoints import gemini_compat  # noqa: E402
+
+app.include_router(gemini_compat.router)
 
 
 if __name__ == "__main__":

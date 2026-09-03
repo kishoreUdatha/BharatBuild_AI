@@ -12,6 +12,8 @@ import random
 
 from app.core.database import get_db
 from app.core.logging_config import logger
+from app.models.user import User
+from app.modules.auth.dependencies import get_current_admin
 from app.models.campus_drive import (
     CampusDrive,
     CampusDriveRegistration,
@@ -471,6 +473,17 @@ async def submit_quiz(
                 marks_obtained=marks
             ))
 
+        # Clear anything auto-save already wrote for this attempt before the
+        # graded set goes in. Auto-save stores a provisional row per answered
+        # question with is_correct=False; without this the two sets coexist and
+        # the result reads back double the questions, double the attempts, and
+        # counts every provisional row as wrong.
+        await db.execute(
+            CampusDriveResponse.__table__.delete().where(
+                CampusDriveResponse.registration_id == registration.id
+            )
+        )
+
         # Bulk add all responses
         db.add_all(responses_to_add)
 
@@ -600,6 +613,10 @@ async def get_result(
             ai_ml_total=drive.ai_ml_questions,
             english_score=registration.english_score,
             english_total=drive.english_questions,
+            # Was left off entirely, so the coding row always read 0 out of 0
+            # however the drive was configured.
+            coding_score=registration.coding_score,
+            coding_total=drive.coding_questions,
         )
 
     except HTTPException:
@@ -895,19 +912,17 @@ async def resume_quiz(
 
 @router.post("/seed")
 async def seed_campus_drive_data(
-    secret: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin),
 ):
     """
-    Seed campus drive and questions data.
-    Requires secret key: 'bharatbuild2026'
-    """
-    if secret != "bharatbuild2026":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid secret key"
-        )
+    Seed campus drive and questions data. Admin only.
 
+    This previously gated a database-writing endpoint on a shared secret
+    hardcoded in this file (and therefore committed to git), passed as a URL
+    query parameter where it also landed in access logs. It now uses the same
+    admin dependency as the rest of the admin surface.
+    """
     try:
         # Check if drive already exists
         existing = await db.execute(

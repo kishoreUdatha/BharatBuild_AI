@@ -163,6 +163,10 @@ function UserDetailsModal({
                     <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Batch</td>
                     <td className="py-2 text-right font-medium">{user.batch || '-'}</td>
                   </tr>
+                  <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
+                    <td className={`py-2 ${isDark ? 'text-zinc-500' : 'text-gray-500'}`}>Section</td>
+                    <td className="py-2 text-right font-medium">{user.section || '-'}</td>
+                  </tr>
 
                   <tr><td colSpan={2} className={`pt-4 pb-1 text-[10px] font-semibold uppercase ${isDark ? 'text-zinc-600' : 'text-gray-400'}`}>Guide</td></tr>
                   <tr className={`border-b ${isDark ? 'border-zinc-800/50' : 'border-gray-100'}`}>
@@ -324,6 +328,8 @@ const ROLES = [
   { value: 'developer', label: 'Developer' },
   { value: 'founder', label: 'Founder' },
   { value: 'faculty', label: 'Faculty' },
+  { value: 'trainer', label: 'Trainer' },
+  { value: 'manager', label: 'Platform manager' },
   { value: 'admin', label: 'Admin' },
   { value: 'api_partner', label: 'API Partner' },
 ]
@@ -361,6 +367,8 @@ export default function AdminUsersPage() {
     changePageSize,
     handleSearch,
     handleRoleFilter,
+    handleCollegeFilter,
+    colleges,
     handleActiveFilter,
     handleSort,
     getUserDetails,
@@ -373,6 +381,7 @@ export default function AdminUsersPage() {
 
   const [searchInput, setSearchInput] = useState('')
   const [selectedRole, setSelectedRole] = useState('')
+  const [selectedCollege, setSelectedCollege] = useState('')
   const [selectedStatus, setSelectedStatus] = useState('')
   const [actionMenuUser, setActionMenuUser] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
@@ -391,6 +400,12 @@ export default function AdminUsersPage() {
     setSelectedRole(value)
     handleRoleFilter(value)
   }, [handleRoleFilter])
+
+  const onCollegeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value
+    setSelectedCollege(value)
+    handleCollegeFilter(value)
+  }, [handleCollegeFilter])
 
   const onStatusChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value
@@ -459,6 +474,8 @@ export default function AdminUsersPage() {
         return 'bg-red-500/20 text-red-400'
       case 'faculty':
         return 'bg-purple-500/20 text-purple-400'
+      case 'trainer':
+        return 'bg-teal-500/20 text-teal-400'
       case 'developer':
         return 'bg-blue-500/20 text-blue-400'
       case 'founder':
@@ -528,6 +545,25 @@ export default function AdminUsersPage() {
                 {role.label}
               </option>
             ))}
+          </select>
+
+          {/* College Filter */}
+          <select
+            value={selectedCollege}
+            onChange={onCollegeChange}
+            className={`px-4 py-2 rounded-lg border text-sm ${
+              isDark
+                ? 'bg-[#252525] border-[#333] text-white'
+                : 'bg-gray-50 border-gray-200 text-gray-900'
+            } outline-none focus:border-blue-500`}
+          >
+            <option value="">All Colleges</option>
+            {colleges.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+            {/* Accounts with no tenant are the ones worth finding: every
+                screen scoped by college is empty for them. */}
+            <option value="none">— No college —</option>
           </select>
 
           {/* Status Filter */}
@@ -633,6 +669,11 @@ export default function AdminUsersPage() {
                   <th className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                     isDark ? 'text-gray-400' : 'text-gray-500'
                   }`}>
+                    College
+                  </th>
+                  <th className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                    isDark ? 'text-gray-400' : 'text-gray-500'
+                  }`}>
                     Status
                   </th>
                   <th className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${
@@ -667,7 +708,7 @@ export default function AdminUsersPage() {
                 {loading ? (
                   [...Array(5)].map((_, i) => (
                     <tr key={i}>
-                      <td colSpan={8} className="px-4 py-4">
+                      <td colSpan={9} className="px-4 py-4">
                         <div className="animate-pulse flex items-center gap-4">
                           <div className={`w-10 h-10 rounded-full ${isDark ? 'bg-[#333]' : 'bg-gray-200'}`} />
                           <div className="flex-1 space-y-2">
@@ -680,7 +721,7 @@ export default function AdminUsersPage() {
                   ))
                 ) : users.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className={`px-4 py-8 text-center ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+                    <td colSpan={9} className={`px-4 py-8 text-center ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
                       No users found
                     </td>
                   </tr>
@@ -720,6 +761,14 @@ export default function AdminUsersPage() {
                         <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
                           {user.role}
                         </span>
+                      </td>
+                      <td className={`px-4 py-4 text-sm ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+                        {user.college ?? (
+                          // Not a dash: an account with no tenant is invisible
+                          // to every college-scoped screen, which is a problem
+                          // rather than a blank.
+                          <span className="text-amber-500">No college</span>
+                        )}
                       </td>
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-2">

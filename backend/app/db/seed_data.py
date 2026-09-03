@@ -157,6 +157,9 @@ SAMPLE_USERS = [
     # Admin
     {
         "email": "admin@bharatbuild.ai", "full_name": "System Admin", "role": UserRole.ADMIN,
+        # The platform operator, not a college's administrator - the only
+        # account that should carry this.
+        "is_superuser": True,
         "organization": "BharatBuild", "phone": "9000000001", "username": "admin",
         "avatar_url": "https://ui-avatars.com/api/?name=Admin&background=ef4444&color=fff"
     },
@@ -242,6 +245,12 @@ async def seed_users(db: AsyncSession) -> List[User]:
             oauth_provider=user_data.get("oauth_provider"),
             is_active=True,
             is_verified=True,
+            # `get_platform_admin` separates the vendor's administrator from a
+            # college's own, and reads this flag to do it. Without it every
+            # route behind that guard - billing, analytics, plans, API keys,
+            # colleges - refuses everyone, including the only admin account
+            # the seeder creates.
+            is_superuser=user_data.get("is_superuser", False),
             created_at=datetime.utcnow() - timedelta(days=random.randint(1, 365)),
             last_login=datetime.utcnow() - timedelta(hours=random.randint(1, 168)),
             # Student academic fields
@@ -308,7 +317,10 @@ async def seed_colleges(db: AsyncSession) -> List[College]:
         college = College(
             name=college_data["name"],
             code=college_data["code"],
-            domain=college_data["domain"],
+            # No `domain` column on College - the sample data's domain is the
+            # email suffix, not a stored field. City/state are real columns.
+            city=college_data["city"],
+            state=college_data["state"],
             address=f"{college_data['city']}, {college_data['state']}, India",
             is_active=True
         )
@@ -524,7 +536,7 @@ async def seed_token_transactions(db: AsyncSession, users: List[User], projects:
     transactions = []
     transaction_types = ["usage", "purchase", "bonus", "monthly_reset"]
     agents = ["planner", "writer", "fixer", "runner", "documenter"]
-    models = ["claude-3-haiku-20240307", "claude-3-sonnet-20240229", "claude-3-5-sonnet-20241022"]
+    models = ["claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5"]
 
     for user in users:
         user_projects = [p for p in projects if p.user_id == user.id]

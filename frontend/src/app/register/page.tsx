@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { OtpField } from '@/components/auth/OtpField'
 import Link from 'next/link'
 import { apiClient } from '@/lib/api-client'
 import { setAccessToken } from '@/lib/auth-utils'
@@ -10,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { UserPlus, Mail, Lock, User, AlertCircle, Briefcase, GraduationCap, Building2, Users, ChevronRight, ChevronLeft, Check, Phone, Zap, Sparkles, Shield, Clock } from 'lucide-react'
+import { COURSES, SECTIONS, OTHER, getDepartments, getYearSemesterOptions, getBatchOptions } from '@/lib/academic-options'
 
 // Google Icon SVG
 const GoogleIcon = () => (
@@ -56,6 +58,25 @@ const StepIndicator = ({ currentStep, totalSteps, stepTitles }: { currentStep: n
 )
 
 export default function RegisterPage() {
+  // Both contact fields must be proven before an account can be created.
+  // The proof tokens issued by /auth/otp/verify. Registration is refused
+  // without them, so holding the boolean alone is not enough.
+  const [emailToken, setEmailToken] = useState<string | null>(null)
+  const [phoneToken, setPhoneToken] = useState<string | null>(null)
+  const emailVerified = Boolean(emailToken)
+  const phoneVerified = Boolean(phoneToken)
+
+  // Whether a one-time code is required at all. Read from the server rather
+  // than assumed, so the form cannot demand a code the server has stopped
+  // checking - or let someone through when it has not.
+  const [otpRequired, setOtpRequired] = useState(true)
+  useEffect(() => {
+    apiClient.get<{ require_contact_verification: boolean }>('/auth/signup-config')
+      .then((c) => setOtpRequired(c.require_contact_verification))
+      // A server that will not say is treated as requiring it: failing closed
+      // here only blocks signup, failing open would let anyone in.
+      .catch(() => setOtpRequired(true))
+  }, [])
   const router = useRouter()
   const [currentStep, setCurrentStep] = useState(0)
   const [formData, setFormData] = useState({
@@ -72,6 +93,7 @@ export default function RegisterPage() {
     course: '',
     yearSemester: '',
     batch: '',
+    section: '',
     guideName: '',
     guideDesignation: '',
     hodName: ''
@@ -80,6 +102,8 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false)
   const [oauthLoading, setOauthLoading] = useState<'google' | 'github' | null>(null)
   const [isAlreadyLoggedIn, setIsAlreadyLoggedIn] = useState(false)
+  // Set when the student picks "Other" as department - reveals a free-text input
+  const [customDepartment, setCustomDepartment] = useState(false)
 
   useEffect(() => {
     const token = localStorage.getItem('access_token')
@@ -92,6 +116,26 @@ export default function RegisterPage() {
   const steps = isStudent ? ['Account', 'Academic', 'Guide'] : ['Account']
   const totalSteps = steps.length
 
+  // Course drives Department, Year/Sem and Batch - all three reset when it changes
+  const departmentOptions = getDepartments(formData.course)
+  const yearSemesterOptions = getYearSemesterOptions(formData.course)
+  const batchOptions = getBatchOptions(formData.course)
+
+  const handleCourseChange = (course: string) => {
+    setFormData({ ...formData, course, department: '', yearSemester: '', batch: '' })
+    setCustomDepartment(course === OTHER)
+  }
+
+  const handleDepartmentChange = (department: string) => {
+    if (department === OTHER) {
+      setCustomDepartment(true)
+      setFormData({ ...formData, department: '' })
+      return
+    }
+    setCustomDepartment(false)
+    setFormData({ ...formData, department })
+  }
+
   const validateStep = (step: number): boolean => {
     setError('')
     if (step === 0) {
@@ -100,19 +144,28 @@ export default function RegisterPage() {
       if (formData.password !== formData.confirmPassword) { setError('Passwords do not match'); return false }
     }
     if (step === 1 && isStudent) {
+      if (!formData.course) { setError('Course is required'); return false }
+      if (!formData.department.trim()) { setError('Department is required'); return false }
       if (!formData.rollNumber.trim()) { setError('Roll Number is required'); return false }
       if (!formData.collegeName.trim()) { setError('College Name is required'); return false }
-      if (!formData.department.trim()) { setError('Department is required'); return false }
-      if (!formData.course) { setError('Course is required'); return false }
     }
-    if (step === 2 && isStudent) {
-      if (!formData.guideName.trim()) { setError('Guide Name is required'); return false }
-    }
+    // Step 2 asks for the guide and HOD. None of it is required: a student
+    // signing up has usually not been allotted a guide yet - that comes with
+    // the batch they join, which records it. Demanding it here stopped
+    // invited teammates who had the batch code but not the staff name.
     return true
   }
 
   const nextStep = () => { if (validateStep(currentStep) && currentStep < totalSteps - 1) setCurrentStep(currentStep + 1) }
   const prevStep = () => { if (currentStep > 0) setCurrentStep(currentStep - 1) }
+
+  const phoneNeedsProof = otpRequired && formData.phone.trim().length > 0 && !phoneVerified
+  const contactProven = !otpRequired || (emailVerified && !phoneNeedsProof)
+  const contactHint = !otpRequired
+    ? ''
+    : !emailVerified
+      ? 'Verify your email with the code we send you first.'
+      : 'Verify your mobile number, or clear the field to skip it.'
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -124,6 +177,8 @@ export default function RegisterPage() {
         password: formData.password,
         full_name: formData.fullName,
         phone: formData.phone || undefined,
+        email_verification_token: emailToken ?? undefined,
+        phone_verification_token: phoneToken ?? undefined,
         role: formData.role,
         roll_number: formData.role === 'student' ? formData.rollNumber : undefined,
         college_name: formData.role === 'student' ? formData.collegeName : undefined,
@@ -132,6 +187,7 @@ export default function RegisterPage() {
         course: formData.role === 'student' ? formData.course : undefined,
         year_semester: formData.role === 'student' ? formData.yearSemester : undefined,
         batch: formData.role === 'student' ? formData.batch : undefined,
+        section: formData.role === 'student' ? formData.section : undefined,
         guide_name: formData.role === 'student' ? formData.guideName : undefined,
         guide_designation: formData.role === 'student' ? formData.guideDesignation : undefined,
         hod_name: formData.role === 'student' ? formData.hodName : undefined
@@ -139,7 +195,14 @@ export default function RegisterPage() {
       const loginResponse = await apiClient.login(formData.email, formData.password)
       setAccessToken(loginResponse.access_token)
       localStorage.setItem('refresh_token', loginResponse.refresh_token)
-      router.push('/build')
+      // An invited teammate carries the invite URL here in ?next=, batch code
+      // and all. Honouring it is what lets them go signup -> straight into the
+      // batch; otherwise they arrive at a registration form with an empty code
+      // box and have to be told the code a second time.
+      const next = new URLSearchParams(window.location.search).get('next')
+      // Failing that, a student who registered through the college form goes
+      // to team registration; everyone else to the builder.
+      router.push(next || (formData.role === 'student' ? '/student/registration' : '/build'))
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Registration failed. Please try again.')
     } finally {
@@ -224,6 +287,10 @@ export default function RegisterPage() {
                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                     className="pl-10 h-10 bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-blue-500/50" required />
                 </div>
+                {otpRequired && (
+                  <OtpField channel="email" value={formData.email} verified={emailVerified}
+                    onVerified={setEmailToken} disabled={loading} required />
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-gray-400">Phone</Label>
@@ -233,6 +300,10 @@ export default function RegisterPage() {
                     onChange={(e) => setFormData({ ...formData, phone: e.target.value.replace(/\D/g, '').slice(0, 10) })}
                     className="pl-10 h-10 bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-blue-500/50" maxLength={10} />
                 </div>
+                {otpRequired && formData.phone.length > 0 && (
+                  <OtpField channel="phone" value={formData.phone} verified={phoneVerified}
+                    onVerified={setPhoneToken} disabled={loading} />
+                )}
               </div>
             </div>
 
@@ -279,49 +350,93 @@ export default function RegisterPage() {
               <span className="text-[10px] text-gray-500 font-normal ml-auto">* Required fields</span>
             </div>
 
-            {/* Row 1 */}
+            {/* Row 1 - Course drives Department */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-gray-400">Course <span className="text-red-400">*</span></Label>
+                <Select value={formData.course} onValueChange={handleCourseChange}>
+                  <SelectTrigger className="h-10 bg-white/5 border-white/10 text-white">
+                    <SelectValue placeholder="Select course" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-[#1a1a2e] border-white/10">
+                    {COURSES.map((course) => (
+                      <SelectItem key={course} value={course}>{course}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-gray-400">Department <span className="text-red-400">*</span></Label>
+                {customDepartment ? (
+                  <Input id="department" type="text" placeholder="Enter your department" value={formData.department}
+                    onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+                    className="h-10 bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-blue-500/50" required autoFocus />
+                ) : (
+                  <Select value={formData.department} onValueChange={handleDepartmentChange} disabled={!formData.course}>
+                    <SelectTrigger className="h-10 bg-white/5 border-white/10 text-white disabled:opacity-50">
+                      <SelectValue placeholder={formData.course ? 'Select department' : 'Select course first'} />
+                    </SelectTrigger>
+                    <SelectContent className="bg-[#1a1a2e] border-white/10">
+                      {departmentOptions.map((dept) => (
+                        <SelectItem key={dept} value={dept}>{dept}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            </div>
+
+            {/* Row 2 - Year/Sem, Batch and Section all derive from Course */}
             <div className="grid grid-cols-4 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-gray-400">Year / Sem</Label>
+                <Select value={formData.yearSemester} onValueChange={(value) => setFormData({ ...formData, yearSemester: value })} disabled={!formData.course}>
+                  <SelectTrigger className="h-10 bg-white/5 border-white/10 text-white disabled:opacity-50">
+                    <SelectValue placeholder={formData.course ? 'Select' : 'Course first'} />
+                  </SelectTrigger>
+                  <SelectContent className="bg-[#1a1a2e] border-white/10">
+                    {yearSemesterOptions.map((option) => (
+                      <SelectItem key={option} value={option}>{option}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-gray-400">Batch</Label>
+                <Select value={formData.batch} onValueChange={(value) => setFormData({ ...formData, batch: value })} disabled={!formData.course}>
+                  <SelectTrigger className="h-10 bg-white/5 border-white/10 text-white disabled:opacity-50">
+                    <SelectValue placeholder={formData.course ? 'Select' : 'Course first'} />
+                  </SelectTrigger>
+                  <SelectContent className="bg-[#1a1a2e] border-white/10">
+                    {batchOptions.map((option) => (
+                      <SelectItem key={option} value={option}>{option}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-gray-400">Section</Label>
+                <Select value={formData.section} onValueChange={(value) => setFormData({ ...formData, section: value })}>
+                  <SelectTrigger className="h-10 bg-white/5 border-white/10 text-white">
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-[#1a1a2e] border-white/10">
+                    {SECTIONS.map((option) => (
+                      <SelectItem key={option} value={option}>{option}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-gray-400">Roll No. <span className="text-red-400">*</span></Label>
                 <Input id="rollNumber" type="text" placeholder="21CS101" value={formData.rollNumber}
                   onChange={(e) => setFormData({ ...formData, rollNumber: e.target.value })}
                   className="h-10 bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-blue-500/50" required />
               </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-gray-400">Batch</Label>
-                <Input id="batch" type="text" placeholder="2021-2025" value={formData.batch}
-                  onChange={(e) => setFormData({ ...formData, batch: e.target.value })}
-                  className="h-10 bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-blue-500/50" />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-gray-400">Year / Sem</Label>
-                <Input id="yearSemester" type="text" placeholder="4th / 8th" value={formData.yearSemester}
-                  onChange={(e) => setFormData({ ...formData, yearSemester: e.target.value })}
-                  className="h-10 bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-blue-500/50" />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-gray-400">Course <span className="text-red-400">*</span></Label>
-                <Select value={formData.course} onValueChange={(value) => setFormData({ ...formData, course: value })}>
-                  <SelectTrigger className="h-10 bg-white/5 border-white/10 text-white">
-                    <SelectValue placeholder="Select" />
-                  </SelectTrigger>
-                  <SelectContent className="bg-[#1a1a2e] border-white/10">
-                    <SelectItem value="B.Tech">B.Tech</SelectItem>
-                    <SelectItem value="M.Tech">M.Tech</SelectItem>
-                    <SelectItem value="MCA">MCA</SelectItem>
-                    <SelectItem value="BCA">BCA</SelectItem>
-                    <SelectItem value="B.Sc">B.Sc</SelectItem>
-                    <SelectItem value="M.Sc">M.Sc</SelectItem>
-                    <SelectItem value="BE">BE</SelectItem>
-                    <SelectItem value="ME">ME</SelectItem>
-                    <SelectItem value="Other">Other</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
             </div>
 
-            {/* Row 2 */}
-            <div className="grid grid-cols-3 gap-3">
+            {/* Row 3 */}
+            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs text-gray-400">College <span className="text-red-400">*</span></Label>
                 <div className="relative">
@@ -336,12 +451,6 @@ export default function RegisterPage() {
                 <Input id="universityName" type="text" placeholder="JNTU Hyderabad" value={formData.universityName}
                   onChange={(e) => setFormData({ ...formData, universityName: e.target.value })}
                   className="h-10 bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-blue-500/50" />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-gray-400">Department <span className="text-red-400">*</span></Label>
-                <Input id="department" type="text" placeholder="Computer Science" value={formData.department}
-                  onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                  className="h-10 bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-blue-500/50" required />
               </div>
             </div>
           </div>
@@ -358,10 +467,10 @@ export default function RegisterPage() {
 
             <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1.5">
-                <Label className="text-xs text-gray-400">Guide Name <span className="text-red-400">*</span></Label>
-                <Input id="guideName" type="text" placeholder="Dr. John Smith" value={formData.guideName}
+                <Label className="text-xs text-gray-400">Guide Name</Label>
+                <Input id="guideName" type="text" placeholder="Dr. John Smith (optional)" value={formData.guideName}
                   onChange={(e) => setFormData({ ...formData, guideName: e.target.value })}
-                  className="h-10 bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-blue-500/50" required />
+                  className="h-10 bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-blue-500/50" />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-gray-400">Designation</Label>
@@ -505,14 +614,24 @@ export default function RegisterPage() {
                   </Button>
                 ) : <div />}
 
+                {currentStep === totalSteps - 1 && !contactProven && contactHint && (
+                  /* A title only shows on hover, which is nothing on a phone: a
+                     disabled button with no visible reason reads as broken. */
+                  <p className="flex items-start gap-1.5 text-[11px] text-amber-400">
+                    <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" /> {contactHint}
+                  </p>
+                )}
                 {currentStep < totalSteps - 1 ? (
                   <Button type="button" onClick={nextStep} size="sm"
                     className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white">
                     Next <ChevronRight className="h-4 w-4 ml-1" />
                   </Button>
                 ) : (
-                  <Button type="submit" disabled={loading || oauthLoading !== null} size="sm"
-                    className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white shadow-lg shadow-blue-500/25">
+                  <Button type="submit"
+                    disabled={loading || oauthLoading !== null || !contactProven}
+                    title={contactProven ? undefined : contactHint}
+                    size="sm"
+                    className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white shadow-lg shadow-blue-500/25 disabled:opacity-50">
                     {loading ? 'Creating...' : 'Create Account'}
                   </Button>
                 )}

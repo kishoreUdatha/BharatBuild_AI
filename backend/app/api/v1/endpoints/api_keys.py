@@ -75,6 +75,51 @@ class PaginatedAPIKeysResponse(BaseModel):
     has_previous: bool
 
 
+# ==================== Model <-> schema mapping ====================
+#
+# The HTTP contract and the `api_keys` table do not use the same names, and
+# every handler below used to hand-build its response from attributes the model
+# does not define (`key_prefix`, `rate_limit`, `permissions`, `request_count`).
+# Those raised AttributeError on any read, so the whole resource was broken.
+#
+# The table is the ground truth here: it is created from app/models/api_key.py
+# and no migration alters it. So the columns stay, the wire format stays
+# (the frontend depends on it), and the translation happens in exactly one
+# place instead of being re-derived — differently — in four.
+#
+#   wire            column
+#   ----            ------
+#   key_prefix      derived from `key` (never expose the whole key on read)
+#   rate_limit      rate_limit_per_hour  (its default of 1000 is the one the
+#                                        create schema already defaults to)
+#   permissions     allowed_modes
+#   request_count   total_requests
+
+KEY_PREFIX_LENGTH = 11  # "bb_" + 8 chars
+
+
+def _key_prefix(key: Optional[str]) -> str:
+    """Displayable stub of a key. The full value is shown only at creation."""
+    return key[:KEY_PREFIX_LENGTH] if key else "bb_****"
+
+
+def _to_response(key: APIKey) -> "APIKeyResponse":
+    """Build the wire representation of a single API key."""
+    return APIKeyResponse(
+        id=str(key.id),
+        name=key.name,
+        key_prefix=_key_prefix(key.key),
+        description=key.description,
+        status=key.status.value if key.status else "unknown",
+        rate_limit=key.rate_limit_per_hour or 1000,
+        permissions=key.allowed_modes or ["read"],
+        last_used_at=key.last_used_at,
+        expires_at=key.expires_at,
+        created_at=key.created_at,
+        request_count=key.total_requests or 0,
+    )
+
+
 # ==================== Endpoints ====================
 
 @router.post("/", response_model=APIKeyCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -91,18 +136,21 @@ async def create_api_key(
     # Generate key and secret
     api_key = generate_api_key()
     secret_key = generate_secret_key()
-    key_prefix = f"bb_{api_key[:8]}"
 
-    # Create API key record
+    # Only the secret is hashed. The previous code hashed `api_key + secret_key`,
+    # but bcrypt silently truncates at 72 bytes and that concatenation is ~110,
+    # so most of the secret never reached the hash. The key is stored in the
+    # clear because it is the indexed lookup column, not the confidential half
+    # of the pair - that is what the secret is for.
     key_record = APIKey(
         user_id=current_user.id,
         name=key_data.name,
         description=key_data.description,
-        key_prefix=key_prefix,
-        hashed_key=get_password_hash(api_key + secret_key),
+        key=api_key,
+        secret_hash=get_password_hash(secret_key),
         status=APIKeyStatus.ACTIVE,
-        rate_limit=key_data.rate_limit,
-        permissions=key_data.permissions
+        rate_limit_per_hour=key_data.rate_limit,
+        allowed_modes=key_data.permissions,
     )
 
     db.add(key_record)
@@ -111,19 +159,9 @@ async def create_api_key(
 
     # Return with plain secret (only time it's shown)
     return APIKeyCreateResponse(
-        id=str(key_record.id),
-        name=key_record.name,
-        key_prefix=key_prefix,
+        **_to_response(key_record).model_dump(),
         key=api_key,
         secret=secret_key,
-        description=key_record.description,
-        status=key_record.status.value,
-        rate_limit=key_record.rate_limit,
-        permissions=key_record.permissions or ["read"],
-        last_used_at=key_record.last_used_at,
-        expires_at=key_record.expires_at,
-        created_at=key_record.created_at,
-        request_count=key_record.request_count or 0
     )
 
 
@@ -165,22 +203,7 @@ async def list_api_keys(
     total_pages = (total + page_size - 1) // page_size if total > 0 else 1
 
     return PaginatedAPIKeysResponse(
-        items=[
-            APIKeyResponse(
-                id=str(key.id),
-                name=key.name,
-                key_prefix=key.key_prefix or "bb_****",
-                description=key.description,
-                status=key.status.value if key.status else "unknown",
-                rate_limit=key.rate_limit or 1000,
-                permissions=key.permissions or ["read"],
-                last_used_at=key.last_used_at,
-                expires_at=key.expires_at,
-                created_at=key.created_at,
-                request_count=key.request_count or 0
-            )
-            for key in keys
-        ],
+        items=[_to_response(key) for key in keys],
         total=total,
         page=page,
         page_size=page_size,
@@ -217,19 +240,7 @@ async def get_api_key(
             detail="Invalid key ID"
         )
 
-    return APIKeyResponse(
-        id=str(key.id),
-        name=key.name,
-        key_prefix=key.key_prefix or "bb_****",
-        description=key.description,
-        status=key.status.value if key.status else "unknown",
-        rate_limit=key.rate_limit or 1000,
-        permissions=key.permissions or ["read"],
-        last_used_at=key.last_used_at,
-        expires_at=key.expires_at,
-        created_at=key.created_at,
-        request_count=key.request_count or 0
-    )
+    return _to_response(key)
 
 
 @router.patch("/{key_id}", response_model=APIKeyResponse)
@@ -266,34 +277,26 @@ async def update_api_key(
     if key_data.description is not None:
         key.description = key_data.description
     if key_data.rate_limit is not None:
-        key.rate_limit = key_data.rate_limit
+        key.rate_limit_per_hour = key_data.rate_limit
     if key_data.permissions is not None:
-        key.permissions = key_data.permissions
+        key.allowed_modes = key_data.permissions
     if key_data.status is not None:
         try:
-            key.status = APIKeyStatus(key_data.status)
+            new_status = APIKeyStatus(key_data.status)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid status value"
             )
+        key.status = new_status
+        # Keep revoked_at consistent with status, so the two cannot disagree
+        # regardless of which route did the revoking.
+        key.revoked_at = datetime.utcnow() if new_status == APIKeyStatus.REVOKED else None
 
     await db.commit()
     await db.refresh(key)
 
-    return APIKeyResponse(
-        id=str(key.id),
-        name=key.name,
-        key_prefix=key.key_prefix or "bb_****",
-        description=key.description,
-        status=key.status.value if key.status else "unknown",
-        rate_limit=key.rate_limit or 1000,
-        permissions=key.permissions or ["read"],
-        last_used_at=key.last_used_at,
-        expires_at=key.expires_at,
-        created_at=key.created_at,
-        request_count=key.request_count or 0
-    )
+    return _to_response(key)
 
 
 @router.delete("/{key_id}")
@@ -323,8 +326,11 @@ async def revoke_api_key(
             detail="Invalid key ID"
         )
 
-    # Soft delete - mark as revoked
+    # Soft delete - mark as revoked. revoked_at is set alongside the status;
+    # the column existed but nothing ever wrote it, so revoked keys carried no
+    # record of when they were revoked.
     key.status = APIKeyStatus.REVOKED
+    key.revoked_at = datetime.utcnow()
 
     await db.commit()
 

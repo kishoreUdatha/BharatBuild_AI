@@ -1,0 +1,72 @@
+# The CLI had no CI at all: the other workflows here build and test ./backend
+# and ./frontend only, so its test suite ran exactly when somebody remembered
+# to run it by hand.
+#
+# Both platforms on purpose. Most of the bugs this suite exists to catch have
+# been platform-specific — killing a process tree needs taskkill on Windows and
+# a process group on POSIX, CRLF line endings break newline-based patching, and
+# path separators leak into output. Testing one platform would miss the class
+# of bug that keeps happening.
+name: CLI
+
+on:
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'bharatbuild-cli/**'
+      - '.github/workflows/cli.yml'
+  pull_request:
+    paths:
+      - 'bharatbuild-cli/**'
+      - '.github/workflows/cli.yml'
+
+defaults:
+  run:
+    working-directory: ./bharatbuild-cli
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    strategy:
+      # One platform failing should not hide the result on the other — that is
+      # the whole reason for testing both.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        # The floor declared in package.json engines, and current LTS.
+        node: ['18', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+          cache-dependency-path: bharatbuild-cli/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        # No `|| true`. A test job that cannot fail reports success on a broken
+        # build, which is worse than having no job at all.
+        run: npx vitest run --reporter=default
+        env:
+          # The suite asserts on coloured output (diff tints, syntax
+          # highlighting), and chalk disables colour for a non-TTY.
+          FORCE_COLOR: '3'
+          # Several permission tests assert that a tool is *blocked*. This
+          # variable turns that off globally, so a runner with it set would
+          # pass them for the wrong reason.
+          BHARATBUILD_TRUST_ALL_TOOLS: ''
+
+      - name: Build
+        # The published artifact is dist/, so a clean compile is part of green.
+        run: npm run build

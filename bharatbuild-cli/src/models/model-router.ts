@@ -41,9 +41,20 @@ export function createModelClient(modelId: string, overrideApiKey?: string): Mod
 export class AutoModelClient implements ModelClient {
   private opts: AutoSelectOptions;
   private lastResult: ReturnType<typeof autoSelectModel> | null = null;
+  /**
+   * Key to hand the provider it picks.
+   *
+   * Without this the auto path fell through to the provider's own
+   * `process.env` lookup, so a key stored on disk routed as "direct" and then
+   * failed with "ANTHROPIC_API_KEY not set" — right route, no credential.
+   */
+  private apiKey: string | undefined;
+  /** Last model announced, so the banner marks a change rather than a call. */
+  private announced: string | null = null;
 
-  constructor(opts: AutoSelectOptions = {}) {
+  constructor(opts: AutoSelectOptions = {}, apiKey?: string) {
     this.opts = opts;
+    this.apiKey = apiKey;
   }
 
   async *complete(params: {
@@ -70,14 +81,26 @@ export class AutoModelClient implements ModelClient {
     this.lastResult = result;
 
     // Yield a status chunk so TUI shows which model was picked + why
-    // This matches Kiro's "Using Claude Sonnet 5 (auto)" status line
-    yield {
-      type: "text_delta",
-      text: `\x1b[2m  ✦ Auto → ${result.modelName}  (${result.complexity}, ${result.multiplier}x)\x1b[0m\n`,
-    };
+    // This matches Kiro's "Using Claude Sonnet 5 (auto)" status line.
+    //
+    // "status", not "text_delta". As a text_delta this was accumulated into
+    // the assistant message and pushed into the conversation, so every model
+    // call added a banner — ANSI escapes included — that every later call paid
+    // to re-send.
+    // Only on a change. Emitting this per request put an identical
+    // "✦ Auto → Claude Haiku 4.5" line between every step of a forty-turn
+    // session — forty repetitions of one unchanging fact, breaking up the very
+    // output it was meant to label.
+    if (this.announced !== result.modelId) {
+      this.announced = result.modelId;
+      yield {
+        type: "status",
+        text: `\x1b[2m  ✦ Auto → ${result.modelName}  (${result.complexity}, ${result.multiplier}x)\x1b[0m\n`,
+      };
+    }
 
     // Delegate to the concrete provider
-    const client = createModelClient(result.modelId);
+    const client = createModelClient(result.modelId, this.apiKey);
     yield* client.complete({ ...params, model: result.modelId } as Parameters<typeof client.complete>[0]);
   }
 
@@ -98,7 +121,9 @@ export function createModelClientAuto(
   opts?: AutoSelectOptions
 ): ModelClient {
   if (isAutoModel(modelId)) {
-    return new AutoModelClient(opts ?? {});
+    // The key was accepted here and then dropped, so every auto session
+    // depended on the environment regardless of what the caller resolved.
+    return new AutoModelClient(opts ?? {}, overrideApiKey);
   }
   return createModelClient(modelId, overrideApiKey);
 }

@@ -102,19 +102,21 @@ class TestModelSelection:
         model = fixer._select_model(ErrorComplexity.SIMPLE)
         assert "haiku" in model.lower()
 
-    def test_select_sonnet_for_moderate(self, fixer):
-        """Test Sonnet model is selected for MODERATE errors"""
+    # NOTE: these assert the ROUTING (which configured tier slot is chosen),
+    # not the resolved model string. Asserting `"sonnet" in model` made the
+    # test depend on deployment config - it fails under a cost-saving profile
+    # that points CLAUDE_SONNET_MODEL at haiku, even though routing is correct.
+    def test_select_sonnet_tier_for_moderate(self, fixer):
+        """MODERATE errors route to the sonnet-tier slot, not the haiku slot"""
         from app.services.simple_fixer import ErrorComplexity
 
-        model = fixer._select_model(ErrorComplexity.MODERATE)
-        assert "sonnet" in model.lower()
+        assert fixer._select_model(ErrorComplexity.MODERATE) == fixer.model_sonnet
 
-    def test_select_sonnet_for_complex(self, fixer):
-        """Test Sonnet model is selected for COMPLEX errors"""
+    def test_select_sonnet_tier_for_complex(self, fixer):
+        """COMPLEX errors route to the sonnet-tier slot, not the haiku slot"""
         from app.services.simple_fixer import ErrorComplexity
 
-        model = fixer._select_model(ErrorComplexity.COMPLEX)
-        assert "sonnet" in model.lower()
+        assert fixer._select_model(ErrorComplexity.COMPLEX) == fixer.model_sonnet
 
 
 class TestShouldFix:

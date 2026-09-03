@@ -8,7 +8,12 @@ import {
 export interface CLIDefaults {
   apiBaseUrl:     string;
   model:          string;
-  permissionMode: "ask" | "auto" | "deny";
+  /**
+   * "plan" is read-only: it refuses tools that write files or run commands.
+   * It was missing here, so a configured or env-set plan mode fell through
+   * checkPermission's final `return "allow"` and gated nothing outside the TUI.
+   */
+  permissionMode: "ask" | "auto" | "deny" | "plan";
   maxTurns:       number;
   timeoutMs:      number;
   sessionDir:     string;
@@ -16,6 +21,14 @@ export interface CLIDefaults {
   theme:          "dark" | "light" | "auto";
   verbose:        boolean;
   telemetry:      boolean;
+  /**
+   * Per-tool permission rules, checked before the global permissionMode.
+   *
+   * One mode for every tool could not express what people actually want —
+   * "never touch the network, always confirm a shell command, edits are fine" —
+   * so the choice was between being asked about everything and nothing.
+   */
+  permissions?: import("../permissions/rules.js").PermissionRules;
 }
 
 export const DEFAULTS: CLIDefaults = {

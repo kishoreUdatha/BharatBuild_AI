@@ -604,9 +604,14 @@ class ModelRegistry:
         return self.models.get(model_id)
 
     def get_model_name(self, model_id: str) -> str:
-        """Get the actual API model name from an internal ID."""
+        """Get the actual API model name from an internal ID.
+
+        The fallback must be a CURRENT model: it previously returned
+        claude-3-5-haiku-20241022, retired 2026-02-19, so every unrecognised
+        model_id resolved to an ID that 404s.
+        """
         model = self.models.get(model_id)
-        return model.model_name if model else "claude-3-5-haiku-20241022"
+        return model.model_name if model else "claude-haiku-4-5"
 
     def get_provider(self, model_id: str) -> str:
         """Get the provider for a model."""

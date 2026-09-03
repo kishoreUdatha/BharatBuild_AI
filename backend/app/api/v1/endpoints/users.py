@@ -76,6 +76,35 @@ class UserStatsResponse(BaseModel):
 
 # ==================== Endpoints ====================
 
+def _visible_users(stmt, current_user: User):
+    """
+    Narrow a user query to the people this administrator is responsible for.
+
+    The platform operator sees everyone - that is the whole job. A college's
+    own administrator sees their college, because the directory carries staff
+    and student names and email addresses and one customer has no business
+    reading another's.
+    """
+    if current_user.is_superuser:
+        return stmt
+    return stmt.where(User.college_id == current_user.college_id)
+
+
+def _require_admin(current_user: User) -> None:
+    """
+    Guard the endpoints that expose or alter the whole user table.
+
+    Being signed in is not enough here. The directory carries every
+    member's name and email address - including staff - so a student
+    account must not be able to read it, page through it, or search it.
+    """
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
+
+
 @router.get("/", response_model=PaginatedUsersResponse)
 async def list_users(
     page: int = Query(1, ge=1, description="Page number"),
@@ -98,9 +127,11 @@ async def list_users(
     - Filtering: by role, is_active, is_verified
     - Sorting: by any field (created_at, email, full_name, role, etc.)
     """
-    # Build base query
-    query = select(User)
-    count_query = select(func.count(User.id))
+    _require_admin(current_user)
+
+    # Build base query, confined to the people this admin is responsible for.
+    query = _visible_users(select(User), current_user)
+    count_query = _visible_users(select(func.count(User.id)), current_user)
 
     # Apply search filter
     if search:
@@ -185,6 +216,8 @@ async def get_user_stats(
     db: AsyncSession = Depends(get_db)
 ):
     """Get user statistics."""
+    _require_admin(current_user)
+
     from datetime import timedelta
 
     now = datetime.utcnow()
@@ -193,18 +226,18 @@ async def get_user_stats(
     month_start = today_start.replace(day=1)
 
     # Total users
-    total_result = await db.execute(select(func.count(User.id)))
+    total_result = await db.execute(_visible_users(select(func.count(User.id)), current_user))
     total_users = total_result.scalar() or 0
 
     # Active users
     active_result = await db.execute(
-        select(func.count(User.id)).where(User.is_active == True)
+        _visible_users(select(func.count(User.id)), current_user).where(User.is_active == True)
     )
     active_users = active_result.scalar() or 0
 
     # Verified users
     verified_result = await db.execute(
-        select(func.count(User.id)).where(User.is_verified == True)
+        _visible_users(select(func.count(User.id)), current_user).where(User.is_verified == True)
     )
     verified_users = verified_result.scalar() or 0
 
@@ -212,25 +245,25 @@ async def get_user_stats(
     role_counts = {}
     for role in UserRole:
         role_result = await db.execute(
-            select(func.count(User.id)).where(User.role == role)
+            _visible_users(select(func.count(User.id)), current_user).where(User.role == role)
         )
         role_counts[role.value] = role_result.scalar() or 0
 
     # New users today
     today_result = await db.execute(
-        select(func.count(User.id)).where(User.created_at >= today_start)
+        _visible_users(select(func.count(User.id)), current_user).where(User.created_at >= today_start)
     )
     new_users_today = today_result.scalar() or 0
 
     # New users this week
     week_result = await db.execute(
-        select(func.count(User.id)).where(User.created_at >= week_start)
+        _visible_users(select(func.count(User.id)), current_user).where(User.created_at >= week_start)
     )
     new_users_this_week = week_result.scalar() or 0
 
     # New users this month
     month_result = await db.execute(
-        select(func.count(User.id)).where(User.created_at >= month_start)
+        _visible_users(select(func.count(User.id)), current_user).where(User.created_at >= month_start)
     )
     new_users_this_month = month_result.scalar() or 0
 
@@ -252,6 +285,20 @@ async def get_user(
     db: AsyncSession = Depends(get_db)
 ):
     """Get a specific user by ID."""
+    # Anyone may look themselves up - that is what the profile screen does.
+    # Reading somebody else's record is an administrator's business.
+    if str(current_user.id) != user_id:
+        _require_admin(current_user)
+        # An administrator may look up their own college's people, not another's.
+        if not current_user.is_superuser:
+            owner = (await db.execute(
+                select(User.college_id).where(User.id == UUID(user_id))
+            )).scalar_one_or_none()
+            if owner != current_user.college_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+                )
+
     try:
         result = await db.execute(
             select(User).where(User.id == UUID(user_id))
@@ -432,6 +479,10 @@ async def seed_sample_employees(
     Generate sample employee data for testing pagination.
     Creates specified number of sample users.
     """
+    # This writes real rows to the real user table. Left open, any signed-in
+    # student could inflate the roll by fifty accounts per request.
+    _require_admin(current_user)
+
     import random
     from app.core.security import get_password_hash
 

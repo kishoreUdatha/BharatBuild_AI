@@ -119,46 +119,41 @@ async def verify_api_key(api_key: str, secret_key: str) -> bool:
         return False
 
     # Database validation
+    #
+    # This used raw SQL against columns that do not exist on the api_keys table
+    # (`api_key`, `secret_key_hash`, `is_active`), so every lookup raised and was
+    # swallowed by the handler below - the function could only ever return False.
+    # Going through the ORM means the column names are checked against the model
+    # rather than being restated by hand, so the two cannot drift apart again.
+    #
+    # It also compared a sha256 of the secret, while create_api_key stores a
+    # bcrypt hash. Even with the right columns nothing would have matched;
+    # verification has to use the same primitive that wrote the hash.
     try:
         from app.core.database import AsyncSessionLocal
-        from sqlalchemy import select, text
+        from app.models.api_key import APIKey, APIKeyStatus
+        from sqlalchemy import select
 
         async with AsyncSessionLocal() as session:
-            # Query API key from database
             result = await session.execute(
-                text("""
-                    SELECT id, secret_key_hash, is_active, expires_at
-                    FROM api_keys
-                    WHERE api_key = :api_key
-                """),
-                {"api_key": api_key}
+                select(APIKey).where(APIKey.key == api_key)
             )
-            row = result.fetchone()
+            key_record = result.scalar_one_or_none()
 
-            if not row:
+            if not key_record:
                 return False
 
-            key_id, secret_hash, is_active, expires_at = row
-
-            # Check if key is active
-            if not is_active:
+            if key_record.status != APIKeyStatus.ACTIVE:
                 return False
 
-            # Check expiration
-            if expires_at:
+            if key_record.expires_at:
                 from datetime import datetime
-                if datetime.utcnow() > expires_at:
+                if datetime.utcnow() > key_record.expires_at:
                     return False
 
-            # Verify secret key hash
-            # Using constant-time comparison to prevent timing attacks
-            import hmac
-            import hashlib
-            expected_hash = hashlib.sha256(secret_key.encode()).hexdigest()
-            if not hmac.compare_digest(secret_hash, expected_hash):
-                return False
-
-            return True
+            # bcrypt.checkpw is itself constant-time, so verify_password covers
+            # the timing concern the previous hmac.compare_digest was reaching for.
+            return verify_password(secret_key, key_record.secret_hash)
 
     except Exception as e:
         # Log error but don't expose details

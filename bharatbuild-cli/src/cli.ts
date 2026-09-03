@@ -7,6 +7,7 @@ import chalk from "chalk";
 import { loadConfig } from "./config/config.js";
 import { loadCredentials } from "./auth/credentials.js";
 import { BharatBuildClient } from "./api/client.js";
+import { attachAutoRefresh } from "./auth/refresh.js";
 
 export function createCLI(): Command {
   const program = new Command();
@@ -24,7 +25,11 @@ export function createCLI(): Command {
 export function makeClient(apiUrl?: string): BharatBuildClient {
   const config = loadConfig();
   const creds = loadCredentials();
-  return new BharatBuildClient({ apiBaseUrl: apiUrl ?? config.apiBaseUrl, authToken: creds?.token });
+  const baseUrl = apiUrl ?? config.apiBaseUrl;
+  return attachAutoRefresh(
+    new BharatBuildClient({ apiBaseUrl: baseUrl, authToken: creds?.token }),
+    baseUrl
+  );
 }
 
 export function requireAuth(): void {

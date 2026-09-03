@@ -590,6 +590,19 @@ async def razorpay_webhook(
         elif event == "order.paid":
             await _handle_order_paid(payload, db)
 
+        # One Razorpay account collects for two different things: token
+        # purchases above, and students' registration shares here. The event
+        # does not say which, so both are offered it and the one that owns the
+        # order takes it.
+        if event in ("payment.captured", "payment.failed"):
+            entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
+            if entity:
+                from app.services.student_registration import StudentRegistrationService
+                outcome = await StudentRegistrationService(db).settle_from_webhook(
+                    event, entity)
+                if outcome != "not-a-registration":
+                    logger.info(f"[Webhook] registration fee: {outcome}")
+
         return {"status": "ok"}
 
     except HTTPException:

@@ -11,6 +11,10 @@ import { EventStream }                             from "./event-stream.js";
 import { CostMeter }                               from "./cost-meter.js";
 import { withRetry }                               from "./retry-controller.js";
 import { MAX_TURNS, MAX_EMPTY_RETRIES }            from "../config/constants.js";
+// A refusal must say why. "denied by user" is also wrong for a mode-driven
+// deny - nobody was asked - and the model just invents reasons for it.
+import { takeDenyReason } from "../permissions/deny-reason.js";
+import { takeBackgroundNotices } from "../tools/shell/background.js";
 
 export interface ModelClient {
   complete(params: {
@@ -24,11 +28,26 @@ export interface ModelClient {
 }
 
 export interface ModelChunk {
-  type:         "text_delta" | "tool_use" | "usage" | "stop";
+  // tool_progress reports that a tool call is being composed. The backend
+  // buffered the argument JSON and emitted nothing until the block closed, so
+  // writing a large file produced no visible activity for its whole duration —
+  // measured at 9s of silence before the first sign anything was happening.
+  /**
+   * "status" is shown to the user but never becomes part of the reply.
+   *
+   * The auto-router announced its choice as a text_delta, so the banner
+   * "✦ Auto → Claude Haiku 4.5 (moderate, 0.4x)" — ANSI escapes and all — was
+   * accumulated into the assistant message and pushed into the conversation.
+   * Every model call added one, and every later call re-sent all of them.
+   */
+  type:         "text_delta" | "thinking_delta" | "thinking_signature" | "status"
+              | "tool_use" | "tool_progress" | "usage" | "stop";
   text?:        string;
   toolUseId?:   string;
   toolName?:    string;
   toolInput?:   Record<string, unknown>;
+  /** Bytes of tool arguments received so far. tool_progress only. */
+  toolBytes?:   number;
   inputTokens?: number;
   outputTokens?: number;
   stopReason?:  "end_turn" | "tool_use" | "max_tokens" | "stop_sequence";
@@ -42,6 +61,15 @@ export interface AgentLoopOptions {
   onPermission?: (toolName: string, input: Record<string, unknown>) => Promise<"allow" | "deny" | "cancel">;
   /** Run independent tool calls in parallel (default: true, matches Kiro behaviour) */
   parallelTools?: boolean;
+  /**
+   * Content blocks to send ahead of the text — a pasted image, say.
+   *
+   * Needed because this method always pushes the user message itself. The
+   * caller that wanted to attach an image pushed its own combined message
+   * first and then called run() anyway, so the model received the attachment
+   * and then a duplicate text-only turn right behind it.
+   */
+  attachments?: MessageContent[];
 }
 
 // Tools that MUST run sequentially because they mutate shared state
@@ -56,6 +84,15 @@ const SEQUENTIAL_TOOLS = new Set([
 const PARALLEL_SAFE_TOOLS = new Set([
   "read_file",
   "list_files",
+  // glob and grep are the survivors of the duplicate-pair collapse and were
+  // missed here, so the two search tools the model actually reaches for ran
+  // one at a time. The retired names stay listed: a resumed session or a
+  // backend advertising the old spelling still dispatches them.
+  "glob",
+  "grep",
+  "code",          // AST and symbol search - reads only
+  "introspect",    // reads bundled documentation
+  "read_process_output",  // reads a buffer; starting and stopping stay serial
   "find_files",
   "search_code",
   "search_files",
@@ -109,11 +146,24 @@ export class AgentLoop {
     const parallelTools = opts.parallelTools !== false; // default true
     let   emptyRetries = 0;
 
-    // push user message
-    this._context.push({ role: "user", content: userMessage });
+    // push user message, with anything attached to it in front of the text
+    this._context.push(
+      opts.attachments?.length
+        ? { role: "user", content: [...opts.attachments, { type: "text", text: userMessage }] }
+        : { role: "user", content: userMessage },
+    );
 
     for (let turn = 0; turn < maxTurns; turn++) {
       if (signal?.aborted) break;
+
+      // A background process that died says so here, without waiting to be
+      // asked. The agent only polls when it decides to, so a server that
+      // crashes while it is busy editing files would otherwise go unnoticed
+      // until something else tripped over it.
+      for (const notice of takeBackgroundNotices()) {
+        this._context.push({ role: "user", content: notice });
+        await this._events.emit(EventStream.status(notice.split("\n")[0] ?? "", "thinking"));
+      }
 
       await this._events.emit(EventStream.status(
         turn === 0 ? "thinking..." : "continuing...",
@@ -122,6 +172,11 @@ export class AgentLoop {
 
       // ── call model ────────────────────────────────────────────────────────
       let   textBuffer    = "";
+      /** Native extended thinking for this turn, and its signature. */
+      let   thinkingBuffer = "";
+      let   thinkingSignature = "";
+      /** Whether an opening <thinking> tag has been emitted and not yet closed. */
+      let   thinkingOpen = false;
       const pendingTools: Array<{ id: string; name: string; inputStr: string }> = [];
       let   stopReason: ModelChunk["stopReason"] = "end_turn";
 
@@ -142,8 +197,59 @@ export class AgentLoop {
             switch (chunk.type) {
               case "text_delta":
                 if (chunk.text) {
+                  // The reply has started, so the reasoning is over.
+                  if (thinkingOpen) {
+                    thinkingOpen = false;
+                    await this._events.emit(EventStream.text("\n</thinking>\n\n", true));
+                  }
                   textBuffer += chunk.text;
                   await this._events.emit(EventStream.text(chunk.text, true));
+                }
+                break;
+
+              // Displayed, not remembered: it is information about the request
+              // rather than part of the answer, so it must not reach the
+              // context and be charged for again on every later turn.
+              // Reasoning, kept apart from the reply. It is accumulated rather
+              // than streamed into textBuffer so it cannot end up inside the
+              // answer, and it is pushed back to the API with the assistant
+              // turn — with tools in play, omitting it is a hard error, not a
+              // degradation.
+              case "thinking_delta":
+                if (chunk.text) {
+                  thinkingBuffer += chunk.text;
+                  // Wrapped in the tags the renderer already folds, so native
+                  // thinking is set apart and dimmed exactly like the inline
+                  // kind. Emitted raw it read as the reply itself, and ran
+                  // straight into the real answer with no break between them.
+                  if (!thinkingOpen) {
+                    thinkingOpen = true;
+                    await this._events.emit(EventStream.text("<thinking>\n", true));
+                  }
+                  await this._events.emit(EventStream.text(chunk.text, true));
+                }
+                break;
+
+              case "thinking_signature":
+                if (chunk.text) thinkingSignature = chunk.text;
+                break;
+
+              case "status":
+                if (chunk.text) await this._events.emit(EventStream.text(chunk.text, true));
+                break;
+
+              // Forwarded straight through: the model is still composing the
+              // call, so there is nothing to execute yet — only something to
+              // show, which is the whole point of the event.
+              case "tool_progress":
+                if (chunk.toolUseId) {
+                  await this._events.emit({
+                    type: "tool_progress",
+                    id: chunk.toolUseId,
+                    toolName: chunk.toolName ?? "",
+                    bytes: chunk.toolBytes ?? 0,
+                    timestamp: Date.now(),
+                  });
                 }
                 break;
 
@@ -189,7 +295,7 @@ export class AgentLoop {
       }
 
       // ── handle empty response ─────────────────────────────────────────────
-      if (!textBuffer && pendingTools.length === 0) {
+      if (!textBuffer && !thinkingBuffer && pendingTools.length === 0) {
         emptyRetries++;
         if (emptyRetries >= MAX_EMPTY_RETRIES) {
           await this._events.emit(EventStream.error("Model returned empty response repeatedly", false));
@@ -199,8 +305,25 @@ export class AgentLoop {
       }
       emptyRetries = 0;
 
+      // A turn can think and then go straight to a tool call without saying
+      // anything, so the tag has to be closed here too or it swallows the rest.
+      if (thinkingOpen) {
+        thinkingOpen = false;
+        await this._events.emit(EventStream.text("\n</thinking>\n\n", true));
+      }
+
       // ── push assistant message to context ─────────────────────────────────
       const assistantContent: MessageContent[] = [];
+      // Thinking goes first, in the order the API produced it. It has to be
+      // sent back verbatim, signature included: the signature is what lets the
+      // API verify the block was not edited between turns.
+      if (thinkingBuffer) {
+        assistantContent.push({
+          type: "thinking",
+          thinking: thinkingBuffer,
+          signature: thinkingSignature,
+        });
+      }
       if (textBuffer) assistantContent.push({ type: "text", text: textBuffer });
       for (const t of pendingTools) {
         assistantContent.push({
@@ -241,35 +364,57 @@ export class AgentLoop {
           else sequentialBatch.push(t);
         }
 
-        // Run parallel-safe tools concurrently
-        const parallelResults = await Promise.all(
-          parallelBatch.map(async (pending) => {
-            if (signal?.aborted) return null;
-            const input = JSON.parse(pending.inputStr) as Record<string, unknown>;
+        // Ask about every parallel tool FIRST, one at a time, and only then
+        // run them together.
+        //
+        // Asking inside Promise.all fired every prompt simultaneously. The
+        // TUI has a single pending slot, so the second prompt overwrote the
+        // first and the first promise never resolved — Promise.all then
+        // waited forever and the turn hung with no error and no way out but
+        // Ctrl+C. Approval is a conversation with one human; it cannot be
+        // parallelised even when the work can.
+        const approved: typeof parallelBatch = [];
+        const preResults: MessageContent[] = [];
+        let cancelled = false;
 
-            if (opts.onPermission) {
-              const decision = await opts.onPermission(pending.name, input);
-              if (decision === "cancel") return "CANCEL" as const;
-              if (decision === "deny") {
-                return {
-                  type: "tool_result" as const,
-                  id:   pending.id,
-                  content: "Tool call denied by user",
-                  isError: true,
-                };
-              }
+        for (const pending of parallelBatch) {
+          if (signal?.aborted) break;
+          const input = JSON.parse(pending.inputStr) as Record<string, unknown>;
+
+          if (opts.onPermission) {
+            const decision = await opts.onPermission(pending.name, input);
+            if (decision === "cancel") { cancelled = true; break; }
+            if (decision === "deny") {
+              preResults.push({
+                type: "tool_result",
+                id: pending.id,
+                content: takeDenyReason() ?? "Tool call denied by user.",
+                isError: true,
+              });
+              continue;
             }
+          }
+          approved.push(pending);
+        }
 
-            const result = await this._dispatcher.execute(pending.id, pending.name, input, signal);
-            return { type: "tool_result" as const, id: result.toolUseId, content: result.content, isError: result.isError };
-          })
-        );
+        if (cancelled) {
+          await this._events.emit(EventStream.error("Turn cancelled by user", false));
+          return;
+        }
+
+        const parallelResults: Array<MessageContent | null> = [
+          ...preResults,
+          ...(await Promise.all(
+            approved.map(async (pending) => {
+              if (signal?.aborted) return null;
+              const input = JSON.parse(pending.inputStr) as Record<string, unknown>;
+              const result = await this._dispatcher.execute(pending.id, pending.name, input, signal);
+              return { type: "tool_result" as const, id: result.toolUseId, content: result.content, isError: result.isError };
+            }),
+          )),
+        ];
 
         for (const r of parallelResults) {
-          if (r === "CANCEL") {
-            await this._events.emit(EventStream.error("Turn cancelled by user", false));
-            return;
-          }
           if (r !== null) toolResults.push(r);
         }
 
@@ -285,7 +430,7 @@ export class AgentLoop {
               return;
             }
             if (decision === "deny") {
-              toolResults.push({ type: "tool_result", id: pending.id, content: "Tool call denied by user", isError: true });
+              toolResults.push({ type: "tool_result", id: pending.id, content: takeDenyReason() ?? "Tool call denied by user.", isError: true });
               continue;
             }
           }
@@ -316,7 +461,7 @@ export class AgentLoop {
               return;
             }
             if (decision === "deny") {
-              toolResults.push({ type: "tool_result", id: pending.id, content: "Tool call denied by user", isError: true });
+              toolResults.push({ type: "tool_result", id: pending.id, content: takeDenyReason() ?? "Tool call denied by user.", isError: true });
               continue;
             }
           }

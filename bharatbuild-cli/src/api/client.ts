@@ -18,25 +18,58 @@ export class APIError extends Error {
   }
 }
 
+/**
+ * Called when the API rejects a request with 401. Should mint a new access
+ * token (e.g. via the refresh token) and return it, or null to give up.
+ */
+export type TokenRefresher = () => Promise<string | null>;
+
 export interface ClientConfig {
   apiBaseUrl: string;
   authToken?: string;
   timeout?: number;
+  onUnauthorized?: TokenRefresher;
 }
 
 export class BharatBuildClient {
   private baseUrl: string;
   private authToken: string | undefined;
   private timeout: number;
+  private onUnauthorized: TokenRefresher | undefined;
+  /** In-flight refresh, shared so concurrent 401s trigger only one refresh. */
+  private refreshInFlight: Promise<string | null> | null = null;
 
   constructor(config: ClientConfig) {
     this.baseUrl = config.apiBaseUrl.replace(/\/$/, "");
     this.authToken = config.authToken;
     this.timeout = config.timeout ?? 60_000;
+    this.onUnauthorized = config.onUnauthorized;
   }
 
   setToken(token: string): void {
     this.authToken = token;
+  }
+
+  setUnauthorizedHandler(handler: TokenRefresher): void {
+    this.onUnauthorized = handler;
+  }
+
+  /**
+   * Run the refresh handler at most once at a time. Returns the new access
+   * token, or null when the session cannot be recovered.
+   */
+  private async refreshAuth(): Promise<string | null> {
+    if (!this.onUnauthorized) return null;
+    if (!this.refreshInFlight) {
+      this.refreshInFlight = this.onUnauthorized()
+        .catch(() => null)
+        .finally(() => {
+          this.refreshInFlight = null;
+        });
+    }
+    const token = await this.refreshInFlight;
+    if (token) this.authToken = token;
+    return token;
   }
 
   clearToken(): void {
@@ -57,7 +90,8 @@ export class BharatBuildClient {
   private async request<T>(
     method: string,
     path: string,
-    body?: unknown
+    body?: unknown,
+    allowRetry = true
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const controller = new AbortController();
@@ -73,6 +107,12 @@ export class BharatBuildClient {
 
       clearTimeout(timer);
 
+      // Access tokens are short-lived — swap in a fresh one and retry once.
+      if (res.status === 401 && allowRetry && this.onUnauthorized) {
+        const token = await this.refreshAuth();
+        if (token) return this.request<T>(method, path, body, false);
+      }
+
       if (!res.ok) {
         let detail = `HTTP ${res.status}`;
         try {
@@ -80,6 +120,11 @@ export class BharatBuildClient {
           detail = err.detail ?? err.message ?? detail;
         } catch {
           // ignore parse error
+        }
+        // The session is genuinely dead — tell the user what to do about it
+        // instead of surfacing the backend's internal wording.
+        if (res.status === 401 && this.authToken) {
+          detail = "Session expired. Run: bharatbuild login";
         }
         throw new APIError(res.status, detail);
       }
@@ -123,20 +168,29 @@ export class BharatBuildClient {
     const url = `${this.baseUrl}${path}`;
     const controller = new AbortController();
 
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        method: "POST",
-        headers: {
-          ...this.getAuthHeaders(),
-          Accept: "text/event-stream",
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new APIError(0, `Stream connect error: ${msg}`);
+    const connect = async (): Promise<Response> => {
+      try {
+        return await fetch(url, {
+          method: "POST",
+          headers: {
+            ...this.getAuthHeaders(),
+            Accept: "text/event-stream",
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new APIError(0, `Stream connect error: ${msg}`);
+      }
+    };
+
+    let res = await connect();
+
+    // Nothing has been streamed yet, so a 401 here is safe to retry.
+    if (res.status === 401 && this.onUnauthorized) {
+      const token = await this.refreshAuth();
+      if (token) res = await connect();
     }
 
     if (!res.ok) {

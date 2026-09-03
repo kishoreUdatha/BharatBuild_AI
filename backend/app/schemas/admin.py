@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from enum import Enum
 
@@ -77,6 +77,11 @@ class AdminUserResponse(BaseModel):
     tokens_used: int = 0
     subscription_plan: Optional[str] = None
 
+    # The institution this account actually belongs to, resolved from
+    # college_id. Distinct from `college_name` below, which is free text a
+    # student typed at signup and is empty on every staff account.
+    college: Optional[str] = None
+
     # Student Academic Details
     roll_number: Optional[str] = None
     college_name: Optional[str] = None
@@ -85,6 +90,7 @@ class AdminUserResponse(BaseModel):
     course: Optional[str] = None
     year_semester: Optional[str] = None
     batch: Optional[str] = None
+    section: Optional[str] = None
 
     # Guide/Mentor Details
     guide_name: Optional[str] = None
@@ -123,6 +129,9 @@ class AdminUsersResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+    # Every tenant, for the college filter. Sent with the page so the filter
+    # cannot only offer the colleges that happen to appear on it.
+    colleges: List[dict] = []
 
 
 # ==================== Project Management Schemas ====================
@@ -285,7 +294,11 @@ class AdminPlanCreate(BaseModel):
 
     # Features
     allowed_models: List[str] = ["haiku"]
-    feature_flags: Dict[str, bool] = {}
+    # Not all flags are booleans: a plan's flags carry credit counts,
+    # file and project limits, an add-on price and a list of models
+    # alongside the on/off switches. Typing this as Dict[str, bool]
+    # made every plan fail response validation with a 500.
+    feature_flags: Dict[str, Any] = {}
 
     is_active: bool = True
 
@@ -296,7 +309,11 @@ class AdminPlanUpdate(BaseModel):
     price: Optional[int] = None
     token_limit: Optional[int] = None
     project_limit: Optional[int] = None
-    feature_flags: Optional[Dict[str, bool]] = None
+    # Not all flags are booleans: a plan's flags carry credit counts,
+    # file and project limits, an add-on price and a list of models
+    # alongside the on/off switches. Typing this as Dict[str, bool]
+    # made every plan fail response validation with a 500.
+    feature_flags: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
 
 
@@ -311,7 +328,11 @@ class AdminPlanResponse(BaseModel):
     billing_period: str
     token_limit: Optional[int]
     project_limit: Optional[int]
-    feature_flags: Dict[str, bool] = {}
+    # Not all flags are booleans: a plan's flags carry credit counts,
+    # file and project limits, an add-on price and a list of models
+    # alongside the on/off switches. Typing this as Dict[str, bool]
+    # made every plan fail response validation with a 500.
+    feature_flags: Dict[str, Any] = {}
     allowed_models: List[str] = []
     subscribers_count: int = 0
     is_active: bool

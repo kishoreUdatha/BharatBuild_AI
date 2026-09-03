@@ -7,6 +7,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { BharatBuildClient, APIError } from "./client.js";
+import { jwtExpiresAt, jwtIsExpired } from "../auth/jwt.js";
 
 export interface Credentials {
   token: string;
@@ -29,7 +30,11 @@ function ensureDir(): void {
 
 export function saveCredentials(creds: Credentials): void {
   ensureDir();
-  fs.writeFileSync(AUTH_PATH, JSON.stringify(creds, null, 2), { mode: 0o600 });
+  const withExpiry: Credentials = {
+    ...creds,
+    expiresAt: jwtExpiresAt(creds.token) ?? creds.expiresAt,
+  };
+  fs.writeFileSync(AUTH_PATH, JSON.stringify(withExpiry, null, 2), { mode: 0o600 });
 }
 
 export function loadCredentials(): Credentials | null {
@@ -53,8 +58,17 @@ export function clearCredentials(): void {
 }
 
 export function isTokenExpired(creds: Credentials): boolean {
+  // The access token's own `exp` claim wins — the backend's
+  // ACCESS_TOKEN_EXPIRE_MINUTES can be far shorter than any local guess.
+  if (jwtExpiresAt(creds.token) !== null) return jwtIsExpired(creds.token);
   if (!creds.expiresAt) return false;
   return Date.now() >= creds.expiresAt - 60_000; // 1 min buffer
+}
+
+/** True when a valid refresh token is on hand, so expiry is recoverable. */
+export function canRefreshSession(creds: Credentials): boolean {
+  if (!creds.refreshToken) return false;
+  return !jwtIsExpired(creds.refreshToken, 0);
 }
 
 // ── API calls ─────────────────────────────────────────────────────────────────
@@ -101,7 +115,7 @@ export async function login(
     email: user?.email ?? email,
     name: user?.name ?? user?.email ?? email,
     tier: user?.subscription_plan ?? user?.tier ?? "free",
-    expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24h default
+    expiresAt: jwtExpiresAt(res.access_token) ?? Date.now() + 24 * 60 * 60 * 1000,
   };
 
   saveCredentials(creds);
@@ -129,7 +143,7 @@ export async function register(
     email: user?.email ?? email,
     name: name,
     tier: "free",
-    expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+    expiresAt: jwtExpiresAt(res.access_token) ?? Date.now() + 24 * 60 * 60 * 1000,
   };
 
   saveCredentials(creds);
@@ -163,7 +177,7 @@ export async function refreshToken(
     ...creds,
     token: res.access_token,
     refreshToken: res.refresh_token ?? creds.refreshToken,
-    expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+    expiresAt: jwtExpiresAt(res.access_token) ?? Date.now() + 24 * 60 * 60 * 1000,
   };
 
   saveCredentials(updated);

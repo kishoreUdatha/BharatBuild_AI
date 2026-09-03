@@ -13,7 +13,10 @@ export interface Message {
 }
 
 export interface MessageContent {
-  type:       "text" | "tool_use" | "tool_result" | "image";
+  type:       "text" | "thinking" | "tool_use" | "tool_result" | "image";
+  /** Native extended thinking, sent back so the API can verify the turn. */
+  thinking?:  string;
+  signature?: string;
   text?:      string;
   id?:        string;
   name?:      string;

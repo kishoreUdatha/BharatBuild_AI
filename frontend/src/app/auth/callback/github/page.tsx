@@ -41,6 +41,22 @@ function GitHubCallbackContent() {
       }
 
       try {
+        // The same callback serves two errands, because a college should have
+        // to register one redirect URI rather than two. Which one this is was
+        // written down before the browser left for GitHub.
+        if (sessionStorage.getItem('oauth_purpose') === 'link_git') {
+          sessionStorage.removeItem('oauth_purpose')
+          try {
+            await apiClient.post('/student/git/oauth/link', { code })
+            setStatus('success')
+            router.replace('/student/stories?git=linked')
+          } catch (err: any) {
+            const detail = err?.response?.data?.detail ?? 'link-failed'
+            router.replace(`/student/stories?git=error&reason=${encodeURIComponent(detail)}`)
+          }
+          return
+        }
+
         // Get stored state for verification (optional)
         const storedState = sessionStorage.getItem('oauth_state')
         if (storedState && state !== storedState) {

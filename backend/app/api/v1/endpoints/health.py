@@ -452,7 +452,7 @@ async def registration_health_check():
             )
         if not db_check.get("tables_ready"):
             response["troubleshooting"].append(
-                "Database tables not created. Run /api/v1/create-tables or apply migrations."
+                "Database tables not created. Apply migrations with `alembic upgrade head`."
             )
 
     if not can_send_verification:

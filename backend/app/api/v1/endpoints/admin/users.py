@@ -12,6 +12,7 @@ import math
 from app.core.database import get_db
 from app.models import User, UserRole, Project, Subscription, AuditLog
 from app.models.billing import Plan, SubscriptionStatus
+from app.models.college import College
 from app.modules.auth.dependencies import get_current_admin
 from app.schemas.admin import (
     AdminUserResponse, AdminUserUpdate, AdminUsersResponse,
@@ -50,6 +51,7 @@ async def list_users(
     page_size: int = Query(10, ge=1, le=100),
     search: Optional[str] = None,
     role: Optional[str] = None,
+    college_id: Optional[str] = None,
     is_active: Optional[bool] = None,
     is_verified: Optional[bool] = None,
     sort_by: str = Query("created_at", regex="^(created_at|email|full_name|role|last_login)$"),
@@ -80,6 +82,15 @@ async def list_users(
         except ValueError:
             pass
 
+    if college_id:
+        # "none" is a real answer, not an absent filter: accounts with no
+        # tenant are exactly the ones worth finding, since every screen scoped
+        # by college is empty for them.
+        if college_id == "none":
+            conditions.append(User.college_id.is_(None))
+        else:
+            conditions.append(User.college_id == college_id)
+
     if is_active is not None:
         conditions.append(User.is_active == is_active)
 
@@ -107,6 +118,17 @@ async def list_users(
     # Execute query
     result = await db.execute(query)
     users = result.scalars().all()
+
+    # The institution each account belongs to. Looked up once for the page
+    # rather than per row, and resolved from college_id - `college_name` is
+    # free text a student typed at signup and is empty on every staff account.
+    college_ids = {u.college_id for u in users if u.college_id}
+    colleges = {}
+    if college_ids:
+        for row in (await db.execute(
+            select(College).where(College.id.in_(college_ids))
+        )).scalars().all():
+            colleges[str(row.id)] = row.name
 
     # Build response with usage stats
     items = []
@@ -144,6 +166,7 @@ async def list_users(
             is_superuser=user.is_superuser,
             oauth_provider=user.oauth_provider,
             avatar_url=user.avatar_url,
+            college=colleges.get(str(user.college_id)) if user.college_id else None,
             created_at=user.created_at,
             last_login=user.last_login,
             projects_count=projects_count or 0,
@@ -157,18 +180,25 @@ async def list_users(
             course=user.course,
             year_semester=user.year_semester,
             batch=user.batch,
+            section=user.section,
             # Guide/Mentor Details
             guide_name=user.guide_name,
             guide_designation=user.guide_designation,
             hod_name=user.hod_name,
         ))
 
+    # Offered to the filter, so it lists real tenants rather than whichever
+    # ones happen to appear on the page being viewed.
+    all_colleges = (await db.execute(
+        select(College).order_by(College.name))).scalars().all()
+
     return AdminUsersResponse(
         items=items,
         total=total,
         page=page,
         page_size=page_size,
-        total_pages=math.ceil(total / page_size) if total > 0 else 1
+        total_pages=math.ceil(total / page_size) if total > 0 else 1,
+        colleges=[{"id": str(c.id), "name": c.name} for c in all_colleges],
     )
 
 
@@ -288,6 +318,7 @@ async def get_user(
         course=user.course,
         year_semester=user.year_semester,
         batch=user.batch,
+        section=user.section,
         # Guide/Mentor Details
         guide_name=user.guide_name,
         guide_designation=user.guide_designation,

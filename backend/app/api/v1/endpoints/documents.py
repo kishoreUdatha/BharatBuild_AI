@@ -207,7 +207,8 @@ async def generate_document_stream(
                 "hod_name": current_user.hod_name,
                 "course": current_user.course,
                 "year_semester": current_user.year_semester,
-                "batch": current_user.batch
+                "batch": current_user.batch,
+                "section": current_user.section
             }
 
             # Create agent context with user_id for isolation
@@ -907,6 +908,7 @@ async def regenerate_all_documents(
                     "university_name": current_user.university_name,
                     "hod_name": current_user.hod_name,
                     "batch": current_user.batch,
+                    "section": current_user.section,
                     "technologies": project.tech_stack or {},
                     "features": project.requirements or [],
                     "api_endpoints": api_endpoints,

@@ -1,4 +1,5 @@
 import fs from "fs";
+import { buildUnifiedDiff, renderFileChange } from "./diff.js";
 import path from "path";
 
 export const deleteFileDefinition = {
@@ -40,8 +41,13 @@ export async function deleteFile(input: {
       fs.rmSync(p, { recursive: true, force: true });
       return { content: `Deleted directory: ${input.path}`, isError: false };
     }
+    // Capture the contents before unlinking so the result can show what was
+    // lost rather than a bare "Deleted: path".
+    let before = "";
+    try { before = fs.readFileSync(p, "utf8"); } catch { /* binary or unreadable */ }
     fs.unlinkSync(p);
-    return { content: `Deleted: ${input.path}`, isError: false };
+    const summary = buildUnifiedDiff(before, "", input.path);
+    return { content: renderFileChange("Delete", input.path, summary), isError: false };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return { content: `File not found: ${input.path}`, isError: true };

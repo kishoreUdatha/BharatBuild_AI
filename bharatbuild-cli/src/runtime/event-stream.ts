@@ -4,6 +4,7 @@
 export type EventType =
   | "text"
   | "tool_call"
+  | "tool_progress"
   | "tool_result"
   | "status"
   | "error"
@@ -29,6 +30,21 @@ export interface ToolCallEvent extends BaseEvent {
   toolName: string;
   input: Record<string, unknown>;
   description?: string;
+}
+
+/**
+ * A tool call is still being composed by the model.
+ *
+ * Emitted while the argument JSON streams in, so the UI can show that a write
+ * is under way instead of nothing at all. Carries a byte count rather than the
+ * content: the full input arrives once in ToolCallEvent, and echoing every
+ * fragment would send a large file twice.
+ */
+export interface ToolProgressEvent extends BaseEvent {
+  type: "tool_progress";
+  id: string;
+  toolName: string;
+  bytes: number;
 }
 
 export interface ToolResultEvent extends BaseEvent {
@@ -88,6 +104,7 @@ export interface PermissionRequestEvent extends BaseEvent {
 export type AgentEvent =
   | TextEvent
   | ToolCallEvent
+  | ToolProgressEvent
   | ToolResultEvent
   | StatusEvent
   | ErrorEvent
@@ -106,6 +123,15 @@ export class EventStream {
     const list = this.handlers.get(type) ?? [];
     list.push(handler);
     this.handlers.set(type, list);
+    return this;
+  }
+
+  /** Detach a handler. Long-lived UIs need this to avoid replaying events. */
+  off(type: EventType | "*", handler: EventHandler): this {
+    const list = this.handlers.get(type);
+    if (!list) return this;
+    const idx = list.indexOf(handler);
+    if (idx !== -1) list.splice(idx, 1);
     return this;
   }
 

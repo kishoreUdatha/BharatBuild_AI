@@ -128,6 +128,7 @@ export default function ProfilePage() {
       case 'developer': return 'bg-blue-500/20 text-blue-400 border-blue-500/30'
       case 'founder': return 'bg-purple-500/20 text-purple-400 border-purple-500/30'
       case 'faculty': return 'bg-green-500/20 text-green-400 border-green-500/30'
+      case 'trainer': return 'bg-teal-500/20 text-teal-400 border-teal-500/30'
       default: return 'bg-gray-500/20 text-gray-400 border-gray-500/30'
     }
   }

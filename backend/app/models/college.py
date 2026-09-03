@@ -1,6 +1,7 @@
-from sqlalchemy import Column, String, DateTime, Boolean, ForeignKey, Integer, Text
+from sqlalchemy import JSON, Column, String, DateTime, Boolean, ForeignKey, Integer, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime
+from typing import Optional
 import uuid
 
 from app.core.database import Base
@@ -28,6 +29,56 @@ class College(Base):
     # Status
     is_active = Column(Boolean, default=True)
 
+    # The tenant that individually signed-up students belong to.
+    # Without one, a self-serve student lands in whichever paying
+    # college's pool the portal happens to query, and shows up in
+    # that college's rosters and exports.
+    is_self_serve = Column(Boolean, default=False, nullable=False)
+
+    # The mail domains this college owns, lowercase and without the "@"
+    # ("sgit.ac.in", "students.sgit.ac.in"). Signing up from one of these
+    # places the account in this college - which is the only claim a student
+    # can make that they cannot simply type. Empty means the college onboards
+    # by roster or batch code instead.
+    email_domains = Column(JSON, default=list, nullable=False)
+
+    # What a batch here charges unless it says otherwise. Held on the college
+    # so a standard fee is entered once rather than on all 45 batches, each an
+    # opportunity to mistype a number students then pay.
+    #
+    # The fallback for a project type this college has not priced.
+    # Where this college's project repositories are created.
+    #
+    # An organisation per college rather than one shared namespace: a college
+    # keeps its own students' work, its member list stays its own, and handing
+    # the org over if they leave the platform is then a single transfer rather
+    # than an extraction.
+    github_org = Column(String(120), nullable=True)
+    # The id of this college's installation of the BharatBuild GitHub App.
+    # Nothing is created until the college installs it, so this is what says
+    # whether repository creation is available here at all.
+    github_installation_id = Column(String(40), nullable=True)
+
+    default_project_fee = Column(Integer, default=15000, nullable=False)
+
+    # The kinds of project this college runs, in the order it thinks of them
+    # ("Major Project", "Minor Project"). A college offering only these two
+    # should not be shown Capstone when creating batches.
+    project_types = Column(JSON, default=list, nullable=False)
+
+    # Fee per project type: {"Major Project": 15000, "Minor Project": 8000}.
+    # A minor project rarely costs what a major one does, and a single number
+    # would quietly overcharge one of them.
+    project_fees = Column(JSON, default=dict, nullable=False)
+
+    def fee_for(self, project_type: Optional[str]) -> int:
+        """What a batch of this type costs here."""
+        if project_type:
+            priced = (self.project_fees or {}).get(project_type)
+            if priced is not None:
+                return int(priced)
+        return int(self.default_project_fee or 0)
+    
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -10,6 +10,14 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Loader2, User, GraduationCap, Building, BookOpen } from 'lucide-react'
+import { COURSES, SECTIONS, OTHER, getDepartments, getYearSemesterOptions, getBatchOptions, isCustomValue } from '@/lib/academic-options'
+
+/**
+ * Keep a previously saved value selectable even when it predates the dropdowns
+ * (legacy free-text profiles), so opening this page never silently clears it.
+ */
+const withCurrent = (options: string[], current: string): string[] =>
+  current && !options.includes(current) ? [current, ...options] : options
 
 export default function CompleteProfilePage() {
   const router = useRouter()
@@ -30,10 +38,13 @@ export default function CompleteProfilePage() {
     course: '',
     year_semester: '',
     batch: '',
+    section: '',
     guide_name: '',
     guide_designation: '',
     hod_name: ''
   })
+  // Set when the student picks "Other" as department - reveals a free-text input
+  const [customDepartment, setCustomDepartment] = useState(false)
 
   useEffect(() => {
     checkProfileStatus()
@@ -64,10 +75,16 @@ export default function CompleteProfilePage() {
         course: userData.course || '',
         year_semester: userData.year_semester || '',
         batch: userData.batch || '',
+        section: userData.section || '',
         guide_name: userData.guide_name || '',
         guide_designation: userData.guide_designation || '',
         hod_name: userData.hod_name || ''
       }))
+
+      // A saved department outside this course's list came from free text - keep it editable
+      if (isCustomValue(userData.department || '', getDepartments(userData.course || ''))) {
+        setCustomDepartment(true)
+      }
 
       // Check if profile is already complete
       const status = await apiClient.get('/auth/me/profile-status')
@@ -84,6 +101,26 @@ export default function CompleteProfilePage() {
 
   const handleChange = (field: string, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }))
+  }
+
+  // Course drives Department, Year/Sem and Batch - all three reset when it changes
+  const departmentOptions = getDepartments(formData.course)
+  const yearSemesterOptions = withCurrent(getYearSemesterOptions(formData.course), formData.year_semester)
+  const batchOptions = withCurrent(getBatchOptions(formData.course), formData.batch)
+
+  const handleCourseChange = (course: string) => {
+    setFormData(prev => ({ ...prev, course, department: '', year_semester: '', batch: '' }))
+    setCustomDepartment(course === OTHER)
+  }
+
+  const handleDepartmentChange = (department: string) => {
+    if (department === OTHER) {
+      setCustomDepartment(true)
+      setFormData(prev => ({ ...prev, department: '' }))
+      return
+    }
+    setCustomDepartment(false)
+    setFormData(prev => ({ ...prev, department }))
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -213,25 +250,97 @@ export default function CompleteProfilePage() {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label htmlFor="roll_number">Roll Number *</Label>
-                        <Input
-                          id="roll_number"
-                          value={formData.roll_number}
-                          onChange={(e) => handleChange('roll_number', e.target.value)}
-                          placeholder="e.g., 21CS101"
-                          required={formData.role === 'student'}
-                        />
+                        <Label htmlFor="course">Course *</Label>
+                        <Select value={formData.course} onValueChange={handleCourseChange}>
+                          <SelectTrigger id="course">
+                            <SelectValue placeholder="Select course" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {COURSES.map((course) => (
+                              <SelectItem key={course} value={course}>{course}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="department">Department *</Label>
+                        {customDepartment ? (
+                          <Input
+                            id="department"
+                            value={formData.department}
+                            onChange={(e) => handleChange('department', e.target.value)}
+                            placeholder="Enter your department"
+                            required={formData.role === 'student'}
+                          />
+                        ) : (
+                          <Select value={formData.department} onValueChange={handleDepartmentChange} disabled={!formData.course}>
+                            <SelectTrigger id="department">
+                              <SelectValue placeholder={formData.course ? 'Select department' : 'Select course first'} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {departmentOptions.map((dept) => (
+                                <SelectItem key={dept} value={dept}>{dept}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="year_semester">Year / Semester</Label>
+                        <Select value={formData.year_semester} onValueChange={(value) => handleChange('year_semester', value)} disabled={!formData.course}>
+                          <SelectTrigger id="year_semester">
+                            <SelectValue placeholder={formData.course ? 'Select year / semester' : 'Select course first'} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {yearSemesterOptions.map((option) => (
+                              <SelectItem key={option} value={option}>{option}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
 
                       <div className="space-y-2">
                         <Label htmlFor="batch">Batch</Label>
-                        <Input
-                          id="batch"
-                          value={formData.batch}
-                          onChange={(e) => handleChange('batch', e.target.value)}
-                          placeholder="e.g., 2021-2025"
-                        />
+                        <Select value={formData.batch} onValueChange={(value) => handleChange('batch', value)} disabled={!formData.course}>
+                          <SelectTrigger id="batch">
+                            <SelectValue placeholder={formData.course ? 'Select batch' : 'Select course first'} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {batchOptions.map((option) => (
+                              <SelectItem key={option} value={option}>{option}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="section">Section</Label>
+                        <Select value={formData.section} onValueChange={(value) => handleChange('section', value)}>
+                          <SelectTrigger id="section">
+                            <SelectValue placeholder="Select section" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {SECTIONS.map((option) => (
+                              <SelectItem key={option} value={option}>{option}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="roll_number">Roll Number *</Label>
+                      <Input
+                        id="roll_number"
+                        value={formData.roll_number}
+                        onChange={(e) => handleChange('roll_number', e.target.value)}
+                        placeholder="e.g., 21CS101"
+                        required={formData.role === 'student'}
+                      />
                     </div>
 
                     <div className="space-y-2">
@@ -255,38 +364,6 @@ export default function CompleteProfilePage() {
                       />
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="department">Department *</Label>
-                        <Input
-                          id="department"
-                          value={formData.department}
-                          onChange={(e) => handleChange('department', e.target.value)}
-                          placeholder="e.g., Computer Science"
-                          required={formData.role === 'student'}
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="course">Course</Label>
-                        <Input
-                          id="course"
-                          value={formData.course}
-                          onChange={(e) => handleChange('course', e.target.value)}
-                          placeholder="e.g., B.Tech, MCA"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="year_semester">Year / Semester</Label>
-                      <Input
-                        id="year_semester"
-                        value={formData.year_semester}
-                        onChange={(e) => handleChange('year_semester', e.target.value)}
-                        placeholder="e.g., 4th Year / 8th Semester"
-                      />
-                    </div>
                   </div>
 
                   <hr className="my-4" />

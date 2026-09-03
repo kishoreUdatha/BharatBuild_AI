@@ -20,12 +20,18 @@ import { loadConfig } from "../config/config.js";
 import { loadCredentials } from "../auth/credentials.js";
 import type { CLIConfig } from "../config/config.js";
 import { createModelClientAuto, isAutoModel } from "../models/model-router.js";
-import { TUISession } from "../ui/tui-session.js";
 import { pickSession } from "../ui/session-picker.js";
+import { applyAgent } from "../agents/apply-agent.js";
+import { AGENTIC_CHAT_STREAM } from "../api/endpoints.js";
+import { hooksRuntime } from "../hooks/hooks-runtime.js";
+import { modelRoute, describeRoute } from "../api/model-route.js";
+import { resolveProviderKey } from "../auth/provider-key.js";
 
 export interface ChatOpts {
   model?:          string;
   resume?:         boolean;
+  /** Alias for `resume`; commander fills whichever flag was used. */
+  continue?:       boolean;
   resumeId?:       string;
   resumePicker?:   boolean;
   listSessions?:   boolean;
@@ -35,16 +41,6 @@ export interface ChatOpts {
   effort?:         string;
   noInteractive?:  boolean;
 }
-
-// Agent role system prompts (matches /agent slash command)
-const AGENT_PROMPTS: Record<string, string> = {
-  default:  "You are BharatBuild AI, an expert software engineer assistant.",
-  planner:  "You are a senior software architect. Break tasks into clear implementation plans.",
-  coder:    "You are an expert software engineer. Write clean, production-quality code.",
-  tester:   "You are a QA engineer. Write comprehensive tests and ensure they pass.",
-  fixer:    "You are a debugging expert. Identify root causes and apply minimal fixes.",
-  reviewer: "You are a code reviewer. Check for bugs, security issues, and quality problems.",
-};
 
 // Effort → model tier mapping
 const EFFORT_MODEL: Record<string, string> = {
@@ -98,20 +94,13 @@ export async function chatCommand(
     return;
   }
 
-  if (!creds) {
-    // Allow direct API key usage without login (like setting ANTHROPIC_API_KEY)
-    const hasDirectKey =
-      process.env["ANTHROPIC_API_KEY"] ||
-      process.env["OPENAI_API_KEY"]    ||
-      process.env["GEMINI_API_KEY"]    ||
-      process.env["GOOGLE_API_KEY"];
-
-    if (!hasDirectKey) {
-      console.error(chalk.red("\n✗ Not logged in. Run: bharatbuild login\n"));
-      console.log(chalk.dim("  Or set ANTHROPIC_API_KEY environment variable to use directly.\n"));
-      process.exit(1);
-    }
-    console.log(chalk.dim("  Using direct API key (no login required)\n"));
+  // A direct provider key works without logging in, from the environment or
+  // from the stored file. The route banner below reports which, on every path.
+  if (!creds && !resolveProviderKey()) {
+    console.error(chalk.red("\n✗ Not logged in, and no API key.\n"));
+    console.log(chalk.dim("  Run: bharatbuild login\n"));
+    console.log(chalk.dim("  Or:  bharatbuild key set sk-ant-…    (stored once, every terminal)\n"));
+    process.exit(1);
   }
 
   // ── Resolve model (effort overrides model tier) ────────────────────────────
@@ -123,20 +112,17 @@ export async function chatCommand(
   const usingAuto = isAutoModel(activeModel);
 
   // ── Build model client ─────────────────────────────────────────────────────
-  const hasDirectKey =
-    process.env["ANTHROPIC_API_KEY"] ||
-    process.env["OPENAI_API_KEY"]    ||
-    process.env["GEMINI_API_KEY"]    ||
-    process.env["GOOGLE_API_KEY"];
+  // Environment or stored file — see resolveProviderKey for why both.
+  const directKey = resolveProviderKey();
 
-  const modelClient = hasDirectKey
-    ? createModelClientAuto(activeModel)
+  const modelClient = directKey
+    ? createModelClientAuto(activeModel, directKey.key)
     : {
         async *complete(params: {
           model: string; system: string; messages: unknown[];
           tools: object[]; maxTokens: number; signal?: AbortSignal;
         }): AsyncIterable<import("../runtime/agent-loop.js").ModelChunk> {
-          const stream = client.streamSSE("/api/v1/chat/stream", {
+          const stream = client.streamSSE(AGENTIC_CHAT_STREAM, {
             model: usingAuto ? "auto" : activeModel,
             system: params.system, messages: params.messages,
             tools: params.tools, max_tokens: params.maxTokens,
@@ -157,14 +143,44 @@ export async function chatCommand(
     model:  modelClient,
   });
 
-  // ── Apply --agent flag (set system prompt) ─────────────────────────────────
+  /*
+   * ── Where the model calls are going ────────────────────────────────────────
+   *
+   * Printed on every start, both routes. Previously only the direct path
+   * announced itself, and only when logged out — so being logged in and routed
+   * through the server was silent, and the first sign of which path you were
+   * on was a turn failing. When the server's model account ran out of credit,
+   * the provider's "your credit balance is too low" read as though the user's
+   * own key was dead.
+   */
+  console.log(chalk.dim(`  ${describeRoute(modelRoute(runtime.isProxied, process.env, config.apiBaseUrl), activeModel)}\n`));
+
+  /*
+   * ── Hooks ──────────────────────────────────────────────────────────────────
+   *
+   * This used to be started by the bare `bharatbuild` action only, so the file
+   * watcher and git hooks ran or did not run depending on whether you typed
+   * `bharatbuild` or `bharatbuild chat` — the same session either way, and
+   * nothing on screen explained the difference. Starting it here covers every
+   * route into a chat, interactive or not.
+   */
+  hooksRuntime.start(config.workingDir);
+
+  // ── Apply --agent flag ─────────────────────────────────────────────────────
+  // This used a local six-entry prompt map while the registry defines ten
+  // agents, and fell back to the default prompt for anything missing — so
+  // `--agent guide` and `--agent typo` both silently started a normal session.
   if (opts.agent) {
-    const prompt = AGENT_PROMPTS[opts.agent] ?? AGENT_PROMPTS["default"]!;
-    runtime.context.setSystemPrompt(
-      `${prompt}\n\nWorking directory: ${config.workingDir}\n` +
-      `You have access to tools for reading/writing files, running commands, searching code, and git.`
-    );
-    console.log(chalk.dim(`  agent: ${opts.agent}\n`));
+    let applied;
+    try {
+      applied = applyAgent(runtime, opts.agent, config.workingDir);
+    } catch (err) {
+      console.error(chalk.red(`\n  ${err instanceof Error ? err.message : err}\n`));
+      process.exitCode = 1;
+      return;
+    }
+    const badge = applied.readOnly ? chalk.yellow(" [read-only]") : "";
+    console.log(chalk.dim(`  agent: ${applied.role}${badge}\n`));
   }
 
   // ── Apply --trust-all-tools ────────────────────────────────────────────────
@@ -195,7 +211,7 @@ export async function chatCommand(
       runtime.resume(picked.id);
       console.log(chalk.dim(`  Resumed: "${picked.title}"\n`));
     }
-  } else if (opts.resume) {
+  } else if (opts.resume || opts.continue) {
     // Resume most recent session for this working dir
     const sessions = sm.list()
       .filter((s) => s.workingDir === config.workingDir)
@@ -218,31 +234,39 @@ export async function chatCommand(
     return;
   }
 
-  // ── Interactive TUI mode ───────────────────────────────────────────────────
-  // Use ink-based rich TUI (Kiro-style) by default; fall back to classic on error
-  const useRichTUI = process.env["BHARATBUILD_CLASSIC_UI"] !== "1" && process.stdout.isTTY;
-
-  if (useRichTUI) {
-    try {
-      const { startInkTUI } = await import("../ui/ink/index.js");
-      const instance = startInkTUI({
-        runtime,
-        model: activeModel,
-        mode: "developer",
-      });
-      await instance.waitUntilExit();
-      return;
-    } catch {
-      // Fall back to classic TUI if ink fails (e.g. no TTY, missing deps)
-    }
+  /*
+   * ── Interactive TUI ────────────────────────────────────────────────────────
+   *
+   * There used to be a second, complete chat interface here (TUISession) that
+   * ran whenever this one could not. It was a fork in every sense: none of the
+   * ink UI's behaviour existed in it, and features drifted between the two —
+   * `!` and `@file` lived only in the fallback for months, while the approval
+   * dialog, prompt history and rewind lived only here. Anyone piping output or
+   * running without a TTY silently got the older interface.
+   *
+   * An interactive chat needs a terminal. Without one, say so and point at the
+   * non-interactive path rather than starting a lesser interface.
+   */
+  if (!process.stdout.isTTY) {
+    console.error(
+      chalk.yellow("\n  Interactive chat needs a terminal.\n") +
+      chalk.dim("  This looks like a pipe or a redirect. For non-interactive use:\n\n") +
+      chalk.dim("    bharatbuild chat \"your question\"\n") +
+      chalk.dim("    bharatbuild chat --no-interactive\n") +
+      chalk.dim("    bharatbuild ask \"your question\"\n"),
+    );
+    process.exitCode = 1;
+    return;
   }
 
-  // Classic TUI fallback
-  const tui = new TUISession({
+  const { startInkTUI } = await import("../ui/ink/index.js");
+  const instance = startInkTUI({
     runtime,
     model: activeModel,
-    mode:  "developer",
+    mode: "developer",
   });
-
-  await tui.start();
+  await instance.waitUntilExit();
+  // An active fs.watch keeps the event loop alive, so the process would sit
+  // there after the UI had gone.
+  hooksRuntime.stop();
 }

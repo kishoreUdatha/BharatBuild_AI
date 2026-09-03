@@ -15,15 +15,28 @@ import { createModelClientAuto } from "../models/model-router.js";
 import { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { HookEvent } from "./hook-config.js";
 import { resolveModel } from "../config/constants.js";
+import { rolePrompt } from "../agents/apply-agent.js";
 
-// Agent role system prompts for hooks
-const HOOK_AGENT_PROMPTS: Record<string, string> = {
-  default:  "You are BharatBuild AI. A file hook event has fired. Take appropriate action based on the event and file. Be concise.",
-  coder:    "You are an expert software engineer. A code file has changed. Review the change and take any needed action (e.g. fix lint errors, update imports, run tests).",
-  tester:   "You are a QA engineer. A source file changed. Check if tests need updating and run the relevant test suite.",
-  reviewer: "You are a code reviewer. A file was saved. Review it for obvious issues and report findings concisely.",
-  fixer:    "You are a debugging expert. A file event occurred. Identify and fix any issues introduced.",
+/**
+ * What a hook adds on top of the role.
+ *
+ * This used to be a fourth full copy of the role prompts, which meant the
+ * "coder" description drifted from the registry's. Only the second half was
+ * ever hook-specific, so that is all that lives here now — the role itself
+ * comes from the registry like everywhere else.
+ */
+const HOOK_CONTEXT: Record<string, string> = {
+  default:  "A file hook event has fired. Take appropriate action based on the event and file.",
+  coder:    "A code file has changed. Review the change and take any needed action (e.g. fix lint errors, update imports, run tests).",
+  tester:   "A source file changed. Check if tests need updating and run the relevant test suite.",
+  reviewer: "A file was saved. Review it for obvious issues and report findings concisely.",
+  fixer:    "A file event occurred. Identify and fix any issues introduced.",
 };
+
+function hookPrompt(role: string): string {
+  const key = (role ?? "").trim().toLowerCase();
+  return `${rolePrompt(key)} ${HOOK_CONTEXT[key] ?? HOOK_CONTEXT["default"]!}`;
+}
 
 export class HooksRuntime {
   private watcher: FileWatcher;
@@ -78,9 +91,8 @@ export class HooksRuntime {
 
       // Override system prompt with hook-specific agent role
       const agentRole = hook.agent ?? "default";
-      const rolePrompt = HOOK_AGENT_PROMPTS[agentRole] ?? HOOK_AGENT_PROMPTS["default"]!;
       runtime.context.setSystemPrompt(
-        `${rolePrompt}\n\nWorking directory: ${config.workingDir}\n` +
+        `${hookPrompt(agentRole)}\n\nWorking directory: ${config.workingDir}\n` +
         `You have full tool access. Keep responses concise — this is a background hook, not an interactive session.`
       );
 
@@ -105,6 +117,12 @@ export class HooksRuntime {
   }
 
   start(watchDir?: string): void {
+    // Starting twice would register a second "change" listener on the same
+    // watcher, so every hook would fire twice per save. This is a module-level
+    // singleton reached from more than one entry point, so that is a question
+    // of which command you typed, not of anything the user did.
+    if (this.active) return;
+
     const dir = watchDir ?? this.dir ?? process.cwd();
     const config = loadHooksConfig(dir);
 

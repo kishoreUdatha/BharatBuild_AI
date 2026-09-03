@@ -74,12 +74,14 @@ export default function StudentDashboard() {
         tokens_used: 0
       })
 
-      // Fetch token balance
+      // Fetch token balance. This used to ask /users/me, which is not a
+      // route - it fell through to /users/{id}, failed on every request and
+      // was swallowed below, so the balance silently read zero forever.
       try {
-        const userResponse = await apiClient.get<{ token_balance: number }>('/users/me')
-        setTokenBalance(userResponse.token_balance || 0)
-      } catch {
-        // Ignore token fetch errors
+        const balance = await apiClient.get<{ remaining_tokens: number }>('/tokens/balance')
+        setTokenBalance(balance.remaining_tokens ?? 0)
+      } catch (err) {
+        console.error('Failed to fetch token balance:', err)
       }
     } catch (error) {
       console.error('Failed to fetch dashboard data:', error)

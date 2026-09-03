@@ -694,25 +694,29 @@ I'll keep trying to help!`)
               switch (event.type) {
                 case 'thinking':
                   addThinkingStep(aiMessageId, {
-                    id: `step-${Date.now()}`,
-                    text: event.data.message || 'Thinking...',
+                    // ThinkingStep is keyed by `label`, and the store assigns
+                    // its own identity - passing `id`/`text` here failed the
+                    // production type check and so blocked every build.
+                    label: event.data.message || 'Thinking...',
                     status: 'active'
                   })
                   break
 
                 case 'tool_call':
                   addThinkingStep(aiMessageId, {
-                    id: `tool-${Date.now()}`,
-                    text: `Using ${event.data.tool}: ${JSON.stringify(event.data.input || {}).slice(0, 80)}`,
+                    label: `Using ${event.data.tool}: ${JSON.stringify(event.data.input || {}).slice(0, 80)}`,
                     status: 'active'
                   })
                   break
 
                 case 'file_created':
                   addFileOperation(aiMessageId, {
-                    id: `op-${Date.now()}`,
+                    // FileOperation carries no id, and `description` is
+                    // required - the other call sites in this file already
+                    // pass it. These two did not, and failed the build.
                     type: 'create',
                     path: event.data.path,
+                    description: `Created ${event.data.path}`,
                     status: 'complete'
                   })
                   soundManager.playFileComplete()
@@ -720,9 +724,10 @@ I'll keep trying to help!`)
 
                 case 'file_modified':
                   addFileOperation(aiMessageId, {
-                    id: `op-${Date.now()}`,
-                    type: 'update',
+                    // 'update' is not one of the three allowed types.
+                    type: 'modify',
                     path: event.data.path,
+                    description: `Modified ${event.data.path}`,
                     status: 'complete'
                   })
                   soundManager.playFileComplete()

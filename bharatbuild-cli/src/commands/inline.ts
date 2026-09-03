@@ -10,6 +10,7 @@ import path from "path";
 import { loadConfig } from "../config/config.js";
 import { loadCredentials } from "../auth/credentials.js";
 import { BharatBuildClient } from "../api/client.js";
+import { attachAutoRefresh } from "../auth/refresh.js";
 import { createModelClientAuto } from "../models/model-router.js";
 
 export function inlineCommand(): Command {
@@ -32,10 +33,13 @@ export function inlineCommand(): Command {
         process.exit(1);
       }
 
-      const client = new BharatBuildClient({
-        apiBaseUrl: config.apiBaseUrl,
-        authToken: creds.token,
-      });
+      const client = attachAutoRefresh(
+        new BharatBuildClient({
+          apiBaseUrl: config.apiBaseUrl,
+          authToken: creds.token,
+        }),
+        config.apiBaseUrl
+      );
 
       const modelClient = createModelClientAuto(opts.model || config.model || "auto");
 

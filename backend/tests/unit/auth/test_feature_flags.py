@@ -50,6 +50,54 @@ class TestFreeTierFeatures:
         """Test free tier has download disabled"""
         assert FREE_TIER_FEATURES["download_files"] is False
 
+    def test_free_tier_no_agentic_mode(self):
+        """Agentic mode is a paid feature and must stay off by default.
+
+        Regression: this constant was once edited to True for local CLI access,
+        which would have shipped a paywall bypass if committed. Use the
+        FREE_TIER_UNLOCKED_FEATURES env var for local development instead.
+        """
+        assert FREE_TIER_FEATURES["agentic_mode"] is False
+
+
+class TestDevUnlockOverride:
+    """The FREE_TIER_UNLOCKED_FEATURES escape hatch must be dev-only."""
+
+    def test_override_applies_in_development(self):
+        from app.modules.auth import feature_flags
+
+        with patch.object(feature_flags.settings, "ENVIRONMENT", "development"), \
+             patch.object(feature_flags.settings, "DEBUG", True), \
+             patch.object(
+                 feature_flags.settings,
+                 "FREE_TIER_UNLOCKED_FEATURES",
+                 "agentic_mode,document_generation",
+             ):
+            assert feature_flags._dev_unlocked_features() == {
+                "agentic_mode",
+                "document_generation",
+            }
+
+    def test_override_is_ignored_in_production(self):
+        """Even if the env var is set in prod, it must have no effect."""
+        from app.modules.auth import feature_flags
+
+        with patch.object(feature_flags.settings, "ENVIRONMENT", "production"), \
+             patch.object(feature_flags.settings, "DEBUG", False), \
+             patch.object(
+                 feature_flags.settings,
+                 "FREE_TIER_UNLOCKED_FEATURES",
+                 "agentic_mode,document_generation",
+             ):
+            assert feature_flags._dev_unlocked_features() == set()
+
+    def test_override_empty_by_default(self):
+        from app.modules.auth import feature_flags
+
+        with patch.object(feature_flags.settings, "ENVIRONMENT", "development"), \
+             patch.object(feature_flags.settings, "FREE_TIER_UNLOCKED_FEATURES", ""):
+            assert feature_flags._dev_unlocked_features() == set()
+
 
 class TestGlobalFeatureFlag:
     """Test global feature flag retrieval"""

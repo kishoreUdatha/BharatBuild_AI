@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { apiClient } from '@/lib/api-client'
@@ -28,6 +28,14 @@ const GitHubIcon = () => (
 )
 
 export default function LoginPage() {
+  // An invited teammate arrives at /login?next=<the invite URL>, but the one
+  // they need is Sign up, not Sign in. Carrying `next` across to /register
+  // keeps the batch code alive through account creation; without it they
+  // finish signing up and land on an empty registration form.
+  const [signupNext, setSignupNext] = useState<string | null>(null)
+  useEffect(() => {
+    setSignupNext(new URLSearchParams(window.location.search).get('next'))
+  }, [])
   const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -55,17 +63,45 @@ export default function LoginPage() {
         sessionStorage.removeItem('pendingPrompt')
       }
 
-      const redirectUrl = sessionStorage.getItem('redirectAfterLogin')
+      // Guarded pages send you here as /login?next=<path>; honour that as well
+      // as the sessionStorage handoff older flows use.
+      const nextParam = new URLSearchParams(window.location.search).get('next')
+      const storedRedirect = sessionStorage.getItem('redirectAfterLogin')
       sessionStorage.removeItem('redirectAfterLogin')
 
       const userRole = response.user?.role?.toLowerCase()
       const isAdmin = userRole === 'admin' || response.user?.is_superuser
 
+      // A college student is one enrolled through the institution's own
+      // registration form, which is what sets roll_number. Plain product
+      // signups share the `student` role but have no college record, so they
+      // must keep landing on the builder.
+      const isCollegeStudent = userRole === 'student' && Boolean(response.user?.roll_number)
+
+      // Each role lands on its own portal; /build is the default for everyone
+      // else, which is why a plain product signup gets no portal here.
+      // Without the faculty case, faculty accounts were dropped into the
+      // project builder instead of their dashboard.
+      const portal = userRole === 'faculty' ? '/faculty'
+        : userRole === 'trainer' ? '/trainer'
+        : isCollegeStudent ? '/student/registration'
+        : null
+
       let finalRedirect = '/build'
       if (isAdmin) {
         finalRedirect = '/admin'
-      } else if (redirectUrl) {
-        finalRedirect = redirectUrl
+      } else if (nextParam) {
+        // A ?next= is the visitor's own intent - a link they followed, or a
+        // guarded page that sent them here - so it outranks everything else.
+        finalRedirect = nextParam
+      } else if (portal) {
+        // The account's own portal beats whatever sessionStorage is holding.
+        // The landing page stores '/build' for every signed-out visitor, and
+        // that stale value was dropping verified college students into the
+        // builder instead of their registration screen.
+        finalRedirect = portal
+      } else if (storedRedirect) {
+        finalRedirect = storedRedirect
       }
 
       router.replace(finalRedirect)
@@ -237,7 +273,9 @@ export default function LoginPage() {
             {/* Footer */}
             <div className="mt-6 pt-6 border-t border-white/10 text-center text-sm text-gray-400">
               Don't have an account?{' '}
-              <Link href="/register" className="text-cyan-400 hover:text-cyan-300 font-medium">
+              <Link
+                href={signupNext ? `/register?next=${encodeURIComponent(signupNext)}` : '/register'}
+                className="text-cyan-400 hover:text-cyan-300 font-medium">
                 Sign up
               </Link>
             </div>

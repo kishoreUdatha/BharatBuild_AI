@@ -14,6 +14,7 @@ import { AgentRuntime } from "../../runtime/agent-runtime.js";
 import type { AgentEvent } from "../../runtime/event-stream.js";
 import { createModelClientAuto } from "../../models/model-router.js";
 import { loadConfig } from "../../config/config.js";
+import { rolePrompt as rolePromptFor } from "../../agents/apply-agent.js";
 
 // ── Tool Definition ────────────────────────────────────────────────────────
 
@@ -58,15 +59,6 @@ export const subagentDefinition = {
 } as const;
 
 // ── Agent role system prompts ──────────────────────────────────────────────
-
-const AGENT_PROMPTS: Record<string, string> = {
-  default:  "You are BharatBuild AI, an expert software engineer assistant. Complete the given task thoroughly using available tools.",
-  planner:  "You are a senior software architect. Break the task into a clear implementation plan, then execute it step by step.",
-  coder:    "You are an expert software engineer. Write clean, well-tested, production-quality code. Follow existing patterns in the codebase.",
-  tester:   "You are a QA engineer. Write comprehensive unit and integration tests. Cover edge cases. Verify all tests pass.",
-  fixer:    "You are a debugging expert. Identify root causes of errors (not symptoms). Fix issues without breaking existing functionality.",
-  reviewer: "You are a code reviewer. Check for bugs, security vulnerabilities, performance issues, and code quality. Provide specific, actionable feedback.",
-};
 
 // ── SubagentManager (state tracker) ───────────────────────────────────────
 
@@ -173,7 +165,7 @@ export async function executeSubagent(
     });
 
     // Override system prompt with agent-role prompt
-    const rolePrompt = AGENT_PROMPTS[agent] ?? AGENT_PROMPTS["default"]!;
+    const rolePrompt = rolePromptFor(agent);
     runtime.context.setSystemPrompt(
       `${rolePrompt}\n\nWorking directory: ${config.workingDir}\n` +
       `You have access to tools for reading/writing files, running shell commands, ` +

@@ -8,6 +8,7 @@ import asyncio
 import logging
 from typing import AsyncGenerator, Optional, List, Dict
 
+from app.core.models import sampling_kwargs
 from app.llm.providers.base import BaseLLMProvider
 
 logger = logging.getLogger(__name__)
@@ -78,8 +79,9 @@ class AnthropicProvider(BaseLLMProvider):
                 kwargs = {
                     "model": model_id,
                     "max_tokens": max_tokens,
-                    "temperature": temperature,
-                    "messages": built_messages,
+                    # Opus 4.7+ and the 5-series reject temperature with a 400.
+                    **sampling_kwargs(model_id, temperature),
+                    "messages":built_messages,
                 }
                 if system_prompt:
                     kwargs["system"] = system_prompt
@@ -132,8 +134,9 @@ class AnthropicProvider(BaseLLMProvider):
                 kwargs = {
                     "model": model_id,
                     "max_tokens": max_tokens,
-                    "temperature": temperature,
-                    "messages": [{"role": "user", "content": prompt}],
+                    # Opus 4.7+ and the 5-series reject temperature with a 400.
+                    **sampling_kwargs(model_id, temperature),
+                    "messages":[{"role": "user", "content": prompt}],
                 }
                 if system_prompt:
                     kwargs["system"] = system_prompt

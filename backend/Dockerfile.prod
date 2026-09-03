@@ -69,7 +69,9 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2
     rm -rf awscliv2.zip aws
 
 # Copy lightweight API requirements (fast build ~2-3 min instead of 15-20 min)
-COPY requirements-api.txt .
+# requirements-api.txt is a thin `-r requirements.txt` pointer, so the
+# referenced file has to be copied alongside it.
+COPY requirements-api.txt requirements.txt ./
 
 # Cache buster - change this value or pass --build-arg CACHEBUST=$(date +%s) to force pip reinstall
 ARG CACHEBUST=1
@@ -87,7 +89,10 @@ RUN mkdir -p uploads temp generated logs user_projects /certs
 
 # Copy and setup entrypoint script for automatic migrations
 COPY scripts/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Strip CR characters: the repo has no .gitattributes, so a Windows
+# checkout gives the script CRLF endings and the shebang becomes
+# `#!/bin/bash`, which fails at exec with "no such file or directory".
+RUN sed -i 's/$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Expose port
 EXPOSE 8000

@@ -63,6 +63,10 @@ class UserRegister(BaseModel):
     password: str = Field(..., min_length=8, max_length=128)
     full_name: Optional[str] = None
     phone: Optional[str] = Field(None, pattern=r'^[6-9]\d{9}$', description="10-digit Indian mobile number")
+    # Proof that this caller verified the address and number, issued by
+    # /auth/otp/verify. Registration is refused without them.
+    email_verification_token: Optional[str] = None
+    phone_verification_token: Optional[str] = None
     role: str = "student"
 
     # Student Academic Details
@@ -73,6 +77,7 @@ class UserRegister(BaseModel):
     course: Optional[str] = None
     year_semester: Optional[str] = None
     batch: Optional[str] = None
+    section: Optional[str] = None
 
     # Guide/Mentor Details
     guide_name: Optional[str] = None
@@ -101,9 +106,11 @@ class UserRegister(BaseModel):
             if not self.course or not self.course.strip():
                 missing_fields.append('Course')
 
-            # Required guide field for students
-            if not self.guide_name or not self.guide_name.strip():
-                missing_fields.append('Guide Name')
+            # The guide is deliberately NOT required. A student signing up
+            # has often not been allotted one yet - the guide is attached to
+            # the batch they are about to join, and is recorded there. Asking
+            # for it at signup blocked invited teammates who knew their batch
+            # code but not the staff member's name.
 
             if missing_fields:
                 raise ValueError(f"Required fields for students: {', '.join(missing_fields)}")
@@ -149,6 +156,7 @@ class UserResponse(BaseModel):
     course: Optional[str] = None
     year_semester: Optional[str] = None
     batch: Optional[str] = None
+    section: Optional[str] = None
 
     # Guide/Mentor Details
     guide_name: Optional[str] = None

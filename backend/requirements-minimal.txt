@@ -1,78 +1,13 @@
 # ============================================
-# Minimal requirements for CI testing
+# CI test requirements
 # ============================================
+# Previously this file hand-listed a SUBSET of the runtime deps, which meant CI
+# tested against a dependency set that never shipped (missing asyncpg,
+# psycopg2-binary, google-genai, resend, and pinning pydantic==2.5.3 while prod
+# shipped >=2.9.0). It now includes the real runtime set so tests exercise the
+# same packages production runs.
 
-# FastAPI and core dependencies
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-python-multipart==0.0.6
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-python-dotenv==1.0.0
-pydantic==2.5.3
-pydantic-settings==2.1.0
-email-validator==2.1.0
-starlette>=0.35.0
+-r requirements.txt
 
-# Database (SQLite for testing)
-sqlalchemy==2.0.25
-alembic==1.13.1
+# CI-only: SQLite async driver, used in place of Postgres for unit tests
 aiosqlite>=0.19.0
-
-# AI and LLM
-anthropic>=0.39.0
-httpx>=0.28.1
-tiktoken==0.6.0
-
-# Redis and Celery (for task queue)
-redis==5.0.1
-celery==5.3.6
-
-# Document Generation
-python-docx==1.1.0
-python-pptx==0.6.23
-reportlab==4.0.9
-PyPDF2==3.0.1
-Pillow>=10.2.0
-openpyxl==3.1.2
-matplotlib==3.8.2
-
-# Utilities
-aiofiles==23.2.1
-aiosmtplib==3.0.1
-python-slugify==8.0.3
-shortuuid==1.0.11
-pytz==2024.1
-arrow==1.3.0
-pyyaml==6.0.1
-chardet==5.2.0
-
-# Payment
-razorpay==1.4.1
-
-# Monitoring and Logging
-structlog==24.1.0
-sentry-sdk[fastapi]==1.40.0
-
-# Security
-cryptography==42.0.2
-bcrypt==4.1.2
-
-# Rate Limiting
-slowapi==0.1.9
-
-# OAuth
-google-auth==2.27.0
-authlib==1.3.0
-requests>=2.31.0
-
-# Storage (S3/MinIO)
-boto3==1.34.34
-minio==7.2.3
-
-# WebSockets and SSE
-websockets>=13.0
-sse-starlette==2.1.0
-
-# Docker
-docker==7.0.0
